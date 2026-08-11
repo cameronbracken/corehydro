@@ -101,6 +101,18 @@ test_that("confint errors for a GMM fit and points at quantile_variance", {
   expect_error(confint(f), "quantile_variance")
 })
 
+test_that("confint() with no level argument defaults to 0.95, triggering a Bayesian rebuild", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 200, output_length = 500, seed = 123
+  )
+  # fit_bayesian() builds the chain at BayesianAnalysis's own class default, 0.9; confint(f)
+  # with no `level` asks for 0.95 (base R's confint() convention), which does not match
+  # `credible_level`, so it always takes the rebuild path -- this pins the cross-language
+  # default-level parity finding (Python's confint() default was 0.9; now matches R's 0.95).
+  expect_equal(confint(f), confint(f, level = 0.95))
+  expect_false(isTRUE(all.equal(confint(f), confint(f, level = 0.9))))
+})
+
 test_that("the fit carries a fitted model that simulates identically", {
   f <- fit_mle(model_univariate("Normal", peaks))
   expect_s3_class(f$model, "corehydro_model")

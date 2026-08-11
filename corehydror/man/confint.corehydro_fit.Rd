@@ -37,7 +37,10 @@ interval at the level \code{BayesianAnalysis}'s own class default (0.9) computes
 columns are returned directly; otherwise the identical seeded chain is re-run with
 \code{credible_interval_width} set to \code{level} (the same lazy-rebuild precedent as the profile path
 above -- re-sampling with an identical seed reproduces the same chain bit-for-bit, so only the
-post-hoc credible-interval quantile computation changes).
+post-hoc credible-interval quantile computation changes). Because a Bayesian fit is always
+built at the 0.9 credible level and \code{confint()}'s own default is 0.95 (the base R \code{confint}
+convention), calling \code{confint(f)} with no \code{level} on a Bayesian fit always takes the rebuild
+path.
 
 \code{\link[=fit_gmm]{fit_gmm()}} is method-of-moments and has no likelihood or posterior to draw an interval from;
 calling \code{confint()} on one errors. Use \code{\link[=quantile_variance]{quantile_variance()}} for the delta-method variance of a

@@ -317,7 +317,7 @@ class Fit:
         """Delta-method variance of a fitted quantile. See :func:`quantile_variance`."""
         return quantile_variance(self, aep)
 
-    def confint(self, level: float = 0.9) -> dict:
+    def confint(self, level: float = 0.95) -> dict:
         """Confidence or credible intervals for the fit.
 
         MLE/MAP fits get profile-likelihood confidence intervals; a Bayesian fit gets posterior
@@ -337,7 +337,9 @@ class Fit:
         chain is re-run with ``credible_interval_width`` set to ``level`` (the same
         lazy-rebuild precedent as the profile path above -- re-sampling with an identical seed
         reproduces the same chain bit-for-bit, so only the post-hoc credible-interval quantile
-        computation changes).
+        computation changes). Because a Bayesian fit is always built at the 0.9 credible level
+        and this method's own default is 0.95, calling ``confint()`` with no argument on a
+        Bayesian fit always takes the rebuild path.
 
         GMM is method-of-moments and has no likelihood or posterior to draw an interval from;
         calling this raises. Use :meth:`quantile_variance` for the delta-method variance of a
@@ -345,8 +347,9 @@ class Fit:
 
         Parameters
         ----------
-        level : float, default 0.9
-            Confidence (MLE/MAP) or credible (Bayesian) level.
+        level : float, default 0.95
+            Confidence (MLE/MAP) or credible (Bayesian) level. Matches R's `confint()`
+            convention, not `BayesianAnalysis`'s own 0.9 class default.
 
         Returns
         -------

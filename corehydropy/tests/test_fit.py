@@ -136,6 +136,36 @@ def test_confint_errors_for_a_gmm_fit_and_points_at_quantile_variance():
         f.confint()
 
 
+def test_confint_default_level_is_0_95_triggering_a_bayesian_rebuild():
+    # Twin of test-fit.R's "confint() with no level argument defaults to 0.95, triggering a
+    # Bayesian rebuild" -- pins the fix for the divergence where Fit.confint's default was 0.9
+    # (BayesianAnalysis's own class default) while R's confint.corehydro_fit defaulted to 0.95
+    # (base R's confint() convention). fit_bayesian() always builds the chain at 0.9, so a
+    # no-argument confint() call always asks for a different level and takes the rebuild path.
+    f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=200,
+                      output_length=500, seed=123)
+    assert f.confint() == f.confint(level=0.95)
+    assert f.confint() != f.confint(level=0.9)
+
+
+def test_confint_default_level_matches_r_for_the_identical_seeded_bayesian_fit():
+    # Cross-language check for the same divergence: this pytest suite has no established way to
+    # invoke R (no rpy2/subprocess-to-Rscript harness anywhere in this test tree), so per the
+    # project's "do not invent one" instruction this only carries the Python half, structurally
+    # (no R-derived literal hardcoded here -- oracle values live in fixtures/*.json, not
+    # behavioural tests). The actual cross-language numeric comparison for this identical model/
+    # sampler/seed was run by hand and is recorded in .superpowers/sdd/task-8-report.md: R's
+    # `confint(f)` (no `level`) and Python's `f.confint()` (no `level`) agree to every printed
+    # digit.
+    f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=200,
+                      output_length=500, seed=123)
+    ci = f.confint()
+    assert ci == f.confint(level=0.95)
+    for name in f.parameter_names:
+        assert ci["lower"][name] <= f.posterior_summary["mean"][f.parameter_names.index(name)]
+        assert ci["upper"][name] >= f.posterior_summary["mean"][f.parameter_names.index(name)]
+
+
 def test_the_fit_carries_a_fitted_model_that_simulates_identically():
     f = fit_mle(model_univariate("Normal", PEAKS))
     assert isinstance(f.model, Model)

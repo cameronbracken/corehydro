@@ -687,7 +687,10 @@ logLik.corehydro_fit <- function(object, ...) {
 #' columns are returned directly; otherwise the identical seeded chain is re-run with
 #' `credible_interval_width` set to `level` (the same lazy-rebuild precedent as the profile path
 #' above -- re-sampling with an identical seed reproduces the same chain bit-for-bit, so only the
-#' post-hoc credible-interval quantile computation changes).
+#' post-hoc credible-interval quantile computation changes). Because a Bayesian fit is always
+#' built at the 0.9 credible level and `confint()`'s own default is 0.95 (the base R `confint`
+#' convention), calling `confint(f)` with no `level` on a Bayesian fit always takes the rebuild
+#' path.
 #'
 #' [fit_gmm()] is method-of-moments and has no likelihood or posterior to draw an interval from;
 #' calling `confint()` on one errors. Use [quantile_variance()] for the delta-method variance of a
