@@ -27,7 +27,11 @@
 #include <string>
 #include <vector>
 
+#include "corehydro/diagnostics/influence_diagnostics.hpp"
+#include "corehydro/diagnostics/leverage_diagnostics.hpp"
+#include "corehydro/diagnostics/prior_influence_diagnostics.hpp"
 #include "corehydro/estimation/bayesian_analysis.hpp"
+#include "corehydro/estimation/generalized_method_of_moments.hpp"
 #include "corehydro/estimation/maximum_a_posteriori.hpp"
 #include "corehydro/estimation/maximum_likelihood.hpp"
 #include "corehydro/estimation/optimization_method.hpp"
@@ -93,6 +97,25 @@ struct FitResult {
     double dic = kNaN, waic = kNaN, waic_pd = kNaN, looic = kNaN, loo_pd = kNaN,
            looic_se = kNaN;
     std::vector<double> pareto_k;
+
+    // --- GMM block ---------------------------------------------------------------------
+    double j_stat = kNaN, j_stat_pval = kNaN;
+    int gmm_iterations = 0;
+    bool converged_within_tolerance = false;
+    int optimizer_fallback_count = 0;
+};
+
+// Estimation diagnostics off a fit. Every field is populated where the target supports it and
+// left empty where it does not: leverage/Cook's distance come from MAP and GMM, Pareto-k and
+// prior influence from BayesianAnalysis.
+struct FitDiagnostics {
+    std::vector<double> cooks_distance;
+    std::vector<double> leverage;
+    std::vector<double> observation_influence;   // row-major n_obs x n_params
+    std::vector<double> pareto_k;
+    double max_pareto_k = FitResult::kNaN;
+    std::vector<double> prior_influence;
+    std::vector<std::string> prior_influence_names;
 };
 
 // Maps an OptimizationStatus to the string the bindings surface.
@@ -145,13 +168,48 @@ inline PointEstimateType parse_point_estimator(const std::string& s) {
 
 // Parameter display names, falling back to p1..pn when the model leaves them empty (some
 // ported models do -- see the PriorInfluenceDiagnostics note in docs/upstream-csharp-issues.md).
-inline std::vector<std::string> parameter_names_of(const corehydro::models::ModelBase& model) {
+// Templated (not `const ModelBase&`) so it also serves Bulletin17CDistribution, which exposes
+// the identical `parameters()`/`number_of_parameters()` shape but -- per model_spec.hpp's
+// build_bulletin17c_model note -- does NOT derive from ModelBase.
+template <typename TModel>
+inline std::vector<std::string> parameter_names_of(const TModel& model) {
     std::vector<std::string> names;
     for (int i = 0; i < model.number_of_parameters(); ++i) {
         const std::string& n = model.parameters()[static_cast<std::size_t>(i)].display_name();
         names.push_back(n.empty() ? ("p" + std::to_string(i + 1)) : n);
     }
     return names;
+}
+
+// The GMM estimation-strategy knob (default Iterative, matching the C# GMM default). Mirrors
+// corehydror/src/estimation.cpp's parse_gmm_strategy.
+inline GeneralizedMethodOfMoments::GMMEstimationStrategy parse_gmm_strategy(const std::string& s) {
+    using Strat = GeneralizedMethodOfMoments::GMMEstimationStrategy;
+    if (s == "OneStep") return Strat::OneStep;
+    if (s == "TwoStep") return Strat::TwoStep;
+    if (s == "Iterative") return Strat::Iterative;
+    throw std::runtime_error("unknown GMM estimation strategy '" + s + "'");
+}
+
+// Builds a concrete Bulletin17CDistribution (NOT a ModelBase -- the GMM ctor takes it as
+// IGMMModel&; see model_spec.hpp's build_bulletin17c_model note) and fits it by GMM. Copied
+// verbatim from `build_and_fit_gmm` at corehydror/src/estimation.cpp:107-120, including
+// `post_process(true, true)`: BFGS + the numerical Jacobian have no RNG, so rebuilding this from
+// the same construct reproduces the identical fit -- the lazy-rebuild contract
+// run_fit_quantile_variance below (and ch_estimation_bic_) rely on.
+inline std::unique_ptr<GeneralizedMethodOfMoments> build_and_fit_gmm(
+    std::unique_ptr<corehydro::models::Bulletin17CDistribution>& model,
+    const std::string& model_json, const std::vector<double>& dataset, const std::string& strategy,
+    const std::string& optimizer, int max_gmm_iterations) {
+    model = corehydro::models::spec::build_bulletin17c_from_json(model_json, dataset);
+    auto gmm = std::make_unique<GeneralizedMethodOfMoments>(*model, parse_optimizer(optimizer));
+    gmm->set_estimation_strategy(parse_gmm_strategy(strategy));
+    if (max_gmm_iterations > 0) gmm->set_max_gmm_iterations(max_gmm_iterations);
+    if (!gmm->estimate())
+        throw std::runtime_error("GeneralizedMethodOfMoments::estimate() failed with optimizer " +
+                                 optimizer);
+    gmm->post_process(/*use_sandwich=*/true, /*compute_jstat=*/true);
+    return gmm;
 }
 
 // Fills the common block from any estimator exposing the ML/MAP accessor set.
@@ -246,6 +304,51 @@ inline std::string fitted_spec(const corehydro::models::spec::JsonValue& model_s
     return out;
 }
 
+// Settings cascade copied verbatim from ch_estimation_bayes_run_
+// (corehydror/src/estimation.cpp:264-312): the two "use defaults" flags are turned off so the
+// explicit settings below aren't clobbered, and every numeric knob is applied only when the
+// construct supplies a positive value, exactly matching that `> 0` guard. Factored out of
+// run_fit's BayesianAnalysis arm so run_fit_diagnostics's BayesianAnalysis arm below builds the
+// identical fit from the identical construct shape -- two dispatchers computing diagnostics off
+// the same fit is only meaningful if they agree on what "the same fit" means.
+inline void apply_bayesian_settings(BayesianAnalysis& ba,
+                                    const corehydro::models::spec::JsonValue& construct) {
+    ba.set_use_simulation_defaults(false);
+    ba.set_use_advanced_simulation_defaults(false);
+    int seed = construct.value_or("seed", -1);
+    if (seed >= 0) ba.set_prng_seed(seed);
+    if (construct.value_or("iterations", 0) > 0)
+        ba.set_iterations(construct.value_or("iterations", 0));
+    if (construct.value_or("warmup_iterations", 0) > 0)
+        ba.set_warmup_iterations(construct.value_or("warmup_iterations", 0));
+    if (construct.value_or("number_of_chains", 0) > 0)
+        ba.set_number_of_chains(construct.value_or("number_of_chains", 0));
+    if (construct.value_or("thinning_interval", 0) > 0)
+        ba.set_thinning_interval(construct.value_or("thinning_interval", 0));
+    if (construct.value_or("initial_iterations", 0) > 0)
+        ba.set_initial_iterations(construct.value_or("initial_iterations", 0));
+    if (construct.value_or("output_length", 0) > 0)
+        ba.set_output_length(construct.value_or("output_length", 0));
+
+    // Sampler knobs (doubles/int, applied only when the construct actually carries the key, so
+    // an unset knob leaves the sampler's own default -- e.g. the
+    // set_default_advanced_simulation_options() values -- in place).
+    if (construct.contains("jump")) ba.set_jump(construct.at("jump").as_double());
+    if (construct.contains("jump_threshold"))
+        ba.set_jump_threshold(construct.at("jump_threshold").as_double());
+    if (construct.contains("snooker_threshold"))
+        ba.set_snooker_threshold(construct.at("snooker_threshold").as_double());
+    if (construct.contains("noise")) ba.set_noise(construct.at("noise").as_double());
+    if (construct.contains("scale")) ba.set_scale(construct.at("scale").as_double());
+    if (construct.contains("beta")) ba.set_beta(construct.at("beta").as_double());
+    if (construct.contains("max_tree_depth"))
+        ba.set_max_tree_depth(construct.at("max_tree_depth").as_int());
+    if (construct.contains("credible_interval_width"))
+        ba.set_credible_interval_width(construct.at("credible_interval_width").as_double());
+    if (construct.contains("point_estimator"))
+        ba.set_point_estimator(parse_point_estimator(construct.at("point_estimator").as_string()));
+}
+
 inline FitResult run_fit(const std::string& target, const std::string& construct_json,
                          const std::vector<double>& dataset) {
     corehydro::models::spec::JsonValue construct =
@@ -288,45 +391,7 @@ inline FitResult run_fit(const std::string& target, const std::string& construct
         std::unique_ptr<corehydro::models::ModelBase> model =
             corehydro::models::spec::build_model_from_json(model_text, dataset);
         BayesianAnalysis ba(*model, parse_sampler(construct.value_or("sampler", "DEMCzs")));
-        // Settings cascade copied verbatim from ch_estimation_bayes_run_
-        // (corehydror/src/estimation.cpp:264-312): the two "use defaults" flags are turned off
-        // so the explicit settings below aren't clobbered, and every numeric knob is applied
-        // only when the construct supplies a positive value, exactly matching that `> 0` guard.
-        ba.set_use_simulation_defaults(false);
-        ba.set_use_advanced_simulation_defaults(false);
-        int seed = construct.value_or("seed", -1);
-        if (seed >= 0) ba.set_prng_seed(seed);
-        if (construct.value_or("iterations", 0) > 0)
-            ba.set_iterations(construct.value_or("iterations", 0));
-        if (construct.value_or("warmup_iterations", 0) > 0)
-            ba.set_warmup_iterations(construct.value_or("warmup_iterations", 0));
-        if (construct.value_or("number_of_chains", 0) > 0)
-            ba.set_number_of_chains(construct.value_or("number_of_chains", 0));
-        if (construct.value_or("thinning_interval", 0) > 0)
-            ba.set_thinning_interval(construct.value_or("thinning_interval", 0));
-        if (construct.value_or("initial_iterations", 0) > 0)
-            ba.set_initial_iterations(construct.value_or("initial_iterations", 0));
-        if (construct.value_or("output_length", 0) > 0)
-            ba.set_output_length(construct.value_or("output_length", 0));
-
-        // Sampler knobs (doubles/int, applied only when the construct actually carries the
-        // key, so an unset knob leaves the sampler's own default -- e.g. the
-        // set_default_advanced_simulation_options() values -- in place).
-        if (construct.contains("jump")) ba.set_jump(construct.at("jump").as_double());
-        if (construct.contains("jump_threshold"))
-            ba.set_jump_threshold(construct.at("jump_threshold").as_double());
-        if (construct.contains("snooker_threshold"))
-            ba.set_snooker_threshold(construct.at("snooker_threshold").as_double());
-        if (construct.contains("noise")) ba.set_noise(construct.at("noise").as_double());
-        if (construct.contains("scale")) ba.set_scale(construct.at("scale").as_double());
-        if (construct.contains("beta")) ba.set_beta(construct.at("beta").as_double());
-        if (construct.contains("max_tree_depth"))
-            ba.set_max_tree_depth(construct.at("max_tree_depth").as_int());
-        if (construct.contains("credible_interval_width"))
-            ba.set_credible_interval_width(construct.at("credible_interval_width").as_double());
-        if (construct.contains("point_estimator"))
-            ba.set_point_estimator(
-                parse_point_estimator(construct.at("point_estimator").as_string()));
+        apply_bayesian_settings(ba, construct);
 
         if (!ba.estimate())
             throw std::runtime_error("BayesianAnalysis::estimate() failed for sampler " +
@@ -414,7 +479,168 @@ inline FitResult run_fit(const std::string& target, const std::string& construct
         r.model_spec = fitted_spec(model_json, r.parameters);
         return r;
     }
+    if (target == "GMM") {
+        // GMM fits a Bulletin17CDistribution -- not a ModelBase (see build_and_fit_gmm's header
+        // note) -- so this cannot reuse build_model_from_json; guard the model type first, before
+        // ever touching the dedicated bulletin17c construction path.
+        std::string model_type = model_json.value_or("type", "univariate_distribution");
+        if (model_type != "bulletin17c")
+            throw std::runtime_error("GMM fits a bulletin17c model only; got type '" + model_type +
+                                     "'");
+
+        std::string strategy = construct.value_or("strategy", "Iterative");
+        int max_gmm_iterations = construct.value_or("max_gmm_iterations", 0);
+        std::unique_ptr<corehydro::models::Bulletin17CDistribution> model;
+        std::unique_ptr<GeneralizedMethodOfMoments> gmm =
+            build_and_fit_gmm(model, model_text, dataset, strategy, optimizer, max_gmm_iterations);
+        int p = model->number_of_parameters();
+
+        FitResult r;
+        r.method = "GMM";
+        r.parameter_names = parameter_names_of(*model);
+        const std::vector<double>& best = gmm->best_parameter_set().values;
+        r.parameters.assign(best.begin(), best.end());
+        r.standard_errors = gmm->get_standard_errors();
+
+        auto cov = gmm->get_covariance_matrix();
+        auto corr = gmm->get_correlation_matrix();
+        r.covariance.resize(static_cast<std::size_t>(p * p));
+        r.correlation.resize(static_cast<std::size_t>(p * p));
+        for (int i = 0; i < p; ++i)
+            for (int j = 0; j < p; ++j) {
+                r.covariance[static_cast<std::size_t>(i * p + j)] = cov(i, j);
+                r.correlation[static_cast<std::size_t>(i * p + j)] = corr(i, j);
+            }
+
+        r.j_stat = gmm->jstat();
+        r.j_stat_pval = gmm->jstat_pval();
+        r.gmm_iterations = gmm->gmm_iterations();
+        r.converged_within_tolerance = gmm->converged_within_tolerance();
+        r.optimizer_fallback_count = gmm->optimizer_fallback_count();
+        r.converged = true;
+        r.status = "Success";
+        r.model_spec = fitted_spec(model_json, r.parameters);
+        return r;
+    }
     throw std::runtime_error("unknown fit target: " + target);
+}
+
+// `quantile_variance [aep]`: like `bic [n]`, the AEP is only known at assertion-dispatch time, so
+// this rebuilds the same deterministic GMM fit and evaluates the B17C delta-method Var(Q_p) live,
+// exactly as ch_estimation_gmm_qvar_ does (corehydror/src/estimation.cpp:457-465). `aep` is the
+// annual EXCEEDANCE probability; the C# QuantileVariance takes a NON-exceedance probability, so
+// this passes 1 - aep.
+inline double run_fit_quantile_variance(const std::string& construct_json,
+                                        const std::vector<double>& dataset, double aep) {
+    corehydro::models::spec::JsonValue construct =
+        corehydro::models::spec::parse_json(construct_json);
+    const auto& model_json = construct.at("model");
+    std::string model_text = corehydro::models::spec::to_json_string(model_json);
+    std::string optimizer = construct.value_or("optimizer", "DifferentialEvolution");
+    std::string strategy = construct.value_or("strategy", "Iterative");
+    int max_gmm_iterations = construct.value_or("max_gmm_iterations", 0);
+
+    std::unique_ptr<corehydro::models::Bulletin17CDistribution> model;
+    std::unique_ptr<GeneralizedMethodOfMoments> gmm =
+        build_and_fit_gmm(model, model_text, dataset, strategy, optimizer, max_gmm_iterations);
+    return model->quantile_variance(1.0 - aep, gmm->best_parameter_set().values,
+                                    gmm->get_covariance_matrix().to_array());
+}
+
+// Estimation diagnostics off a fresh fit of `target` (MaximumAPosteriori, BayesianAnalysis, or
+// GMM -- the three estimators the Diagnostics layer is wired onto). Populated from the
+// already-un-stubbed estimator methods, matching ch_analysis_diagnostics_run_
+// (corehydror/src/analysis.cpp:507-588) field-for-field for the BayesianAnalysis case (built
+// through the shared apply_bayesian_settings, so the two dispatchers cannot silently diverge) and
+// MaximumAPosteriori::{get_cooks_distance, get_observation_influence,
+// compute_leverage_diagnostics} / the GeneralizedMethodOfMoments diagnostics quartet for the
+// other two.
+inline FitDiagnostics run_fit_diagnostics(const std::string& target,
+                                          const std::string& construct_json,
+                                          const std::vector<double>& dataset) {
+    corehydro::models::spec::JsonValue construct =
+        corehydro::models::spec::parse_json(construct_json);
+    const auto& model_json = construct.at("model");
+    std::string model_text = corehydro::models::spec::to_json_string(model_json);
+    std::string optimizer = construct.value_or("optimizer", "DifferentialEvolution");
+
+    // Row-major flatten of an [n x p] Matrix, shared by the MAP and GMM observation-influence
+    // arms below.
+    auto flatten_influence = [](const Matrix& m) {
+        int n = m.number_of_rows(), p = m.number_of_columns();
+        std::vector<double> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(p));
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < p; ++j)
+                out[static_cast<std::size_t>(i) * static_cast<std::size_t>(p) +
+                    static_cast<std::size_t>(j)] = m(i, j);
+        return out;
+    };
+
+    if (target == "MaximumAPosteriori") {
+        std::unique_ptr<corehydro::models::ModelBase> model =
+            corehydro::models::spec::build_model_from_json(model_text, dataset);
+        MaximumAPosteriori e(*model, parse_optimizer(optimizer));
+        // get_observation_influence/get_cooks_distance both need the posterior Hessian.
+        e.set_compute_hessian(true);
+        if (!e.estimate())
+            throw std::runtime_error("MaximumAPosteriori::estimate() failed with optimizer " +
+                                     optimizer);
+
+        FitDiagnostics d;
+        d.cooks_distance = e.get_cooks_distance();
+        d.observation_influence = flatten_influence(e.get_observation_influence());
+        // Bind the LeverageDiagnostics temporary to a named variable before iterating:
+        // `for (const auto& o : e.compute_leverage_diagnostics().observations())` would bind the
+        // loop range to a reference returned from a temporary that is destroyed at the end of the
+        // full expression (before C++23's P2718R0 range-for lifetime-extension fix), an immediate
+        // dangling reference.
+        corehydro::diagnostics::LeverageDiagnostics lev = e.compute_leverage_diagnostics();
+        for (const auto& o : lev.observations()) d.leverage.push_back(o.leverage());
+        return d;
+    }
+    if (target == "BayesianAnalysis") {
+        std::unique_ptr<corehydro::models::ModelBase> model =
+            corehydro::models::spec::build_model_from_json(model_text, dataset);
+        BayesianAnalysis ba(*model, parse_sampler(construct.value_or("sampler", "DEMCzs")));
+        apply_bayesian_settings(ba, construct);
+        if (!ba.estimate())
+            throw std::runtime_error("BayesianAnalysis::estimate() failed for sampler " +
+                                     construct.value_or("sampler", "DEMCzs"));
+
+        FitDiagnostics d;
+        corehydro::diagnostics::LeverageDiagnostics lev = ba.compute_leverage_diagnostics();
+        for (const auto& o : lev.observations()) d.leverage.push_back(o.leverage());
+
+        auto inf = ba.compute_influence_diagnostics();
+        for (const auto& o : inf.observations()) d.pareto_k.push_back(o.pareto_k());
+        d.max_pareto_k = inf.max_pareto_k();
+
+        // thin_every mirrors ch_analysis_diagnostics_run_'s own default of 10.
+        int thin_every = construct.value_or("thin_every", 10);
+        auto pri = ba.compute_prior_influence_diagnostics(thin_every);
+        d.prior_influence = pri.prior_precision_share();
+        d.prior_influence_names = parameter_names_of(*model);
+        return d;
+    }
+    if (target == "GMM") {
+        std::string model_type = model_json.value_or("type", "univariate_distribution");
+        if (model_type != "bulletin17c")
+            throw std::runtime_error("GMM fits a bulletin17c model only; got type '" + model_type +
+                                     "'");
+        std::string strategy = construct.value_or("strategy", "Iterative");
+        int max_gmm_iterations = construct.value_or("max_gmm_iterations", 0);
+        std::unique_ptr<corehydro::models::Bulletin17CDistribution> model;
+        std::unique_ptr<GeneralizedMethodOfMoments> gmm =
+            build_and_fit_gmm(model, model_text, dataset, strategy, optimizer, max_gmm_iterations);
+
+        FitDiagnostics d;
+        d.cooks_distance = gmm->get_cooks_distance();
+        d.observation_influence = flatten_influence(gmm->get_observation_influence());
+        corehydro::diagnostics::LeverageDiagnostics lev = gmm->get_leverage_diagnostics();
+        for (const auto& o : lev.observations()) d.leverage.push_back(o.leverage());
+        return d;
+    }
+    throw std::runtime_error("unknown fit_diagnostics target: " + target);
 }
 
 }  // namespace corehydro::estimation::support

@@ -284,6 +284,51 @@ static void test_bayesian_rejects_a_sampler_it_cannot_construct() {
     CHECK_TRUE(threw);
 }
 
+static void test_gmm_block() {
+    std::string construct =
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
+        R"("strategy":"Iterative","optimizer":"BFGS","max_gmm_iterations":50})";
+    support::FitResult r = support::run_fit("GMM", construct, kPeaks);
+    CHECK_TRUE(r.method == "GMM");
+    CHECK_TRUE(r.parameters.size() == 3);
+    CHECK_TRUE(r.standard_errors.size() == 3);
+    CHECK_TRUE(r.gmm_iterations > 0);
+    // B17C GMM is always just-identified, so the J-statistic p-value is structurally NaN.
+    // See docs/upstream-csharp-issues.md.
+    CHECK_TRUE(std::isnan(r.j_stat_pval));
+}
+
+static void test_gmm_rejects_a_non_b17c_model() {
+    bool threw = false;
+    try {
+        support::run_fit("GMM", R"({"model":{"family":"Normal","dataset":"peaks"}})", kPeaks);
+    } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("bulletin17c") != std::string::npos;
+    }
+    CHECK_TRUE(threw);
+}
+
+static void test_quantile_variance_is_finite_and_positive() {
+    std::string construct =
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
+        R"("strategy":"Iterative","optimizer":"BFGS"})";
+    double v = support::run_fit_quantile_variance(construct, kPeaks, 0.01);
+    CHECK_TRUE(std::isfinite(v) && v > 0.0);
+}
+
+static void test_diagnostics_shape() {
+    // NOTE: the task-4 brief's literal construct omits "dataset":"peaks" from the model object;
+    // every other case in this file supplies it, and build_model_from_json throws "model spec
+    // requires either 'dataset' or 'data_frame'" without it (confirmed against model_spec.hpp).
+    // Added here to match the established convention.
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead"})";
+    support::FitDiagnostics d =
+        support::run_fit_diagnostics("MaximumAPosteriori", construct, kPeaks);
+    CHECK_TRUE(d.cooks_distance.size() == 10);
+    CHECK_TRUE(d.leverage.size() == 10);
+}
+
 int main() {
     test_mle_shape();
     test_hessian_can_be_disabled();
@@ -297,5 +342,9 @@ int main() {
     test_profile_on_request();
     test_bayesian_block();
     test_bayesian_rejects_a_sampler_it_cannot_construct();
+    test_gmm_block();
+    test_gmm_rejects_a_non_b17c_model();
+    test_quantile_variance_is_finite_and_positive();
+    test_diagnostics_shape();
     return chtest::summary("fit_runner");
 }
