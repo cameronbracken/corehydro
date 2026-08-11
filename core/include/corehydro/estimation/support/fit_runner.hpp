@@ -311,6 +311,25 @@ inline std::string fitted_spec(const corehydro::models::spec::JsonValue& model_s
 // run_fit's BayesianAnalysis arm so run_fit_diagnostics's BayesianAnalysis arm below builds the
 // identical fit from the identical construct shape -- two dispatchers computing diagnostics off
 // the same fit is only meaningful if they agree on what "the same fit" means.
+//
+// SETTINGS-TRANSPARENCY CONTRACT (decided; do not "fix" by deriving a default here): every knob
+// below is applied ONLY when the construct carries its key. An absent key means the ported
+// class's own default, full stop -- this function deliberately derives nothing on the caller's
+// behalf. That is deliberately narrower than ch_analysis_diagnostics_run_'s
+// apply_family_bayes_knobs (corehydror/src/analysis.cpp:343-355), which derives
+// `warmup_iterations = max(50, iterations / 2)` whenever `iterations > 0`. The two cascades are
+// allowed to disagree because a later task delegates ch_estimation_bayes_run_ onto this exact
+// path, and that delegation is only byte-identical to the 4542 pinned oracle assertions it
+// backs if this function's behavior does not move out from under it; any derived default belongs
+// in the user-facing R/Python verbs (which write an explicit `warmup_iterations` into the
+// construct), not here.
+//
+// Consequence a caller must know: BayesianAnalysis's class default warmup_iterations_ is 1500.
+// If the construct omits `warmup_iterations` and the caller also chose a small `iterations`
+// (below ~3000), that default warmup exceeds iterations/2 and trips the sampler's own
+// "warmup > iterations/2" guard (mcmc_sampler.hpp) rather than silently shrinking. Any caller
+// that lets a user pick `iterations` must derive and pass a `warmup_iterations` itself -- this
+// function will not do it for them.
 inline void apply_bayesian_settings(BayesianAnalysis& ba,
                                     const corehydro::models::spec::JsonValue& construct) {
     ba.set_use_simulation_defaults(false);
@@ -554,7 +573,11 @@ inline double run_fit_quantile_variance(const std::string& construct_json,
 // through the shared apply_bayesian_settings, so the two dispatchers cannot silently diverge) and
 // MaximumAPosteriori::{get_cooks_distance, get_observation_influence,
 // compute_leverage_diagnostics} / the GeneralizedMethodOfMoments diagnostics quartet for the
-// other two.
+// other two. Its BayesianAnalysis arm builds through apply_bayesian_settings and therefore
+// inherits that function's settings-transparency contract verbatim: an absent
+// `warmup_iterations` in `construct_json` leaves the 1500 class default, so a caller that lets a
+// user choose a small `iterations` must pass an explicit `warmup_iterations` or trip the
+// sampler's own guard (see apply_bayesian_settings's header comment).
 inline FitDiagnostics run_fit_diagnostics(const std::string& target,
                                           const std::string& construct_json,
                                           const std::vector<double>& dataset) {

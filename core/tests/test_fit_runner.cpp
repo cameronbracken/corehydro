@@ -329,6 +329,60 @@ static void test_diagnostics_shape() {
     CHECK_TRUE(d.leverage.size() == 10);
 }
 
+// BayesianAnalysis arm of run_fit_diagnostics: covers the leverage/Pareto-k/prior-influence
+// fields ba.compute_leverage_diagnostics()/compute_influence_diagnostics()/
+// compute_prior_influence_diagnostics() actually populate, and that cooks_distance/
+// observation_influence -- fields only the MAP and GMM arms fill -- stay empty rather than
+// picking up garbage from an uninitialized FitDiagnostics.
+//
+// warmup_iterations is explicit here for the same reason test_bayesian_block's is: per the
+// settings-transparency contract documented on apply_bayesian_settings (fit_runner.hpp), an
+// absent warmup_iterations leaves BayesianAnalysis's 1500 class default in place, which exceeds
+// this test's small iterations and trips the sampler's own "warmup > iterations/2" guard. The
+// contract says the runner will not derive one, so the test must supply it.
+static void test_bayesian_diagnostics_shape() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"DEMCz","seed":12345,)"
+        R"("iterations":200,"warmup_iterations":50,"number_of_chains":4,"thinning_interval":1,)"
+        R"("output_length":500,"credible_interval_width":0.9})";
+    support::FitDiagnostics d =
+        support::run_fit_diagnostics("BayesianAnalysis", construct, kPeaks);
+
+    // Sizes tied to the input, not to a hardcoded literal.
+    CHECK_TRUE(d.leverage.size() == kPeaks.size());
+    CHECK_TRUE(d.pareto_k.size() == kPeaks.size());
+    CHECK_TRUE(std::isfinite(d.max_pareto_k));
+    // Normal has 2 parameters; prior_influence and its names are per-parameter.
+    CHECK_TRUE(d.prior_influence.size() == 2);
+    CHECK_TRUE(d.prior_influence_names.size() == 2);
+    for (const auto& name : d.prior_influence_names) CHECK_TRUE(!name.empty());
+
+    // Fields this arm does not populate stay empty rather than carrying stale/garbage data.
+    CHECK_TRUE(d.cooks_distance.empty());
+    CHECK_TRUE(d.observation_influence.empty());
+}
+
+// GMM arm of run_fit_diagnostics: covers the get_cooks_distance/get_observation_influence/
+// get_leverage_diagnostics quartet, sized to the input dataset and parameter count rather than
+// hardcoded literals. Pareto-k and prior influence are BayesianAnalysis-only, so they must stay
+// empty here.
+static void test_gmm_diagnostics_shape() {
+    std::string construct =
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
+        R"("strategy":"Iterative","optimizer":"BFGS","max_gmm_iterations":50})";
+    support::FitDiagnostics d = support::run_fit_diagnostics("GMM", construct, kPeaks);
+
+    CHECK_TRUE(d.cooks_distance.size() == kPeaks.size());
+    CHECK_TRUE(d.leverage.size() == kPeaks.size());
+    // observation_influence is row-major n_obs x n_params; LogPearsonTypeIII has 3 parameters.
+    CHECK_TRUE(d.observation_influence.size() == kPeaks.size() * 3u);
+
+    // Fields this arm does not populate stay empty rather than carrying stale/garbage data.
+    CHECK_TRUE(d.pareto_k.empty());
+    CHECK_TRUE(!std::isfinite(d.max_pareto_k));
+    CHECK_TRUE(d.prior_influence.empty());
+}
+
 int main() {
     test_mle_shape();
     test_hessian_can_be_disabled();
@@ -346,5 +400,7 @@ int main() {
     test_gmm_rejects_a_non_b17c_model();
     test_quantile_variance_is_finite_and_positive();
     test_diagnostics_shape();
+    test_bayesian_diagnostics_shape();
+    test_gmm_diagnostics_shape();
     return chtest::summary("fit_runner");
 }
