@@ -170,6 +170,32 @@ static void test_unknown_optimizer_throws_naming_it() {
     CHECK_TRUE(threw);
 }
 
+// fitted_spec must not duplicate `parameter_values` when the caller's construct already
+// carries one (e.g. as a starting/fixed value): the fitted values must win, and there must be
+// exactly one such key so a caller re-parsing model_spec reads the FITTED values back, not the
+// stale pre-fit input. See the review finding this covers: JsonValue::at() returns the first
+// match by insertion order, so a duplicated key would silently resurrect the input values.
+static void test_fitted_spec_does_not_duplicate_parameter_values() {
+    std::string construct = R"({"model":{"family":"Normal","dataset":"peaks",)"
+                            R"("parameter_values":[10000,1000]},"optimizer":"NelderMead"})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+
+    // Exactly one parameter_values key in the returned spec.
+    std::size_t first = r.model_spec.find("\"parameter_values\"");
+    CHECK_TRUE(first != std::string::npos);
+    std::size_t second = r.model_spec.find("\"parameter_values\"", first + 1);
+    CHECK_TRUE(second == std::string::npos);
+
+    // It reads back as the FITTED values, not the input [10, 2].
+    spec::JsonValue parsed = spec::parse_json(r.model_spec);
+    std::vector<double> readback = parsed.at("parameter_values").as_double_vector();
+    CHECK_TRUE(readback.size() == r.parameters.size());
+    for (std::size_t i = 0; i < readback.size(); ++i) CHECK_NEAR(readback[i], r.parameters[i], 1e-12);
+    // Sanity: the input values were a poor starting guess far from the fit, so a bug that
+    // resurrects them would fail the readback-equals-fitted check above.
+    CHECK_TRUE(std::abs(readback[0] - 10000.0) > 1.0 || std::abs(readback[1] - 1000.0) > 1.0);
+}
+
 // json_lite.hpp's to_json_string is new surface added by this task; prove a double round-trips
 // bit-exactly through parse_json(to_json_string(v)) at %.17g precision.
 static void test_json_round_trip() {
@@ -189,6 +215,7 @@ int main() {
     test_hessian_can_be_disabled();
     test_single_parameter_covariance_is_nan_not_zero();
     test_map_reports_status();
+    test_fitted_spec_does_not_duplicate_parameter_values();
     test_unknown_target_throws();
     test_unknown_optimizer_throws_naming_it();
     test_json_round_trip();

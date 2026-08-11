@@ -140,13 +140,19 @@ void fill_common(FitResult& r, TEstimator& e, corehydro::models::ModelBase& mode
 
 // Re-serializes the model spec with the fitted values appended, so a caller can rebuild the
 // fitted model. Re-emits the parsed construct's model object's own entries (json_lite.hpp has
-// no in-place mutation -- see its header) and adds one more key, `parameter_values`.
+// no in-place mutation -- see its header) and adds one more key, `parameter_values`. Any
+// `parameter_values` entry already present on the input construct (a starting or fixed-value
+// guess) is skipped here rather than re-emitted: the fitted values below must be the sole
+// `parameter_values` a caller re-parsing model_spec can read, since JsonValue::at() returns the
+// first match by insertion order and would otherwise resurrect the stale pre-fit input.
 inline std::string fitted_spec(const corehydro::models::spec::JsonValue& model_spec,
                                const std::vector<double>& values) {
     std::string out = "{";
-    for (const auto& kv : model_spec.entries())
+    for (const auto& kv : model_spec.entries()) {
+        if (kv.first == "parameter_values") continue;
         out += "\"" + corehydro::models::spec::escape_json_string(kv.first) +
                "\":" + corehydro::models::spec::to_json_string(kv.second) + ",";
+    }
     out += "\"parameter_values\":[";
     for (std::size_t i = 0; i < values.size(); ++i) {
         if (i != 0) out += ",";
