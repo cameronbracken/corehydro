@@ -22,6 +22,7 @@
 - After editing any `corehydror/src/*.cpp`, run `Rscript -e 'cpp11::cpp_register("corehydror")'` before installing.
 - Every new R export must appear in `corehydror/_pkgdown.yml`. Every new Python export must appear in the `quartodoc.sections` of `site/_quarto.yml`. pkgdown errors on a missing entry.
 - Baselines that must not regress: ctest 79/79, oracle gate 4542 reproduced / 0 failed / 11 skipped, testthat 4446 / 0, pytest 884.
+- Every model spec in a construct needs a `"dataset"` key naming a datasets entry, even when the harness passes the observations as a flat vector alongside it; the spec builder requires the marker. Tasks 1 and 2 both hit this.
 - Target version at the end of the phase: **0.4.0** in `corehydror/DESCRIPTION`, `corehydropy/pyproject.toml`, and the core version stamp.
 
 ---
@@ -152,7 +153,7 @@ static void test_map_reports_status() {
 static void test_unknown_target_throws() {
     bool threw = false;
     try {
-        support::run_fit("NotAnEstimator", R"({"model":{"family":"Normal"}})", kPeaks);
+        support::run_fit("NotAnEstimator", R"({"model":{"family":"Normal","dataset":"peaks"}})", kPeaks);
     } catch (const std::exception& e) {
         threw = std::string(e.what()).find("NotAnEstimator") != std::string::npos;
     }
@@ -539,7 +540,7 @@ Append to `core/tests/test_fit_runner.cpp` and call from `main()`:
 ```cpp
 static void test_bayesian_block() {
     std::string construct =
-        R"({"model":{"family":"Normal"},"sampler":"DEMCz","seed":12345,"iterations":200,)"
+        R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"DEMCz","seed":12345,"iterations":200,)"
         R"("number_of_chains":4,"thinning_interval":1,"output_length":500,)"
         R"("credible_interval_width":0.9})";
     support::FitResult r = support::run_fit("BayesianAnalysis", construct, kPeaks);
@@ -569,7 +570,7 @@ static void test_bayesian_rejects_a_sampler_it_cannot_construct() {
     bool threw = false;
     try {
         support::run_fit("BayesianAnalysis",
-                         R"({"model":{"family":"Normal"},"sampler":"HMC"})", kPeaks);
+                         R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"HMC"})", kPeaks);
     } catch (const std::exception& e) {
         std::string m = e.what();
         threw = m.find("HMC") != std::string::npos && m.find("mcmc_sample") != std::string::npos;
@@ -707,7 +708,7 @@ Append and call from `main()`:
 ```cpp
 static void test_gmm_block() {
     std::string construct =
-        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII"},)"
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
         R"("strategy":"Iterative","optimizer":"BFGS","max_gmm_iterations":50})";
     support::FitResult r = support::run_fit("GMM", construct, kPeaks);
     CHECK_TRUE(r.method == "GMM");
@@ -722,7 +723,7 @@ static void test_gmm_block() {
 static void test_gmm_rejects_a_non_b17c_model() {
     bool threw = false;
     try {
-        support::run_fit("GMM", R"({"model":{"family":"Normal"}})", kPeaks);
+        support::run_fit("GMM", R"({"model":{"family":"Normal","dataset":"peaks"}})", kPeaks);
     } catch (const std::exception& e) {
         threw = std::string(e.what()).find("bulletin17c") != std::string::npos;
     }
@@ -731,7 +732,7 @@ static void test_gmm_rejects_a_non_b17c_model() {
 
 static void test_quantile_variance_is_finite_and_positive() {
     std::string construct =
-        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII"},)"
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
         R"("strategy":"Iterative","optimizer":"BFGS"})";
     double v = support::run_fit_quantile_variance(construct, kPeaks, 0.01);
     CHECK_TRUE(std::isfinite(v) && v > 0.0);
