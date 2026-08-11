@@ -68,6 +68,27 @@ extern "C" SEXP _corehydror_ch_cop_fit_(SEXP type, SEXP x, SEXP y, SEXP method, 
     return cpp11::as_sexp(ch_cop_fit_(cpp11::as_cpp<cpp11::decay_t<std::string>>(type), cpp11::as_cpp<cpp11::decay_t<doubles>>(x), cpp11::as_cpp<cpp11::decay_t<doubles>>(y), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(marg_x), cpp11::as_cpp<cpp11::decay_t<std::string>>(marg_y)));
   END_CPP11
 }
+// data.cpp
+list ch_data_frame_summary_(std::string data_frame_json, double plotting_parameter);
+extern "C" SEXP _corehydror_ch_data_frame_summary_(SEXP data_frame_json, SEXP plotting_parameter) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_data_frame_summary_(cpp11::as_cpp<cpp11::decay_t<std::string>>(data_frame_json), cpp11::as_cpp<cpp11::decay_t<double>>(plotting_parameter)));
+  END_CPP11
+}
+// data.cpp
+list ch_model_log_likelihood_(std::string model_json, doubles dataset, doubles params);
+extern "C" SEXP _corehydror_ch_model_log_likelihood_(SEXP model_json, SEXP dataset, SEXP params) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_model_log_likelihood_(cpp11::as_cpp<cpp11::decay_t<std::string>>(model_json), cpp11::as_cpp<cpp11::decay_t<doubles>>(dataset), cpp11::as_cpp<cpp11::decay_t<doubles>>(params)));
+  END_CPP11
+}
+// data.cpp
+list ch_threshold_diagnostics_(doubles data, std::string method, double u_min, double u_max, int n_thresholds, double confidence_level);
+extern "C" SEXP _corehydror_ch_threshold_diagnostics_(SEXP data, SEXP method, SEXP u_min, SEXP u_max, SEXP n_thresholds, SEXP confidence_level) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_threshold_diagnostics_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<double>>(u_min), cpp11::as_cpp<cpp11::decay_t<double>>(u_max), cpp11::as_cpp<cpp11::decay_t<int>>(n_thresholds), cpp11::as_cpp<cpp11::decay_t<double>>(confidence_level)));
+  END_CPP11
+}
 // dist.cpp
 doubles ch_dist_moments_(std::string target, doubles params);
 extern "C" SEXP _corehydror_ch_dist_moments_(SEXP target, SEXP params) {
@@ -729,6 +750,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_cr_pdf_",                       (DL_FUNC) &_corehydror_ch_cr_pdf_,                        6},
     {"_corehydror_ch_cr_quantile_",                  (DL_FUNC) &_corehydror_ch_cr_quantile_,                   6},
     {"_corehydror_ch_cr_valid_",                     (DL_FUNC) &_corehydror_ch_cr_valid_,                      5},
+    {"_corehydror_ch_data_frame_summary_",           (DL_FUNC) &_corehydror_ch_data_frame_summary_,            2},
     {"_corehydror_ch_dirichlet_val_",                (DL_FUNC) &_corehydror_ch_dirichlet_val_,                 3},
     {"_corehydror_ch_dist_cdf_",                     (DL_FUNC) &_corehydror_ch_dist_cdf_,                      3},
     {"_corehydror_ch_dist_cdf_v_",                   (DL_FUNC) &_corehydror_ch_dist_cdf_v_,                    3},
@@ -781,6 +803,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_mix_quantile_",                 (DL_FUNC) &_corehydror_ch_mix_quantile_,                  6},
     {"_corehydror_ch_mix_valid_",                    (DL_FUNC) &_corehydror_ch_mix_valid_,                     5},
     {"_corehydror_ch_model_data_frame_",             (DL_FUNC) &_corehydror_ch_model_data_frame_,              2},
+    {"_corehydror_ch_model_log_likelihood_",         (DL_FUNC) &_corehydror_ch_model_log_likelihood_,          3},
     {"_corehydror_ch_model_simulate_",               (DL_FUNC) &_corehydror_ch_model_simulate_,                4},
     {"_corehydror_ch_model_validate_",               (DL_FUNC) &_corehydror_ch_model_validate_,                2},
     {"_corehydror_ch_multinomial_val_",              (DL_FUNC) &_corehydror_ch_multinomial_val_,               4},
@@ -800,6 +823,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_plotting_positions_alpha_",     (DL_FUNC) &_corehydror_ch_plotting_positions_alpha_,      2},
     {"_corehydror_ch_sobol_generate_",               (DL_FUNC) &_corehydror_ch_sobol_generate_,                3},
     {"_corehydror_ch_sobol_skip_to_",                (DL_FUNC) &_corehydror_ch_sobol_skip_to_,                 3},
+    {"_corehydror_ch_threshold_diagnostics_",        (DL_FUNC) &_corehydror_ch_threshold_diagnostics_,         6},
     {"_corehydror_ch_trunc_cdf_",                    (DL_FUNC) &_corehydror_ch_trunc_cdf_,                     5},
     {"_corehydror_ch_trunc_moments_",                (DL_FUNC) &_corehydror_ch_trunc_moments_,                 4},
     {"_corehydror_ch_trunc_pdf_",                    (DL_FUNC) &_corehydror_ch_trunc_pdf_,                     5},

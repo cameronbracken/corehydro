@@ -36,6 +36,18 @@ ch_cop_fit_ <- function(type, x, y, method, marg_x, marg_y) {
   .Call(`_corehydror_ch_cop_fit_`, type, x, y, method, marg_x, marg_y)
 }
 
+ch_data_frame_summary_ <- function(data_frame_json, plotting_parameter) {
+  .Call(`_corehydror_ch_data_frame_summary_`, data_frame_json, plotting_parameter)
+}
+
+ch_model_log_likelihood_ <- function(model_json, dataset, params) {
+  .Call(`_corehydror_ch_model_log_likelihood_`, model_json, dataset, params)
+}
+
+ch_threshold_diagnostics_ <- function(data, method, u_min, u_max, n_thresholds, confidence_level) {
+  .Call(`_corehydror_ch_threshold_diagnostics_`, data, method, u_min, u_max, n_thresholds, confidence_level)
+}
+
 ch_dist_moments_ <- function(target, params) {
   .Call(`_corehydror_ch_dist_moments_`, target, params)
 }

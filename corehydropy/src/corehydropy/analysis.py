@@ -13,6 +13,8 @@ import json
 
 import numpy as np
 
+from .data import AnalysisData
+from .models import Model
 from ._core import (
     analysis_b17c_run as _b17c_run,
     analysis_diagnostics_run as _diagnostics_run,
@@ -23,9 +25,77 @@ from ._core import (
 )
 
 
+
+def _require(value, name):
+    """Argument required on the plain-sequence path, supplied by the model otherwise."""
+    if value is None:
+        raise TypeError(
+            f"`{name}` is required unless `data` is a Model from a model_*() constructor"
+        )
+    return value
+
+
+def _analysis_input(data, build, expected_type=None, expected_subtype=None):
+    """Resolve an analysis's first argument.
+
+    Accepts either a plain sequence of observations (the convenience path every analysis has
+    always had) or a :class:`~corehydropy.models.Model` from one of the ``model_*()``
+    constructors. ``build`` assembles the spec for the sequence path; ``expected_type`` and
+    ``expected_subtype`` guard a mismatched model here, with a clear message, rather than
+    letting it fail deep in the C++ dispatch.
+
+    A model built over an :class:`~corehydropy.data.AnalysisData` frame carries its
+    observations inline, so the separate dataset vector is empty and the spec builder prefers
+    the inline frame.
+    """
+    if isinstance(data, Model):
+        actual = data.spec.get("type", "univariate_distribution")
+        if expected_type is not None and actual != expected_type:
+            raise ValueError(
+                f"this analysis takes a {expected_type} model, but was given a {actual} model"
+            )
+        if expected_subtype is not None and data.spec.get("subtype") != expected_subtype:
+            raise ValueError(
+                f"this analysis takes a {expected_subtype} model, but was given a "
+                f"{data.spec.get('subtype')} model"
+            )
+        return data.to_json(), list(data.dataset)
+    if isinstance(data, AnalysisData):
+        raise TypeError(
+            "pass an AnalysisData frame through a model, e.g. "
+            'univariate_analysis(model_univariate("Normal", data))'
+        )
+    return json.dumps(build()), [float(v) for v in np.asarray(data).ravel()]
+
+
+def _extended_data_block(data):
+    """The data half of an extended-analysis construct.
+
+    A plain sequence goes into the separate ``datasets`` map under the key the model spec names;
+    an :class:`~corehydropy.data.AnalysisData` frame travels inline in the model spec, and the
+    datasets map then carries nothing.
+    """
+    if isinstance(data, AnalysisData):
+        return {"data_frame": data.spec}, {"data": []}
+    return {"dataset": "data"}, {"data": [float(v) for v in np.asarray(data).ravel()]}
+
+
+def _extended_model_spec(data, distribution, expected_type):
+    """The model half of an extended-analysis construct over a single univariate distribution."""
+    if isinstance(data, Model):
+        actual = data.spec.get("type", "univariate_distribution")
+        if actual != expected_type:
+            raise ValueError(
+                f"this analysis takes a {expected_type} model, but was given a {actual} model"
+            )
+        return data.spec, {"data": list(data.dataset)}
+    block, datasets = _extended_data_block(data)
+    return {"family": str(_require(distribution, "distribution")), **block}, datasets
+
+
 def univariate_analysis(
     data,
-    distribution: str,
+    distribution: str | None = None,
     sampler: str = "DEMCz",
     iterations: int = 3000,
     output_length: int = 10000,
@@ -70,9 +140,11 @@ def univariate_analysis(
         (one value per exceedance ordinate) and the scalars ``aic``, ``bic``, ``dic``,
         ``rmse``.
     """
-    model_json = json.dumps({"family": distribution, "dataset": "data"})
+    model_json, values = _analysis_input(
+        data, lambda: {"family": str(_require(distribution, "distribution")), "dataset": "data"},
+        "univariate_distribution",
+    )
     ep = [] if exceedance_probabilities is None else [float(v) for v in exceedance_probabilities]
-    values = [float(v) for v in np.asarray(data).ravel()]
     return _univariate_run(
         model_json, values, sampler, int(iterations), int(output_length),
         float(credible_level), int(seed), ep, int(thinning_interval),
@@ -136,11 +208,12 @@ def bulletin17c_analysis(
         ``confidence_level``, ``beta1``, ``nu``, ``quantile_variance``, ``parameters``, and
         ``covariance`` (a nested p x p list).
     """
-    model_json = json.dumps(
-        {"type": "bulletin17c", "family": "LogPearsonTypeIII", "dataset": "data"}
+    model_json, values = _analysis_input(
+        data,
+        lambda: {"type": "bulletin17c", "family": "LogPearsonTypeIII", "dataset": "data"},
+        "bulletin17c",
     )
     ep = [] if exceedance_probabilities is None else [float(v) for v in exceedance_probabilities]
-    values = [float(v) for v in np.asarray(data).ravel()]
     return _b17c_run(
         model_json, values, uncertainty_method, int(output_length), int(seed),
         float(confidence_level), ep,
@@ -154,12 +227,12 @@ def bulletin17c_analysis(
 
 
 def _family_run_dispatch(
-    analysis_type, model, data, sampler, iterations, output_length, credible_level, seed,
+    analysis_type, build, data, sampler, iterations, output_length, credible_level, seed,
     exceedance_probabilities, thinning_interval, training_time_steps, forecasting_time_steps,
+    expected_type, expected_subtype=None,
 ) -> dict:
-    model_json = json.dumps(model)
+    model_json, values = _analysis_input(data, build, expected_type, expected_subtype)
     ep = [] if exceedance_probabilities is None else [float(v) for v in exceedance_probabilities]
-    values = [float(v) for v in np.asarray(data).ravel()]
     return _family_run(
         analysis_type, model_json, values, sampler, int(iterations), int(output_length),
         float(credible_level), int(seed), ep, int(thinning_interval), int(training_time_steps),
@@ -169,7 +242,7 @@ def _family_run_dispatch(
 
 def mixture_analysis(
     data,
-    families,
+    families=None,
     zero_inflated: bool = False,
     sampler: str = "DEMCz",
     iterations: int = 3000,
@@ -217,21 +290,25 @@ def mixture_analysis(
     --------
     univariate_analysis
     """
-    model = {
-        "type": "mixture",
-        "families": [str(f) for f in families],
-        "zero_inflated": bool(zero_inflated),
-        "dataset": "data",
-    }
+    def _build():
+        model = {
+            "type": "mixture",
+            "families": [str(f) for f in _require(families, "families")],
+            "zero_inflated": bool(zero_inflated),
+            "dataset": "data",
+        }
+        return model
+
     return _family_run_dispatch(
-        "mixture", model, data, sampler, iterations, output_length, credible_level, seed,
+        "mixture", _build, data, sampler, iterations, output_length, credible_level, seed,
         exceedance_probabilities, thinning_interval, -1, -1,
+        "mixture",
     )
 
 
 def competing_risk_analysis(
     data,
-    families,
+    families=None,
     sampler: str = "DEMCz",
     iterations: int = 3000,
     output_length: int = 10000,
@@ -277,14 +354,18 @@ def competing_risk_analysis(
     --------
     univariate_analysis, mixture_analysis
     """
-    model = {
-        "type": "competing_risks",
-        "families": [str(f) for f in families],
-        "dataset": "data",
-    }
+    def _build():
+        model = {
+            "type": "competing_risks",
+            "families": [str(f) for f in _require(families, "families")],
+            "dataset": "data",
+        }
+        return model
+
     return _family_run_dispatch(
-        "competing_risk", model, data, sampler, iterations, output_length, credible_level, seed,
+        "competing_risk", _build, data, sampler, iterations, output_length, credible_level, seed,
         exceedance_probabilities, thinning_interval, -1, -1,
+        "competing_risks",
     )
 
 
@@ -338,14 +419,18 @@ def point_process_analysis(
     --------
     univariate_analysis, mixture_analysis
     """
-    model = {"type": "point_process", "dataset": "data"}
-    if threshold is not None:
-        model["threshold"] = float(threshold)
-    if total_years is not None:
-        model["total_years"] = float(total_years)
+    def _build():
+        model = {"type": "point_process", "dataset": "data"}
+        if threshold is not None:
+            model["threshold"] = float(threshold)
+        if total_years is not None:
+            model["total_years"] = float(total_years)
+        return model
+
     return _family_run_dispatch(
-        "point_process", model, data, sampler, iterations, output_length, credible_level, seed,
+        "point_process", _build, data, sampler, iterations, output_length, credible_level, seed,
         exceedance_probabilities, thinning_interval, -1, -1,
+        "point_process",
     )
 
 
@@ -404,17 +489,21 @@ def ar_analysis(
     --------
     univariate_analysis, ma_analysis, arima_analysis, arimax_analysis
     """
-    model = {
-        "type": "time_series",
-        "subtype": "ar",
-        "dataset": "data",
-        "orders": {"p": int(order_p)},
-        "include_intercept": bool(include_intercept),
-    }
+    def _build():
+        model = {
+            "type": "time_series",
+            "subtype": "ar",
+            "dataset": "data",
+            "orders": {"p": int(order_p)},
+            "include_intercept": bool(include_intercept),
+        }
+        return model
+
     tts = -1 if training_time_steps is None else int(training_time_steps)
     return _family_run_dispatch(
-        "ar", model, data, sampler, iterations, output_length, credible_level, seed, None,
+        "ar", _build, data, sampler, iterations, output_length, credible_level, seed, None,
         thinning_interval, tts, forecasting_time_steps,
+        "time_series", "ar",
     )
 
 
@@ -473,17 +562,21 @@ def ma_analysis(
     --------
     ar_analysis, arima_analysis, arimax_analysis
     """
-    model = {
-        "type": "time_series",
-        "subtype": "ma",
-        "dataset": "data",
-        "orders": {"q": int(order_q)},
-        "include_intercept": bool(include_intercept),
-    }
+    def _build():
+        model = {
+            "type": "time_series",
+            "subtype": "ma",
+            "dataset": "data",
+            "orders": {"q": int(order_q)},
+            "include_intercept": bool(include_intercept),
+        }
+        return model
+
     tts = -1 if training_time_steps is None else int(training_time_steps)
     return _family_run_dispatch(
-        "ma", model, data, sampler, iterations, output_length, credible_level, seed, None,
+        "ma", _build, data, sampler, iterations, output_length, credible_level, seed, None,
         thinning_interval, tts, forecasting_time_steps,
+        "time_series", "ma",
     )
 
 
@@ -548,17 +641,21 @@ def arima_analysis(
     --------
     ar_analysis, ma_analysis, arimax_analysis
     """
-    model = {
-        "type": "time_series",
-        "subtype": "arima",
-        "dataset": "data",
-        "orders": {"p": int(order_p), "d": int(order_d), "q": int(order_q)},
-        "include_intercept": bool(include_intercept),
-    }
+    def _build():
+        model = {
+            "type": "time_series",
+            "subtype": "arima",
+            "dataset": "data",
+            "orders": {"p": int(order_p), "d": int(order_d), "q": int(order_q)},
+            "include_intercept": bool(include_intercept),
+        }
+        return model
+
     tts = -1 if training_time_steps is None else int(training_time_steps)
     return _family_run_dispatch(
-        "arima", model, data, sampler, iterations, output_length, credible_level, seed, None,
+        "arima", _build, data, sampler, iterations, output_length, credible_level, seed, None,
         thinning_interval, tts, forecasting_time_steps,
+        "time_series", "arima",
     )
 
 
@@ -630,24 +727,28 @@ def arimax_analysis(
     --------
     ar_analysis, ma_analysis, arima_analysis
     """
-    model = {
-        "type": "time_series",
-        "subtype": "arimax",
-        "dataset": "data",
-        "orders": {"p": int(order_p), "d": int(order_d), "q": int(order_q), "b": int(order_b)},
-        "include_intercept": bool(include_intercept),
-        "trend": str(trend),
-    }
+    def _build():
+        model = {
+            "type": "time_series",
+            "subtype": "arimax",
+            "dataset": "data",
+            "orders": {"p": int(order_p), "d": int(order_d), "q": int(order_q), "b": int(order_b)},
+            "include_intercept": bool(include_intercept),
+            "trend": str(trend),
+        }
+        return model
+
     tts = -1 if training_time_steps is None else int(training_time_steps)
     return _family_run_dispatch(
-        "arimax", model, data, sampler, iterations, output_length, credible_level, seed, None,
+        "arimax", _build, data, sampler, iterations, output_length, credible_level, seed, None,
         thinning_interval, tts, forecasting_time_steps,
+        "time_series", "arimax",
     )
 
 
 def estimation_diagnostics(
     data,
-    distribution: str,
+    distribution: str | None = None,
     sampler: str = "DEMCz",
     iterations: int = 3000,
     output_length: int = 10000,
@@ -694,8 +795,10 @@ def estimation_diagnostics(
           ``total_prior_log_likelihood``, ``total_data_log_likelihood``,
           ``prior_to_data_ratio``, ``is_prior_influential``, ``mean_prior_precision_share``.
     """
-    model_json = json.dumps({"family": distribution, "dataset": "data"})
-    values = [float(v) for v in np.asarray(data).ravel()]
+    model_json, values = _analysis_input(
+        data, lambda: {"family": str(_require(distribution, "distribution")), "dataset": "data"},
+        "univariate_distribution",
+    )
     return _diagnostics_run(
         model_json, values, sampler, int(iterations), int(output_length), int(seed),
         int(thinning_interval), int(thin_every),
@@ -767,8 +870,9 @@ def composite_analysis(
     --------
     univariate_analysis
     """
+    _block, _datasets = _extended_data_block(data)
     construct = {
-        "model": {"families": [str(f) for f in families], "dataset": "data"},
+        "model": {"families": [str(f) for f in families], **_block},
         "composite_type": str(composite_type),
         "average_method": str(average_method),
         "sampler": str(sampler),
@@ -780,7 +884,7 @@ def composite_analysis(
     }
     if exceedance_probabilities is not None:
         construct["exceedance_probabilities"] = [float(v) for v in exceedance_probabilities]
-    return _extended("CompositeAnalysis", construct, {"data": [float(v) for v in np.asarray(data).ravel()]})
+    return _extended("CompositeAnalysis", construct, _datasets)
 
 
 def spatial_gev_analysis(
@@ -1187,7 +1291,7 @@ def bootstrap_analysis(
 
 def prior_predictive_check(
     data,
-    distribution: str,
+    distribution: str | None = None,
     number_of_draws: int = 1000,
     sample_size=None,
     seed: int = 12345,
@@ -1215,19 +1319,20 @@ def prior_predictive_check(
         ``number_of_valid_draws`` and the predictive quantile summaries
         (``summary_mean_quantiles`` etc., each the ``[2.5, 25, 50, 75, 97.5]%`` quantiles).
     """
+    _model, _datasets = _extended_model_spec(data, distribution, "univariate_distribution")
     construct = {
-        "model": {"family": str(distribution), "dataset": "data"},
+        "model": _model,
         "number_of_draws": int(number_of_draws),
         "seed": int(seed),
     }
     if sample_size is not None:
         construct["sample_size"] = int(sample_size)
-    return _extended("PriorPredictiveCheck", construct, {"data": [float(v) for v in np.asarray(data).ravel()]})
+    return _extended("PriorPredictiveCheck", construct, _datasets)
 
 
 def posterior_predictive_check(
     data,
-    distribution: str,
+    distribution: str | None = None,
     sampler: str = "DEMCz",
     iterations: int = 3000,
     output_length: int = 10000,
@@ -1264,8 +1369,9 @@ def posterior_predictive_check(
         ``number_of_replicates``, the five posterior predictive p-values (``mean_p_value``
         etc.), and ``has_misfit`` (1 when any p-value is extreme, else 0).
     """
+    _model, _datasets = _extended_model_spec(data, distribution, "univariate_distribution")
     construct = {
-        "model": {"family": str(distribution), "dataset": "data"},
+        "model": _model,
         "sampler": str(sampler),
         "iterations": int(iterations),
         "output_length": int(output_length),
@@ -1273,4 +1379,4 @@ def posterior_predictive_check(
         "number_of_replicates": int(number_of_replicates),
         "thinning_interval": int(thinning_interval),
     }
-    return _extended("PosteriorPredictiveCheck", construct, {"data": [float(v) for v in np.asarray(data).ravel()]})
+    return _extended("PosteriorPredictiveCheck", construct, _datasets)

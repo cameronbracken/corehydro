@@ -22,6 +22,12 @@
 //     "trends": [ { "parameter": p, "type": "<TrendModelType name>",
 //                   "start_index"?: i, "values"?: [ ... ] } ],
 //     "parameter_values"?: [ ... ] }
+// Every type additionally accepts the optional model-level keys `use_default_flat_priors` (bool)
+// and `parameters` (a per-parameter override block), both applied by apply_parameter_values
+// before the flat `parameter_values` vector:
+//   "parameters": [ { "index": i, "value"?: x, "lower"?: lo, "upper"?: hi,
+//                     "is_positive"?: b, "is_fixed"?: b, "name"?: "<label>",
+//                     "prior"?: { "family": "<factory name>", "parameters": [ ... ] } } ]
 //   { "type": "mixture", "families": [ ... ], "zero_inflated"?: b, <data>, ... }
 //   { "type": "competing_risks", "families": [ ... ], <data>, ... }
 //   { "type": "point_process", <data>, "use_defaults"?: b, "threshold"?: x,
@@ -171,6 +177,26 @@ inline DataFrame build_data_frame(const JsonValue& spec) {
     // flags / `low_outlier_threshold` by fixture convention (MGBT clears both first).
     if (spec.value_or("mgbt_low_outliers", false)) df.set_low_outliers_from_mgbt();
 
+    // Optional explicit-threshold trigger: the sibling public set_low_outliers_from_threshold()
+    // path. Unlike a bare `low_outlier_threshold` (which only records the value, leaving the
+    // per-ordinate flags to the caller -- the fixture convention above), this derives the flags
+    // AND the low-outlier count from the threshold, which is what a user asking to censor below
+    // a level means. Opt-in so the existing bare-threshold fixtures are untouched.
+    if (spec.value_or("threshold_low_outliers", false)) df.set_low_outliers_from_threshold();
+
+    // Honour the port's invalidation contract (see the strategy note in data_frame.hpp): the C#
+    // recomputes plotting positions off the INotifyPropertyChanged cascade that fires when the
+    // low-outlier flags change, and this port replaced that plumbing with an explicit call the
+    // mutating caller owns. This IS that caller. It matters beyond plotting: the Bulletin 17C
+    // ROS imputation (get_nonparametric_moments_ros) reads each ordinate's plotting position,
+    // and without this a censored frame reaches it with every position still at its 0.0 default,
+    // which throws out of the moment machinery.
+    //
+    // Guarded on the count rather than run unconditionally: only the two public setters above
+    // maintain number_of_low_outliers_, so this fires exactly for frames they touched and leaves
+    // every frame built from explicit per-ordinate flags exactly as it was.
+    if (df.number_of_low_outliers() > 0) df.calculate_plotting_positions();
+
     return df;
 }
 
@@ -188,8 +214,45 @@ inline DataFrame build_model_data_frame(const JsonValue& model,
     throw std::runtime_error("model spec requires either 'dataset' or 'data_frame'");
 }
 
-// Optional model-level `parameter_values`: one sync-safe set_parameter_values call.
+// Optional model-level `parameters` block: per-parameter bounds / fixed flag / prior
+// distribution / starting value, written straight onto the ModelParameter elements the model
+// built (models/support/model_parameter.hpp). Every entry names its target by 0-based `index`
+// into the model's own parameter vector, so the block composes with `trends` (which decides the
+// layout) and runs BEFORE the flat `parameter_values` vector.
+//
+// Operates on the parameter vector rather than the model so the one implementation serves both
+// hierarchies: ModelBase-derived models AND Bulletin17CDistribution, which is an IGMMModel and
+// shares only the `parameters()` / `set_parameter_values()` surface.
+inline void apply_parameter_overrides(std::vector<ModelParameter>& parameters,
+                                      const JsonValue& spec) {
+    if (!spec.contains("parameters")) return;
+    for (const JsonValue& entry : spec.at("parameters").items()) {
+        int index = entry.at("index").as_int();
+        if (index < 0 || static_cast<std::size_t>(index) >= parameters.size())
+            throw std::runtime_error("parameter spec 'index' is out of range for this model");
+        ModelParameter& p = parameters[static_cast<std::size_t>(index)];
+
+        // Bounds first: the prior guard below reads them, and an estimator reads them off the
+        // element regardless of whether a prior was supplied.
+        if (entry.contains("lower")) p.set_lower_bound(entry.at("lower").as_double());
+        if (entry.contains("upper")) p.set_upper_bound(entry.at("upper").as_double());
+        if (entry.contains("is_positive")) p.set_is_positive(entry.at("is_positive").as_bool());
+        if (entry.contains("is_fixed")) p.set_is_fixed(entry.at("is_fixed").as_bool());
+        if (entry.contains("name")) p.set_name(entry.at("name").as_string());
+        if (entry.contains("prior")) p.set_prior_distribution(build_spec_distribution(entry.at("prior")));
+        if (entry.contains("value")) p.set_value(entry.at("value").as_double());
+    }
+}
+
+// Optional model-level `use_default_flat_priors` + `parameters` + `parameter_values`, applied in
+// that order. The flat-priors flag goes first because a model whose defaults cascade is still
+// armed would otherwise overwrite a caller-supplied prior; `parameter_values` goes last because
+// it is the sync-safe whole-vector setter (trend copies stay in step) and must win over a
+// per-parameter `value`.
 inline void apply_parameter_values(ModelBase& model, const JsonValue& spec) {
+    if (spec.contains("use_default_flat_priors"))
+        model.set_use_default_flat_priors(spec.at("use_default_flat_priors").as_bool());
+    apply_parameter_overrides(model.parameters(), spec);
     if (!spec.contains("parameter_values")) return;
     model.set_parameter_values(spec.at("parameter_values").as_double_vector());
 }
@@ -534,8 +597,7 @@ inline std::unique_ptr<ModelBase> build_bivariate_model(const JsonValue& model,
                                               model.at("estimation_method").as_string())
                                         : numerics::distributions::copulas::
                                               CopulaEstimationMethod::InferenceFromMargins);
-    if (model.contains("parameter_values"))
-        m->set_parameter_values(model.at("parameter_values").as_double_vector());
+    apply_parameter_values(*m, model);
     return m;
 }
 
@@ -586,6 +648,10 @@ inline std::unique_ptr<Bulletin17CDistribution> build_bulletin17c_model(
             ? numerics::distributions::create_distribution(model.at("family").as_string())->type()
             : numerics::distributions::UnivariateDistributionType::LogPearsonTypeIII;
     auto m = std::make_unique<Bulletin17CDistribution>(std::move(df), type);
+    // Bulletin17CDistribution is an IGMMModel, not a ModelBase (see the wiring note above), so
+    // it gets the parameter-vector overload directly; it has no UseDefaultFlatPriors property in
+    // C# either, so that spec key is silently inapplicable here.
+    apply_parameter_overrides(m->parameters(), model);
     if (model.contains("parameter_values"))
         m->set_parameter_values(model.at("parameter_values").as_double_vector());
     return m;

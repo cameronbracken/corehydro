@@ -86,4 +86,7 @@ PYBIND11_MODULE(_core, m) {
 
     // Data-statistics utilities (MGBT, Box-Cox, Yeo-Johnson, plotting positions, LHS).
     register_stats(m);
+
+    // The data layer (DataFrame summaries, model log-likelihood, threshold diagnostics).
+    register_data(m);
 }
