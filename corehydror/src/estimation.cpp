@@ -455,3 +455,84 @@ double ch_estimation_gmm_qvar_(std::string model_json, doubles dataset, std::str
     // run_fit_quantile_variance IS this function's old body, lifted into fit_runner.hpp.
     return est::support::run_fit_quantile_variance(construct, data, aep);
 }
+
+// --- The user-facing fit surface (Task 6) ---------------------------------------------------
+//
+// Reshapes an n*n row-major flat vector (FitResult's covariance/correlation convention) into an
+// n x n matrix, OR -- when the vector is empty (hessian = FALSE, or a target that never
+// populates it) -- a zero-length numeric. R's new_fit()/fit_optimized() (corehydror/R/fit.R)
+// turn that empty numeric into NULL; see fit_runner.hpp's FitResult doc for the row-major
+// convention this mirrors (and ch_estimation_run_ above, which reshapes the identical way for
+// the fixture path).
+static sexp square_or_empty(const std::vector<double>& v, int n) {
+    if (v.empty()) return as_sexp(writable::doubles(static_cast<R_xlen_t>(0)));
+    writable::doubles_matrix<by_column> m(n, n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j) m(i, j) = v[static_cast<std::size_t>(i * n + j)];
+    return as_sexp(m);
+}
+
+// The user-facing fit entry point. ONE function for all four estimators (MaximumLikelihood,
+// MaximumAPosteriori here; BayesianAnalysis and GMM added in a later task): the R verbs in
+// R/fit.R assemble `construct_json` (via fit_input()) and read this named list back, picking
+// the fields their target populates. Every FitResult field `run_fit` can fill is packed here so
+// a later task extends the R side only, not this entry point's shape.
+[[cpp11::register]]
+list ch_fit_run_(std::string target, std::string construct_json, doubles dataset) {
+    std::vector<double> data(dataset.begin(), dataset.end());
+    est::support::FitResult r = est::support::run_fit(target, construct_json, data);
+    int n = static_cast<int>(r.parameters.size());
+
+    writable::doubles parameters(n);
+    writable::strings parameter_names(n);
+    for (int i = 0; i < n; ++i) {
+        parameters[i] = r.parameters[static_cast<std::size_t>(i)];
+        parameter_names[i] = r.parameter_names[static_cast<std::size_t>(i)];
+    }
+
+    writable::doubles standard_errors(static_cast<R_xlen_t>(r.standard_errors.size()));
+    for (std::size_t i = 0; i < r.standard_errors.size(); ++i)
+        standard_errors[static_cast<R_xlen_t>(i)] = r.standard_errors[i];
+
+    writable::doubles profile_grid(static_cast<R_xlen_t>(r.profile_grid.size()));
+    for (std::size_t i = 0; i < r.profile_grid.size(); ++i)
+        profile_grid[static_cast<R_xlen_t>(i)] = r.profile_grid[i];
+    writable::doubles profile_lower(static_cast<R_xlen_t>(r.profile_lower.size()));
+    for (std::size_t i = 0; i < r.profile_lower.size(); ++i)
+        profile_lower[static_cast<R_xlen_t>(i)] = r.profile_lower[i];
+    writable::doubles profile_upper(static_cast<R_xlen_t>(r.profile_upper.size()));
+    for (std::size_t i = 0; i < r.profile_upper.size(); ++i)
+        profile_upper[static_cast<R_xlen_t>(i)] = r.profile_upper[i];
+
+    // Draws stay flat CHAIN-major (see FitResult::draws's doc) alongside chain_dims; empty for
+    // MaximumLikelihood/MaximumAPosteriori targets. A later task's fit_bayesian() reshapes them.
+    writable::doubles draws(static_cast<R_xlen_t>(r.draws.size()));
+    for (std::size_t i = 0; i < r.draws.size(); ++i) draws[static_cast<R_xlen_t>(i)] = r.draws[i];
+    writable::integers chain_dims(static_cast<R_xlen_t>(r.chain_dims.size()));
+    for (std::size_t i = 0; i < r.chain_dims.size(); ++i)
+        chain_dims[static_cast<R_xlen_t>(i)] = r.chain_dims[i];
+
+    return writable::list({
+        "method"_nm = writable::strings({r.method}),
+        "parameter_names"_nm = parameter_names,
+        "parameters"_nm = parameters,
+        "log_likelihood"_nm = writable::doubles({r.log_likelihood}),
+        "prior_log_likelihood"_nm = writable::doubles({r.prior_log_likelihood}),
+        "aic"_nm = writable::doubles({r.aic}),
+        "bic"_nm = writable::doubles({r.bic}),
+        "nobs"_nm = writable::integers({r.nobs}),
+        "covariance"_nm = square_or_empty(r.covariance, n),
+        "standard_errors"_nm = standard_errors,
+        "correlation"_nm = square_or_empty(r.correlation, n),
+        "converged"_nm = writable::logicals({cpp11::r_bool(r.converged)}),
+        "status"_nm = writable::strings({r.status}),
+        "function_evaluations"_nm = writable::integers({r.function_evaluations}),
+        "model_spec"_nm = writable::strings({r.model_spec}),
+        "profile_grid"_nm = profile_grid,
+        "profile_lower"_nm = profile_lower,
+        "profile_upper"_nm = profile_upper,
+        "profile_bins"_nm = writable::integers({r.profile_bins}),
+        "draws"_nm = draws,
+        "chain_dims"_nm = chain_dims,
+    });
+}

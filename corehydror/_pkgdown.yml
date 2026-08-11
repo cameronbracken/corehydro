@@ -76,6 +76,10 @@ reference:
       - model_simulate
       - model_log_likelihood
       - model_parameters
+  - title: Point-estimate fits
+    contents:
+      - fit_mle
+      - fit_map
   - title: Frequency analysis
     contents:
       - univariate_analysis

@@ -453,6 +453,13 @@ extern "C" SEXP _corehydror_ch_estimation_gmm_qvar_(SEXP model_json, SEXP datase
     return cpp11::as_sexp(ch_estimation_gmm_qvar_(cpp11::as_cpp<cpp11::decay_t<std::string>>(model_json), cpp11::as_cpp<cpp11::decay_t<doubles>>(dataset), cpp11::as_cpp<cpp11::decay_t<std::string>>(strategy), cpp11::as_cpp<cpp11::decay_t<std::string>>(optimizer), cpp11::as_cpp<cpp11::decay_t<int>>(max_gmm_iterations), cpp11::as_cpp<cpp11::decay_t<double>>(aep)));
   END_CPP11
 }
+// estimation.cpp
+list ch_fit_run_(std::string target, std::string construct_json, doubles dataset);
+extern "C" SEXP _corehydror_ch_fit_run_(SEXP target, SEXP construct_json, SEXP dataset) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_fit_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(target), cpp11::as_cpp<cpp11::decay_t<std::string>>(construct_json), cpp11::as_cpp<cpp11::decay_t<doubles>>(dataset)));
+  END_CPP11
+}
 // gev.cpp
 doubles ch_gev_pdf_(doubles x, double location, double scale, double shape);
 extern "C" SEXP _corehydror_ch_gev_pdf_(SEXP x, SEXP location, SEXP scale, SEXP shape) {
@@ -778,6 +785,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_estimation_gmm_qvar_",          (DL_FUNC) &_corehydror_ch_estimation_gmm_qvar_,           6},
     {"_corehydror_ch_estimation_gmm_run_",           (DL_FUNC) &_corehydror_ch_estimation_gmm_run_,            7},
     {"_corehydror_ch_estimation_run_",               (DL_FUNC) &_corehydror_ch_estimation_run_,                6},
+    {"_corehydror_ch_fit_run_",                      (DL_FUNC) &_corehydror_ch_fit_run_,                       3},
     {"_corehydror_ch_gev_cdf_",                      (DL_FUNC) &_corehydror_ch_gev_cdf_,                       4},
     {"_corehydror_ch_gev_fit_",                      (DL_FUNC) &_corehydror_ch_gev_fit_,                       2},
     {"_corehydror_ch_gev_linear_moments_",           (DL_FUNC) &_corehydror_ch_gev_linear_moments_,            3},

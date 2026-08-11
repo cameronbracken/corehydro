@@ -37,7 +37,9 @@ priors (see \code{\link[=model_parameter]{model_parameter()}}).}
 \item{seed}{PRNG seed for the sampler (fixed for reproducibility).}
 
 \item{exceedance_probabilities}{optional numeric vector of exceedance probabilities at which to
-tabulate the curve; when \code{NULL}, the 25 standard default ordinates are used.}
+tabulate the curve; when \code{NULL}, the 25 standard default ordinates are used. Must be in
+\strong{ascending} order (as the defaults are); an unsorted vector fails validation and the
+analysis reports itself as not valid.}
 
 \item{thinning_interval}{MCMC thinning interval; \code{-1} (default) keeps the sampler's own default.}
 }

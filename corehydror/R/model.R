@@ -239,6 +239,12 @@ build_model <- function(spec, dataset_values, trends = NULL, parameters = NULL,
 }
 
 check_model <- function(m) {
+  # A corehydro_fit (fit_mle()/fit_map()/...) carries its fitted model at $model, so every
+  # model_*() verb (model_validate(), model_simulate(), model_log_likelihood()) also accepts a
+  # fit directly -- e.g. model_simulate(fit_mle(m), ...) -- without the caller unwrapping it.
+  if (inherits(m, "corehydro_fit")) {
+    return(m$model)
+  }
   if (!inherits(m, "corehydro_model")) {
     stop("`model` must be a corehydro_model object from one of the model_*() constructors",
       call. = FALSE
