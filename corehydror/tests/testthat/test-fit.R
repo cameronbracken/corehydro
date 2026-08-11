@@ -248,6 +248,29 @@ test_that("fit_bayesian rejects a knob its sampler does not use", {
   )
 })
 
+test_that("point_estimator defaults to the posterior mean and selects the MAP on request", {
+  m <- model_univariate("Normal", peaks)
+  default <- fit_bayesian(m, sampler = "DEMCz", iterations = 200, seed = 7)
+  mean_estimator <- fit_bayesian(m,
+    sampler = "DEMCz", iterations = 200, seed = 7, point_estimator = "PosteriorMean"
+  )
+  mode_estimator <- fit_bayesian(m,
+    sampler = "DEMCz", iterations = 200, seed = 7, point_estimator = "PosteriorMode"
+  )
+  expect_equal(unname(default$parameters), unname(default$summary$mean))
+  expect_identical(default$parameters, mean_estimator$parameters)
+  expect_false(isTRUE(all.equal(mean_estimator$parameters, mode_estimator$parameters)))
+})
+
+test_that("fit_bayesian rejects an unknown point_estimator", {
+  expect_error(
+    fit_bayesian(model_univariate("Normal", peaks),
+      sampler = "DEMCz", iterations = 100, point_estimator = "bogus"
+    ),
+    "point estimator"
+  )
+})
+
 test_that("fit_gmm requires a bulletin17c model", {
   expect_error(fit_gmm(model_univariate("Normal", peaks)), "bulletin17c")
 })

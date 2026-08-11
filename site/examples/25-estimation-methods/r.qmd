@@ -94,10 +94,12 @@ estimate rather than handing back a failed fit, so these two fields record that 
 completed, not that it necessarily found a good optimum.
 
 The skew estimate moves from -0.4657 at MLE toward the prior's mean of -0.3 once a prior is in
-play: -0.4189 at MAP, and -0.4263 for the Bayesian fit's own point estimate (a mode-like point
-tracked by the sampler, not the posterior mean reported below in `$summary`). Both parameter
-priors and censored data pull in the same direction here, pulling the log-Pearson III skew
-away from the strongly negative value example 23 found for the systematic-only record.
+play: -0.4189 at MAP, and -0.4263 for the Bayesian fit's own point estimate, which is the
+posterior mean reported below in `$summary` (bit-identical, since `fit_bayesian()`'s default
+`point_estimator` is `"PosteriorMean"`; pass `point_estimator = "PosteriorMode"` to report the
+MAP-like point instead). Both parameter priors and censored data pull in the same direction
+here, pulling the log-Pearson III skew away from the strongly negative value example 23 found
+for the systematic-only record.
 
 ## Goodness of fit: AIC, BIC, DIC
 

@@ -282,6 +282,26 @@ def test_fit_bayesian_rejects_a_knob_its_sampler_does_not_use():
         fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=100, beta=0.1)
 
 
+def test_point_estimator_defaults_to_the_posterior_mean_and_selects_the_map_on_request():
+    m = model_univariate("Normal", PEAKS)
+    default = fit_bayesian(m, sampler="DEMCz", iterations=200, seed=7)
+    mean_estimator = fit_bayesian(m, sampler="DEMCz", iterations=200, seed=7,
+                                   point_estimator="PosteriorMean")
+    mode_estimator = fit_bayesian(m, sampler="DEMCz", iterations=200, seed=7,
+                                   point_estimator="PosteriorMode")
+    assert np.array_equal(
+        np.asarray(list(default.parameters.values())), default.posterior_summary["mean"]
+    )
+    assert default.parameters == mean_estimator.parameters
+    assert mean_estimator.parameters != mode_estimator.parameters
+
+
+def test_fit_bayesian_rejects_an_unknown_point_estimator():
+    with pytest.raises(ValueError, match="point estimator"):
+        fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=100,
+                     point_estimator="bogus")
+
+
 def test_fit_gmm_requires_a_bulletin17c_model():
     with pytest.raises(ValueError, match="bulletin17c"):
         fit_gmm(model_univariate("Normal", PEAKS))

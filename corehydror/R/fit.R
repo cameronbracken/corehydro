@@ -395,6 +395,10 @@ sampler_knobs <- list(
 #' @param thinning_interval MCMC thinning interval; `-1` (default) keeps the sampler's own default.
 #' @param seed PRNG seed for the sampler (fixed for reproducibility -- a seeded call returns
 #'   identical draws in R and Python).
+#' @param point_estimator which posterior summary `$parameters` reports: `"PosteriorMean"` or
+#'   `"PosteriorMode"` (the MAP). `NULL` (default) leaves `BayesianAnalysis`'s own class default,
+#'   which is `"PosteriorMean"` -- so by default `$parameters` is bit-identical to
+#'   `$summary$mean`. Pass `"PosteriorMode"` to report the MAP point instead.
 #' @param ... sampler-specific tuning knobs. Passing a knob the chosen `sampler` does not use is an
 #'   error: `"DEMCz"` accepts `jump`, `jump_threshold`, `noise`; `"DEMCzs"` additionally accepts
 #'   `snooker_threshold`; `"ARWMH"` accepts `scale`, `beta`; `"NUTS"` accepts `max_tree_depth`.
@@ -416,7 +420,7 @@ sampler_knobs <- list(
 #' f$summary
 fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains = 4L,
                          iterations = 3000L, warmup = NULL, output_length = 10000L,
-                         thinning_interval = -1L, seed = 12345L, ...) {
+                         thinning_interval = -1L, seed = 12345L, point_estimator = NULL, ...) {
   known_samplers <- c("DEMCz", "DEMCzs", "ARWMH", "NUTS")
   sampler <- as.character(sampler)
   if (!sampler %in% known_samplers) {
@@ -427,6 +431,17 @@ fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains =
       ),
       sampler
     ), call. = FALSE)
+  }
+
+  known_point_estimators <- c("PosteriorMean", "PosteriorMode")
+  if (!is.null(point_estimator)) {
+    point_estimator <- as.character(point_estimator)
+    if (!point_estimator %in% known_point_estimators) {
+      stop(sprintf(
+        "unknown point estimator '%s'; expected one of %s",
+        point_estimator, paste(known_point_estimators, collapse = ", ")
+      ), call. = FALSE)
+    }
   }
 
   knobs <- list(...)
@@ -453,6 +468,7 @@ fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains =
   )
   thinning_interval <- as.integer(thinning_interval)
   if (thinning_interval > 0L) settings$thinning_interval <- thinning_interval
+  if (!is.null(point_estimator)) settings$point_estimator <- point_estimator
   # `knobs` names are a validated subset of sampler_knobs[[sampler]] above, disjoint from the
   # general settings keys assembled here, so a plain concat -- not utils::modifyList()'s
   # overwrite semantics -- is enough (and keeps this package's zero-runtime-dependency contract:

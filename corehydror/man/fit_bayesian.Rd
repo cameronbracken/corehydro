@@ -14,6 +14,7 @@ fit_bayesian(
   output_length = 10000L,
   thinning_interval = -1L,
   seed = 12345L,
+  point_estimator = NULL,
   ...
 )
 }
@@ -44,6 +45,11 @@ the summary and any downstream uncertainty quantification.}
 
 \item{seed}{PRNG seed for the sampler (fixed for reproducibility -- a seeded call returns
 identical draws in R and Python).}
+
+\item{point_estimator}{which posterior summary \verb{$parameters} reports: \code{"PosteriorMean"} or
+\code{"PosteriorMode"} (the MAP). \code{NULL} (default) leaves \code{BayesianAnalysis}'s own class default,
+which is \code{"PosteriorMean"} -- so by default \verb{$parameters} is bit-identical to
+\verb{$summary$mean}. Pass \code{"PosteriorMode"} to report the MAP point instead.}
 
 \item{...}{sampler-specific tuning knobs. Passing a knob the chosen \code{sampler} does not use is an
 error: \code{"DEMCz"} accepts \code{jump}, \code{jump_threshold}, \code{noise}; \code{"DEMCzs"} additionally accepts

@@ -56,6 +56,11 @@ _INT_KNOBS = {"max_tree_depth"}
 
 _KNOWN_GMM_STRATEGIES = ("OneStep", "TwoStep", "Iterative")
 
+# Point-estimator name -> PointEstimateType, by its C# name (BayesianAnalysis's
+# PointEstimateType enum: PosteriorMean, PosteriorMode -- the MAP). Matches corehydror's R/fit.R
+# `known_point_estimators`.
+_KNOWN_POINT_ESTIMATORS = ("PosteriorMean", "PosteriorMode")
+
 # Fit targets run_fit_diagnostics (fit_runner.hpp) actually populates -- MaximumLikelihood carries
 # no posterior/Hessian-at-a-point-estimate diagnostics surface, so it is deliberately absent here.
 _FIT_DIAGNOSTICS_TARGETS = ("MaximumAPosteriori", "BayesianAnalysis", "GMM")
@@ -661,7 +666,7 @@ def fit_map(model, distribution: str | None = None, optimizer: str = "NelderMead
 def fit_bayesian(
     model, distribution: str | None = None, sampler: str = "DEMCz", chains: int = 4,
     iterations: int = 3000, warmup: int | None = None, output_length: int = 10000,
-    thinning_interval: int = -1, seed: int = 12345, **knobs,
+    thinning_interval: int = -1, seed: int = 12345, point_estimator: str | None = None, **knobs,
 ) -> Fit:
     """Bayesian MCMC fit.
 
@@ -696,6 +701,11 @@ def fit_bayesian(
     seed : int, default 12345
         PRNG seed for the sampler (fixed for reproducibility -- a seeded call returns identical
         draws in R and Python).
+    point_estimator : {"PosteriorMean", "PosteriorMode"}, optional
+        Which posterior summary ``.parameters`` reports. ``None`` (default) leaves
+        ``BayesianAnalysis``'s own class default, which is ``"PosteriorMean"`` -- so by default
+        ``.parameters`` is bit-identical to ``.posterior_summary["mean"]``. Pass
+        ``"PosteriorMode"`` to report the MAP point instead.
     **knobs
         Sampler-specific tuning knobs. Passing a knob the chosen `sampler` does not use is an
         error: ``"DEMCz"`` accepts ``jump``, ``jump_threshold``, ``noise``; ``"DEMCzs"``
@@ -740,6 +750,14 @@ def fit_bayesian(
             f"{sampler} accepts: {', '.join(allowed) if allowed else '(none)'}"
         )
 
+    if point_estimator is not None:
+        point_estimator = str(point_estimator)
+        if point_estimator not in _KNOWN_POINT_ESTIMATORS:
+            raise ValueError(
+                f"unknown point estimator '{point_estimator}'; expected one of "
+                f"{', '.join(_KNOWN_POINT_ESTIMATORS)}"
+            )
+
     iterations = int(iterations)
     warmup = max(50, iterations // 2) if warmup is None else int(warmup)
 
@@ -754,6 +772,8 @@ def fit_bayesian(
     thinning_interval = int(thinning_interval)
     if thinning_interval > 0:
         settings["thinning_interval"] = thinning_interval
+    if point_estimator is not None:
+        settings["point_estimator"] = point_estimator
     # `knobs` names are a validated subset of _SAMPLER_KNOBS[sampler] above, disjoint from the
     # general settings keys assembled here, so a plain update is enough.
     for key, value in knobs.items():
