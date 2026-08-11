@@ -551,6 +551,27 @@ def _run_bootstrap_case(construct: dict, assertions: list, datasets: dict):
 # resolved here, like every other fixture kind.
 
 
+def _fit_runner_target(target: str) -> str:
+    """Fixture target name -> the name run_fit/run_fit_diagnostics dispatch on.
+
+    The only one that differs is GMM, whose fixture-level target spells out the C# class name.
+    """
+    return "GMM" if target == "GeneralizedMethodOfMoments" else target
+
+
+def _full_construct_json(construct: dict) -> str:
+    """The case's FULL construct, in the shape the shared fit runner reads (Task 9).
+
+    The fixture's own construct with the `settings` sub-object hoisted to the top level -- where
+    `apply_bayesian_settings` looks for the Bayesian knobs. Every other key passes through
+    untouched and `run_fit` ignores the ones its target does not use. C++ and R assemble it
+    identically, so all three hand the runner byte-identical constructs.
+    """
+    full = {k: v for k, v in construct.items() if k != "settings"}
+    full.update(construct.get("settings", {}))
+    return json.dumps(full)
+
+
 def _dispatch_estimation(
     result: dict,
     method: str,
@@ -634,6 +655,74 @@ def _dispatch_estimation(
         if method == "is_valid":
             return 1.0 if validation["is_valid"] else 0.0
         return 1.0 if any(args[0] in m for m in validation["messages"]) else 0.0
+    # --- Task 9: the wider fit surface -------------------------------------------------------
+    # These read a lazily-built + memoized _core.fit_run over the case's FULL construct (the
+    # fixture construct with `settings` hoisted to the top level -- see _full_construct_json).
+    # The narrow estimation_run/estimation_bayes_run result above is deliberately untouched: it
+    # backs the pinned oracles and does not carry these fields. Both calls run the same
+    # deterministic fit, so this is the `bic` lazy-rebuild precedent, not a second, different fit.
+    if method in (
+        "profile_lower",
+        "profile_upper",
+        "profile_value",
+        "function_evaluations",
+        "status_is",
+        "nobs",
+        "prior_log_likelihood",
+        "rhat",
+        "ess",
+        "acceptance_rate",
+        "posterior_median",
+        "posterior_sd",
+        "posterior_lower",
+        "posterior_upper",
+    ):
+        if "_fit" not in result:
+            result["_fit"] = _core.fit_run(
+                _fit_runner_target(target), _full_construct_json(construct), data
+            )
+        fit = result["_fit"]
+        if method == "profile_lower":
+            return fit["profile_lower"][int(args[0])]
+        if method == "profile_upper":
+            return fit["profile_upper"][int(args[0])]
+        if method == "profile_value":
+            # profile_value [param, bin, col]: profile_grid is n_params x bins x 2, row-major,
+            # col 0 = the parameter value at the bin midpoint, col 1 = the profile log-likelihood.
+            idx = (int(args[0]) * fit["profile_bins"] + int(args[1])) * 2 + int(args[2])
+            return fit["profile_grid"][idx]
+        if method == "function_evaluations":
+            return fit["function_evaluations"]
+        if method == "status_is":
+            # 1.0 when the optimizer status matches, else 0.0 (the validation_message_contains
+            # boolean-as-double precedent -- the fixture schema carries no string comparison).
+            return 1.0 if fit["status"] == args[0] else 0.0
+        if method == "nobs":
+            return fit["nobs"]
+        if method == "prior_log_likelihood":
+            return fit["prior_log_likelihood"]
+        if method == "acceptance_rate":
+            return fit["acceptance_rates"][int(args[0])]
+        key = {
+            "rhat": "rhat",
+            "ess": "ess",
+            "posterior_median": "summary_median",
+            "posterior_sd": "summary_sd",
+            "posterior_lower": "summary_lower",
+            "posterior_upper": "summary_upper",
+        }[method]
+        return fit[key][int(args[0])]
+    # The PSIS-LOO Pareto-k surface lives on FitDiagnostics (the InfluenceDiagnostics wrapper),
+    # not on the fit result, so it takes the second lazily-memoized runner call.
+    if method in ("pareto_k", "max_pareto_k"):
+        if "_fit_diagnostics" not in result:
+            result["_fit_diagnostics"] = _core.fit_diagnostics(
+                _fit_runner_target(target), _full_construct_json(construct), data
+            )
+        diagnostics = result["_fit_diagnostics"]
+        if method == "pareto_k":
+            return diagnostics["pareto_k"][int(args[0])]
+        return diagnostics["max_pareto_k"]
     raise KeyError(f"unknown model_estimation fixture method: {method}")
 
 

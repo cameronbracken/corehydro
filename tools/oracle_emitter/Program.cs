@@ -2425,13 +2425,54 @@ static (BestFitModels.IModel model, object? estimator, double[]? simulated)
     throw new Exception($"unknown model_estimation target: {target}");
 }
 
-// ML/MAP dispatch with LAZY accessors (covariance/SE/correlation are computed only when the
-// method asks -- GetCovarianceMatrix throws for a 1-parameter model, e.g. the Normal copula).
-static double DispatchMlMapGeneral(string m, JsonElement[] a,
-    Func<int, double> param, Func<double> maxLL, Func<double> aic, Func<int, double> bic,
-    Func<int, int, double> cov, Func<int, double> se, Func<int, int, double> corr)
+// Task 9: the wider ML/MAP fit surface, shared by BOTH dispatch paths (DispatchMlMap over
+// UnivariateDistributionModelBase and DispatchMlMapGeneral over IModel) so the two cannot drift.
+// Returns null when `m` is not one of these methods, letting the caller fall through to its own
+// switch. Every accessor is LAZY: ProfileLikelihood/ParameterConfidenceIntervals cost
+// bins * n_params likelihood evaluations each, so a case that asserts none of them pays nothing.
+//
+// `profile_bins` and `alpha` come from the case CONSTRUCT (they are ProfileLikelihood(bins) /
+// ParameterConfidenceIntervals(alpha) arguments, not per-assertion arguments), with the same
+// defaults fit_runner.hpp's run_fit applies -- 100 bins and alpha 0.1, which are also the C#
+// method defaults. `status_is [name]` compares OptimizationStatus.ToString() and returns
+// 1.0/0.0 (the `is_valid`/`validation_message_contains` boolean-as-double precedent -- the
+// fixture schema carries no string comparison).
+static double? DispatchMlMapExtended(string m, JsonElement[] a, JsonElement construct,
+    BestFitModels.IModel model, ParameterSet best,
+    Func<int, List<double[,]>> profileLikelihood, Func<double, double[,]> parameterCIs,
+    Func<int> totalFunctionEvaluations, Func<OptimizationStatus> status)
 {
     int I(int i) => a[i].GetInt32();
+    int bins = construct.TryGetProperty("profile_bins", out var pb) ? pb.GetInt32() : 100;
+    double alpha = construct.TryGetProperty("alpha", out var al) ? al.GetDouble() : 0.1;
+    switch (m)
+    {
+        case "profile_lower": return parameterCIs(alpha)[I(0), 0];
+        case "profile_upper": return parameterCIs(alpha)[I(0), 1];
+        // profile_value [param, bin, col]: ProfileLikelihood returns one [bins, 2] array per
+        // parameter, col 0 = the bin midpoint parameter value, col 1 = the log-likelihood there.
+        case "profile_value": return profileLikelihood(bins)[I(0)][I(1), I(2)];
+        case "function_evaluations": return totalFunctionEvaluations();
+        case "status_is": return status().ToString() == a[0].GetString() ? 1.0 : 0.0;
+        case "nobs": return model.PointwiseDataLogLikelihood(best.Values).Length;
+        case "prior_log_likelihood": return model.PriorLogLikelihood(best.Values);
+        default: return null;
+    }
+}
+
+// ML/MAP dispatch with LAZY accessors (covariance/SE/correlation are computed only when the
+// method asks -- GetCovarianceMatrix throws for a 1-parameter model, e.g. the Normal copula).
+static double DispatchMlMapGeneral(string m, JsonElement[] a, JsonElement construct,
+    BestFitModels.IModel model, ParameterSet best,
+    Func<int, double> param, Func<double> maxLL, Func<double> aic, Func<int, double> bic,
+    Func<int, int, double> cov, Func<int, double> se, Func<int, int, double> corr,
+    Func<int, List<double[,]>> profileLikelihood, Func<double, double[,]> parameterCIs,
+    Func<int> totalFunctionEvaluations, Func<OptimizationStatus> status)
+{
+    int I(int i) => a[i].GetInt32();
+    var extended = DispatchMlMapExtended(m, a, construct, model, best, profileLikelihood,
+                                         parameterCIs, totalFunctionEvaluations, status);
+    if (extended.HasValue) return extended.Value;
     switch (m)
     {
         case "parameter": return param(I(0));
@@ -2447,7 +2488,7 @@ static double DispatchMlMapGeneral(string m, JsonElement[] a,
 
 static double DispatchEstimationGeneral(
     (BestFitModels.IModel model, object? estimator, double[]? simulated) ec,
-    string m, JsonElement[] a)
+    string m, JsonElement[] a, JsonElement construct)
 {
     if (m == "simulated_value")
         return (ec.simulated ?? throw new Exception("simulated_value outside a seeded case"))[a[0].GetInt32()];
@@ -2490,17 +2531,23 @@ static double DispatchEstimationGeneral(
     switch (ec.estimator)
     {
         case MaximumLikelihood mle:
-            return DispatchMlMapGeneral(m, a, i => mle.BestParameterSet.Values[i],
+            return DispatchMlMapGeneral(m, a, construct, ec.model, mle.BestParameterSet,
+                i => mle.BestParameterSet.Values[i],
                 () => mle.MaximumLogLikelihood, () => mle.GetAIC(), n => mle.GetBIC(n),
                 (i, j) => mle.GetCovarianceMatrix()[i, j], i => mle.GetStandardErrors()[i],
-                (i, j) => mle.GetCorrelationMatrix()[i, j]);
+                (i, j) => mle.GetCorrelationMatrix()[i, j],
+                bins => mle.ProfileLikelihood(bins), alpha => mle.ParameterConfidenceIntervals(alpha),
+                () => mle.TotalFunctionEvaluations, () => mle.Status);
         case MaximumAPosteriori map:
-            return DispatchMlMapGeneral(m, a, i => map.BestParameterSet.Values[i],
+            return DispatchMlMapGeneral(m, a, construct, ec.model, map.BestParameterSet,
+                i => map.BestParameterSet.Values[i],
                 () => map.MaximumLogLikelihood, () => map.GetAIC(), n => map.GetBIC(n),
                 (i, j) => map.GetCovarianceMatrix()[i, j], i => map.GetStandardErrors()[i],
-                (i, j) => map.GetCorrelationMatrix()[i, j]);
+                (i, j) => map.GetCorrelationMatrix()[i, j],
+                bins => map.ProfileLikelihood(bins), alpha => map.ParameterConfidenceIntervals(alpha),
+                () => map.TotalFunctionEvaluations, () => map.Status);
         case BayesianAnalysis ba:
-            return DispatchBayesian(ba, m, a);
+            return DispatchBayesian(ba, ec.model, m, a);
         case null:
             throw new Exception($"unknown Simulation fixture method: {m}");
         default:
@@ -2510,10 +2557,18 @@ static double DispatchEstimationGeneral(
 
 // Shared MaximumLikelihood/MaximumAPosteriori dispatch surface (identical member names on both
 // C# classes). Passed the fit's already-computed pieces so each assertion is a cheap lookup.
-static double DispatchMlMap(string m, JsonElement[] a, ParameterSet best, double maxLL,
-                            double aic, Func<int, double> bic, Matrix cov, double[] se, Matrix corr)
+static double DispatchMlMap(string m, JsonElement[] a, JsonElement construct,
+                            BestFitModels.IModel model, ParameterSet best, double maxLL,
+                            double aic, Func<int, double> bic, Matrix cov, double[] se, Matrix corr,
+                            Func<int, List<double[,]>> profileLikelihood,
+                            Func<double, double[,]> parameterCIs,
+                            Func<int> totalFunctionEvaluations, Func<OptimizationStatus> status)
 {
     int I(int i) => a[i].GetInt32();
+    // Task 9: the wider fit surface, shared verbatim with DispatchMlMapGeneral.
+    var extended = DispatchMlMapExtended(m, a, construct, model, best, profileLikelihood,
+                                         parameterCIs, totalFunctionEvaluations, status);
+    if (extended.HasValue) return extended.Value;
     switch (m)
     {
         case "parameter": return best.Values[I(0)];
@@ -2527,10 +2582,16 @@ static double DispatchMlMap(string m, JsonElement[] a, ParameterSet best, double
     }
 }
 
-static double DispatchBayesian(BayesianAnalysis ba, string m, JsonElement[] a)
+static double DispatchBayesian(BayesianAnalysis ba, BestFitModels.IModel model, string m,
+                               JsonElement[] a)
 {
     int I(int i) => a[i].GetInt32();
     var results = ba.Results ?? throw new Exception("BayesianAnalysis.Results is null after RunAsync");
+    // The point estimate the fit runner reports as the fit's `parameters` -- C# never centralizes
+    // this ternary (see bayesian_analysis.hpp's point_estimate() note), so it is spelled out here
+    // exactly as the ~15 C# Analysis classes each spell it inline.
+    ParameterSet Point() => ba.PointEstimator == BayesianAnalysis.PointEstimateType.PosteriorMean
+        ? results.PosteriorMean : results.MAP;
     switch (m)
     {
         case "dic": return ba.DIC;
@@ -2540,6 +2601,26 @@ static double DispatchBayesian(BayesianAnalysis ba, string m, JsonElement[] a)
         case "chain_value":
             return (ba.Sampler ?? throw new Exception("BayesianAnalysis.Sampler is null"))
                 .MarkovChains![I(0)][I(1)].Values[I(2)];
+        // --- Task 9: the posterior summary + convergence diagnostics -------------------------
+        // Rhat/ESS are set on ParameterStatistics by MCMCResults.ProcessParameterResults (the
+        // Gelman-Rubin diagnostic over the post-warm-up MarkovChains, and the effective sample
+        // size over Output); Median/StandardDeviation/LowerCI/UpperCI are the ParameterResults
+        // summary over Output at the analysis's credible-interval alpha.
+        case "rhat": return results.ParameterResults[I(0)].SummaryStatistics.Rhat;
+        case "ess": return results.ParameterResults[I(0)].SummaryStatistics.ESS;
+        case "acceptance_rate": return results.AcceptanceRates[I(0)];
+        case "posterior_median": return results.ParameterResults[I(0)].SummaryStatistics.Median;
+        case "posterior_sd":
+            return results.ParameterResults[I(0)].SummaryStatistics.StandardDeviation;
+        case "posterior_lower": return results.ParameterResults[I(0)].SummaryStatistics.LowerCI;
+        case "posterior_upper": return results.ParameterResults[I(0)].SummaryStatistics.UpperCI;
+        // The PSIS-LOO Pareto-k surface, read through ComputeInfluenceDiagnostics -- the same
+        // wrapper fit_runner.hpp's run_fit_diagnostics reads, not the raw ba.ParetoK array, so
+        // the four harnesses agree on the (NaN-guarded) MaxParetoK too.
+        case "pareto_k": return ba.ComputeInfluenceDiagnostics().Observations[I(0)].ParetoK;
+        case "max_pareto_k": return ba.ComputeInfluenceDiagnostics().MaxParetoK;
+        case "nobs": return model.PointwiseDataLogLikelihood(Point().Values).Length;
+        case "prior_log_likelihood": return model.PriorLogLikelihood(Point().Values);
         default: throw new Exception($"unknown model_estimation method for BayesianAnalysis: {m}");
     }
 }
@@ -2580,7 +2661,7 @@ static double DispatchModelDataFrame(BestFitModels.UnivariateDistributionModelBa
 
 static double DispatchEstimation(
     (BestFitModels.UnivariateDistributionModelBase model, object? estimator, double[]? simulated) ec,
-    string m, JsonElement[] a)
+    string m, JsonElement[] a, JsonElement construct)
 {
     // The seeded-simulation digest (M13/M14): reads the vector cached at build time.
     if (m == "simulated_value")
@@ -2601,15 +2682,21 @@ static double DispatchEstimation(
     switch (ec.estimator)
     {
         case MaximumLikelihood mle:
-            return DispatchMlMap(m, a, mle.BestParameterSet, mle.MaximumLogLikelihood, mle.GetAIC(),
+            return DispatchMlMap(m, a, construct, ec.model, mle.BestParameterSet,
+                mle.MaximumLogLikelihood, mle.GetAIC(),
                 n => mle.GetBIC(n), mle.GetCovarianceMatrix(), mle.GetStandardErrors(),
-                mle.GetCorrelationMatrix());
+                mle.GetCorrelationMatrix(),
+                bins => mle.ProfileLikelihood(bins), alpha => mle.ParameterConfidenceIntervals(alpha),
+                () => mle.TotalFunctionEvaluations, () => mle.Status);
         case MaximumAPosteriori map:
-            return DispatchMlMap(m, a, map.BestParameterSet, map.MaximumLogLikelihood, map.GetAIC(),
+            return DispatchMlMap(m, a, construct, ec.model, map.BestParameterSet,
+                map.MaximumLogLikelihood, map.GetAIC(),
                 n => map.GetBIC(n), map.GetCovarianceMatrix(), map.GetStandardErrors(),
-                map.GetCorrelationMatrix());
+                map.GetCorrelationMatrix(),
+                bins => map.ProfileLikelihood(bins), alpha => map.ParameterConfidenceIntervals(alpha),
+                () => map.TotalFunctionEvaluations, () => map.Status);
         case BayesianAnalysis ba:
-            return DispatchBayesian(ba, m, a);
+            return DispatchBayesian(ba, ec.model, m, a);
         case null:
             throw new Exception($"unknown Simulation fixture method: {m}");
         default:
@@ -4130,13 +4217,13 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     if (dump)
                     {
                         DumpLine(estTarget, caseName, method, argList,
-                                 () => (object)DispatchEstimationGeneral(gc, method, argList));
+                                 () => (object)DispatchEstimationGeneral(gc, method, argList, c.GetProperty("construct")));
                         continue;
                     }
 
                     try
                     {
-                        double actual = DispatchEstimationGeneral(gc, method, argList);
+                        double actual = DispatchEstimationGeneral(gc, method, argList, c.GetProperty("construct"));
                         if (Compare(actual, asrt)) pass++;
                         else { fail++; failures.Add($"{where2}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
                     }
@@ -4164,13 +4251,13 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 if (dump)
                 {
                     DumpLine(estTarget, caseName, method, argList,
-                             () => (object)DispatchEstimation(estimator, method, argList));
+                             () => (object)DispatchEstimation(estimator, method, argList, c.GetProperty("construct")));
                     continue;
                 }
 
                 try
                 {
-                    double actual = DispatchEstimation(estimator, method, argList);
+                    double actual = DispatchEstimation(estimator, method, argList, c.GetProperty("construct"));
                     if (Compare(actual, asrt)) pass++;
                     else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
                 }

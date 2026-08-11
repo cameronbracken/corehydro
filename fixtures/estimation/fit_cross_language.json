@@ -1,0 +1,133 @@
+{
+  "target": "BayesianAnalysis",
+  "kind": "model_estimation",
+  "source": "RMC-BestFit/src/RMC.BestFit/Estimation/BayesianAnalysis.cs @ c2e6192 -- exact oracle values dumped from the REAL C# BayesianAnalysis (DEMCzs, serial chains via RunAsync(null, false, parallel: false)) via tools/oracle_emitter (Task 9) and reproduced by tools/verify_oracles.py. ONE seeded fit of the hardest model the fit surface can build: bayes_censored.json's interval/threshold/uncertain DataFrame with an added nonstationary Linear location trend, so the parameter vector is [trend intercept, trend slope, sigma] over 93 threshold-expanded observations. Its job is the CROSS-LANGUAGE guarantee -- the same fixture drives the C++, R, Python and C# harnesses, so a digest that reproduces in all four proves the seeded chain AND every quantity derived from it are bit-identical across the packages, which is the property both packages promise their users. The chain is deliberately short (100 iterations) and NOT converged (rhat is far above 1); the point is reproducibility of the stream, not statistical quality -- the short_exact digest precedent from fixtures/sampling/mcmc/demczs.json. TOLERANCES: chain_value at the Phase-3 pure-RNG digest tier (rel 1e-11); rhat/ess/posterior_*/pareto_k/max_pareto_k/prior_log_likelihood at the bayes_normal.json Output-derived tier (rel 1e-9), with measured agreement 1e-14..1e-12; acceptance_rate exact (rel 1e-12); nobs an integer (mode 'equal'). output_length 400 keeps the Output-derived quantities inside the population-sampler pre-amplification window (bayes_normal.json precedent).",
+  "datasets": {
+
+  },
+  "cases": [
+    {
+      "name": "normal_censored_trend_demczs_short_exact",
+      "construct": {
+        "model": {
+          "type": "univariate_distribution",
+          "family": "Normal",
+          "data_frame": {
+            "exact": [
+              {
+                "index": 1990,
+                "value": 12500
+              },
+              {
+                "index": 1991,
+                "value": 15300
+              },
+              {
+                "index": 1992,
+                "value": 9870,
+                "is_low_outlier": true
+              },
+              {
+                "index": 1993,
+                "value": 21000
+              },
+              {
+                "index": 1994,
+                "value": 18400
+              },
+              {
+                "index": 1995,
+                "value": 11200
+              },
+              {
+                "index": 1996,
+                "value": 26800
+              },
+              {
+                "index": 1997,
+                "value": 14100
+              },
+              {
+                "index": 1998,
+                "value": 19500
+              },
+              {
+                "index": 1999,
+                "value": 11600
+              }
+            ],
+            "interval": [
+              {
+                "index": 1985,
+                "lower": 12000,
+                "value": 15000,
+                "upper": 18000
+              },
+              {
+                "index": 1986,
+                "lower": 16000,
+                "value": 19000,
+                "upper": 23000
+              }
+            ],
+            "threshold": [
+              {
+                "start_index": 1900,
+                "end_index": 1979,
+                "value": 22000,
+                "number_above": 1
+              }
+            ],
+            "uncertain": [
+              {
+                "index": 1988,
+                "distribution": {
+                  "family": "Normal",
+                  "parameters": [17000, 1500]
+                }
+              }
+            ],
+            "low_outlier_threshold": 10000
+          },
+          "trends": [
+            {
+              "parameter": 0,
+              "type": "Linear"
+            }
+          ]
+        },
+        "sampler": "DEMCzs",
+        "settings": {
+          "seed": 12345,
+          "number_of_chains": 4,
+          "iterations": 100,
+          "warmup_iterations": 50,
+          "thinning_interval": 1,
+          "output_length": 400
+        }
+      },
+      "assertions": [
+        { "method": "chain_value", "args": [0, 0, 0], "expected": -862134.5051455622, "mode": "rel", "tol": 1e-11 },
+        { "method": "chain_value", "args": [0, 0, 2], "expected": 41144.07740052168, "mode": "rel", "tol": 1e-11 },
+        { "method": "chain_value", "args": [0, 99, 0], "expected": -158741.2796241311, "mode": "rel", "tol": 1e-11 },
+        { "method": "chain_value", "args": [3, 99, 2], "expected": 48451.25860256946, "mode": "rel", "tol": 1e-11 },
+        { "method": "rhat", "args": [0], "expected": 1.2751054182074217, "mode": "rel", "tol": 1e-09 },
+        { "method": "rhat", "args": [2], "expected": 1.1076261986650562, "mode": "rel", "tol": 1e-09 },
+        { "method": "ess", "args": [0], "expected": 23.9540545060918, "mode": "rel", "tol": 1e-09 },
+        { "method": "ess", "args": [2], "expected": 25.892905219473125, "mode": "rel", "tol": 1e-09 },
+        { "method": "acceptance_rate", "args": [0], "expected": 0.115, "mode": "rel", "tol": 1e-12 },
+        { "method": "acceptance_rate", "args": [3], "expected": 0.135, "mode": "rel", "tol": 1e-12 },
+        { "method": "posterior_median", "args": [0], "expected": -294893.67894908227, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_median", "args": [1], "expected": 3356.09125525428, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_median", "args": [2], "expected": 47596.131014245926, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_sd", "args": [1], "expected": 1146.022729066373, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_lower", "args": [0], "expected": -504439.11075604847, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_upper", "args": [2], "expected": 49480.430034304765, "mode": "rel", "tol": 1e-09 },
+        { "method": "pareto_k", "args": [3], "expected": 1.4610364975295043, "mode": "rel", "tol": 1e-09 },
+        { "method": "max_pareto_k", "args": [], "expected": 1.5, "mode": "rel", "tol": 1e-09 },
+        { "method": "nobs", "args": [], "expected": 93, "mode": "equal" },
+        { "method": "prior_log_likelihood", "args": [], "expected": -46.80932820258633, "mode": "rel", "tol": 1e-09 }
+      ]
+    }
+  ]
+}

@@ -2001,7 +2001,49 @@ struct EstimationCase {
     std::vector<double> simulated;  // Simulation target, and the ML/MAP/GMM seeded-draw digest
     std::string construct_json;
     std::vector<double> data;
+
+    // Task 9. The case's FULL construct -- the fixture's own `construct` object with the
+    // `settings` sub-object hoisted to the top level, which is exactly the shape
+    // fit_runner.hpp's `run_fit`/`run_fit_diagnostics` read (see apply_bayesian_settings). The
+    // narrow `construct_json` above is deliberately left alone: it backs the pinned
+    // parameter/max_log_likelihood/covariance oracles, and widening it would move them.
+    //
+    // The two memoized results below are LAZY, and only the Task-9 arms touch them: a case that
+    // asserts nothing new never pays for the extra run. Both runs are deterministic functions of
+    // the same construct (seeded MCMC / RNG-free optimizers), so the profile grid and the
+    // diagnostics are the same fit's, not a different one's -- the `bic [n]` lazy-rebuild
+    // precedent this file already uses.
+    std::string full_construct_json;
+    bool full_fit_done = false;
+    corehydro::estimation::support::FitResult full_fit;
+    bool full_diagnostics_done = false;
+    corehydro::estimation::support::FitDiagnostics full_diagnostics;
 };
+
+// Fixture target name -> the name `run_fit`/`run_fit_diagnostics` dispatch on. The only one that
+// differs is GMM, whose fixture-level target spells out the C# class name.
+static std::string fit_runner_target(const std::string& target) {
+    return target == "GeneralizedMethodOfMoments" ? "GMM" : target;
+}
+
+static const corehydro::estimation::support::FitResult& full_fit_of(EstimationCase& ec) {
+    if (!ec.full_fit_done) {
+        ec.full_fit = corehydro::estimation::support::run_fit(fit_runner_target(ec.target),
+                                                              ec.full_construct_json, ec.data);
+        ec.full_fit_done = true;
+    }
+    return ec.full_fit;
+}
+
+static const corehydro::estimation::support::FitDiagnostics& full_diagnostics_of(
+    EstimationCase& ec) {
+    if (!ec.full_diagnostics_done) {
+        ec.full_diagnostics = corehydro::estimation::support::run_fit_diagnostics(
+            fit_runner_target(ec.target), ec.full_construct_json, ec.data);
+        ec.full_diagnostics_done = true;
+    }
+    return ec.full_diagnostics;
+}
 
 // Seeded ISimulatable draw, flattened to a 1-D vector so the `simulated_value [i]` digest works
 // uniformly across model types. Most Phase 4-7 models are ISimulatable<std::vector<double>> and
@@ -2035,6 +2077,21 @@ static EstimationCase build_and_run_estimation(const std::string& target, const 
     EstimationCase ec;
     ec.target = target;
     ec.data = data;
+
+    // Task 9: the FULL construct the fit runner reads (see EstimationCase's note). `settings` is
+    // hoisted to the top level -- where apply_bayesian_settings looks for the Bayesian knobs --
+    // and every other key (model, optimizer, profile, profile_bins, alpha, sampler, strategy,
+    // ...) is passed through untouched; run_fit ignores the ones its target does not use. The
+    // three harnesses build this the same way, so they hand the runner byte-identical constructs.
+    {
+        json full = construct;
+        if (full.contains("settings")) {
+            for (auto it = full["settings"].begin(); it != full["settings"].end(); ++it)
+                full[it.key()] = it.value();
+            full.erase("settings");
+        }
+        ec.full_construct_json = full.dump();
+    }
 
     // GMM fits the CONCRETE Bulletin17CDistribution (not a ModelBase -- see model_spec.hpp's
     // build_bulletin17c_model wiring note), optionally caching a seeded draw from the fitted model
@@ -2188,6 +2245,52 @@ static double dispatch_estimation(EstimationCase& ec, const std::string& m, cons
         return dispatch_model_data_frame(*ec.model, m, a);
     if (m == "is_valid" || m == "validation_message_contains")
         return dispatch_model_validate(*ec.model, m, a);
+
+    // --- Task 9: the wider fit surface -----------------------------------------------------
+    //
+    // Everything below reads the LAZY full-construct fit (or its diagnostics), not the narrow
+    // `ec.fit` the older arms read -- see EstimationCase's note for why the two constructs are
+    // kept separate. These arms come first because they are target-agnostic: the profile block
+    // is ML/MAP-only and the posterior block BayesianAnalysis-only, but which one a fixture may
+    // ask for is decided by the FitResult field being empty, not by a target branch.
+    if (m == "profile_lower" || m == "profile_upper" || m == "profile_value" ||
+        m == "function_evaluations" || m == "status_is" || m == "nobs" ||
+        m == "prior_log_likelihood" || m == "rhat" || m == "ess" || m == "acceptance_rate" ||
+        m == "posterior_median" || m == "posterior_sd" || m == "posterior_lower" ||
+        m == "posterior_upper") {
+        const auto& f = full_fit_of(ec);
+        if (m == "profile_lower") return f.profile_lower.at(idx(0));
+        if (m == "profile_upper") return f.profile_upper.at(idx(0));
+        // profile_value [param, bin, col]: profile_grid is n_params x bins x 2, row-major, with
+        // col 0 = the parameter value at that bin's midpoint and col 1 = the profile
+        // log-likelihood there (fit_runner.hpp's fill_profile).
+        if (m == "profile_value") {
+            std::size_t bins = static_cast<std::size_t>(f.profile_bins);
+            return f.profile_grid.at((idx(0) * bins + idx(1)) * 2u + idx(2));
+        }
+        if (m == "function_evaluations") return f.function_evaluations;
+        // status_is [name]: 1.0 when the optimizer status matches the given name, else 0.0 (the
+        // `validation_message_contains` boolean-as-double precedent -- the fixture schema carries
+        // no string comparison).
+        if (m == "status_is") return f.status == a[0].get<std::string>() ? 1.0 : 0.0;
+        if (m == "nobs") return f.nobs;
+        if (m == "prior_log_likelihood") return f.prior_log_likelihood;
+        if (m == "rhat") return f.rhat.at(idx(0));
+        if (m == "ess") return f.ess.at(idx(0));
+        if (m == "acceptance_rate") return f.acceptance_rates.at(idx(0));
+        if (m == "posterior_median") return f.summary_median.at(idx(0));
+        if (m == "posterior_sd") return f.summary_sd.at(idx(0));
+        if (m == "posterior_lower") return f.summary_lower.at(idx(0));
+        return f.summary_upper.at(idx(0));  // posterior_upper
+    }
+    // The PSIS-LOO Pareto-k surface lives on FitDiagnostics (the InfluenceDiagnostics wrapper),
+    // not on FitResult, so it takes the second lazy runner call.
+    if (m == "pareto_k" || m == "max_pareto_k") {
+        const auto& d = full_diagnostics_of(ec);
+        if (m == "pareto_k") return d.pareto_k.at(idx(0));
+        return d.max_pareto_k;
+    }
+
     if (!ec.has_fit)
         throw std::runtime_error("unknown Simulation/Validate fixture method: " + m);
 

@@ -1,0 +1,45 @@
+{
+  "target": "MaximumLikelihood",
+  "kind": "model_estimation",
+  "source": "RMC-BestFit/src/RMC.BestFit/Estimation/MaximumLikelihood.cs @ c2e6192 (ProfileLikelihood, line 289; ParameterConfidenceIntervals, line 325) -- exact oracle values dumped from the REAL C# MaximumLikelihood via tools/oracle_emitter (Task 9) and reproduced by tools/verify_oracles.py. Pins the profile-likelihood surface the R/Python fit_mle(profile = TRUE) verbs expose (the plottable grid plus the chi-squared profile-likelihood confidence intervals confint() reads), plus the three scalar fit facts the shared fit runner reports. TOLERANCES follow the T12 NelderMead tier (rel 1e-9): the simplex is deterministic (no RNG, no parallel reduction) and this fit reproduces bit-identically against the real C#, so the profile grid (a fixed sweep of Model.DataLogLikelihood over Stratify midpoints of the parameter bounds) and the Brent-solved interval endpoints reproduce to the printed digits -- measured agreement is exact, well inside 1e-9. status_is/nobs are integers/enums, asserted with mode 'equal'. The grid bins asserted here are deliberately ones whose log-likelihood is FINITE: the mu profile sweeps the parameter's full [-1e6, 1e6] bound range, so bins outside roughly +/-1.9e5 underflow to -inf, where a relative comparison is meaningless (the same reason the off-diagonal covariance entries in mle_normal_smoke.json use an absolute tolerance). function_evaluations is NOT asserted here -- see fit_optimizers.json's source and docs/upstream-csharp-issues.md for why the NelderMead path's count is not a C# oracle.",
+  "datasets": {
+    "annual_peaks": [12500, 15300, 9870, 21000, 18400, 11200, 26800, 14100, 19500, 11600]
+  },
+  "cases": [
+    {
+      "name": "normal_nelder_mead_profile",
+      "construct": {
+        "model": {
+          "family": "Normal",
+          "dataset": "annual_peaks"
+        },
+        "optimizer": "NelderMead",
+        "profile": true,
+        "profile_bins": 100,
+        "alpha": 0.1
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 16026.055013737448, "mode": "rel", "tol": 1e-09 },
+        { "method": "parameter", "args": [1], "expected": 5058.828006631213, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_lower", "args": [0], "expected": 13395.658598125914, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_lower", "args": [1], "expected": 3645.5759010022884, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_upper", "args": [0], "expected": 18658.34140187408, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_upper", "args": [1], "expected": 7692.29224807834, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [0, 50, 0], "expected": 10000, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [0, 50, 1], "expected": -106.57626968378653, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [0, 51, 0], "expected": 30000, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [0, 51, 1], "expected": -137.6253493923072, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [1, 0, 0], "expected": 500, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [1, 0, 1], "expected": -583.2747041762493, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [1, 10, 0], "expected": 10500, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [1, 10, 1], "expected": -102.94155064329874, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [1, 25, 1], "expected": -110.85054664884062, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [1, 99, 0], "expected": 99500, "mode": "rel", "tol": 1e-09 },
+        { "method": "profile_value", "args": [1, 99, 1], "expected": -124.28144199559509, "mode": "rel", "tol": 1e-09 },
+        { "method": "status_is", "args": ["Success"], "expected": 1, "mode": "equal" },
+        { "method": "nobs", "args": [], "expected": 10, "mode": "equal" },
+        { "method": "prior_log_likelihood", "args": [], "expected": -34.55047331970523, "mode": "rel", "tol": 1e-09 }
+      ]
+    }
+  ]
+}

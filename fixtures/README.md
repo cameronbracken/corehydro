@@ -1193,6 +1193,57 @@ joining the ML/MAP method list, since the two surfaces are disjoint. R/Python ea
 because its construct shape (`sampler` + numeric knobs) doesn't fit the ML/MAP
 `{target, model_json, dataset, optimizer}` signature.
 
+**The wider fit surface (Task 9).** Sixteen further methods read the fields the shared fit runner
+(`core/include/corehydro/estimation/support/fit_runner.hpp`) fills but the T11/T12 method list
+above never exposed. They reach it through a SECOND, lazily-memoized call per case -- C++
+`run_fit`/`run_fit_diagnostics`, R `ch_fit_run_`/`ch_fit_diagnostics_`, Python
+`_core.fit_run`/`_core.fit_diagnostics`, all three over the case's FULL construct (the fixture's
+own `construct` object with the `settings` sub-object hoisted to the top level, which is the shape
+`run_fit` reads). The narrow `ch_estimation_run_`/`ch_estimation_bayes_run_` call the methods above
+ride is deliberately left alone: it backs the already-pinned oracles. Both calls run the same
+deterministic fit (RNG-free optimizers, seeded MCMC), so this is the `bic [n]` lazy-rebuild
+precedent, not a second, different fit; a case that asserts none of these methods never pays for it.
+
+`MaximumLikelihood`/`MaximumAPosteriori` (the profile block is populated only when the construct
+sets `"profile": true`, with optional `"profile_bins"` (default 100) and `"alpha"` (default 0.1)):
+
+- `profile_lower [p]`, `profile_upper [p]` -- row `p` of `ParameterConfidenceIntervals(alpha)`, the
+  chi-squared profile-likelihood confidence interval for parameter `p`.
+- `profile_value [param, bin, col]` -- `ProfileLikelihood(bins)[param][bin, col]`: `col` 0 is the
+  bin-midpoint parameter value, `col` 1 the data log-likelihood there. Bins sweep the parameter's
+  full `[LowerBound, UpperBound]` range, so a fixture must pick bins whose log-likelihood is finite.
+- `function_evaluations []` -- `TotalFunctionEvaluations`, an integer (assert with `mode: "equal"`).
+  Reproduces C# exactly for DifferentialEvolution/BFGS/MultilevelSingleLinkage only; see
+  `fit_optimizers.json`'s `source` and `docs/upstream-csharp-issues.md` for why the NelderMead,
+  Brent and Powell counts are deliberately not asserted.
+- `status_is [name]` -- `1.0` when the terminal `OptimizationStatus.ToString()` equals `name`, else
+  `0.0` (the `validation_message_contains` boolean-as-double precedent).
+
+Shared by `MaximumLikelihood`/`MaximumAPosteriori` and `BayesianAnalysis`, both evaluated at the
+fit's own point estimate (the ML/MAP `BestParameterSet`, or `PosteriorMean`/`MAP` per the analysis's
+`PointEstimator`):
+
+- `nobs []` -- `Model.PointwiseDataLogLikelihood(point).Length`, an integer (`mode: "equal"`). Note
+  this is the EXPANDED observation count for a censored DataFrame, not the input record length.
+- `prior_log_likelihood []` -- `Model.PriorLogLikelihood(point)`.
+
+`BayesianAnalysis` only:
+
+- `rhat [p]`, `ess [p]` -- `Results.ParameterResults[p].SummaryStatistics.Rhat`/`.ESS` (the
+  Gelman-Rubin diagnostic over the post-warm-up chains, and the effective sample size over `Output`).
+- `acceptance_rate [chain]` -- `Results.AcceptanceRates[chain]`.
+- `posterior_median [p]`, `posterior_sd [p]`, `posterior_lower [p]`, `posterior_upper [p]` --
+  `Results.ParameterResults[p].SummaryStatistics.Median`/`.StandardDeviation`/`.LowerCI`/`.UpperCI`.
+- `pareto_k [i]`, `max_pareto_k []` -- `ComputeInfluenceDiagnostics().Observations[i].ParetoK` and
+  `.MaxParetoK`, the PSIS-LOO diagnostic. Read through the `InfluenceDiagnostics` wrapper (not the
+  raw `ParetoK` array) so all four harnesses share its NaN guard; this is the one pair backed by the
+  `run_fit_diagnostics` call rather than `run_fit`.
+
+Emitter drivers: `DispatchMlMapExtended` (shared by both `DispatchMlMap` and
+`DispatchMlMapGeneral`, so the univariate and IModel paths cannot drift) and the `BayesianAnalysis`
+arm of `DispatchBayesian`. Every one of the sixteen has a driver -- a fixture target the emitter
+does not know about reports as reproduced without checking anything.
+
 **`Simulation` (M13):** a fourth file-level `target` with NO estimator: the case builds the model
 (any of the four types above), calls the ISimulatable surface
 `generate_random_values(construct.sample_size, construct.seed)` **once** (`seed` optional,
@@ -1352,6 +1403,22 @@ fields for the measured tolerances).
   `output_length` the aggregates reproduce to ~1e-11..1e-14, far tighter than the long-run rstan
   cases' `tol: 0.05`, because the divergent tail never gets long enough to amplify sub-ULP noise
   into a measurable difference.
+- `fit_profile.json` (Task 9): the whole profile block at the NelderMead tier (`tol: 1e-9`). The
+  fit itself is bit-identical to the real C#, so the profile grid (a fixed `Stratify` sweep of
+  `Model.DataLogLikelihood`) and the Brent-solved interval endpoints reproduce to the printed
+  digits. Only bins with a FINITE log-likelihood are asserted -- the mu profile sweeps the
+  parameter's full bound range, and far bins underflow to `-inf`, where a relative comparison is
+  meaningless (the `mle_normal_smoke.json` off-diagonal-covariance precedent).
+- `fit_optimizers.json` (Task 9): `function_evaluations`/`status_is`/`nobs` with `mode: "equal"`
+  (an integer count and an enum name are never "close"); optimizer-dependent
+  `parameter`/`max_log_likelihood`/`prior_log_likelihood` at the `mle_optimizers_smoke.json` tier
+  (`tol: 1e-8`).
+- `fit_bayes_diagnostics.json` and `fit_cross_language.json` (Task 9): the Output-derived posterior
+  summary and diagnostics (`rhat`/`ess`/`posterior_*`/`pareto_k`/`max_pareto_k`/
+  `prior_log_likelihood`) at the `bayes_normal.json` tier (`tol: 1e-9`), measured agreement
+  1e-14..1e-12; `acceptance_rate` at `tol: 1e-12` (an accepted-count/iterations ratio off a
+  bit-identical chain, so exact); `chain_value` at the Phase-3 pure-RNG digest tier (`tol: 1e-11`).
+  Both files reuse `bayes_normal.json`'s `output_length` 400 for the same pre-amplification reason.
 
 **Port-fidelity finding (Task M14, real-C#-oracle-driven): the Mixture `SetParameters(ref)`
 write-back.** Dumping exact oracles for the M13 mixture smoke cases surfaced a real trajectory

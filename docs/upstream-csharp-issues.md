@@ -1643,6 +1643,51 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
 - **Suggested C# fix:** call `RecalculatePlottingPositionsAfterEdit()` (already present, line
   ~1157) at the end of both setters, so the headless and GUI paths agree.
 
+---
+
+## FIDELITY (Task 9) — `TotalFunctionEvaluations` reproduces C# for BFGS/DE/MLSL but not for NelderMead, Brent or Powell
+
+- **Where:** `RMC.BestFit/Estimation/MaximumLikelihood.cs` @ c2e6192 (`TotalFunctionEvaluations`,
+  line 164, copied from `Optimizer.FunctionEvaluations` at the end of a successful `Estimate()`),
+  against the port's `core/include/corehydro/estimation/maximum_likelihood.hpp` and the six
+  optimizers `parse_optimizer` accepts. Surfaced writing `fixtures/estimation/fit_optimizers.json`,
+  which pins one fit under each optimizer.
+- **What:** fitting a Normal to the shared 10-value `annual_peaks` record, the real C# and the port
+  report the same evaluation count for the three optimizers that are genuine `Optimizer` subclasses
+  in the port — DifferentialEvolution `1160`, BFGS `164`, MultilevelSingleLinkage `277` — and
+  different counts for the other three: NelderMead C# `43` vs port `44`, Brent (on the one-parameter
+  bivariate copula model) C# `16` vs port `17`, Powell C# `186` vs port `125`. The optimum itself
+  agrees in every case.
+- **Two separate causes, both already understood:**
+  1. **NelderMead and Brent (+1, deterministic).** In this port `BrentSearch` and `NelderMead` are
+     standalone classes that do not derive from `Optimizer` (a documented Phase-0 shortcut), so
+     `MaximumLikelihood` reaches them through `estimation/support/optimizer_adapters.hpp`. That
+     header's own `total_function_evaluations() FIDELITY` note already states the case: the adapter
+     counts the wrapped solver's evaluations **plus one extra re-evaluation at the reported best
+     point** to recover the fitness/sign convention, so it "will generally run one-or-more calls
+     higher than a faithful C# count ... not asserted to match C#." The measured `+1` on both paths
+     is exactly that re-evaluation.
+  2. **Powell (~61, chaotic).** Powell IS a real `Optimizer` subclass here and the port is
+     line-for-line faithful (same `Evaluate` counter, same `LineMinimization` over a `BrentSearch`
+     bracket+minimize, same convergence test). Its optimum agrees with C# to ~1e-11 —
+     `mle_optimizers_smoke.json` already pins it at rel 1e-8, with C# `16026.999999749589` vs port
+     `16027.000000279293` — and that sub-ULP drift is enough to flip the outer `CheckConvergence`
+     test one iteration earlier in the port. One outer Powell iteration on a 2-parameter model is
+     two line minimizations, each a Brent bracket plus minimize, which is the observed ~61-evaluation
+     gap. Same class as the D6/X12 chaotic-sensitivity findings: the arithmetic agrees, the discrete
+     iteration count need not.
+- **Port handling:** `fit_optimizers.json` pins `function_evaluations` for DifferentialEvolution,
+  BFGS and MultilevelSingleLinkage only, and simply **does not assert** it for NelderMead, Brent and
+  Powell; `fit_profile.json` (a NelderMead fit) likewise omits it. Those three cases assert the
+  deterministic quantities that do reproduce — `status_is`, `nobs`, `prior_log_likelihood`, and the
+  parameter/log-likelihood values. There is **NO `oracle_skip` and NO loosened tolerance**: the
+  assertion is not made at all, following the D6/X12 precedent.
+- **Suggested action:** none required for correctness. If exact evaluation-count parity is ever
+  wanted, cause 1 is a real (small) refactor — fold the `Optimizer` base machinery into
+  `BrentSearch`/`NelderMead` so no adapter re-evaluation is needed — while cause 2 is not fixable by
+  any port change, since it is the same last-ULP reassociation sensitivity the analysis-curve
+  findings above describe.
+
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 
 Every entry above was re-checked against the shipped source at the new pins. This is the summary;
