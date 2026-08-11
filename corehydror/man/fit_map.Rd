@@ -34,7 +34,12 @@ evaluations.}
 \item{profile_bins}{number of bins in each parameter's profile.}
 }
 \value{
-An object of class \code{corehydro_fit}. See \code{\link[=fit_bayesian]{fit_bayesian()}} for the Bayesian surface.
+An object of class \code{corehydro_fit}. When \code{profile = TRUE}, it also carries \verb{$profile},
+a named list (one entry per parameter, named to match \code{coef()}) of \code{profile_bins}-by-2
+matrices with columns \code{value} and \code{log_likelihood}, the profile-likelihood grid \code{confint()}'s
+intervals are drawn from -- plot a parameter's curve with e.g.
+\code{plot(f$profile[[1]], type = "l")}. Absent (\code{NULL}) when the fit was built with the default
+\code{profile = FALSE}. See \code{\link[=fit_bayesian]{fit_bayesian()}} for the Bayesian surface.
 }
 \description{
 Fit a model by maximum a posteriori (the mode of the posterior formed from the model's own

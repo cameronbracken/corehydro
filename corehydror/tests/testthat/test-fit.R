@@ -87,3 +87,48 @@ test_that("argument errors name the offending value", {
   expect_error(fit_mle(m, optimizer = "Simplexx"), "Simplexx")
   expect_error(fit_mle(peaks), "distribution")
 })
+
+test_that("fit_input produces valid JSON when settings is empty", {
+  skip_if_not_installed("jsonlite")
+  m <- model_univariate("Normal", peaks)
+  fi <- corehydror:::fit_input(m, NULL, list())
+  parsed <- jsonlite::fromJSON(fi$json, simplifyVector = FALSE)
+  expect_true(is.list(parsed))
+  expect_named(parsed, "model")
+  expect_equal(parsed$model$family, "Normal")
+})
+
+test_that("covariance keeps the layout C++ built, not a re-flattened transpose", {
+  # LogPearsonTypeIII's 3 parameters give a covariance with real (non-zero) off-diagonal
+  # entries -- unlike Normal's asymptotically-independent mean/sd -- so a transpose bug would
+  # actually move a value to a different cell instead of swapping two zeros. Comparing directly
+  # against `raw$covariance` (the matrix ch_fit_run_ itself returns, built element-by-element in
+  # corehydror/src/estimation.cpp's `square_or_empty`) rather than a recomputed expectation means
+  # no oracle literal is hardcoded here.
+  m <- model_univariate("LogPearsonTypeIII", peaks)
+  fi <- corehydror:::fit_input(m, NULL,
+    list(optimizer = "NelderMead", hessian = TRUE, profile = FALSE, profile_bins = 100L)
+  )
+  raw <- corehydror:::ch_fit_run_("MaximumLikelihood", fi$json, fi$dataset)
+  expect_true(any(abs(raw$covariance[upper.tri(raw$covariance)]) > 0))
+
+  f <- corehydror:::new_fit(raw, fi$spec, fi$dataset, "NelderMead", level = 0.9)
+  expect_identical(unname(f$covariance), unname(raw$covariance))
+})
+
+test_that("fit_mle(..., profile = TRUE) surfaces a plottable per-parameter grid", {
+  f <- fit_mle(model_univariate("Normal", peaks), profile = TRUE, profile_bins = 20)
+  expect_type(f$profile, "list")
+  expect_named(f$profile, names(f$parameters))
+  for (p in f$profile) {
+    expect_equal(dim(p), c(20L, 2L))
+    expect_equal(colnames(p), c("value", "log_likelihood"))
+    # The grid comes from an ordered sequence; a column swap would break monotonicity here.
+    expect_true(all(diff(p[, "value"]) >= 0))
+  }
+})
+
+test_that("profile is absent when the fit was built without profile = TRUE", {
+  f <- fit_mle(model_univariate("Normal", peaks))
+  expect_null(f$profile)
+})

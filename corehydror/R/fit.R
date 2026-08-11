@@ -57,26 +57,60 @@ new_fit <- function(result, base_spec, dataset, optimizer, level) {
   parameters <- result$parameters
   names(parameters) <- result$parameter_names
 
-  reshape <- function(flat) {
-    if (!length(flat)) {
+  # `result$covariance`/`result$correlation` are already proper n x n R matrices (built
+  # column-by-column in corehydror/src/estimation.cpp's `square_or_empty`), so only the
+  # dimnames need applying here. Do NOT round-trip a matrix through `matrix(x, byrow = TRUE)`:
+  # that first flattens it column-major (`as.vector()`) and refills row-major, i.e. transposes
+  # it -- invisible only because these particular matrices are symmetric.
+  name_square <- function(m) {
+    if (!length(m)) {
       return(NULL)
     }
-    m <- matrix(flat, nrow = n, ncol = n, byrow = TRUE)
     dimnames(m) <- list(result$parameter_names, result$parameter_names)
     m
   }
-  covariance <- reshape(result$covariance)
-  correlation <- reshape(result$correlation)
+  covariance <- name_square(result$covariance)
+  correlation <- name_square(result$correlation)
   standard_errors <- if (length(result$standard_errors)) {
-    stats::setNames(result$standard_errors, result$parameter_names)
+    se <- result$standard_errors
+    names(se) <- result$parameter_names
+    se
   } else {
     NULL
   }
 
-  profile <- if (length(result$profile_lower)) {
+  has_profile <- length(result$profile_lower) > 0
+
+  # The plottable profile-likelihood grid: `result$profile_grid` is a genuinely flat vector (not
+  # a pre-built matrix, unlike covariance/correlation above), n_params * bins * 2, row-major
+  # [parameter][bin][value, profile log-likelihood] -- see fit_runner.hpp's FitResult doc. One
+  # `bins x 2` matrix per parameter, byrow = TRUE is correct here because the source is flat.
+  profile <- if (has_profile) {
+    bins <- result$profile_bins
+    grid <- result$profile_grid
+    per_parameter <- lapply(seq_len(n), function(p) {
+      start <- (p - 1L) * bins * 2L
+      sub <- grid[(start + 1L):(start + bins * 2L)]
+      m <- matrix(sub, nrow = bins, ncol = 2L, byrow = TRUE)
+      colnames(m) <- c("value", "log_likelihood")
+      m
+    })
+    names(per_parameter) <- result$parameter_names
+    per_parameter
+  } else {
+    NULL
+  }
+
+  # The profile-likelihood confidence-interval bookkeeping confint.corehydro_fit() reuses; kept
+  # separate from `profile` above (the public plottable-grid element the design spec names).
+  profile_intervals <- if (has_profile) {
+    lower <- result$profile_lower
+    names(lower) <- result$parameter_names
+    upper <- result$profile_upper
+    names(upper) <- result$parameter_names
     list(
-      lower = stats::setNames(result$profile_lower, result$parameter_names),
-      upper = stats::setNames(result$profile_upper, result$parameter_names),
+      lower = lower,
+      upper = upper,
       bins = result$profile_bins,
       level = level
     )
@@ -107,6 +141,7 @@ new_fit <- function(result, base_spec, dataset, optimizer, level) {
       status = result$status,
       function_evaluations = result$function_evaluations,
       profile = profile,
+      profile_intervals = profile_intervals,
       model = fitted_model,
       spec = base_spec,
       dataset = dataset,
@@ -163,7 +198,12 @@ fit_optimized <- function(target, model, distribution, optimizer, hessian, profi
 #'   `FALSE` by default because each costs `profile_bins * length(parameters)` likelihood
 #'   evaluations.
 #' @param profile_bins number of bins in each parameter's profile.
-#' @return An object of class `corehydro_fit`. See [fit_bayesian()] for the Bayesian surface.
+#' @return An object of class `corehydro_fit`. When `profile = TRUE`, it also carries `$profile`,
+#'   a named list (one entry per parameter, named to match `coef()`) of `profile_bins`-by-2
+#'   matrices with columns `value` and `log_likelihood`, the profile-likelihood grid `confint()`'s
+#'   intervals are drawn from -- plot a parameter's curve with e.g.
+#'   `plot(f$profile[[1]], type = "l")`. Absent (`NULL`) when the fit was built with the default
+#'   `profile = FALSE`. See [fit_bayesian()] for the Bayesian surface.
 #' @seealso [fit_map()], [fit_bayesian()], [fit_gmm()], [fit_diagnostics()].
 #' @export
 #' @examples
@@ -184,7 +224,12 @@ fit_mle <- function(model, distribution = NULL, optimizer = "NelderMead", hessia
 #' RMC.BestFit.
 #'
 #' @inheritParams fit_mle
-#' @return An object of class `corehydro_fit`. See [fit_bayesian()] for the Bayesian surface.
+#' @return An object of class `corehydro_fit`. When `profile = TRUE`, it also carries `$profile`,
+#'   a named list (one entry per parameter, named to match `coef()`) of `profile_bins`-by-2
+#'   matrices with columns `value` and `log_likelihood`, the profile-likelihood grid `confint()`'s
+#'   intervals are drawn from -- plot a parameter's curve with e.g.
+#'   `plot(f$profile[[1]], type = "l")`. Absent (`NULL`) when the fit was built with the default
+#'   `profile = FALSE`. See [fit_bayesian()] for the Bayesian surface.
 #' @seealso [fit_mle()], [fit_bayesian()], [fit_gmm()], [fit_diagnostics()].
 #' @export
 #' @examples
@@ -256,18 +301,19 @@ logLik.corehydro_fit <- function(object, ...) {
 #' f <- fit_mle(model_univariate("Normal", peaks))
 #' confint(f, level = 0.9)
 confint.corehydro_fit <- function(object, parm, level = 0.95, ...) {
-  if (is.null(object$profile) || !isTRUE(all.equal(object$profile$level, level))) {
+  if (is.null(object$profile_intervals) ||
+        !isTRUE(all.equal(object$profile_intervals$level, level))) {
     base_model <- structure(
       list(spec = object$spec, dataset = object$dataset),
       class = "corehydro_model"
     )
-    bins <- if (is.null(object$profile)) 100L else object$profile$bins
+    bins <- if (is.null(object$profile_intervals)) 100L else object$profile_intervals$bins
     object <- fit_optimized(
       object$method, base_model, NULL, object$optimizer,
       hessian = TRUE, profile = TRUE, profile_bins = bins, alpha = 1 - level
     )
   }
-  out <- cbind(lower = object$profile$lower, upper = object$profile$upper)
+  out <- cbind(lower = object$profile_intervals$lower, upper = object$profile_intervals$upper)
   rownames(out) <- names(object$parameters)
   if (!missing(parm)) out <- out[parm, , drop = FALSE]
   out
