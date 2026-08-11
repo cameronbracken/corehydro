@@ -236,6 +236,54 @@ static void test_profile_on_request() {
     }
 }
 
+static void test_bayesian_block() {
+    // warmup_iterations is explicit (not in the brief's literal construct) because
+    // BayesianAnalysis's ctor computes a default warmup_iterations_ from the DEFAULT
+    // iterations_ (~3500 for credible_interval_width 0.9) before the cascade below overrides
+    // iterations to 200; an unset warmup_iterations leaves that stale ~1750 in place, which
+    // legitimately trips the sampler's own "warmup > iterations/2" guard
+    // (mcmc_sampler.hpp:402) -- a real port-faithful invariant, not a defect in the cascade.
+    // Every shipped Bayesian fixture (e.g. fixtures/estimation/bayes_normal.json) likewise
+    // always pairs iterations with an explicit warmup_iterations.
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"DEMCz","seed":12345,"iterations":200,)"
+        R"("warmup_iterations":50,"number_of_chains":4,"thinning_interval":1,"output_length":500,)"
+        R"("credible_interval_width":0.9})";
+    support::FitResult r = support::run_fit("BayesianAnalysis", construct, kPeaks);
+
+    CHECK_TRUE(r.method == "BayesianAnalysis");
+    CHECK_TRUE(r.chain_dims.size() == 3);
+    CHECK_TRUE(r.chain_dims[0] == 4);            // chains
+    CHECK_TRUE(r.chain_dims[2] == 2);            // parameters
+    CHECK_TRUE(r.draws.size() == static_cast<std::size_t>(r.chain_dims[0]) *
+                                   static_cast<std::size_t>(r.chain_dims[1]) *
+                                   static_cast<std::size_t>(r.chain_dims[2]));
+    CHECK_TRUE(r.posterior.size() == r.posterior_rows * 2u);
+    CHECK_TRUE(r.acceptance_rates.size() == 4);
+    CHECK_TRUE(r.posterior_mean.size() == 2);
+    CHECK_TRUE(r.map.size() == 2);
+    CHECK_TRUE(r.rhat.size() == 2);
+    CHECK_TRUE(r.ess.size() == 2);
+    CHECK_TRUE(r.summary_median.size() == 2);
+    CHECK_TRUE(std::isfinite(r.dic));
+    CHECK_TRUE(std::isfinite(r.waic));
+    CHECK_TRUE(std::isfinite(r.looic));
+    CHECK_TRUE(!r.pareto_k.empty());
+    CHECK_TRUE(r.converged);   // a completed chain reports converged
+}
+
+static void test_bayesian_rejects_a_sampler_it_cannot_construct() {
+    bool threw = false;
+    try {
+        support::run_fit("BayesianAnalysis",
+                         R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"HMC"})", kPeaks);
+    } catch (const std::exception& e) {
+        std::string m = e.what();
+        threw = m.find("HMC") != std::string::npos && m.find("mcmc_sample") != std::string::npos;
+    }
+    CHECK_TRUE(threw);
+}
+
 int main() {
     test_mle_shape();
     test_hessian_can_be_disabled();
@@ -247,5 +295,7 @@ int main() {
     test_json_round_trip();
     test_profile_off_by_default();
     test_profile_on_request();
+    test_bayesian_block();
+    test_bayesian_rejects_a_sampler_it_cannot_construct();
     return chtest::summary("fit_runner");
 }

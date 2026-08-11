@@ -27,9 +27,11 @@
 #include <string>
 #include <vector>
 
+#include "corehydro/estimation/bayesian_analysis.hpp"
 #include "corehydro/estimation/maximum_a_posteriori.hpp"
 #include "corehydro/estimation/maximum_likelihood.hpp"
 #include "corehydro/estimation/optimization_method.hpp"
+#include "corehydro/numerics/data/goodness_of_fit.hpp"
 #include "corehydro/models/json_lite.hpp"
 #include "corehydro/models/model_spec.hpp"
 #include "corehydro/models/support/model_base.hpp"
@@ -71,6 +73,26 @@ struct FitResult {
     std::vector<double> profile_grid;
     std::vector<double> profile_lower, profile_upper;  // n_params, profile-likelihood CIs
     int profile_bins = 0;
+
+    // --- Bayesian block ----------------------------------------------------------------
+    // Raw chains, flattened CHAIN-major: index = (chain * n_iterations + iter) * n_params + p.
+    // This is the exact order ch_estimation_bayes_run_ has always returned, so the fixture
+    // `chain_value [chain, iter, param]` arm is unchanged. The bindings permute it to the
+    // user-facing [iteration, chain, parameter] array.
+    std::vector<double> draws;
+    std::vector<int> chain_dims;              // {n_chains, n_iterations, n_params}
+    // The thinned posterior the analyses consume, flattened row-major, posterior_rows x n_params.
+    std::vector<double> posterior;
+    std::size_t posterior_rows = 0;
+    std::vector<double> acceptance_rates;     // one per chain
+    std::vector<double> mean_log_likelihood;  // one per iteration
+    std::vector<double> map, posterior_mean;  // n_params
+    std::vector<double> rhat, ess;            // n_params
+    std::vector<double> summary_mean, summary_median, summary_sd,
+                        summary_lower, summary_upper;  // n_params
+    double dic = kNaN, waic = kNaN, waic_pd = kNaN, looic = kNaN, loo_pd = kNaN,
+           looic_se = kNaN;
+    std::vector<double> pareto_k;
 };
 
 // Maps an OptimizationStatus to the string the bindings surface.
@@ -97,6 +119,28 @@ inline OptimizationMethod parse_optimizer(const std::string& s) {
     if (s == "MultilevelSingleLinkage" || s == "MLSL")
         return OptimizationMethod::MultilevelSingleLinkage;
     throw std::runtime_error("unknown optimizer '" + s + "'");
+}
+
+// Sampler name -> SamplerType. BayesianAnalysis::set_up_sampler (bayesian_analysis.hpp:429-492)
+// constructs exactly these four (mirrors parse_sampler_type in corehydror/src/estimation.cpp);
+// RWMH/HMC/SNIS are real MCMC samplers but BayesianAnalysis cannot build them, so the rejection
+// names the public function that can: mcmc_sample().
+inline SamplerType parse_sampler(const std::string& s) {
+    if (s == "DEMCz") return SamplerType::DEMCz;
+    if (s == "DEMCzs") return SamplerType::DEMCzs;
+    if (s == "ARWMH") return SamplerType::ARWMH;
+    if (s == "NUTS") return SamplerType::NUTS;
+    throw std::runtime_error(
+        "BayesianAnalysis cannot construct sampler '" + s +
+        "'; it supports DEMCz, DEMCzs, ARWMH and NUTS. For RWMH, HMC or SNIS use mcmc_sample().");
+}
+
+// Point-estimator name -> PointEstimateType, by its C# name (BayesianAnalysis.cs's
+// PointEstimateType enum: PosteriorMean, PosteriorMode -- the MAP).
+inline PointEstimateType parse_point_estimator(const std::string& s) {
+    if (s == "PosteriorMean") return PointEstimateType::PosteriorMean;
+    if (s == "PosteriorMode") return PointEstimateType::PosteriorMode;
+    throw std::runtime_error("unknown point estimator '" + s + "'");
 }
 
 // Parameter display names, falling back to p1..pn when the model leaves them empty (some
@@ -237,6 +281,136 @@ inline FitResult run_fit(const std::string& target, const std::string& construct
             fill_common(r, e, *model, want_hessian);
             if (want_profile) fill_profile(r, e, profile_bins, alpha);
         }
+        r.model_spec = fitted_spec(model_json, r.parameters);
+        return r;
+    }
+    if (target == "BayesianAnalysis") {
+        std::unique_ptr<corehydro::models::ModelBase> model =
+            corehydro::models::spec::build_model_from_json(model_text, dataset);
+        BayesianAnalysis ba(*model, parse_sampler(construct.value_or("sampler", "DEMCzs")));
+        // Settings cascade copied verbatim from ch_estimation_bayes_run_
+        // (corehydror/src/estimation.cpp:264-312): the two "use defaults" flags are turned off
+        // so the explicit settings below aren't clobbered, and every numeric knob is applied
+        // only when the construct supplies a positive value, exactly matching that `> 0` guard.
+        ba.set_use_simulation_defaults(false);
+        ba.set_use_advanced_simulation_defaults(false);
+        int seed = construct.value_or("seed", -1);
+        if (seed >= 0) ba.set_prng_seed(seed);
+        if (construct.value_or("iterations", 0) > 0)
+            ba.set_iterations(construct.value_or("iterations", 0));
+        if (construct.value_or("warmup_iterations", 0) > 0)
+            ba.set_warmup_iterations(construct.value_or("warmup_iterations", 0));
+        if (construct.value_or("number_of_chains", 0) > 0)
+            ba.set_number_of_chains(construct.value_or("number_of_chains", 0));
+        if (construct.value_or("thinning_interval", 0) > 0)
+            ba.set_thinning_interval(construct.value_or("thinning_interval", 0));
+        if (construct.value_or("initial_iterations", 0) > 0)
+            ba.set_initial_iterations(construct.value_or("initial_iterations", 0));
+        if (construct.value_or("output_length", 0) > 0)
+            ba.set_output_length(construct.value_or("output_length", 0));
+
+        // Sampler knobs (doubles/int, applied only when the construct actually carries the
+        // key, so an unset knob leaves the sampler's own default -- e.g. the
+        // set_default_advanced_simulation_options() values -- in place).
+        if (construct.contains("jump")) ba.set_jump(construct.at("jump").as_double());
+        if (construct.contains("jump_threshold"))
+            ba.set_jump_threshold(construct.at("jump_threshold").as_double());
+        if (construct.contains("snooker_threshold"))
+            ba.set_snooker_threshold(construct.at("snooker_threshold").as_double());
+        if (construct.contains("noise")) ba.set_noise(construct.at("noise").as_double());
+        if (construct.contains("scale")) ba.set_scale(construct.at("scale").as_double());
+        if (construct.contains("beta")) ba.set_beta(construct.at("beta").as_double());
+        if (construct.contains("max_tree_depth"))
+            ba.set_max_tree_depth(construct.at("max_tree_depth").as_int());
+        if (construct.contains("credible_interval_width"))
+            ba.set_credible_interval_width(construct.at("credible_interval_width").as_double());
+        if (construct.contains("point_estimator"))
+            ba.set_point_estimator(
+                parse_point_estimator(construct.at("point_estimator").as_string()));
+
+        if (!ba.estimate())
+            throw std::runtime_error("BayesianAnalysis::estimate() failed for sampler " +
+                                     construct.value_or("sampler", "DEMCzs"));
+
+        FitResult r;
+        r.method = "BayesianAnalysis";
+        r.parameter_names = parameter_names_of(*model);
+
+        const auto& point = ba.point_estimate();
+        r.parameters.assign(point.values.begin(), point.values.end());
+        std::vector<double> values = point.values;
+        r.nobs = static_cast<int>(model->pointwise_data_log_likelihood(values).size());
+        // BayesianAnalysis exposes no get_aic()/get_bic() of its own (unlike MLE/MAP), so these
+        // are recomputed here from the point estimate with the same -2*logL + 2k / -2*logL +
+        // k*log(n) definitions GoodnessOfFit::aic/bic implement for every other estimator.
+        // `point.fitness` is the POSTERIOR (data + prior) log-likelihood the sampler tracked for
+        // MCMC ParameterSets (unlike the ML/MAP optimizers' negated-fitness convention -- see
+        // mcmc_sampler.hpp's mean_log_likelihood_ accumulation), matching MAP's own
+        // maximum_log_likelihood(), which is likewise the log-posterior at its optimum -- so aic/
+        // bic stay comparable across the MaximumLikelihood/MaximumAPosteriori/BayesianAnalysis
+        // targets.
+        r.log_likelihood = point.fitness;
+        r.prior_log_likelihood = model->prior_log_likelihood(values);
+        int n_params = model->number_of_parameters();
+        r.aic = corehydro::numerics::data::GoodnessOfFit::aic(n_params, r.log_likelihood);
+        r.bic = corehydro::numerics::data::GoodnessOfFit::bic(r.nobs, n_params, r.log_likelihood);
+
+        const auto& results = *ba.results();
+        int n_chains = static_cast<int>(results.markov_chains.size());
+        int n_iterations = n_chains > 0 ? static_cast<int>(results.markov_chains[0].size()) : 0;
+        r.chain_dims = {n_chains, n_iterations, n_params};
+        r.draws.resize(static_cast<std::size_t>(n_chains) * static_cast<std::size_t>(n_iterations) *
+                       static_cast<std::size_t>(n_params));
+        std::size_t k = 0;
+        for (int c = 0; c < n_chains; ++c)
+            for (int it = 0; it < n_iterations; ++it)
+                for (int p = 0; p < n_params; ++p)
+                    r.draws[k++] = results.markov_chains[static_cast<std::size_t>(c)]
+                                       [static_cast<std::size_t>(it)]
+                                       .values[static_cast<std::size_t>(p)];
+
+        r.posterior_rows = results.output.size();
+        r.posterior.resize(r.posterior_rows * static_cast<std::size_t>(n_params));
+        for (std::size_t row = 0; row < r.posterior_rows; ++row)
+            for (int p = 0; p < n_params; ++p)
+                r.posterior[row * static_cast<std::size_t>(n_params) + static_cast<std::size_t>(p)] =
+                    results.output[row].values[static_cast<std::size_t>(p)];
+
+        r.acceptance_rates = results.acceptance_rates;
+        r.mean_log_likelihood = results.mean_log_likelihood;
+        r.map.assign(results.map.values.begin(), results.map.values.end());
+        r.posterior_mean.assign(results.posterior_mean.values.begin(),
+                                results.posterior_mean.values.end());
+
+        r.rhat.resize(static_cast<std::size_t>(n_params));
+        r.ess.resize(static_cast<std::size_t>(n_params));
+        r.summary_mean.resize(static_cast<std::size_t>(n_params));
+        r.summary_median.resize(static_cast<std::size_t>(n_params));
+        r.summary_sd.resize(static_cast<std::size_t>(n_params));
+        r.summary_lower.resize(static_cast<std::size_t>(n_params));
+        r.summary_upper.resize(static_cast<std::size_t>(n_params));
+        for (int p = 0; p < n_params; ++p) {
+            const auto& stats =
+                results.parameter_results[static_cast<std::size_t>(p)].summary_statistics;
+            r.rhat[static_cast<std::size_t>(p)] = stats.rhat;
+            r.ess[static_cast<std::size_t>(p)] = stats.ess;
+            r.summary_mean[static_cast<std::size_t>(p)] = stats.mean;
+            r.summary_median[static_cast<std::size_t>(p)] = stats.median;
+            r.summary_sd[static_cast<std::size_t>(p)] = stats.standard_deviation;
+            r.summary_lower[static_cast<std::size_t>(p)] = stats.lower_ci;
+            r.summary_upper[static_cast<std::size_t>(p)] = stats.upper_ci;
+        }
+
+        r.dic = ba.dic();
+        r.waic = ba.waic();
+        r.waic_pd = ba.waic_pd();
+        r.looic = ba.looic();
+        r.loo_pd = ba.loo_pd();
+        r.looic_se = ba.looic_se();
+        r.pareto_k = ba.pareto_k();
+
+        r.converged = true;
+        r.status = "Success";
         r.model_spec = fitted_spec(model_json, r.parameters);
         return r;
     }
