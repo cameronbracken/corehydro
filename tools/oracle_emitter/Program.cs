@@ -2437,6 +2437,46 @@ static (BestFitModels.IModel model, object? estimator, double[]? simulated)
 // method defaults. `status_is [name]` compares OptimizationStatus.ToString() and returns
 // 1.0/0.0 (the `is_valid`/`validation_message_contains` boolean-as-double precedent -- the
 // fixture schema carries no string comparison).
+//
+// This function is called once per ASSERTION (the outer per-case loop calls DispatchMlMap/
+// DispatchMlMapGeneral fresh for every assertion), so without memoization a case asserting
+// several `profile_value`/`profile_lower`/`profile_upper` entries -- e.g. fit_profile.json's
+// eleven profile_value + four profile_lower/upper assertions -- recomputes the full profile
+// sweep or the confidence-interval solve from scratch on every one. `TotalFunctionEvaluations`
+// is a snapshot property set once inside Estimate(), not a live counter, so the redundant calls
+// were correct, just wasteful. Cache by `best` (the case's BestParameterSet instance, stable for
+// the case's lifetime -- a fresh instance is built per case, and ParameterSet has no
+// Equals/GetHashCode override, so reference identity is exactly "per case").
+static List<double[,]> MemoizedProfileLikelihood(ParameterSet key, int bins, Func<int, List<double[,]>> compute)
+{
+    if (!ProfileFitCache.Profile.TryGetValue(key, out var byBins))
+    {
+        byBins = new Dictionary<int, List<double[,]>>();
+        ProfileFitCache.Profile[key] = byBins;
+    }
+    if (!byBins.TryGetValue(bins, out var v))
+    {
+        v = compute(bins);
+        byBins[bins] = v;
+    }
+    return v;
+}
+
+static double[,] MemoizedParameterCIs(ParameterSet key, double alpha, Func<double, double[,]> compute)
+{
+    if (!ProfileFitCache.Cis.TryGetValue(key, out var byAlpha))
+    {
+        byAlpha = new Dictionary<double, double[,]>();
+        ProfileFitCache.Cis[key] = byAlpha;
+    }
+    if (!byAlpha.TryGetValue(alpha, out var v))
+    {
+        v = compute(alpha);
+        byAlpha[alpha] = v;
+    }
+    return v;
+}
+
 static double? DispatchMlMapExtended(string m, JsonElement[] a, JsonElement construct,
     BestFitModels.IModel model, ParameterSet best,
     Func<int, List<double[,]>> profileLikelihood, Func<double, double[,]> parameterCIs,
@@ -2447,11 +2487,11 @@ static double? DispatchMlMapExtended(string m, JsonElement[] a, JsonElement cons
     double alpha = construct.TryGetProperty("alpha", out var al) ? al.GetDouble() : 0.1;
     switch (m)
     {
-        case "profile_lower": return parameterCIs(alpha)[I(0), 0];
-        case "profile_upper": return parameterCIs(alpha)[I(0), 1];
+        case "profile_lower": return MemoizedParameterCIs(best, alpha, parameterCIs)[I(0), 0];
+        case "profile_upper": return MemoizedParameterCIs(best, alpha, parameterCIs)[I(0), 1];
         // profile_value [param, bin, col]: ProfileLikelihood returns one [bins, 2] array per
         // parameter, col 0 = the bin midpoint parameter value, col 1 = the log-likelihood there.
-        case "profile_value": return profileLikelihood(bins)[I(0)][I(1), I(2)];
+        case "profile_value": return MemoizedProfileLikelihood(best, bins, profileLikelihood)[I(0)][I(1), I(2)];
         case "function_evaluations": return totalFunctionEvaluations();
         case "status_is": return status().ToString() == a[0].GetString() ? 1.0 : 0.0;
         case "nobs": return model.PointwiseDataLogLikelihood(best.Values).Length;
@@ -4327,6 +4367,17 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
 Console.WriteLine($"oracle verification: {pass} reproduced, {fail} failed, {skip} skipped (GEV std-err + oracle-exempt)");
 foreach (var f in failures) Console.Error.WriteLine("  FAIL " + f);
 return fail == 0 ? 0 : 1;
+
+// Memoizes DispatchMlMapExtended's ProfileLikelihood/ParameterConfidenceIntervals calls, keyed by
+// the case's BestParameterSet instance (stable for the case's lifetime; ParameterSet has no
+// Equals/GetHashCode override, so reference identity is exactly "per case" -- see
+// MemoizedProfileLikelihood/MemoizedParameterCIs above). Declared after the top-level statements
+// (C# requires it), matching the AnalysisData precedent just below.
+static class ProfileFitCache
+{
+    public static readonly Dictionary<ParameterSet, Dictionary<int, List<double[,]>>> Profile = new();
+    public static readonly Dictionary<ParameterSet, Dictionary<double, double[,]>> Cis = new();
+}
 
 // Flat analysis-result surface (Task A11), mirroring test_fixtures.cpp's AnalysisResult. Only the
 // fields a given target populates are filled; curve/CI vectors are indexed by the exceedance grid,

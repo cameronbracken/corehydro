@@ -559,16 +559,25 @@ def _fit_runner_target(target: str) -> str:
     return "GMM" if target == "GeneralizedMethodOfMoments" else target
 
 
-def _full_construct_json(construct: dict) -> str:
+def _full_construct_json(construct: dict, target: str) -> str:
     """The case's FULL construct, in the shape the shared fit runner reads (Task 9).
 
     The fixture's own construct with the `settings` sub-object hoisted to the top level -- where
     `apply_bayesian_settings` looks for the Bayesian knobs. Every other key passes through
     untouched and `run_fit` ignores the ones its target does not use. C++ and R assemble it
     identically, so all three hand the runner byte-identical constructs.
+
+    fit_runner.hpp's run_fit/run_fit_diagnostics default `optimizer` to DifferentialEvolution for
+    every target, including GMM -- but the narrow GMM path (_run_estimation_case below) defaults
+    it to BFGS (matching the C# GMM ctor default). Without this, a GMM case that omits `optimizer`
+    and asserts one of the wider fit-surface methods would read that method off a
+    DifferentialEvolution fit while parameter/j_stat came from a BFGS fit. Write the same BFGS
+    default here so both paths agree.
     """
     full = {k: v for k, v in construct.items() if k != "settings"}
     full.update(construct.get("settings", {}))
+    if target == "GeneralizedMethodOfMoments" and "optimizer" not in full:
+        full["optimizer"] = "BFGS"
     return json.dumps(full)
 
 
@@ -679,7 +688,7 @@ def _dispatch_estimation(
     ):
         if "_fit" not in result:
             result["_fit"] = _core.fit_run(
-                _fit_runner_target(target), _full_construct_json(construct), data
+                _fit_runner_target(target), _full_construct_json(construct, target), data
             )
         fit = result["_fit"]
         if method == "profile_lower":
@@ -717,7 +726,7 @@ def _dispatch_estimation(
     if method in ("pareto_k", "max_pareto_k"):
         if "_fit_diagnostics" not in result:
             result["_fit_diagnostics"] = _core.fit_diagnostics(
-                _fit_runner_target(target), _full_construct_json(construct), data
+                _fit_runner_target(target), _full_construct_json(construct, target), data
             )
         diagnostics = result["_fit_diagnostics"]
         if method == "pareto_k":

@@ -124,7 +124,7 @@
         { "method": "posterior_lower", "args": [0], "expected": -504439.11075604847, "mode": "rel", "tol": 1e-09 },
         { "method": "posterior_upper", "args": [2], "expected": 49480.430034304765, "mode": "rel", "tol": 1e-09 },
         { "method": "pareto_k", "args": [3], "expected": 1.4610364975295043, "mode": "rel", "tol": 1e-09 },
-        { "method": "max_pareto_k", "args": [], "expected": 1.5, "mode": "rel", "tol": 1e-09 },
+        { "method": "max_pareto_k", "args": [], "expected": 1.5, "mode": "rel", "tol": 1e-09, "note": "1.5 is the PSIS clip bound in bayesian_analysis.hpp (k = max(-0.5, min(k, 1.5))), not a computed statistic -- this assertion holds whenever ANY observation saturates the clip and is blind to drift in every other k. The pareto_k [3] pin above (1.461...) is below the clip and carries the real information." },
         { "method": "nobs", "args": [], "expected": 93, "mode": "equal" },
         { "method": "prior_log_likelihood", "args": [], "expected": -46.80932820258633, "mode": "rel", "tol": 1e-09 }
       ]

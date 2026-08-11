@@ -103,7 +103,7 @@
       "assertions": [
         { "method": "status_is", "args": ["Success"], "expected": 1, "mode": "equal" },
         { "method": "nobs", "args": [], "expected": 15, "mode": "equal" },
-        { "method": "prior_log_likelihood", "args": [], "expected": -0.6931471805599451, "mode": "rel", "tol": 1e-09 },
+        { "method": "prior_log_likelihood", "args": [], "expected": -0.6931471805599451, "mode": "rel", "tol": 1e-09, "note": "log(1/2): the constant density of the Uniform(-1, 1) prior on the copula's single theta parameter, pinned at any valid theta -- this checks the prior CONSTRUCTION, not the estimate. The parameter/max_log_likelihood pins below cover the fit itself; contrast with normal_differential_evolution's/normal_powell's prior_log_likelihood above, which ARE fit-dependent because the Jeffreys 1/sigma term is evaluated at the fitted scale." },
         { "method": "parameter", "args": [0], "expected": 0.6466238414554035, "mode": "rel", "tol": 1e-08 },
         { "method": "max_log_likelihood", "args": [], "expected": 3.8744392511391674, "mode": "rel", "tol": 1e-08 }
       ]

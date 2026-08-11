@@ -806,6 +806,12 @@ run_estimation_case <- function(target, construct, assertions, datasets) {
     for (nm in names(full$settings)) full[[nm]] <- full$settings[[nm]]
     full$settings <- NULL
   }
+  # fit_runner.hpp's run_fit/run_fit_diagnostics default `optimizer` to DifferentialEvolution for
+  # every target, including GMM -- but the narrow GMM path above defaults it to BFGS (matching the
+  # C# GMM ctor default). Without this, a GMM case that omits `optimizer` and asserts one of the
+  # wider fit-surface methods would read that method off a DifferentialEvolution fit while
+  # parameter/j_stat came from a BFGS fit. Write the same BFGS default here so both paths agree.
+  if (target == "GeneralizedMethodOfMoments" && is.null(full$optimizer)) full$optimizer <- "BFGS"
   full_json <- as.character(jsonlite::toJSON(full, auto_unbox = TRUE, digits = I(17)))
   fit_target <- if (target == "GeneralizedMethodOfMoments") "GMM" else target
   fit_env <- new.env(parent = emptyenv())

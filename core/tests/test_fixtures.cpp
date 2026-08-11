@@ -2090,6 +2090,15 @@ static EstimationCase build_and_run_estimation(const std::string& target, const 
                 full[it.key()] = it.value();
             full.erase("settings");
         }
+        // fit_runner.hpp's run_fit/run_fit_diagnostics default `optimizer` to
+        // DifferentialEvolution for every target, including GMM -- but the narrow GMM path just
+        // above defaults it to BFGS (matching the C# GMM ctor default). Without this, a GMM case
+        // that omits `optimizer` and asserts one of the sixteen wider fit-surface methods would
+        // read that method off a DifferentialEvolution fit while `parameter`/`j_stat` came from a
+        // BFGS fit -- two different fits, silently. Write the same BFGS default here so both
+        // paths agree, mirroring the narrow path's own explicit default a few lines below.
+        if (target == "GeneralizedMethodOfMoments" && !full.contains("optimizer"))
+            full["optimizer"] = "BFGS";
         ec.full_construct_json = full.dump();
     }
 
