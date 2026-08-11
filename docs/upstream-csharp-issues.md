@@ -1603,6 +1603,46 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
 
 ---
 
+## BUG — SetLowOutliersFromMGBT leaves plotting positions stale, so a headless Bulletin 17C fit over a censored record throws
+
+- **Where:** `RMC.BestFit/Models/DataFrame/DataFrame.cs`, `SetLowOutliersFromMGBT()` and
+  `SetLowOutliersFromThreshold()`; consumed by `GetNonparametricMomentsROS()` and
+  `Bulletin17CDistribution.ComputeDefaultInitials()`.
+- **What:** Both public low-outlier setters change the `IsLowOutlier` flags that the
+  Hirsch-Stedinger plotting positions depend on, but neither recomputes those positions. They end
+  with `RaisePropertyChange("LowOutliers")`, so in the WPF application the recomputation happens
+  through the `INotifyPropertyChanged` cascade. A **headless** caller (a script, a test, or any
+  non-GUI consumer) gets a frame whose flags say "censored" while every `PlottingPosition` is
+  still at its `0.0` default. The same gap applies to a frame assembled with a `ThresholdSeries`
+  and no low outliers at all: the ROS branch is taken for `NumberOfLowOutliers > 0 ||
+  ThresholdSeries.Count > 0`, so a perception-threshold record hits it too.
+- **Why it matters:** `GetNonparametricMomentsROS()` is exactly such a consumer. It regresses the
+  uncensored values on `Normal.StandardZ(PlottingPositionComplement)` to impute the censored ones.
+  With every position at 0 the complements are all 1, so the regression runs on `+Inf` quantiles
+  and the imputed empirical distribution has a non-monotonic probability vector. `ComputeDefaultInitials`
+  throws, `SetDefaultParameters` swallows it and leaves `Parameters` **empty**, and the GMM then
+  fails outright.
+- **Evidence (real C#, via `tools/oracle_emitter`):** building a `DataFrame` over a 17-year record
+  containing two low floods, calling `SetLowOutliersFromMGBT()` (which flags 2 and sets the
+  threshold to 8900), and fitting `Bulletin17CDistribution` by GMM throws
+  `ArgumentException: There must be at least 1 parameter to evaluate. (Parameter 'numberOfParameters')`.
+  Inserting a single `dataframe.CalculatePlottingPositions()` after the setter makes the same fit
+  succeed and return `[4.149225763920944, 0.18029214454603246, -0.11697673213754865]`.
+- **Port handling:** the port already replaced the `INotifyPropertyChanged` plumbing with the
+  explicit-call invalidation contract documented in `data_frame.hpp` ("a caller MUST re-run
+  `calculate_plotting_positions()` explicitly after any mutation"). `models/model_spec.hpp`'s
+  `build_data_frame` is that caller, so it now runs `calculate_plotting_positions()`
+  unconditionally: a spec describes a finished frame, so it leaves one fully computed, exactly
+  like the C# construction paths that end in `ProcessThresholdSeries(); CalculatePlottingPositions();`
+  (for example `BootstrapDataFrame`). Running it at the boundary rather than guarding on one
+  branch's precondition states the contract once and covers the threshold-series case as well.
+  The emitter mirrors the same call, and `fixtures/estimation/gmm_bulletin17c_censored.json` pins
+  the resulting fit against the real library — the C++ reproduces C# to ~1.6e-9 or better on all
+  three parameters, confirming the ROS math itself was never in question. This is therefore a
+  divergence in **who calls** the recompute, not in what it computes.
+- **Suggested C# fix:** call `RecalculatePlottingPositionsAfterEdit()` (already present, line
+  ~1157) at the end of both setters, so the headless and GUI paths agree.
+
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 
 Every entry above was re-checked against the shipped source at the new pins. This is the summary;

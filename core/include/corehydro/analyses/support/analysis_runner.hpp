@@ -146,6 +146,28 @@ inline std::vector<double> resolve_dataset(const models::spec::JsonValue& datase
     return datasets.at(key).as_double_vector();
 }
 
+// The plain value vector a runner needs alongside the model itself: the default sample size for a
+// predictive draw, and the observed sample a posterior check compares against.
+//
+// A model spec that names a `dataset` resolves it from the harness map, which is every caller
+// before the data layer landed. A model carrying its own inline `data_frame` (a censored record)
+// supplies its exact-series values instead: the interval, threshold, and uncertain series have no
+// single value to compare an observed statistic against, and the model itself reads the full frame
+// through build_model regardless, so nothing censored is lost from the fit.
+inline std::vector<double> resolve_model_data(const models::spec::JsonValue& model,
+                                              const models::spec::JsonValue& datasets) {
+    if (model.contains("dataset")) return resolve_dataset(datasets, model.at("dataset").as_string());
+    if (model.contains("data_frame")) {
+        std::vector<double> out;
+        const models::spec::JsonValue& df = model.at("data_frame");
+        if (df.contains("exact"))
+            for (const models::spec::JsonValue& e : df.at("exact").items())
+                out.push_back(e.at("value").as_double());
+        return out;
+    }
+    throw std::runtime_error("analysis model spec requires either 'dataset' or 'data_frame'");
+}
+
 // Fills the shared UncertaintyAnalysisResults surface into `r`.
 inline void collect_uar(const corehydro::numerics::distributions::UncertaintyAnalysisResults& res,
                         ExtendedAnalysisResult& r) {
@@ -168,14 +190,25 @@ inline void collect_uar(const corehydro::numerics::distributions::UncertaintyAna
 inline ExtendedAnalysisResult run_composite(const models::spec::JsonValue& construct,
                                             const models::spec::JsonValue& datasets) {
     const models::spec::JsonValue& model = construct.at("model");
-    std::vector<double> data = resolve_dataset(datasets, model.at("dataset").as_string());
+    std::vector<double> data = resolve_model_data(model, datasets);
+
+    // The children share the parent's observations. A model naming a `dataset` hands each child
+    // the plain vector, which is the vector-constructor path this runner has always taken; a
+    // model carrying an inline `data_frame` hands each child a clone of that frame instead, so a
+    // censored record stays censored in every child fit rather than silently collapsing to its
+    // exact series.
+    bool censored = model.contains("data_frame");
+    models::DataFrame frame;
+    if (censored) frame = models::spec::build_data_frame(model.at("data_frame"));
 
     // One UnivariateAnalysis per child family (non-movable; held by unique_ptr).
     std::vector<std::unique_ptr<UnivariateAnalysis>> children;
     for (const models::spec::JsonValue& f : model.at("families").items()) {
         auto dist = corehydro::numerics::distributions::create_distribution(f.as_string());
         auto child_model =
-            std::make_unique<models::UnivariateDistributionModel>(std::move(dist), data);
+            censored ? std::make_unique<models::UnivariateDistributionModel>(frame.clone(),
+                                                                             std::move(dist))
+                     : std::make_unique<models::UnivariateDistributionModel>(std::move(dist), data);
         auto child = std::make_unique<UnivariateAnalysis>(std::move(child_model));
         apply_ordinates(child->probability_ordinates(), runner_ordinates(construct));
         apply_runner_bayes_knobs(child->bayesian_analysis(), construct);
@@ -386,7 +419,7 @@ inline ExtendedAnalysisResult run_rating_curve(const models::spec::JsonValue& co
 inline ExtendedAnalysisResult run_bootstrap(const models::spec::JsonValue& construct,
                                             const models::spec::JsonValue& datasets) {
     const models::spec::JsonValue& model = construct.at("model");
-    std::vector<double> data = resolve_dataset(datasets, model.at("dataset").as_string());
+    std::vector<double> data = resolve_model_data(model, datasets);
 
     auto dist = corehydro::numerics::distributions::create_distribution(model.at("family").as_string());
     auto method = parse_estimation_method(construct.value_or("estimation_method", "MaximumLikelihood"));
@@ -413,7 +446,7 @@ inline ExtendedAnalysisResult run_bootstrap(const models::spec::JsonValue& const
 inline ExtendedAnalysisResult run_prior_predictive(const models::spec::JsonValue& construct,
                                                    const models::spec::JsonValue& datasets) {
     const models::spec::JsonValue& model = construct.at("model");
-    std::vector<double> data = resolve_dataset(datasets, model.at("dataset").as_string());
+    std::vector<double> data = resolve_model_data(model, datasets);
     auto base = models::spec::build_model(model, data);
     auto* udm = dynamic_cast<models::UnivariateDistributionModel*>(base.get());
     if (udm == nullptr)
@@ -439,7 +472,7 @@ inline ExtendedAnalysisResult run_prior_predictive(const models::spec::JsonValue
 inline ExtendedAnalysisResult run_posterior_predictive(const models::spec::JsonValue& construct,
                                                        const models::spec::JsonValue& datasets) {
     const models::spec::JsonValue& model = construct.at("model");
-    std::vector<double> data = resolve_dataset(datasets, model.at("dataset").as_string());
+    std::vector<double> data = resolve_model_data(model, datasets);
     auto base = models::spec::build_model(model, data);
     auto* udm = dynamic_cast<models::UnivariateDistributionModel*>(base.get());
     if (udm == nullptr)

@@ -1,3 +1,32 @@
+# Internal: resolve an analysis's first argument, which accepts either a plain numeric vector
+# (the convenience path every analysis has always had) or a corehydro_model built by one of the
+# model_*() constructors. `build` assembles the spec for the vector path; `expected_type` is the
+# model spec type this analysis can run, checked so a mismatched model fails here with a clear
+# message rather than deep in the C++ dispatch.
+#
+# A model built over an analysis_data() frame carries its observations inline, so the separate
+# dataset vector is empty; the spec builder prefers the inline frame in that case.
+analysis_input <- function(data, build, expected_type = NULL) {
+  if (inherits(data, "corehydro_model")) {
+    spec <- data$spec
+    actual <- if (is.null(spec$type)) "univariate_distribution" else spec$type
+    if (!is.null(expected_type) && !identical(actual, expected_type)) {
+      stop(sprintf(
+        "this analysis takes a %s model, but was given a %s model", expected_type, actual
+      ), call. = FALSE)
+    }
+    return(list(json = to_spec_json(spec), dataset = data$dataset, model = data))
+  }
+  if (inherits(data, "corehydro_data")) {
+    stop(
+      "pass an analysis_data() frame through a model, e.g. ",
+      "univariate_analysis(model_univariate(\"Normal\", data))",
+      call. = FALSE
+    )
+  }
+  list(json = to_spec_json(build()), dataset = as.double(data), model = NULL)
+}
+
 #' Bayesian univariate frequency analysis
 #'
 #' Fit a univariate distribution to a sample with a Bayesian MCMC analysis and return the
@@ -7,16 +36,22 @@
 #' Because both the R and Python packages call the identical compiled core with a bit-exact
 #' Mersenne Twister, a seeded call returns identical numbers in either language.
 #'
-#' @param data numeric vector of observations.
+#' @param data numeric vector of observations, or a [model_univariate()] model. A model carries
+#'   its own family, so `distribution` is then ignored, and it can bring censored observations
+#'   (see [analysis_data()]), nonstationary trends (see [trend()]), and parameter bounds or
+#'   priors (see [model_parameter()]).
 #' @param distribution distribution family name (e.g. `"Normal"`, `"GeneralizedExtremeValue"`,
-#'   `"LogPearsonTypeIII"`) -- any name the core distribution factory accepts.
+#'   `"LogPearsonTypeIII"`) -- any name the core distribution factory accepts. Ignored when
+#'   `data` is a model.
 #' @param sampler MCMC sampler: `"DEMCz"` (default), `"DEMCzs"`, `"ARWMH"`, or `"NUTS"`.
 #' @param iterations number of post-warmup MCMC iterations.
 #' @param output_length number of posterior samples used to build the credible band.
 #' @param credible_level credible-interval width (e.g. `0.90` for a 90% band).
 #' @param seed PRNG seed for the sampler (fixed for reproducibility).
 #' @param exceedance_probabilities optional numeric vector of exceedance probabilities at which to
-#'   tabulate the curve; when `NULL`, the 25 standard default ordinates are used.
+#'   tabulate the curve; when `NULL`, the 25 standard default ordinates are used. Must be in
+#'   **ascending** order (as the defaults are); an unsorted vector fails validation and the
+#'   analysis reports itself as not valid.
 #' @param thinning_interval MCMC thinning interval; `-1` (default) keeps the sampler's own default.
 #' @details The MCMC warmup (burn-in) length is set automatically to `max(50, iterations / 2)`; it
 #'   is not a user parameter.
@@ -29,14 +64,24 @@
 #' fit <- univariate_analysis(peaks, "Normal", sampler = "DEMCzs",
 #'                            iterations = 100, output_length = 400, seed = 12345)
 #' fit$parameters
+#'
+#' # The same analysis over a censored record, through a model.
+#' d <- analysis_data(
+#'   exact = peaks,
+#'   interval = data.frame(index = 10, lower = 30000, value = 35000, upper = 40000)
+#' )
+#' fit2 <- univariate_analysis(model_univariate("Normal", d), sampler = "DEMCzs",
+#'                             iterations = 100, output_length = 400, seed = 12345)
+#' fit2$parameters
 univariate_analysis <- function(data, distribution, sampler = "DEMCz", iterations = 3000L,
                                 output_length = 10000L, credible_level = 0.90, seed = 12345L,
                                 exceedance_probabilities = NULL, thinning_interval = -1L) {
-  model <- list(family = distribution, dataset = "data")
-  model_json <- as.character(jsonlite::toJSON(model, auto_unbox = TRUE, digits = I(17)))
+  input <- analysis_input(data, function() {
+    list(family = as.character(distribution), dataset = "data")
+  }, "univariate_distribution")
   ep <- if (is.null(exceedance_probabilities)) numeric(0) else as.double(exceedance_probabilities)
   ch_analysis_univariate_run_(
-    model_json, as.double(data), sampler, as.integer(iterations), as.integer(output_length),
+    input$json, input$dataset, sampler, as.integer(iterations), as.integer(output_length),
     as.double(credible_level), as.integer(seed), ep, as.integer(thinning_interval)
   )
 }
@@ -64,14 +109,17 @@ fit_distributions <- function(data) {
 #' moments and return the Cohn-style delta-method confidence intervals, the fitted parameters, and
 #' the sandwich covariance. Wraps the shared C++ `Bulletin17CAnalysis`.
 #'
-#' @param data numeric vector of annual peak observations.
+#' @param data numeric vector of annual peak observations, or a [model_bulletin17c()] model. A
+#'   model can bring historical and paleoflood interval observations, perception thresholds, and
+#'   Multiple Grubbs-Beck low outliers (see [analysis_data()]), which is the case Bulletin 17C
+#'   exists for.
 #' @param uncertainty_method uncertainty-quantification method: `"MultivariateNormal"` (default),
 #'   `"Bootstrap"`, `"LinkedMultivariateNormal"`, or `"BiasCorrectedBootstrap"`.
 #' @param output_length number of parameter-set draws used for uncertainty quantification.
 #' @param seed PRNG seed for the uncertainty draw.
 #' @param confidence_level confidence level for the intervals (e.g. `0.90`).
 #' @param exceedance_probabilities optional numeric vector of exceedance probabilities; when
-#'   `NULL`, the 25 standard default ordinates are used.
+#'   `NULL`, the 25 standard default ordinates are used. Must be in **ascending** order.
 #' @return A named list: `exceedance_probabilities`, `point_estimates` (log10 space), `lower_ci`,
 #'   `upper_ci` (discharge space), `confidence_level`, `beta1`, `nu`, `quantile_variance`,
 #'   `parameters` (fitted location/scale/shape), and `covariance` (the p x p sandwich covariance).
@@ -81,14 +129,19 @@ fit_distributions <- function(data) {
 #'            19200, 13800, 25600, 10500, 16900)
 #' ci <- bulletin17c_analysis(peaks, output_length = 200, seed = 12345)
 #' ci$confidence_level
+#'
+#' # With Multiple Grubbs-Beck low-outlier censoring, through a model.
+#' m <- model_bulletin17c(analysis_data(peaks, mgbt_low_outliers = TRUE))
+#' bulletin17c_analysis(m, output_length = 200, seed = 12345)$confidence_level
 bulletin17c_analysis <- function(data, uncertainty_method = "MultivariateNormal",
                                  output_length = 10000L, seed = 12345L, confidence_level = 0.90,
                                  exceedance_probabilities = NULL) {
-  model <- list(type = "bulletin17c", family = "LogPearsonTypeIII", dataset = "data")
-  model_json <- as.character(jsonlite::toJSON(model, auto_unbox = TRUE, digits = I(17)))
+  input <- analysis_input(data, function() {
+    list(type = "bulletin17c", family = "LogPearsonTypeIII", dataset = "data")
+  }, "bulletin17c")
   ep <- if (is.null(exceedance_probabilities)) numeric(0) else as.double(exceedance_probabilities)
   res <- ch_analysis_b17c_run_(
-    model_json, as.double(data), uncertainty_method, as.integer(output_length),
+    input$json, input$dataset, uncertainty_method, as.integer(output_length),
     as.integer(seed), as.double(confidence_level), ep
   )
   # Reshape the flat row-major covariance into a p x p matrix (empty when unestimated).
@@ -104,13 +157,26 @@ bulletin17c_analysis <- function(data, uncertainty_method = "MultivariateNormal"
 # per-family analyses share the univariate_analysis result surface, so the wrappers below differ
 # only in the model spec they build. `training_time_steps` / `forecasting_time_steps` are ignored
 # by the univariate-family analyses (passed as -1).
-.ch_family_run <- function(analysis_type, model, data, sampler, iterations, output_length,
+#
+# `data` is either a plain numeric vector, in which case `build` assembles the spec, or a model
+# from the matching model_*() constructor. `expected_type` guards the mismatch; the time-series
+# families all share the `time_series` spec type, so `expected_subtype` narrows it further.
+.ch_family_run <- function(analysis_type, build, data, sampler, iterations, output_length,
                            credible_level, seed, exceedance_probabilities, thinning_interval,
-                           training_time_steps, forecasting_time_steps) {
-  model_json <- as.character(jsonlite::toJSON(model, auto_unbox = TRUE, digits = I(17)))
+                           training_time_steps, forecasting_time_steps, expected_type,
+                           expected_subtype = NULL) {
+  input <- analysis_input(data, build, expected_type)
+  if (!is.null(expected_subtype) && !is.null(input$model)) {
+    actual <- input$model$spec$subtype
+    if (!identical(actual, expected_subtype)) {
+      stop(sprintf(
+        "this analysis takes a %s model, but was given a %s model", expected_subtype, actual
+      ), call. = FALSE)
+    }
+  }
   ep <- if (is.null(exceedance_probabilities)) numeric(0) else as.double(exceedance_probabilities)
   ch_analysis_family_run_(
-    analysis_type, model_json, as.double(data), sampler, as.integer(iterations),
+    analysis_type, input$json, input$dataset, sampler, as.integer(iterations),
     as.integer(output_length), as.double(credible_level), as.integer(seed), ep,
     as.integer(thinning_interval), as.integer(training_time_steps),
     as.integer(forecasting_time_steps)
@@ -140,13 +206,14 @@ mixture_analysis <- function(data, families, zero_inflated = FALSE, sampler = "D
                              iterations = 3000L, output_length = 10000L, credible_level = 0.90,
                              seed = 12345L, exceedance_probabilities = NULL,
                              thinning_interval = -1L) {
-  model <- list(
-    type = "mixture", families = as.list(as.character(families)),
-    zero_inflated = as.logical(zero_inflated), dataset = "data"
-  )
   .ch_family_run(
-    "mixture", model, data, sampler, iterations, output_length, credible_level, seed,
-    exceedance_probabilities, thinning_interval, -1L, -1L
+    "mixture", function() {
+      list(
+        type = "mixture", families = spec_array(as.character(families)),
+        zero_inflated = as.logical(zero_inflated), dataset = "data"
+      )
+    }, data, sampler, iterations, output_length, credible_level, seed,
+    exceedance_probabilities, thinning_interval, -1L, -1L, "mixture"
   )
 }
 
@@ -169,12 +236,14 @@ mixture_analysis <- function(data, families, zero_inflated = FALSE, sampler = "D
 competing_risk_analysis <- function(data, families, sampler = "DEMCz", iterations = 3000L,
                                     output_length = 10000L, credible_level = 0.90, seed = 12345L,
                                     exceedance_probabilities = NULL, thinning_interval = -1L) {
-  model <- list(
-    type = "competing_risks", families = as.list(as.character(families)), dataset = "data"
-  )
   .ch_family_run(
-    "competing_risk", model, data, sampler, iterations, output_length, credible_level, seed,
-    exceedance_probabilities, thinning_interval, -1L, -1L
+    "competing_risk", function() {
+      list(
+        type = "competing_risks", families = spec_array(as.character(families)),
+        dataset = "data"
+      )
+    }, data, sampler, iterations, output_length, credible_level, seed,
+    exceedance_probabilities, thinning_interval, -1L, -1L, "competing_risks"
   )
 }
 
@@ -198,25 +267,28 @@ point_process_analysis <- function(data, threshold = NULL, total_years = NULL, s
                                    iterations = 3000L, output_length = 10000L, credible_level = 0.90,
                                    seed = 12345L, exceedance_probabilities = NULL,
                                    thinning_interval = -1L) {
-  model <- list(type = "point_process", dataset = "data")
-  if (!is.null(threshold)) model$threshold <- as.double(threshold)
-  if (!is.null(total_years)) model$total_years <- as.double(total_years)
   .ch_family_run(
-    "point_process", model, data, sampler, iterations, output_length, credible_level, seed,
-    exceedance_probabilities, thinning_interval, -1L, -1L
+    "point_process", function() {
+      model <- list(type = "point_process", dataset = "data")
+      if (!is.null(threshold)) model$threshold <- as.double(threshold)
+      if (!is.null(total_years)) model$total_years <- as.double(total_years)
+      model
+    }, data, sampler, iterations, output_length, credible_level, seed,
+    exceedance_probabilities, thinning_interval, -1L, -1L, "point_process"
   )
 }
 
 # Internal: shared time-series wrapper body (D5). AR / MA / ARIMA / ARIMAX differ only in the
 # model spec; all return the univariate_analysis surface (curves are the posterior forecast).
-.ch_time_series_run <- function(analysis_type, model, data, sampler, iterations, output_length,
+.ch_time_series_run <- function(analysis_type, build, data, sampler, iterations, output_length,
                                 credible_level, seed, thinning_interval, training_time_steps,
                                 forecasting_time_steps) {
   .ch_family_run(
-    analysis_type, model, data, sampler, iterations, output_length, credible_level, seed, NULL,
+    analysis_type, build, data, sampler, iterations, output_length, credible_level, seed, NULL,
     thinning_interval,
     if (is.null(training_time_steps)) -1L else as.integer(training_time_steps),
-    as.integer(forecasting_time_steps)
+    as.integer(forecasting_time_steps),
+    "time_series", analysis_type
   )
 }
 
@@ -247,12 +319,13 @@ ar_analysis <- function(data, order_p = 1L, include_intercept = TRUE, training_t
                         forecasting_time_steps = 0L, sampler = "DEMCz", iterations = 3000L,
                         output_length = 10000L, credible_level = 0.90, seed = 12345L,
                         thinning_interval = -1L) {
-  model <- list(
-    type = "time_series", subtype = "ar", dataset = "data",
-    orders = list(p = as.integer(order_p)), include_intercept = as.logical(include_intercept)
-  )
   .ch_time_series_run(
-    "ar", model, data, sampler, iterations, output_length, credible_level, seed, thinning_interval,
+    "ar", function() {
+      list(
+      type = "time_series", subtype = "ar", dataset = "data",
+      orders = list(p = as.integer(order_p)), include_intercept = as.logical(include_intercept)
+    )
+    }, data, sampler, iterations, output_length, credible_level, seed, thinning_interval,
     training_time_steps, forecasting_time_steps
   )
 }
@@ -277,12 +350,13 @@ ma_analysis <- function(data, order_q = 1L, include_intercept = TRUE, training_t
                         forecasting_time_steps = 0L, sampler = "DEMCz", iterations = 3000L,
                         output_length = 10000L, credible_level = 0.90, seed = 12345L,
                         thinning_interval = -1L) {
-  model <- list(
-    type = "time_series", subtype = "ma", dataset = "data",
-    orders = list(q = as.integer(order_q)), include_intercept = as.logical(include_intercept)
-  )
   .ch_time_series_run(
-    "ma", model, data, sampler, iterations, output_length, credible_level, seed, thinning_interval,
+    "ma", function() {
+      list(
+      type = "time_series", subtype = "ma", dataset = "data",
+      orders = list(q = as.integer(order_q)), include_intercept = as.logical(include_intercept)
+    )
+    }, data, sampler, iterations, output_length, credible_level, seed, thinning_interval,
     training_time_steps, forecasting_time_steps
   )
 }
@@ -309,13 +383,14 @@ arima_analysis <- function(data, order_p = 1L, order_d = 0L, order_q = 1L, inclu
                            training_time_steps = NULL, forecasting_time_steps = 0L,
                            sampler = "DEMCz", iterations = 3000L, output_length = 10000L,
                            credible_level = 0.90, seed = 12345L, thinning_interval = -1L) {
-  model <- list(
-    type = "time_series", subtype = "arima", dataset = "data",
-    orders = list(p = as.integer(order_p), d = as.integer(order_d), q = as.integer(order_q)),
-    include_intercept = as.logical(include_intercept)
-  )
   .ch_time_series_run(
-    "arima", model, data, sampler, iterations, output_length, credible_level, seed,
+    "arima", function() {
+      list(
+      type = "time_series", subtype = "arima", dataset = "data",
+      orders = list(p = as.integer(order_p), d = as.integer(order_d), q = as.integer(order_q)),
+      include_intercept = as.logical(include_intercept)
+    )
+    }, data, sampler, iterations, output_length, credible_level, seed,
     thinning_interval, training_time_steps, forecasting_time_steps
   )
 }
@@ -347,16 +422,17 @@ arimax_analysis <- function(data, order_p = 1L, order_d = 0L, order_q = 0L, orde
                             forecasting_time_steps = 0L, sampler = "DEMCz", iterations = 3000L,
                             output_length = 10000L, credible_level = 0.90, seed = 12345L,
                             thinning_interval = -1L) {
-  model <- list(
-    type = "time_series", subtype = "arimax", dataset = "data",
-    orders = list(
-      p = as.integer(order_p), d = as.integer(order_d), q = as.integer(order_q),
-      b = as.integer(order_b)
-    ),
-    include_intercept = as.logical(include_intercept), trend = as.character(trend)
-  )
   .ch_time_series_run(
-    "arimax", model, data, sampler, iterations, output_length, credible_level, seed,
+    "arimax", function() {
+      list(
+      type = "time_series", subtype = "arimax", dataset = "data",
+      orders = list(
+        p = as.integer(order_p), d = as.integer(order_d), q = as.integer(order_q),
+        b = as.integer(order_b)
+      ),
+      include_intercept = as.logical(include_intercept), trend = as.character(trend)
+    )
+    }, data, sampler, iterations, output_length, credible_level, seed,
     thinning_interval, training_time_steps, forecasting_time_steps
   )
 }
@@ -392,10 +468,11 @@ arimax_analysis <- function(data, order_p = 1L, order_d = 0L, order_q = 0L, orde
 estimation_diagnostics <- function(data, distribution, sampler = "DEMCz", iterations = 3000L,
                                    output_length = 10000L, seed = 12345L, thinning_interval = -1L,
                                    thin_every = 10L) {
-  model <- list(family = distribution, dataset = "data")
-  model_json <- as.character(jsonlite::toJSON(model, auto_unbox = TRUE, digits = I(17)))
+  input <- analysis_input(data, function() {
+    list(family = as.character(distribution), dataset = "data")
+  }, "univariate_distribution")
   ch_analysis_diagnostics_run_(
-    model_json, as.double(data), sampler, as.integer(iterations), as.integer(output_length),
+    input$json, input$dataset, sampler, as.integer(iterations), as.integer(output_length),
     as.integer(seed), as.integer(thinning_interval), as.integer(thin_every)
   )
 }
@@ -408,9 +485,37 @@ estimation_diagnostics <- function(data, distribution, sampler = "DEMCz", iterat
 
 .ch_extended_run <- function(target, construct, datasets) {
   ns <- asNamespace("corehydror")
-  construct_json <- as.character(jsonlite::toJSON(construct, auto_unbox = TRUE, digits = I(17)))
-  datasets_json <- as.character(jsonlite::toJSON(datasets, auto_unbox = TRUE, digits = I(17)))
-  ns$ch_analysis_extended_run_(target, construct_json, datasets_json)
+  ns$ch_analysis_extended_run_(target, to_spec_json(construct), to_spec_json(datasets))
+}
+
+# Internal: the data half of an extended-analysis construct. A plain numeric vector goes into the
+# separate `datasets` map under the key the model spec names; an analysis_data() frame travels
+# inline in the model spec, and the datasets map then carries nothing.
+extended_data_block <- function(data) {
+  if (inherits(data, "corehydro_data")) {
+    return(list(model = list(data_frame = unclass(data)), datasets = list(data = numeric(0))))
+  }
+  list(model = list(dataset = "data"), datasets = list(data = as.double(data)))
+}
+
+# Internal: the model half of an extended-analysis construct whose model is a single univariate
+# distribution. Accepts a plain vector, an analysis_data() frame, or a model_univariate() model.
+extended_model_spec <- function(data, distribution, expected_type) {
+  if (inherits(data, "corehydro_model")) {
+    actual <- if (is.null(data$spec$type)) "univariate_distribution" else data$spec$type
+    if (!identical(actual, expected_type)) {
+      stop(sprintf(
+        "this analysis takes a %s model, but was given a %s model", expected_type, actual
+      ), call. = FALSE)
+    }
+    datasets <- list(data = if (length(data$dataset)) data$dataset else numeric(0))
+    return(list(model = data$spec, datasets = datasets))
+  }
+  block <- extended_data_block(data)
+  list(
+    model = c(list(family = as.character(distribution)), block$model),
+    datasets = block$datasets
+  )
 }
 
 #' Composite frequency analysis
@@ -419,7 +524,9 @@ estimation_diagnostics <- function(data, distribution, sampler = "DEMCz", iterat
 #' `data` by a Bayesian MCMC) into a single composite frequency curve via competing-risks, mixture,
 #' or model-averaging aggregation. Wraps the shared C++ `CompositeAnalysis`.
 #'
-#' @param data numeric vector of observations shared by every child analysis.
+#' @param data numeric vector of observations shared by every child analysis, or an
+#'   [analysis_data()] frame. A frame is cloned into every child fit, so a censored record stays
+#'   censored throughout.
 #' @param families character vector of child distribution family names (one child analysis each).
 #' @param composite_type `"CompetingRisks"` (default), `"Mixture"`, or `"ModelAverage"`.
 #' @param average_method model-averaging criterion when `composite_type = "ModelAverage"`:
@@ -432,8 +539,9 @@ composite_analysis <- function(data, families, composite_type = "CompetingRisks"
                                average_method = "AIC", sampler = "DEMCz", iterations = 3000L,
                                output_length = 10000L, credible_level = 0.90, seed = 12345L,
                                exceedance_probabilities = NULL, thinning_interval = -1L) {
+  block <- extended_data_block(data)
   construct <- list(
-    model = list(families = as.list(as.character(families)), dataset = "data"),
+    model = c(list(families = spec_array(as.character(families))), block$model),
     composite_type = as.character(composite_type), average_method = as.character(average_method),
     sampler = as.character(sampler), iterations = as.integer(iterations),
     output_length = as.integer(output_length), credible_level = as.double(credible_level),
@@ -442,7 +550,7 @@ composite_analysis <- function(data, families, composite_type = "CompetingRisks"
   if (!is.null(exceedance_probabilities)) {
     construct$exceedance_probabilities <- as.double(exceedance_probabilities)
   }
-  .ch_extended_run("CompositeAnalysis", construct, list(data = as.double(data)))
+  .ch_extended_run("CompositeAnalysis", construct, block$datasets)
 }
 
 #' Hierarchical spatial-GEV frequency analysis
@@ -658,12 +766,13 @@ bootstrap_analysis <- function(data, distribution, probabilities,
 #' @export
 prior_predictive_check <- function(data, distribution, number_of_draws = 1000L, sample_size = NULL,
                                    seed = 12345L) {
+  spec <- extended_model_spec(data, distribution, "univariate_distribution")
   construct <- list(
-    model = list(family = as.character(distribution), dataset = "data"),
+    model = spec$model,
     number_of_draws = as.integer(number_of_draws), seed = as.integer(seed)
   )
   if (!is.null(sample_size)) construct$sample_size <- as.integer(sample_size)
-  .ch_extended_run("PriorPredictiveCheck", construct, list(data = as.double(data)))
+  .ch_extended_run("PriorPredictiveCheck", construct, spec$datasets)
 }
 
 #' Posterior predictive check
@@ -682,12 +791,13 @@ prior_predictive_check <- function(data, distribution, number_of_draws = 1000L, 
 posterior_predictive_check <- function(data, distribution, sampler = "DEMCz", iterations = 3000L,
                                        output_length = 10000L, seed = 12345L,
                                        number_of_replicates = 1000L, thinning_interval = -1L) {
+  spec <- extended_model_spec(data, distribution, "univariate_distribution")
   construct <- list(
-    model = list(family = as.character(distribution), dataset = "data"),
+    model = spec$model,
     sampler = as.character(sampler), iterations = as.integer(iterations),
     output_length = as.integer(output_length), seed = as.integer(seed),
     number_of_replicates = as.integer(number_of_replicates),
     thinning_interval = as.integer(thinning_interval)
   )
-  .ch_extended_run("PosteriorPredictiveCheck", construct, list(data = as.double(data)))
+  .ch_extended_run("PosteriorPredictiveCheck", construct, spec$datasets)
 }

@@ -51,6 +51,7 @@
 #include "corehydro/numerics/data/histogram.hpp"
 #include "corehydro/numerics/data/interpolation/bilinear.hpp"
 #include "corehydro/numerics/data/interpolation/search.hpp"
+#include "corehydro/models/data_frame/threshold_diagnostics.hpp"
 #include "corehydro/numerics/data/multiple_grubbs_beck_test.hpp"
 #include "corehydro/numerics/data/plotting_positions.hpp"
 #include "corehydro/numerics/data/yeo_johnson.hpp"
@@ -1266,6 +1267,41 @@ static double dispatch_data_utility(const std::string& fn, const std::vector<dou
             : corehydro::numerics::sampling::LatinHypercube::median(
                   static_cast<int>(args[0]), static_cast<int>(args[1]), static_cast<int>(args[2]));
         return m[static_cast<std::size_t>(args[3])][static_cast<std::size_t>(args[4])];
+    }
+    // Threshold-selection diagnostics (models/data_frame/threshold_diagnostics.hpp). Both take
+    // args [u_min, u_max, n_thresholds, confidence_level, point_index]; the function name picks
+    // the field. `*PointCount` ignores point_index and returns how many candidate thresholds
+    // survived the minimum-exceedance and fit filters.
+    if (fn.rfind("MRL", 0) == 0 || fn.rfind("GPDStability", 0) == 0) {
+        auto u_min = args[0];
+        auto u_max = args[1];
+        auto n = static_cast<int>(args[2]);
+        auto cl = args[3];
+        auto i = args.size() > 4 ? static_cast<std::size_t>(args[4]) : 0;
+        if (fn.rfind("MRL", 0) == 0) {
+            auto r = corehydro::models::ThresholdDiagnostics::compute_mean_residual_life(
+                data, u_min, u_max, n, cl);
+            if (fn == "MRLPointCount") return static_cast<double>(r.points.size());
+            const auto& pt = r.points.at(i);
+            if (fn == "MRLThreshold") return pt.threshold;
+            if (fn == "MRLMeanExcess") return pt.mean_excess;
+            if (fn == "MRLLowerCI") return pt.lower_ci;
+            if (fn == "MRLUpperCI") return pt.upper_ci;
+            if (fn == "MRLCount") return pt.exceedance_count;
+        } else {
+            auto r = corehydro::models::ThresholdDiagnostics::compute_parameter_stability(
+                data, u_min, u_max, n, cl);
+            if (fn == "GPDStabilityPointCount") return static_cast<double>(r.points.size());
+            const auto& pt = r.points.at(i);
+            if (fn == "GPDStabilityThreshold") return pt.threshold;
+            if (fn == "GPDStabilityModifiedScale") return pt.modified_scale;
+            if (fn == "GPDStabilityModifiedScaleLowerCI") return pt.modified_scale_lower_ci;
+            if (fn == "GPDStabilityModifiedScaleUpperCI") return pt.modified_scale_upper_ci;
+            if (fn == "GPDStabilityShape") return pt.shape;
+            if (fn == "GPDStabilityShapeLowerCI") return pt.shape_lower_ci;
+            if (fn == "GPDStabilityShapeUpperCI") return pt.shape_upper_ci;
+            if (fn == "GPDStabilityCount") return pt.exceedance_count;
+        }
     }
     throw std::runtime_error("unknown data_utility function: " + fn);
 }

@@ -1,0 +1,869 @@
+{
+  "kind": "data_utility",
+  "source": "RMC-BestFit/src/RMC.BestFit/Models/DataFrame/ThresholdDiagnostics.cs @ c2e6192 -- EXACT EMITTER ORACLES dumped from the REAL compiled RMC.BestFit via tools/oracle_emitter and reproduced by tools/verify_oracles.py.",
+  "reference": "The two threshold-selection diagnostics for peaks-over-threshold analysis, exposed as threshold_diagnostics() in both packages. Mean residual life is the sample mean of excesses above each candidate threshold with CLT bands (Coles 2001 Section 4.3); parameter stability fits a GPD by MLE at each candidate and reports the modified scale and shape with delta-method bands (Davison and Smith 1990). The dataset is a 200-point GeneralizedPareto(0, 100, 0.1) sample drawn through the ported seeded Mersenne Twister, embedded as a literal. Candidate thresholds below the minimum-exceedance cutoff (5 for MRL, 10 for stability) or with a failed fit are dropped by the core, which is what the two *PointCount cases pin. The stability tolerances are rel 1e-8 (per-threshold MLE fits, so optimizer-dependent, per the file policy); MRL is closed-form and holds rel 1e-10.",
+  "datasets": {
+    "gpd_sample": [
+      129.95841930596518,
+      57.973361284914596,
+      105.22736196995474,
+      9.318885561865443,
+      87.15430890612774,
+      93.85075397269371,
+      93.84404679617519,
+      25.22974597489791,
+      32.403004958084125,
+      52.153272633352785,
+      13.522434423821172,
+      161.9906162093062,
+      169.02530455972254,
+      43.054821208663554,
+      238.32935517799226,
+      101.5514638491618,
+      137.8456746632718,
+      131.88599924428456,
+      45.75591938578805,
+      115.41059061041136,
+      49.96297602203625,
+      41.13034834337892,
+      17.254696305615603,
+      240.30803021669055,
+      12.21755138403835,
+      204.859432481579,
+      56.08014456259092,
+      185.0489479515418,
+      8.573108510165461,
+      137.17515730051633,
+      124.57185645771429,
+      45.724724974841365,
+      51.870531689352184,
+      31.62446642359029,
+      66.83110877031906,
+      174.66188515377812,
+      35.47858195712416,
+      16.26338816271844,
+      116.61832762180279,
+      108.91965842666518,
+      18.679808667301458,
+      339.18680810201715,
+      11.438196335236572,
+      208.28398545044024,
+      154.0627703185833,
+      275.04334578931974,
+      36.68422907026159,
+      233.60633972752876,
+      99.850518426707,
+      214.82988845633756,
+      95.3603515611069,
+      228.92227234936868,
+      252.31184018459453,
+      12.818464810458675,
+      179.7370928564751,
+      157.72721859241733,
+      91.81238736818965,
+      210.84699701863718,
+      13.888927996661415,
+      108.57692810640384,
+      33.834720309519504,
+      167.14938339235152,
+      144.04993613614704,
+      77.33355828209787,
+      20.815652997059786,
+      102.9960190449275,
+      44.52899945033639,
+      170.115513715576,
+      145.08359274077077,
+      230.69741922091046,
+      19.303809272226523,
+      40.42874128874707,
+      9.879757454129944,
+      157.18358824536338,
+      62.449404240988656,
+      174.00885411894274,
+      10.248108909313158,
+      311.2191398491349,
+      34.144728772805166,
+      160.77522357746832,
+      148.63583566727877,
+      208.7899436756031,
+      190.791157828211,
+      84.99992408141888,
+      54.72130579145151,
+      126.37408548044571,
+      166.97184227932317,
+      44.837050821900924,
+      86.17669318440535,
+      19.158343214104146,
+      49.49740216006538,
+      1.432018985834338,
+      21.35486341872539,
+      109.60877829811244,
+      31.694993920998837,
+      8.913240915791153,
+      136.08507169448336,
+      134.3022040323314,
+      78.00189157449289,
+      49.73660897914878,
+      23.1180172734633,
+      335.42000582890574,
+      135.96045450089645,
+      183.84347033985426,
+      80.03333818298353,
+      20.936102862103233,
+      36.1245460405768,
+      411.66402504632396,
+      5.513693043595835,
+      140.5516525604117,
+      243.51723509395927,
+      520.7063357588997,
+      10.031859430358558,
+      221.97806839082855,
+      112.86961897453041,
+      42.89317459914888,
+      253.01736975553035,
+      106.69958173854587,
+      59.185274513548606,
+      3.0276080257249927,
+      55.08622047190293,
+      146.0518746037006,
+      17.848015921904437,
+      301.8488494091603,
+      64.50619635467991,
+      6.8514067281966184,
+      94.39467983815875,
+      2.7003227860450396,
+      8.376479216831378,
+      8.807434574777728,
+      69.68392520715605,
+      61.86801186610502,
+      50.65177075869942,
+      65.80140276889989,
+      12.117125606445068,
+      32.81801225678704,
+      115.55425498466265,
+      18.6074313304061,
+      19.97178729892768,
+      1.824555040180198,
+      41.198374829346406,
+      79.49180533276845,
+      16.895772638151897,
+      390.69645940979893,
+      48.647012342487585,
+      39.40264340113564,
+      26.166888172626912,
+      10.399325388718683,
+      133.8425240559621,
+      72.96371974284155,
+      177.11268068375406,
+      62.88634237353874,
+      35.90998881825902,
+      13.238488397877113,
+      149.20891530813063,
+      76.7172038845243,
+      13.191868410338037,
+      118.20422946985798,
+      58.272618576624694,
+      138.4067174026248,
+      166.99851844779278,
+      290.55753687102816,
+      29.702442133146768,
+      71.57046849928695,
+      3.988488288010905,
+      93.35769616395385,
+      28.144910100027843,
+      49.629134850466826,
+      203.23886763758182,
+      192.55716065962315,
+      314.2909798191409,
+      50.382322314383444,
+      345.6847137474252,
+      11.495171482281187,
+      28.485895042360877,
+      170.08835163949155,
+      231.29601871161455,
+      37.19318875743771,
+      175.54752073652136,
+      87.40081400153454,
+      65.48135678214062,
+      68.80396593784077,
+      21.37057596018044,
+      2.6254184513193612,
+      22.277869475236912,
+      10.257945796116719,
+      79.44712243866769,
+      51.032130531570964,
+      172.84627598576085,
+      40.1741359865111,
+      76.74300369645725,
+      33.95615133621954,
+      6.794327659742194,
+      34.96397377758442,
+      147.6589123020491,
+      34.570585778956996,
+      46.027108586658926,
+      7.185600766528855,
+      13.802876398880226,
+      105.04161612797492
+    ]
+  },
+  "cases": [
+    {
+      "name": "mrl_threshold_0",
+      "function": "MRLThreshold",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 0,
+          "mode": "abs",
+          "tol": 0,
+          "note": "The candidate threshold u itself."
+        }
+      ]
+    },
+    {
+      "name": "mrl_meanexcess_0",
+      "function": "MRLMeanExcess",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 99.05321981463108,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "Sample mean of the exceedances above u."
+        }
+      ]
+    },
+    {
+      "name": "mrl_lowerci_0",
+      "function": "MRLLowerCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 86.41585007270837,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "CLT lower band."
+        }
+      ]
+    },
+    {
+      "name": "mrl_upperci_0",
+      "function": "MRLUpperCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 111.69058955655379,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "CLT upper band."
+        }
+      ]
+    },
+    {
+      "name": "mrl_count_0",
+      "function": "MRLCount",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "note": "Number of observations above u."
+        }
+      ]
+    },
+    {
+      "name": "mrl_threshold_2",
+      "function": "MRLThreshold",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 80,
+          "mode": "abs",
+          "tol": 0,
+          "note": "The candidate threshold u itself."
+        }
+      ]
+    },
+    {
+      "name": "mrl_meanexcess_2",
+      "function": "MRLMeanExcess",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 96.62151061138086,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "Sample mean of the exceedances above u."
+        }
+      ]
+    },
+    {
+      "name": "mrl_lowerci_2",
+      "function": "MRLLowerCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 79.89083043067711,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "CLT lower band."
+        }
+      ]
+    },
+    {
+      "name": "mrl_upperci_2",
+      "function": "MRLUpperCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 113.3521907920846,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "CLT upper band."
+        }
+      ]
+    },
+    {
+      "name": "mrl_count_2",
+      "function": "MRLCount",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 91,
+          "mode": "abs",
+          "tol": 0,
+          "note": "Number of observations above u."
+        }
+      ]
+    },
+    {
+      "name": "mrl_threshold_4",
+      "function": "MRLThreshold",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        4
+      ],
+      "assertions": [
+        {
+          "expected": 160,
+          "mode": "abs",
+          "tol": 0,
+          "note": "The candidate threshold u itself."
+        }
+      ]
+    },
+    {
+      "name": "mrl_meanexcess_4",
+      "function": "MRLMeanExcess",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        4
+      ],
+      "assertions": [
+        {
+          "expected": 75.5649125181299,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "Sample mean of the exceedances above u."
+        }
+      ]
+    },
+    {
+      "name": "mrl_lowerci_4",
+      "function": "MRLLowerCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        4
+      ],
+      "assertions": [
+        {
+          "expected": 52.920407965483065,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "CLT lower band."
+        }
+      ]
+    },
+    {
+      "name": "mrl_upperci_4",
+      "function": "MRLUpperCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        4
+      ],
+      "assertions": [
+        {
+          "expected": 98.20941707077674,
+          "mode": "rel",
+          "tol": 1e-10,
+          "note": "CLT upper band."
+        }
+      ]
+    },
+    {
+      "name": "mrl_count_4",
+      "function": "MRLCount",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        4
+      ],
+      "assertions": [
+        {
+          "expected": 45,
+          "mode": "abs",
+          "tol": 0,
+          "note": "Number of observations above u."
+        }
+      ]
+    },
+    {
+      "name": "mrl_point_count",
+      "function": "MRLPointCount",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95
+      ],
+      "assertions": [
+        {
+          "expected": 6,
+          "mode": "abs",
+          "tol": 0,
+          "note": "Candidate thresholds surviving the 5-exceedance minimum."
+        }
+      ]
+    },
+    {
+      "name": "stability_threshold_0",
+      "function": "GPDStabilityThreshold",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 0,
+          "mode": "abs",
+          "tol": 0,
+          "note": "The candidate threshold u itself."
+        }
+      ]
+    },
+    {
+      "name": "stability_modifiedscale_0",
+      "function": "GPDStabilityModifiedScale",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 106.09714764531739,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "sigma* = alpha - kappa * u."
+        }
+      ]
+    },
+    {
+      "name": "stability_modifiedscalelowerci_0",
+      "function": "GPDStabilityModifiedScaleLowerCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 86.22276149894297,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method lower bound for sigma*."
+        }
+      ]
+    },
+    {
+      "name": "stability_modifiedscaleupperci_0",
+      "function": "GPDStabilityModifiedScaleUpperCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 125.97153379169181,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method upper bound for sigma*."
+        }
+      ]
+    },
+    {
+      "name": "stability_shape_0",
+      "function": "GPDStabilityShape",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 0.08655195937144287,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "The MLE shape kappa; approximately constant above the true threshold."
+        }
+      ]
+    },
+    {
+      "name": "stability_shapelowerci_0",
+      "function": "GPDStabilityShapeLowerCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": -0.04004315391374082,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method lower bound for kappa."
+        }
+      ]
+    },
+    {
+      "name": "stability_shapeupperci_0",
+      "function": "GPDStabilityShapeUpperCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 0.21314707265662658,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method upper bound for kappa."
+        }
+      ]
+    },
+    {
+      "name": "stability_count_0",
+      "function": "GPDStabilityCount",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        0
+      ],
+      "assertions": [
+        {
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "note": "Number of observations above u."
+        }
+      ]
+    },
+    {
+      "name": "stability_threshold_2",
+      "function": "GPDStabilityThreshold",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 80,
+          "mode": "abs",
+          "tol": 0,
+          "note": "The candidate threshold u itself."
+        }
+      ]
+    },
+    {
+      "name": "stability_modifiedscale_2",
+      "function": "GPDStabilityModifiedScale",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 98.96147395763998,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "sigma* = alpha - kappa * u."
+        }
+      ]
+    },
+    {
+      "name": "stability_modifiedscalelowerci_2",
+      "function": "GPDStabilityModifiedScaleLowerCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 77.92864603382904,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method lower bound for sigma*."
+        }
+      ]
+    },
+    {
+      "name": "stability_modifiedscaleupperci_2",
+      "function": "GPDStabilityModifiedScaleUpperCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 119.99430188145092,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method upper bound for sigma*."
+        }
+      ]
+    },
+    {
+      "name": "stability_shape_2",
+      "function": "GPDStabilityShape",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 0.16010316339821978,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "The MLE shape kappa; approximately constant above the true threshold."
+        }
+      ]
+    },
+    {
+      "name": "stability_shapelowerci_2",
+      "function": "GPDStabilityShapeLowerCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": -0.012462084787771083,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method lower bound for kappa."
+        }
+      ]
+    },
+    {
+      "name": "stability_shapeupperci_2",
+      "function": "GPDStabilityShapeUpperCI",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 0.3326684115842107,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "Delta-method upper bound for kappa."
+        }
+      ]
+    },
+    {
+      "name": "stability_count_2",
+      "function": "GPDStabilityCount",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95,
+        2
+      ],
+      "assertions": [
+        {
+          "expected": 91,
+          "mode": "abs",
+          "tol": 0,
+          "note": "Number of observations above u."
+        }
+      ]
+    },
+    {
+      "name": "stability_point_count",
+      "function": "GPDStabilityPointCount",
+      "dataset": "gpd_sample",
+      "args": [
+        0.0,
+        200.0,
+        6,
+        0.95
+      ],
+      "assertions": [
+        {
+          "expected": 6,
+          "mode": "abs",
+          "tol": 0,
+          "note": "Candidate thresholds surviving the 10-exceedance minimum and a successful GPD fit."
+        }
+      ]
+    }
+  ]
+}

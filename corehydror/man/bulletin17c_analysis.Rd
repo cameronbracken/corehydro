@@ -14,7 +14,10 @@ bulletin17c_analysis(
 )
 }
 \arguments{
-\item{data}{numeric vector of annual peak observations.}
+\item{data}{numeric vector of annual peak observations, or a \code{\link[=model_bulletin17c]{model_bulletin17c()}} model. A
+model can bring historical and paleoflood interval observations, perception thresholds, and
+Multiple Grubbs-Beck low outliers (see \code{\link[=analysis_data]{analysis_data()}}), which is the case Bulletin 17C
+exists for.}
 
 \item{uncertainty_method}{uncertainty-quantification method: \code{"MultivariateNormal"} (default),
 \code{"Bootstrap"}, \code{"LinkedMultivariateNormal"}, or \code{"BiasCorrectedBootstrap"}.}
@@ -43,4 +46,8 @@ peaks <- c(12500, 15300, 8900, 22100, 18700, 14200, 9800, 28500, 17400, 11600,
            19200, 13800, 25600, 10500, 16900)
 ci <- bulletin17c_analysis(peaks, output_length = 200, seed = 12345)
 ci$confidence_level
+
+# With Multiple Grubbs-Beck low-outlier censoring, through a model.
+m <- model_bulletin17c(analysis_data(peaks, mgbt_low_outliers = TRUE))
+bulletin17c_analysis(m, output_length = 200, seed = 12345)$confidence_level
 }

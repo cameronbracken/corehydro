@@ -33,3 +33,18 @@ estimation, and analysis layers of Numerics plus all of RMC-BestFit.
 | `examples/reliability_analysis.py` | Monte Carlo reliability | [Ported](22-reliability/python.ipynb) | uses the `LnNormal` family in place of C# `LogNormal.Base = e`; results reproduce exactly |
 
 : {tbl-colwidths="[22,26,14,38]"}
+
+## Beyond the upstream examples
+
+The upstream repository exercises the Numerics half of the library. These examples cover
+capabilities of RMC.BestFit that it never reaches, so they have no upstream counterpart
+and no upstream outputs to reproduce against. Each still ends in an executable check, and
+each pair asserts the same literals in R and Python, which is what pins the
+cross-language identity.
+
+| Example | Covers |
+|---------|--------|
+| [23. Censored flood frequency](23-censored-flood-frequency/python.ipynb) | historical and paleoflood interval observations, perception thresholds, Hirsch-Stedinger plotting positions, Multiple Grubbs-Beck low outliers |
+| [24. Nonstationary frequency analysis](24-nonstationary-trends/python.ipynb) | trends on a distribution parameter, stationary versus nonstationary model comparison by AIC, BIC, and DIC |
+
+: {tbl-colwidths="[34,66]"}

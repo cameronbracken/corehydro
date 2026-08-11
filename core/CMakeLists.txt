@@ -33,6 +33,7 @@ set(BF_TESTS
   test_stratification
   test_numerical_diff
   test_model_parameter
+  test_model_spec_parameters
   test_model_base
   test_quantile_prior
   test_univariate_distribution_model

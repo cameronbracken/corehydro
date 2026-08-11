@@ -1060,7 +1060,40 @@ def _dispatch_data_utility(fn, args, data):
         gen = _core.latin_hypercube_median if fn == "LHSMedian" else _core.latin_hypercube
         m = gen(int(args[0]), int(args[1]), int(args[2]))
         return m[int(args[3])][int(args[4])]
+    if fn.startswith("MRL") or fn.startswith("GPDStability"):
+        return _dispatch_threshold_diagnostic(fn, args, data)
     raise KeyError(f"unknown data_utility function: {fn}")
+
+
+# Threshold-selection diagnostics: both methods share one glue call and differ only in which
+# field the function name selects. args are [u_min, u_max, n_thresholds, confidence_level,
+# point_index]; `*PointCount` ignores the index and returns how many candidate thresholds
+# survived the minimum-exceedance and fit filters.
+_TD_FIELDS = {
+    "MRLThreshold": "threshold",
+    "MRLMeanExcess": "mean_excess",
+    "MRLLowerCI": "lower_ci",
+    "MRLUpperCI": "upper_ci",
+    "MRLCount": "exceedance_count",
+    "GPDStabilityThreshold": "threshold",
+    "GPDStabilityModifiedScale": "modified_scale",
+    "GPDStabilityModifiedScaleLowerCI": "modified_scale_lower_ci",
+    "GPDStabilityModifiedScaleUpperCI": "modified_scale_upper_ci",
+    "GPDStabilityShape": "shape",
+    "GPDStabilityShapeLowerCI": "shape_lower_ci",
+    "GPDStabilityShapeUpperCI": "shape_upper_ci",
+    "GPDStabilityCount": "exceedance_count",
+}
+
+
+def _dispatch_threshold_diagnostic(fn, args, data):
+    method = "mean_residual_life" if fn.startswith("MRL") else "parameter_stability"
+    r = _core.threshold_diagnostics(data, method, args[0], args[1], int(args[2]), args[3])
+    if fn in ("MRLPointCount", "GPDStabilityPointCount"):
+        return float(len(r["threshold"]))
+    if fn not in _TD_FIELDS:
+        raise KeyError(f"unknown data_utility function: {fn}")
+    return float(r[_TD_FIELDS[fn]][int(args[4])])
 
 
 def _load_cases():

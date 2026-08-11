@@ -19,7 +19,9 @@ composite_analysis(
 )
 }
 \arguments{
-\item{data}{numeric vector of observations shared by every child analysis.}
+\item{data}{numeric vector of observations shared by every child analysis, or an
+\code{\link[=analysis_data]{analysis_data()}} frame. A frame is cloned into every child fit, so a censored record stays
+censored throughout.}
 
 \item{families}{character vector of child distribution family names (one child analysis each).}
 
