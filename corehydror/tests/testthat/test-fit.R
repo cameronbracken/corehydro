@@ -66,6 +66,41 @@ test_that("confint computes on demand when the fit was built without profile", {
   )
 })
 
+test_that("confint returns posterior credible intervals for a Bayesian fit", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 200, output_length = 500, seed = 123
+  )
+  # fit_bayesian() never sets credible_interval_width, so the fit was built at
+  # BayesianAnalysis's own class default, 0.9.
+  ci <- confint(f, level = 0.9)
+  expect_equal(dim(ci), c(2L, 2L))
+  expect_equal(colnames(ci), c("lower", "upper"))
+  expect_equal(rownames(ci), names(f$parameters))
+  # Requested level matches the fit's own: reused directly from $summary, not rebuilt.
+  expect_identical(unname(ci[, "lower"]), f$summary$lower)
+  expect_identical(unname(ci[, "upper"]), f$summary$upper)
+  expect_true(all(ci[, "lower"] <= f$summary$mean))
+  expect_true(all(ci[, "upper"] >= f$summary$mean))
+})
+
+test_that("confint on a Bayesian fit rebuilds off a reproduced chain at a different level", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 200, output_length = 500, seed = 123
+  )
+  ci90 <- confint(f, level = 0.9)
+  ci99 <- confint(f, level = 0.99)
+  expect_false(isTRUE(all.equal(ci90, ci99)))
+  # A 99% credible interval is at least as wide as a 90% one at every parameter.
+  width90 <- ci90[, "upper"] - ci90[, "lower"]
+  width99 <- ci99[, "upper"] - ci99[, "lower"]
+  expect_true(all(width99 >= width90))
+})
+
+test_that("confint errors for a GMM fit and points at quantile_variance", {
+  f <- fit_gmm(model_bulletin17c(peaks))
+  expect_error(confint(f), "quantile_variance")
+})
+
 test_that("the fit carries a fitted model that simulates identically", {
   f <- fit_mle(model_univariate("Normal", peaks))
   expect_s3_class(f$model, "corehydro_model")
@@ -211,6 +246,17 @@ test_that("fit_gmm returns the GMM bookkeeping", {
   expect_true(f$gmm_iterations > 0)
   expect_true(is.na(f$j_stat_pval))  # just-identified by construction
   expect_true(quantile_variance(f, 0.01) > 0)
+})
+
+test_that("logLik/AIC/BIC are NA (not NaN) for a GMM fit", {
+  f <- fit_gmm(model_bulletin17c(peaks))
+  ll <- logLik(f)
+  expect_true(is.na(as.numeric(ll)))
+  expect_false(is.nan(as.numeric(ll)))   # NA, not the runner's raw NaN default
+  expect_equal(attr(ll, "df"), length(f$parameters))
+  expect_equal(attr(ll, "nobs"), f$nobs)
+  expect_true(is.na(AIC(f)))
+  expect_true(is.na(BIC(f)))
 })
 
 test_that("quantile_variance rejects a non-GMM fit", {

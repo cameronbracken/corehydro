@@ -46,6 +46,27 @@ fit_input <- function(model, distribution, settings) {
   list(json = json, dataset = input$dataset, spec = base_spec)
 }
 
+# Internal: confint.corehydro_fit()'s Bayesian rebuild path needs the IDENTICAL construct the
+# fit was originally built from, with only `credible_interval_width` overridden -- every other
+# setting (sampler, seed, iterations, chains, thinning, sampler-specific knobs) stays
+# byte-identical, so `sampler_->sample()` reproduces the same seeded chain and only the post-hoc
+# credible-interval quantile computation (`results_.emplace(*sampler_, 1 - width)`, C#
+# BayesianAnalysis::estimate()) changes -- see apply_bayesian_settings() in fit_runner.hpp.
+# Reconstructing the settings list from scratch (the way fit_input() builds a fresh construct)
+# would silently drop any sampler knob (jump/noise/scale/beta/...) the original fit_bayesian()
+# call passed through `...`, since a corehydro_fit does not carry those back out; splicing into
+# the already-built JSON avoids that. Every construct this package builds (fit_input(), above) is
+# a single well-formed top-level JSON object with no trailing content, so overriding is just
+# replacing the final closing brace -- `credible_interval_width` is never already a key (only
+# this rebuild path ever sets it), so there is no duplicate-key ambiguity for json_lite.hpp to
+# resolve.
+inject_credible_interval_width <- function(construct_json, level) {
+  paste0(
+    substr(construct_json, 1L, nchar(construct_json) - 1L),
+    ",\"credible_interval_width\":", spec_number(level), "}"
+  )
+}
+
 # Internal: `result$covariance`/`result$correlation` are already proper n x n R matrices (built
 # column-by-column in corehydror/src/estimation.cpp's `square_or_empty`), so only the dimnames
 # need applying here. Do NOT round-trip a matrix through `matrix(x, byrow = TRUE)`: that first
@@ -174,7 +195,13 @@ new_fit <- function(result, base_spec, dataset, optimizer, level, construct_json
 # `d <- res$chain_dims` / the aperm() below permutes the runner's CHAIN-major flatten (chain,
 # iteration, parameter) into [iteration, chain, parameter], the axis order
 # posterior::as_draws_array() expects (see fit_bayesian()'s header note for the full rationale).
-new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup) {
+# `credible_level` records the width `$summary`'s lower/upper columns were computed at --
+# fit_bayesian() never sets `credible_interval_width` in the construct, so BayesianAnalysis's own
+# class default (0.9) always applies; confint.corehydro_fit() compares its requested `level`
+# against this field to decide whether `$summary` already answers the call or a rebuild is
+# needed.
+new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup,
+                             credible_level = 0.9) {
   d <- result$chain_dims
   draws <- aperm(array(result$draws, dim = c(d[3], d[2], d[1])), c(2L, 3L, 1L))
   dimnames(draws) <- list(NULL, paste0("chain", seq_len(d[1])), result$parameter_names)
@@ -198,6 +225,7 @@ new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup)
         summary = summary,
         acceptance_rates = result$acceptance_rates,
         warmup = warmup,
+        credible_level = credible_level,
         dic = result$dic,
         waic = result$waic,
         looic = result$looic
@@ -615,34 +643,92 @@ coef.corehydro_fit <- function(object, ...) object$parameters
 #' @export
 vcov.corehydro_fit <- function(object, ...) object$covariance
 
+#' Log-likelihood of a fit
+#'
+#' The fitted log-likelihood, with `df` (parameter count) and `nobs` attributes attached so base
+#' `AIC()`/`BIC()` work directly off it.
+#'
+#' @details [fit_gmm()] is method-of-moments: `GeneralizedMethodOfMoments` computes no likelihood
+#'   surface, so `run_fit()` (`fit_runner.hpp`) structurally leaves `log_likelihood`/`aic`/`bic` at
+#'   their `NaN` defaults for that target. `logLik()` turns that into `NA_real_` (still carrying
+#'   `df`/`nobs`) so base `AIC()`/`BIC()` come back a self-explanatory `NA` rather than a bare
+#'   `NaN`. The GMM analogue of a likelihood-based goodness-of-fit summary is the J-statistic
+#'   overidentification diagnostic already on the fit (`fit$j_stat`/`fit$j_stat_pval`; see
+#'   [fit_gmm()]), which is also what `print()` on a `corehydro_fit` shows in place of the
+#'   log-likelihood line for a GMM fit.
+#' @param object a `corehydro_fit`.
+#' @param ... unused; present for generic consistency.
+#' @return An object of class `logLik`.
+#' @seealso [fit_mle()], [fit_map()], [fit_bayesian()], [fit_gmm()].
 #' @export
 logLik.corehydro_fit <- function(object, ...) {
-  structure(object$log_likelihood,
+  ll <- if (identical(object$method, "GMM")) NA_real_ else object$log_likelihood
+  structure(ll,
     df = length(object$parameters), nobs = object$nobs, class = "logLik"
   )
 }
 
-#' Profile-likelihood confidence intervals for a fit
+#' Confidence or credible intervals for a fit
 #'
-#' Confidence intervals from the profile likelihood, at the requested level. When the fit already
-#' carries a profile block at the requested level (built with `fit_mle(..., profile = TRUE)` or a
-#' prior `confint()` call), those bounds are reused; otherwise the identical fit is re-run with
-#' profiling turned on, following the lazy-rebuild precedent of `ch_estimation_bic_`
-#' (`corehydror/src/estimation.cpp`) -- a deterministic optimizer reproduces the identical point
-#' estimate, so the rebuild's confidence intervals are the ones the original fit would have
-#' carried had `profile = TRUE` been requested at the matching level up front.
+#' [fit_mle()] and [fit_map()] fits get profile-likelihood confidence intervals; a [fit_bayesian()]
+#' fit gets posterior credible intervals. [fit_gmm()] has no interval surface (see below).
 #'
-#' @param object a `corehydro_fit` from [fit_mle()] or [fit_map()].
+#' For [fit_mle()]/[fit_map()]: when the fit already carries a profile block at the requested
+#' level (built with `fit_mle(..., profile = TRUE)` or a prior `confint()` call), those bounds are
+#' reused; otherwise the identical fit is re-run with profiling turned on, following the
+#' lazy-rebuild precedent of `ch_estimation_bic_` (`corehydror/src/estimation.cpp`) -- a
+#' deterministic optimizer reproduces the identical point estimate, so the rebuild's confidence
+#' intervals are the ones the original fit would have carried had `profile = TRUE` been requested
+#' at the matching level up front.
+#'
+#' For [fit_bayesian()]: `$summary`'s `lower`/`upper` columns are already the posterior credible
+#' interval at the level `BayesianAnalysis`'s own class default (0.9) computes them at --
+#' `fit_bayesian()` has no argument to change that. When the requested `level` matches, those
+#' columns are returned directly; otherwise the identical seeded chain is re-run with
+#' `credible_interval_width` set to `level` (the same lazy-rebuild precedent as the profile path
+#' above -- re-sampling with an identical seed reproduces the same chain bit-for-bit, so only the
+#' post-hoc credible-interval quantile computation changes).
+#'
+#' [fit_gmm()] is method-of-moments and has no likelihood or posterior to draw an interval from;
+#' calling `confint()` on one errors. Use [quantile_variance()] for the delta-method variance of a
+#' fitted quantile instead.
+#'
+#' @param object a `corehydro_fit` from [fit_mle()], [fit_map()], or [fit_bayesian()].
 #' @param parm optional subset of parameters (by name or position); every parameter by default.
-#' @param level confidence level.
+#' @param level confidence (MLE/MAP) or credible (Bayesian) level.
 #' @param ... unused; present for generic consistency.
 #' @return A matrix with one row per parameter and columns `lower`/`upper`.
+#' @seealso [fit_mle()], [fit_map()], [fit_bayesian()], [fit_gmm()], [quantile_variance()].
 #' @export
 #' @examples
 #' peaks <- c(12500, 15300, 8900, 22100, 18700, 14200, 9800, 28500, 17400, 11600)
 #' f <- fit_mle(model_univariate("Normal", peaks))
 #' confint(f, level = 0.9)
 confint.corehydro_fit <- function(object, parm, level = 0.95, ...) {
+  if (identical(object$method, "GMM")) {
+    stop(
+      "confint() has no interval surface for a fit_gmm() fit: GMM is method-of-moments, not ",
+      "likelihood- or posterior-based, so there is no profile or credible interval to draw; use ",
+      "quantile_variance() for the delta-method variance of a fitted quantile instead",
+      call. = FALSE
+    )
+  }
+
+  if (identical(object$method, "BayesianAnalysis")) {
+    if (!isTRUE(all.equal(object$credible_level, level))) {
+      construct_json <- inject_credible_interval_width(object$construct_json, level)
+      result <- ch_fit_run_("BayesianAnalysis", construct_json, object$dataset)
+      object <- new_fit_bayesian(
+        result, object$spec, object$dataset, construct_json, object$warmup,
+        credible_level = level
+      )
+    }
+    out <- cbind(lower = object$summary$lower, upper = object$summary$upper)
+    rownames(out) <- rownames(object$summary)
+    if (!missing(parm)) out <- out[parm, , drop = FALSE]
+    return(out)
+  }
+
   if (is.null(object$profile_intervals) ||
         !isTRUE(all.equal(object$profile_intervals$level, level))) {
     base_model <- structure(
