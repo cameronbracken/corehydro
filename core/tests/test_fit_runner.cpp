@@ -210,6 +210,32 @@ static void test_json_round_trip() {
     CHECK_TRUE(v2.at("family").as_string() == "Normal");
 }
 
+static void test_profile_off_by_default() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead"})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+    CHECK_TRUE(r.profile_grid.empty());
+    CHECK_TRUE(r.profile_lower.empty());
+    CHECK_TRUE(r.profile_bins == 0);
+}
+
+static void test_profile_on_request() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead","profile":true,)"
+        R"("profile_bins":20,"alpha":0.1})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+    CHECK_TRUE(r.profile_bins == 20);
+    // n_params x bins x 2 (parameter value, profile log-likelihood), row-major.
+    CHECK_TRUE(r.profile_grid.size() == 2u * 20u * 2u);
+    CHECK_TRUE(r.profile_lower.size() == 2);
+    CHECK_TRUE(r.profile_upper.size() == 2);
+    // The interval brackets the point estimate.
+    for (std::size_t i = 0; i < r.parameters.size(); ++i) {
+        CHECK_TRUE(r.profile_lower[i] <= r.parameters[i]);
+        CHECK_TRUE(r.profile_upper[i] >= r.parameters[i]);
+    }
+}
+
 int main() {
     test_mle_shape();
     test_hessian_can_be_disabled();
@@ -219,5 +245,7 @@ int main() {
     test_unknown_target_throws();
     test_unknown_optimizer_throws_naming_it();
     test_json_round_trip();
+    test_profile_off_by_default();
+    test_profile_on_request();
     return chtest::summary("fit_runner");
 }

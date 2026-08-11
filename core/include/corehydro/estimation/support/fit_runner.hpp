@@ -33,9 +33,14 @@
 #include "corehydro/models/json_lite.hpp"
 #include "corehydro/models/model_spec.hpp"
 #include "corehydro/models/support/model_base.hpp"
+#include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/optimization/support/optimization_status.hpp"
 
 namespace corehydro::estimation::support {
+
+// Same alias MaximumLikelihood/MaximumAPosteriori themselves use for the return of
+// profile_likelihood()/parameter_confidence_intervals().
+using Matrix = corehydro::numerics::math::linalg::Matrix;
 
 // Flat result surface every fit assertion and binding reads. Only the fields the requested
 // target populates are filled; the rest keep their defaults (empty vector / NaN).
@@ -60,6 +65,12 @@ struct FitResult {
     int function_evaluations = 0;
     // The model spec with the fitted values applied, so the caller can rebuild from the fit.
     std::string model_spec;
+
+    // --- profile block, populated only when construct["profile"] is true ----------------
+    // n_params * bins * 2, row-major: [parameter][bin][value, profile log-likelihood].
+    std::vector<double> profile_grid;
+    std::vector<double> profile_lower, profile_upper;  // n_params, profile-likelihood CIs
+    int profile_bins = 0;
 };
 
 // Maps an OptimizationStatus to the string the bindings surface.
@@ -138,6 +149,33 @@ void fill_common(FitResult& r, TEstimator& e, corehydro::models::ModelBase& mode
     r.standard_errors.assign(se.begin(), se.end());
 }
 
+// Profile likelihood grid + profile-likelihood confidence intervals. Costs bins * n_params
+// likelihood evaluations, so it is off unless the caller asks. `profile_likelihood(bins)`
+// returns one Matrix(bins, 2) per parameter with columns [parameter value, log-likelihood];
+// `parameter_confidence_intervals(alpha)` returns a single Matrix(n_params, 2) with columns
+// [lower bound, upper bound] (confirmed against maximum_likelihood.hpp:221-296).
+template <typename TEstimator>
+void fill_profile(FitResult& r, const TEstimator& e, int bins, double alpha) {
+    int n = static_cast<int>(r.parameters.size());
+    r.profile_bins = bins;
+    std::vector<Matrix> profiles = e.profile_likelihood(bins);
+    r.profile_grid.resize(static_cast<std::size_t>(n) * static_cast<std::size_t>(bins) * 2u);
+    for (int p = 0; p < n; ++p)
+        for (int b = 0; b < bins; ++b) {
+            std::size_t base = (static_cast<std::size_t>(p) * static_cast<std::size_t>(bins) +
+                                static_cast<std::size_t>(b)) * 2u;
+            r.profile_grid[base] = profiles[static_cast<std::size_t>(p)](b, 0);
+            r.profile_grid[base + 1] = profiles[static_cast<std::size_t>(p)](b, 1);
+        }
+    Matrix cis = e.parameter_confidence_intervals(alpha);
+    r.profile_lower.resize(static_cast<std::size_t>(n));
+    r.profile_upper.resize(static_cast<std::size_t>(n));
+    for (int p = 0; p < n; ++p) {
+        r.profile_lower[static_cast<std::size_t>(p)] = cis(p, 0);
+        r.profile_upper[static_cast<std::size_t>(p)] = cis(p, 1);
+    }
+}
+
 // Re-serializes the model spec with the fitted values appended, so a caller can rebuild the
 // fitted model. Re-emits the parsed construct's model object's own entries (json_lite.hpp has
 // no in-place mutation -- see its header) and adds one more key, `parameter_values`. Any
@@ -172,6 +210,9 @@ inline FitResult run_fit(const std::string& target, const std::string& construct
     std::string model_text = corehydro::models::spec::to_json_string(model_json);
     bool want_hessian = construct.value_or("hessian", true);
     std::string optimizer = construct.value_or("optimizer", "DifferentialEvolution");
+    bool want_profile = construct.value_or("profile", false);
+    int profile_bins = construct.value_or("profile_bins", 100);
+    double alpha = construct.value_or("alpha", 0.1);
 
     if (target == "MaximumLikelihood" || target == "MaximumAPosteriori") {
         std::unique_ptr<corehydro::models::ModelBase> model =
@@ -186,6 +227,7 @@ inline FitResult run_fit(const std::string& target, const std::string& construct
                 throw std::runtime_error("MaximumLikelihood::estimate() failed with optimizer " +
                                          optimizer);
             fill_common(r, e, *model, want_hessian);
+            if (want_profile) fill_profile(r, e, profile_bins, alpha);
         } else {
             MaximumAPosteriori e(*model, method);
             e.set_compute_hessian(want_hessian);
@@ -193,6 +235,7 @@ inline FitResult run_fit(const std::string& target, const std::string& construct
                 throw std::runtime_error("MaximumAPosteriori::estimate() failed with optimizer " +
                                          optimizer);
             fill_common(r, e, *model, want_hessian);
+            if (want_profile) fill_profile(r, e, profile_bins, alpha);
         }
         r.model_spec = fitted_spec(model_json, r.parameters);
         return r;
