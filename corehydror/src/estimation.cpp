@@ -151,15 +151,24 @@ list ch_estimation_run_(std::string target, std::string model_json, doubles data
     // GetCovarianceMatrix throws below that -- so `run_fit` reports NaN for a 1-parameter model,
     // the honest answer for the user-facing surface. This glue backs the PINNED FIXTURE oracles,
     // whose pre-existing contract there is a silent zero (the single-parameter bivariate copula
-    // fit; no fixture asserts covariance/SE/correlation for a 1-param model). Copying only when
-    // n_params >= 2 leaves cpp11's default zeros in place and so maps the runner's NaN block back
-    // to zero HERE, in the fixture path only. The user-facing path stays honest.
+    // fit; no fixture asserts covariance/SE/correlation for a 1-param model). cpp11's
+    // writable::doubles / doubles_matrix allocate through Rf_allocVector(REALSXP, ...), which R
+    // does NOT zero-fill for numeric vectors -- so below, when n_params < 2, we WRITE 0.0 into
+    // every cell explicitly; the glue produces zeros here, it does not inherit them for free.
     if (n_params >= 2) {
         for (int i = 0; i < n_params; ++i) {
             standard_errors[i] = r.standard_errors[static_cast<std::size_t>(i)];
             for (int j = 0; j < n_params; ++j) {
                 covariance(i, j) = r.covariance[static_cast<std::size_t>(i * n_params + j)];
                 correlation(i, j) = r.correlation[static_cast<std::size_t>(i * n_params + j)];
+            }
+        }
+    } else {
+        for (int i = 0; i < n_params; ++i) {
+            standard_errors[i] = 0.0;
+            for (int j = 0; j < n_params; ++j) {
+                covariance(i, j) = 0.0;
+                correlation(i, j) = 0.0;
             }
         }
     }

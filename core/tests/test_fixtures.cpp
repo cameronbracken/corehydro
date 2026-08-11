@@ -2193,13 +2193,23 @@ static double dispatch_estimation(EstimationCase& ec, const std::string& m, cons
 
     const auto& f = ec.fit;
     int n = static_cast<int>(f.parameters.size());
-    // Shared by ML/MAP and GMM (B11).
-    if (m == "parameter") return f.parameters[idx(0)];
-    if (m == "standard_error") return f.standard_errors[idx(0)];
+    // Shared by ML/MAP and GMM (B11). Also reachable when ec.target == "BayesianAnalysis" (the
+    // target-specific dispatch below falls through to here for any method it doesn't itself
+    // recognize), where FitResult leaves standard_errors/covariance/correlation EMPTY -- so these
+    // use .at() rather than operator[] to turn an out-of-range fixture typo into a clear
+    // std::out_of_range instead of indexing UB. No fixture reaches that combination today.
+    //
+    // Divergence note for whoever adds one: for a 1-parameter ML/MAP fit the three harnesses
+    // disagree on these fields' VALUES too -- this C++ runner returns the fit_runner's NaN, the R
+    // glue writes explicit zeros (corehydror/src/estimation.cpp), and the Python glue omits the
+    // keys entirely (corehydropy/src/bindings/estimation.cpp) -- so a new assertion here needs a
+    // harness-specific expectation, not one shared literal.
+    if (m == "parameter") return f.parameters.at(idx(0));
+    if (m == "standard_error") return f.standard_errors.at(idx(0));
     if (m == "covariance")
-        return f.covariance[idx(0) * static_cast<std::size_t>(n) + idx(1)];
+        return f.covariance.at(idx(0) * static_cast<std::size_t>(n) + idx(1));
     if (m == "correlation")
-        return f.correlation[idx(0) * static_cast<std::size_t>(n) + idx(1)];
+        return f.correlation.at(idx(0) * static_cast<std::size_t>(n) + idx(1));
 
     if (ec.target == "GeneralizedMethodOfMoments") {
         if (m == "j_stat") return f.j_stat;
