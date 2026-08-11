@@ -979,11 +979,19 @@ test_that("base generics work off logLik", {
   expect_equal(BIC(f), f$bic, tolerance = 1e-10)
 })
 
-test_that("a single-parameter model reports NA covariance, not zero", {
-  f <- fit_mle(model_univariate("Exponential", peaks), optimizer = "Brent")
-  expect_true(all(is.na(f$covariance)))
-  expect_true(all(is.na(f$standard_errors)))
+test_that("hessian = FALSE skips the covariance stack but still fits", {
+  f <- fit_mle(model_univariate("Normal", peaks), hessian = FALSE)
+  expect_null(f$covariance)
+  expect_null(f$standard_errors)
+  expect_true(is.finite(f$log_likelihood))
 })
+
+# NOTE: the sub-two-parameter NaN covariance guard is NOT testable from R. Every
+# single-parameter family in the factory (Rayleigh, Poisson, ChiSquared, Geometric, Bernoulli,
+# Deterministic) fails to build as a UnivariateDistributionModel: the constructor calls
+# set_default_parameters(), which dynamic_casts to IMaximumLikelihoodEstimation and throws,
+# and none of the six implements it. The guard is covered in C++ by test_fit_runner.cpp
+# against a test-double ModelBase. Do not try to write an R test for it.
 
 test_that("confint returns profile intervals bracketing the estimate", {
   f <- fit_mle(model_univariate("Normal", peaks), profile = TRUE, profile_bins = 20)
