@@ -1335,11 +1335,13 @@ Create `corehydropy/tests/test_fit.py` as the twin of `test-fit.R`, one test per
 ```python
 def test_bayesian_draws_axis_order_matches_r():
     """Draws are (iteration, chain, parameter), the same order corehydror returns."""
+    # chains must differ from the parameter count or a transposition is invisible. Note
+    # BayesianAnalysis::validate() requires between 4 and 20 chains, so 6, not 3.
     f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz",
-                     chains=3, iterations=200, seed=12345)
+                     chains=6, iterations=200, seed=12345)
     assert f.draws.ndim == 3
-    assert f.draws.shape[1] == 3
-    assert f.draws.shape[2] == len(f.parameters)
+    assert f.draws.shape[1] == 6
+    assert f.draws.shape[2] == len(f.parameters) == 2
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
