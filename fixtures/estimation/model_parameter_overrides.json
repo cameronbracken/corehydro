@@ -1,0 +1,164 @@
+{
+  "target": "MaximumAPosteriori",
+  "kind": "model_estimation",
+  "source": "RMC-BestFit/src/RMC.BestFit/Models/Support/ModelParameter.cs and Models/Support/ModelBase.cs @ c2e6192 (PriorDistribution / LowerBound / UpperBound / IsFixed / UseDefaultFlatPriors) -- EXACT EMITTER ORACLES dumped from the REAL compiled RMC.BestFit via tools/oracle_emitter and reproduced by tools/verify_oracles.py.",
+  "reference": "Pins the model-spec `parameters` override block (a corehydro addition to the shared spec builder, see model_spec.hpp's apply_parameter_overrides) against the real library. The block writes bounds, a fixed flag, a prior distribution, and a starting value onto the ModelParameter elements a model built; the R and Python packages expose it as model_parameter(). MaximumAPosteriori is the vehicle because it maximizes data + prior, so a replaced prior moves the fitted parameters and the objective -- an override that silently failed to apply would reproduce the flat-prior baseline instead. The three cases are the baseline (no block), a tightened Normal prior on the mean with UseDefaultFlatPriors off, and a narrowed bound on the standard deviation that binds the optimizer.",
+  "datasets": {
+    "annual_peaks": [
+      12500.0,
+      15300.0,
+      8900.0,
+      22100.0,
+      18700.0,
+      14200.0,
+      9800.0,
+      28500.0,
+      17400.0,
+      11600.0,
+      19200.0,
+      13800.0,
+      25600.0,
+      10500.0,
+      16900.0
+    ]
+  },
+  "cases": [
+    {
+      "name": "map_flat_prior_baseline",
+      "construct": {
+        "model": {
+          "type": "univariate_distribution",
+          "family": "Normal",
+          "dataset": "annual_peaks"
+        },
+        "optimizer": "NelderMead"
+      },
+      "assertions": [
+        {
+          "method": "parameter",
+          "args": [
+            0
+          ],
+          "expected": 16334.05130084235,
+          "mode": "rel",
+          "tol": 1e-09,
+          "note": "No `parameters` block: the model's own default priors and bounds. Every other case is read against this one."
+        },
+        {
+          "method": "parameter",
+          "args": [
+            1
+          ],
+          "expected": 5382.4896818057,
+          "mode": "rel",
+          "tol": 1e-09
+        },
+        {
+          "method": "max_log_likelihood",
+          "args": [],
+          "expected": -185.2600624134046,
+          "mode": "rel",
+          "tol": 1e-09
+        }
+      ]
+    },
+    {
+      "name": "map_custom_normal_prior_on_mean",
+      "construct": {
+        "model": {
+          "type": "univariate_distribution",
+          "family": "Normal",
+          "dataset": "annual_peaks",
+          "use_default_flat_priors": false,
+          "parameters": [
+            {
+              "index": 0,
+              "prior": {
+                "family": "Normal",
+                "parameters": [
+                  15000.0,
+                  1500.0
+                ]
+              }
+            }
+          ]
+        },
+        "optimizer": "NelderMead"
+      },
+      "assertions": [
+        {
+          "method": "parameter",
+          "args": [
+            0
+          ],
+          "expected": 15712.749282010676,
+          "mode": "rel",
+          "tol": 1e-09,
+          "note": "A tight Normal(15000, 1500) prior on the mean replaces the model default, pulling the MAP estimate toward 15000 relative to the baseline."
+        },
+        {
+          "method": "parameter",
+          "args": [
+            1
+          ],
+          "expected": 5415.050306455431,
+          "mode": "rel",
+          "tol": 1e-09
+        },
+        {
+          "method": "max_log_likelihood",
+          "args": [],
+          "expected": -179.19554059617474,
+          "mode": "rel",
+          "tol": 1e-09
+        }
+      ]
+    },
+    {
+      "name": "map_binding_upper_bound_on_sd",
+      "construct": {
+        "model": {
+          "type": "univariate_distribution",
+          "family": "Normal",
+          "dataset": "annual_peaks",
+          "parameters": [
+            {
+              "index": 1,
+              "upper": 4500.0,
+              "value": 4000.0
+            }
+          ]
+        },
+        "optimizer": "NelderMead"
+      },
+      "assertions": [
+        {
+          "method": "parameter",
+          "args": [
+            0
+          ],
+          "expected": 16332.69683122633,
+          "mode": "rel",
+          "tol": 1e-09,
+          "note": "An upper bound of 4500 on the standard deviation binds (the unconstrained fit lands at 5382), with a starting value of 4000 inside it -- the model's own default start would violate the new bound and C# rejects that outright, which is itself the check that the bound reached the optimizer."
+        },
+        {
+          "method": "parameter",
+          "args": [
+            1
+          ],
+          "expected": 4500,
+          "mode": "abs",
+          "tol": 0
+        },
+        {
+          "method": "max_log_likelihood",
+          "args": [],
+          "expected": -185.840251653461,
+          "mode": "rel",
+          "tol": 1e-09
+        }
+      ]
+    }
+  ]
+}

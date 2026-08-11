@@ -1,0 +1,127 @@
+{
+  "target": "GeneralizedMethodOfMoments",
+  "kind": "model_estimation",
+  "source": "RMC-BestFit/src/RMC.BestFit/Models/UnivariateDistribution/Bulletin17CDistribution.cs @ c2e6192 (SetDefaultParameters -> ComputeDefaultInitials -> the ROS nonparametric-moment override) and Models/DataFrame/DataFrame.cs @ c2e6192 (SetLowOutliersFromMGBT, GetNonparametricMomentsROS) -- EXACT EMITTER ORACLES dumped from the REAL compiled RMC.BestFit via tools/oracle_emitter and reproduced by tools/verify_oracles.py.",
+  "reference": "Pins the Bulletin 17C low-outlier path end to end: a record carrying two potentially influential low floods, censored by the PUBLIC SetLowOutliersFromMGBT() frame method, fit by the just-identified LP3 GMM. This is the path that exercises the ROS (regression on order statistics) imputation in ComputeDefaultInitials, which reads each exact ordinate's PLOTTING POSITION. The C# gets those positions from the INotifyPropertyChanged cascade that fires when the low-outlier flags change; this port replaced that plumbing with the explicit-call invalidation contract documented in data_frame.hpp, so models/model_spec.hpp's build_data_frame recomputes them itself after either public low-outlier setter. Before that, a censored frame reached the ROS branch with every plotting position still at its 0.0 default and threw std::out_of_range out of the moment machinery. The parameters asserted here are therefore the direct oracle on that fix: they are the ROS-seeded fit, materially different from the same record fit without censoring (which the sibling gmm_bulletin17c_smoke.json pins). The two frame-state values (number_of_low_outliers 2, low_outlier_threshold 8900) are not asserted here because the GMM target's assertion dispatch has no DataFrame arm (Bulletin17CDistribution is an IGMMModel, not a ModelBase, so it never reaches dispatch_model_data_frame); they are covered by core/tests/test_model_spec_parameters.cpp's sibling suite and the R and Python data-layer tests.",
+  "datasets": {},
+  "cases": [
+    {
+      "name": "lp3_gmm_mgbt_censored",
+      "construct": {
+        "model": {
+          "type": "bulletin17c",
+          "family": "LogPearsonTypeIII",
+          "data_frame": {
+            "exact": [
+              {
+                "index": 0,
+                "value": 12500.0
+              },
+              {
+                "index": 1,
+                "value": 15300.0
+              },
+              {
+                "index": 2,
+                "value": 8900.0
+              },
+              {
+                "index": 3,
+                "value": 22100.0
+              },
+              {
+                "index": 4,
+                "value": 18700.0
+              },
+              {
+                "index": 5,
+                "value": 14200.0
+              },
+              {
+                "index": 6,
+                "value": 9800.0
+              },
+              {
+                "index": 7,
+                "value": 28500.0
+              },
+              {
+                "index": 8,
+                "value": 17400.0
+              },
+              {
+                "index": 9,
+                "value": 11600.0
+              },
+              {
+                "index": 10,
+                "value": 19200.0
+              },
+              {
+                "index": 11,
+                "value": 13800.0
+              },
+              {
+                "index": 12,
+                "value": 25600.0
+              },
+              {
+                "index": 13,
+                "value": 10500.0
+              },
+              {
+                "index": 14,
+                "value": 16900.0
+              },
+              {
+                "index": 15,
+                "value": 120.0
+              },
+              {
+                "index": 16,
+                "value": 95.0
+              }
+            ],
+            "mgbt_low_outliers": true
+          }
+        },
+        "strategy": "Iterative",
+        "optimizer": "BFGS",
+        "sample_size": 4,
+        "seed": 20250705
+      },
+      "assertions": [
+        {
+          "method": "parameter",
+          "args": [
+            0
+          ],
+          "expected": 4.149225763920944,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "LP3 log-space mean, ROS-seeded. The uncensored fit of the same record lands at 3.9346 (see the reference note), so this value is the direct oracle on the low-outlier path."
+        },
+        {
+          "method": "parameter",
+          "args": [
+            1
+          ],
+          "expected": 0.18029214454603246,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "LP3 log-space standard deviation."
+        },
+        {
+          "method": "parameter",
+          "args": [
+            2
+          ],
+          "expected": -0.11697673213754865,
+          "mode": "rel",
+          "tol": 1e-08,
+          "note": "LP3 log-space skew. Reproduces to ~1.6e-9 relative, the loosest of the three: it is the parameter the BFGS search is least sharply determined in, and the file policy for optimizer-dependent parameters is rel 1e-8."
+        }
+      ]
+    }
+  ]
+}

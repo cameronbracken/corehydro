@@ -102,6 +102,35 @@ dispatch_data_utility <- function(fn, args, data) {
   )
 }
 
+# Threshold-selection diagnostics, split out of the switch above because both methods share one
+# glue call and differ only in which field the function name selects. args are
+# [u_min, u_max, n_thresholds, confidence_level, point_index]; `*PointCount` ignores the index and
+# returns how many candidate thresholds survived the minimum-exceedance and fit filters.
+dispatch_threshold_diagnostic <- function(fn, args, data) {
+  ns <- asNamespace("corehydror")
+  is_mrl <- startsWith(fn, "MRL")
+  r <- ns$ch_threshold_diagnostics_(
+    data, if (is_mrl) "mean_residual_life" else "parameter_stability",
+    args[[1]], args[[2]], as.integer(args[[3]]), args[[4]]
+  )
+  if (fn %in% c("MRLPointCount", "GPDStabilityPointCount")) {
+    return(as.double(length(r$threshold)))
+  }
+  field <- switch(fn,
+    MRLThreshold = "threshold", MRLMeanExcess = "mean_excess",
+    MRLLowerCI = "lower_ci", MRLUpperCI = "upper_ci", MRLCount = "exceedance_count",
+    GPDStabilityThreshold = "threshold",
+    GPDStabilityModifiedScale = "modified_scale",
+    GPDStabilityModifiedScaleLowerCI = "modified_scale_lower_ci",
+    GPDStabilityModifiedScaleUpperCI = "modified_scale_upper_ci",
+    GPDStabilityShape = "shape", GPDStabilityShapeLowerCI = "shape_lower_ci",
+    GPDStabilityShapeUpperCI = "shape_upper_ci",
+    GPDStabilityCount = "exceedance_count",
+    stop(sprintf("unknown data_utility function: %s", fn))
+  )
+  as.double(r[[field]][[as.integer(args[[5]]) + 1L]])
+}
+
 check_assertion <- function(actual, a) {
   mode <- a$mode
   if (mode == "bool") {
@@ -977,7 +1006,12 @@ test_that("oracle fixtures validate", {
       for (case in spec$cases) {
         args <- if (is.null(case$args)) numeric() else as.double(unlist(case$args))
         data <- if (is.null(case$dataset)) numeric() else as.double(unlist(datasets[[case$dataset]]))
-        actual <- dispatch_data_utility(case[["function"]], args, data)
+        fn <- case[["function"]]
+        actual <- if (startsWith(fn, "MRL") || startsWith(fn, "GPDStability")) {
+          dispatch_threshold_diagnostic(fn, args, data)
+        } else {
+          dispatch_data_utility(fn, args, data)
+        }
         for (a in case$assertions) check_assertion(actual, a)
       }
       next

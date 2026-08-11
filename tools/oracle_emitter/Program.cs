@@ -1739,6 +1739,9 @@ static BestFitModels.Bulletin17CDistribution BuildBulletin17CModel(
         ? Enum.Parse<UnivariateDistributionType>(fam.GetString()!)
         : UnivariateDistributionType.LogPearsonTypeIII;
     var m = new BestFitModels.Bulletin17CDistribution(df, distType);
+    // Bulletin17CDistribution is an IGMMModel, not an IModel, so it gets the parameter-list
+    // overload directly; it has no UseDefaultFlatPriors property either.
+    ApplyParameterOverrides(m.Parameters, modelSpec);
     if (modelSpec.TryGetProperty("parameter_values", out var pv))
         m.SetParameterValues(pv.EnumerateArray().Select(ParseNum).ToList());
     return m;
@@ -1853,6 +1856,13 @@ static BestFitModels.DataFrame BuildSpecDataFrame(JsonElement dfSpec)
         df.LowOutlierThreshold = lot.GetDouble();
     if (dfSpec.TryGetProperty("mgbt_low_outliers", out var mgbt) && mgbt.GetBoolean())
         df.SetLowOutliersFromMGBT();
+    if (dfSpec.TryGetProperty("threshold_low_outliers", out var tlo) && tlo.GetBoolean())
+        df.SetLowOutliersFromThreshold();
+    // Mirrors model_spec.hpp's build_data_frame: the two public low-outlier setters change the
+    // flags that the Hirsch-Stedinger positions depend on, and BestFit expects the caller (in
+    // the app, the INotifyPropertyChanged cascade) to recompute them. A headless caller must do
+    // it explicitly, or the Bulletin17C ROS imputation reads positions that are still 0.
+    if (df.NumberOfLowOutliers > 0) df.CalculatePlottingPositions();
     return df;
 }
 
@@ -1952,7 +1962,11 @@ static BestFitModels.UnivariateDistributionModelBase BuildSpecModel(
         throw new Exception($"unknown model_estimation model type: {type}");
     }
 
-    // Optional model-level `parameter_values`: one sync-safe SetParameterValues call, last.
+    // Optional model-level `use_default_flat_priors` + `parameters` + `parameter_values`,
+    // applied in that order (see model_spec.hpp's apply_parameter_values).
+    if (modelSpec.TryGetProperty("use_default_flat_priors", out var udfp))
+        model.UseDefaultFlatPriors = udfp.GetBoolean();
+    ApplyParameterOverrides(model.Parameters, modelSpec);
     if (modelSpec.TryGetProperty("parameter_values", out var pv))
         model.SetParameterValues(pv.EnumerateArray().Select(ParseNum).ToList());
     return model;
@@ -2106,10 +2120,37 @@ static double[] EmitterTimeSeriesValues(JsonElement spec, Dictionary<string, dou
     throw new Exception("time_series model requires either 'dataset' or 'data'");
 }
 
+// Optional model-level `parameters` block -> per-parameter bounds / fixed flag / prior
+// distribution / starting value, written onto the ModelParameter elements the model built.
+// Mirrors model_spec.hpp's apply_parameter_overrides; entries name their target by 0-based
+// `index` into the model's own parameter list, so the block composes with `trends` and runs
+// BEFORE the flat `parameter_values` vector.
+static void ApplyParameterOverrides(List<BestFitModels.ModelParameter> parameters, JsonElement spec)
+{
+    if (!spec.TryGetProperty("parameters", out var block)) return;
+    foreach (var entry in block.EnumerateArray())
+    {
+        int index = entry.GetProperty("index").GetInt32();
+        if (index < 0 || index >= parameters.Count)
+            throw new Exception("parameter spec 'index' is out of range for this model");
+        var mp = parameters[index];
+        if (entry.TryGetProperty("lower", out var lo)) mp.LowerBound = lo.GetDouble();
+        if (entry.TryGetProperty("upper", out var hi)) mp.UpperBound = hi.GetDouble();
+        if (entry.TryGetProperty("is_positive", out var ip)) mp.IsPositive = ip.GetBoolean();
+        if (entry.TryGetProperty("is_fixed", out var isf)) mp.IsFixed = isf.GetBoolean();
+        if (entry.TryGetProperty("name", out var nm)) mp.Name = nm.GetString()!;
+        if (entry.TryGetProperty("prior", out var pr)) mp.PriorDistribution = BuildSpecDistribution(pr);
+        if (entry.TryGetProperty("value", out var val)) mp.Value = val.GetDouble();
+    }
+}
+
 // Optional model-level `parameter_values` -> ONE sync-safe SetParameterValues call (the setter
 // every model mandates; poking Parameters directly desyncs trend / covariate copies).
 static void ApplyGeneralParameterValues(BestFitModels.IModel m, JsonElement spec)
 {
+    if (spec.TryGetProperty("use_default_flat_priors", out var udfp))
+        m.UseDefaultFlatPriors = udfp.GetBoolean();
+    ApplyParameterOverrides(m.Parameters, spec);
     if (spec.TryGetProperty("parameter_values", out var pv))
         m.SetParameterValues(pv.EnumerateArray().Select(ParseNum).ToList());
 }
@@ -3653,6 +3694,44 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 // args: [sample_size, dimension, seed, row, col]
                 "LHSRandom" => () => LatinHypercube.Random((int)duArgs[0], (int)duArgs[1], (int)duArgs[2])[(int)duArgs[3], (int)duArgs[4]],
                 "LHSMedian" => () => LatinHypercube.Median((int)duArgs[0], (int)duArgs[1], (int)duArgs[2])[(int)duArgs[3], (int)duArgs[4]],
+                // Threshold-selection diagnostics: args [u_min, u_max, n_thresholds,
+                // confidence_level, point_index]; the function name picks the field.
+                // `*PointCount` ignores the index and returns the surviving candidate count.
+                _ when fn.StartsWith("MRL") => () =>
+                {
+                    var r = ThresholdDiagnostics.ComputeMeanResidualLife(
+                        duData, duArgs[0], duArgs[1], (int)duArgs[2], duArgs[3]);
+                    if (fn == "MRLPointCount") return r.Points.Count;
+                    var pt = r.Points[(int)duArgs[4]];
+                    return fn switch
+                    {
+                        "MRLThreshold" => pt.Threshold,
+                        "MRLMeanExcess" => pt.MeanExcess,
+                        "MRLLowerCI" => pt.LowerCI,
+                        "MRLUpperCI" => pt.UpperCI,
+                        "MRLCount" => pt.ExceedanceCount,
+                        _ => throw new Exception($"unknown data_utility function: {fn}")
+                    };
+                },
+                _ when fn.StartsWith("GPDStability") => () =>
+                {
+                    var r = ThresholdDiagnostics.ComputeParameterStability(
+                        duData, duArgs[0], duArgs[1], (int)duArgs[2], duArgs[3]);
+                    if (fn == "GPDStabilityPointCount") return r.Points.Count;
+                    var pt = r.Points[(int)duArgs[4]];
+                    return fn switch
+                    {
+                        "GPDStabilityThreshold" => pt.Threshold,
+                        "GPDStabilityModifiedScale" => pt.ModifiedScale,
+                        "GPDStabilityModifiedScaleLowerCI" => pt.ModifiedScaleLowerCI,
+                        "GPDStabilityModifiedScaleUpperCI" => pt.ModifiedScaleUpperCI,
+                        "GPDStabilityShape" => pt.Shape,
+                        "GPDStabilityShapeLowerCI" => pt.ShapeLowerCI,
+                        "GPDStabilityShapeUpperCI" => pt.ShapeUpperCI,
+                        "GPDStabilityCount" => pt.ExceedanceCount,
+                        _ => throw new Exception($"unknown data_utility function: {fn}")
+                    };
+                },
                 _ => throw new Exception($"unknown data_utility function: {fn}")
             };
 
