@@ -88,6 +88,40 @@ void append_setting(std::string& out, const py::dict& settings, const char* key)
         out += std::string(",\"") + key + "\":" + std::to_string(settings[key].cast<int>());
 }
 
+// Reshapes a row-major flat n x n vector into a nested list, matching estimation_run's/
+// estimation_gmm_run's existing covariance/correlation convention -- an empty `v` (hessian not
+// requested, or a target that never populates it) comes back as an empty list, which fit.py
+// (the Task 8 caller) treats as "not computed" exactly like corehydror's `name_square`. A
+// single-parameter model still returns a genuine (NaN-filled) 1x1 nested list, matching
+// FitResult's own n < 2 guard -- see fit_runner.hpp's fill_common.
+std::vector<std::vector<double>> nested_square(const std::vector<double>& v, int n) {
+    std::vector<std::vector<double>> out;
+    if (v.empty()) return out;
+    out.resize(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        out[static_cast<std::size_t>(i)].resize(static_cast<std::size_t>(n));
+        for (int j = 0; j < n; ++j)
+            out[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] =
+                v[static_cast<std::size_t>(i * n + j)];
+    }
+    return out;
+}
+
+// Same idea, rectangular, for FitDiagnostics::observation_influence (n_obs x n_params,
+// row-major -- see fit_runner.hpp's flatten_influence and corehydror's `matrix_or_empty`).
+std::vector<std::vector<double>> nested_rect(const std::vector<double>& v, int nrow, int ncol) {
+    std::vector<std::vector<double>> out;
+    if (v.empty() || nrow == 0 || ncol == 0) return out;
+    out.resize(static_cast<std::size_t>(nrow));
+    for (int i = 0; i < nrow; ++i) {
+        out[static_cast<std::size_t>(i)].resize(static_cast<std::size_t>(ncol));
+        for (int j = 0; j < ncol; ++j)
+            out[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] =
+                v[static_cast<std::size_t>(i * ncol + j)];
+    }
+    return out;
+}
+
 }  // namespace
 
 // Seeded ISimulatable draw, flattened to a 1-D vector so the `simulated_value [i]` digest works
@@ -470,4 +504,114 @@ void register_estimation(py::module_& m) {
         },
         py::arg("model_json"), py::arg("dataset"), py::arg("strategy"), py::arg("optimizer"),
         py::arg("max_gmm_iterations"), py::arg("aep"));
+
+    // --- Task 8: the user-facing fit surface (fit_mle/fit_map/fit_bayesian/fit_gmm) ---------
+    //
+    // ONE entry point for all four fit targets, the pybind11 twin of corehydror's `ch_fit_run_`
+    // (corehydror/src/estimation.cpp). Unlike `estimation_run`/`estimation_bayes_run`/
+    // `estimation_gmm_run` above (which each assemble their own narrow construct from a fixture's
+    // flat arguments), `fit.py` assembles the FULL construct JSON itself -- {"model": ...,
+    // settings...} -- exactly as corehydror's `fit_input()` does, so this just runs it and packs
+    // FitResult's entire surface into one dict; fit.py picks the fields its target populates.
+    // Covariance/correlation are reshaped here into nested lists (matching the existing
+    // estimation_run/estimation_gmm_run convention above); draws stay flat CHAIN-major alongside
+    // chain_dims -- fit.py transposes them into [iteration, chain, parameter] with numpy, the
+    // same axis order corehydror returns (see fit.py's `_new_fit_bayesian`).
+    m.def(
+        "fit_run",
+        [](const std::string& target, const std::string& construct_json,
+           const std::vector<double>& dataset) {
+            est::support::FitResult r = est::support::run_fit(target, construct_json, dataset);
+            int n = static_cast<int>(r.parameters.size());
+
+            py::dict out;
+            out["method"] = r.method;
+            out["parameter_names"] = r.parameter_names;
+            out["parameters"] = r.parameters;
+            out["log_likelihood"] = r.log_likelihood;
+            out["prior_log_likelihood"] = r.prior_log_likelihood;
+            out["aic"] = r.aic;
+            out["bic"] = r.bic;
+            out["nobs"] = r.nobs;
+            out["covariance"] = nested_square(r.covariance, n);
+            out["standard_errors"] = r.standard_errors;
+            out["correlation"] = nested_square(r.correlation, n);
+            out["converged"] = r.converged;
+            out["status"] = r.status;
+            out["function_evaluations"] = r.function_evaluations;
+            out["model_spec"] = r.model_spec;
+            out["profile_grid"] = r.profile_grid;
+            out["profile_lower"] = r.profile_lower;
+            out["profile_upper"] = r.profile_upper;
+            out["profile_bins"] = r.profile_bins;
+            out["draws"] = r.draws;
+            out["chain_dims"] = r.chain_dims;
+            // --- Bayesian-only fields; empty/NaN for MaximumLikelihood/MaximumAPosteriori/GMM --
+            out["acceptance_rates"] = r.acceptance_rates;
+            out["dic"] = r.dic;
+            out["waic"] = r.waic;
+            out["looic"] = r.looic;
+            out["rhat"] = r.rhat;
+            out["ess"] = r.ess;
+            out["summary_mean"] = r.summary_mean;
+            out["summary_median"] = r.summary_median;
+            out["summary_sd"] = r.summary_sd;
+            out["summary_lower"] = r.summary_lower;
+            out["summary_upper"] = r.summary_upper;
+            // --- GMM-only fields; NaN/0/false for the other three targets ----------------------
+            out["j_stat"] = r.j_stat;
+            out["j_stat_pval"] = r.j_stat_pval;
+            out["gmm_iterations"] = r.gmm_iterations;
+            out["converged_within_tolerance"] = r.converged_within_tolerance;
+            out["optimizer_fallback_count"] = r.optimizer_fallback_count;
+            return out;
+        },
+        py::arg("target"), py::arg("construct_json"), py::arg("dataset"));
+
+    // `fit.diagnostics()`/`fit_diagnostics(fit)`: reruns the fit's own construct (the JSON
+    // fit.py's `_fit_input` built, carried on the Fit as `_construct_json`) through
+    // `run_fit_diagnostics` -- see that function's header for why an explicit `warmup_iterations`
+    // on the ORIGINAL construct is what makes this agree with the fit it is diagnosing. `target`
+    // is one of MaximumAPosteriori/BayesianAnalysis/GMM (matching FitDiagnostics's three
+    // populated arms); MaximumLikelihood is rejected fit.py-side before this is ever called,
+    // mirroring corehydror's `ch_fit_diagnostics_`/`fit_diagnostics()`.
+    m.def(
+        "fit_diagnostics",
+        [](const std::string& target, const std::string& construct_json,
+           const std::vector<double>& dataset) {
+            est::support::FitDiagnostics d =
+                est::support::run_fit_diagnostics(target, construct_json, dataset);
+
+            // observation_influence is n_obs x n_params, row-major (fit_runner.hpp's
+            // flatten_influence); n_obs is cooks_distance's length (populated together, MAP/GMM
+            // only -- see FitDiagnostics's header), so n_params divides out of the flat length
+            // rather than needing a separate field.
+            int n_obs = static_cast<int>(d.cooks_distance.size());
+            int n_params = (n_obs > 0 && !d.observation_influence.empty())
+                               ? static_cast<int>(d.observation_influence.size() /
+                                                   static_cast<std::size_t>(n_obs))
+                               : 0;
+
+            py::dict out;
+            out["cooks_distance"] = d.cooks_distance;
+            out["leverage"] = d.leverage;
+            out["observation_influence"] = nested_rect(d.observation_influence, n_obs, n_params);
+            out["pareto_k"] = d.pareto_k;
+            out["max_pareto_k"] = d.max_pareto_k;
+            out["prior_influence"] = d.prior_influence;
+            out["prior_influence_names"] = d.prior_influence_names;
+            return out;
+        },
+        py::arg("target"), py::arg("construct_json"), py::arg("dataset"));
+
+    // `quantile_variance(fit, aep)`: like `estimation_gmm_qvar` above, rebuilds the same
+    // deterministic GMM fit from the fit's own construct and evaluates the B17C delta-method
+    // Var(Q_p) live -- `aep` is only known at call time, so this cannot be precomputed into
+    // `fit_run`'s result the way every other GMM field is.
+    m.def(
+        "fit_quantile_variance",
+        [](const std::string& construct_json, const std::vector<double>& dataset, double aep) {
+            return est::support::run_fit_quantile_variance(construct_json, dataset, aep);
+        },
+        py::arg("construct_json"), py::arg("dataset"), py::arg("aep"));
 }

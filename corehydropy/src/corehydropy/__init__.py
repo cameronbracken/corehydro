@@ -39,6 +39,15 @@ from .models import (
     model_validate,
     trend,
 )
+from .fit import (
+    Fit,
+    fit_bayesian,
+    fit_diagnostics,
+    fit_gmm,
+    fit_map,
+    fit_mle,
+    quantile_variance,
+)
 from .mcmc import mcmc_sample
 from .stats import (
     box_cox,
@@ -82,6 +91,13 @@ __all__ = [
     "qgev",
     "gev_moments",
     "gev_fit",
+    "Fit",
+    "fit_mle",
+    "fit_map",
+    "fit_bayesian",
+    "fit_gmm",
+    "fit_diagnostics",
+    "quantile_variance",
     "univariate_analysis",
     "fit_distributions",
     "bulletin17c_analysis",
