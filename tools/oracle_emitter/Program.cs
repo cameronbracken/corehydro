@@ -2219,6 +2219,20 @@ static BestFitModels.IModel BuildTimeSeriesModelGeneral(
     {
         throw new Exception($"unknown time_series subtype: {subtype}");
     }
+    // Optional `training_time_steps` (mirrors model_spec.hpp): a MODEL property whose
+    // data-driven default exceeds the series length for any series shorter than 30.
+    if (model.TryGetProperty("training_time_steps", out var tsSteps))
+    {
+        int steps = tsSteps.GetInt32();
+        switch (result)
+        {
+            case BestFitModels.AutoRegressive arModel: arModel.TrainingTimeSteps = steps; break;
+            case BestFitModels.MovingAverage maModel: maModel.TrainingTimeSteps = steps; break;
+            case BestFitModels.ARIMAX arimaxModel: arimaxModel.TrainingTimeSteps = steps; break;
+            case BestFitModels.ARIMA arimaModel: arimaModel.TrainingTimeSteps = steps; break;
+        }
+    }
+
     ApplyGeneralParameterValues(result, model);
     return result;
 }

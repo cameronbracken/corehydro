@@ -34,7 +34,8 @@
 //     "total_years"?: y, ... }
 //   { "type": "time_series", "subtype": "ar"|"ma"|"arima"|"arimax", <data>,
 //     "orders": { "p"?, "d"?, "q"?, "b"? }, "include_intercept"?: b, "transform"?: "<name>",
-//     "trend"?, "include_seasonality"?, "covariates"?, "parameter_values"?: [ ... ] }
+//     "trend"?, "include_seasonality"?, "covariates"?, "training_time_steps"?: n,
+//     "parameter_values"?: [ ... ] }
 //   { "type": "spatial_gev", "coordinates": [[x,y],...], "at_site_data": [[...],...],
 //     <use_*_errors / use_copula_dependence / use_log_link_* flags>, "parameter_values"?: [...] }
 //   { "type": "rating_curve", "segments"?: 1..3, "stage": [ ... ], "discharge": [ ... ],
@@ -485,6 +486,24 @@ inline std::unique_ptr<ModelBase> build_time_series_model(const JsonValue& model
     } else {
         throw std::runtime_error("unknown time_series subtype: " + subtype);
     }
+
+    // Optional `training_time_steps`: how many leading steps are used for calibration, the rest
+    // held back for validation. It is a MODEL property in C# (ARIMA.TrainingTimeSteps and the
+    // same field on each sibling), and the analyses set it from their own argument. A model built
+    // on its own needs it too: the data-driven default is max(30, floor(0.8 * n)), which exceeds
+    // the series length for any series shorter than 30 and fails Validate().
+    if (model.contains("training_time_steps")) {
+        int steps = model.at("training_time_steps").as_int();
+        if (subtype == "ar")
+            static_cast<AutoRegressive&>(*result).set_training_time_steps(steps);
+        else if (subtype == "ma")
+            static_cast<MovingAverage&>(*result).set_training_time_steps(steps);
+        else if (subtype == "arima")
+            static_cast<ARIMA&>(*result).set_training_time_steps(steps);
+        else
+            static_cast<ARIMAX&>(*result).set_training_time_steps(steps);
+    }
+
     apply_parameter_values(*result, model);
     return result;
 }

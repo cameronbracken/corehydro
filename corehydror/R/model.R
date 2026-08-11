@@ -443,8 +443,8 @@ model_bulletin17c <- function(data, family = "LogPearsonTypeIII", parameters = N
 # Internal: the shared time-series spec. The series always travels inline as `data` so a model
 # is self-contained; `transform` names a TransformType.
 time_series_model <- function(subtype, data, orders, include_intercept, transform, extra = NULL,
-                              parameters = NULL, parameter_values = NULL,
-                              use_default_flat_priors = NULL) {
+                              training_time_steps = NULL, parameters = NULL,
+                              parameter_values = NULL, use_default_flat_priors = NULL) {
   if (inherits(data, "corehydro_data")) {
     stop("time-series models take a plain numeric vector in sequence order, not an analysis_data() frame",
       call. = FALSE
@@ -454,7 +454,12 @@ time_series_model <- function(subtype, data, orders, include_intercept, transfor
     list(
       type = "time_series", subtype = subtype, data = spec_array(as.double(data)),
       orders = orders, include_intercept = isTRUE(include_intercept),
-      transform = if (is.null(transform)) NULL else as.character(transform)
+      transform = if (is.null(transform)) NULL else as.character(transform),
+      training_time_steps = if (is.null(training_time_steps)) {
+        NULL
+      } else {
+        as.integer(training_time_steps)
+      }
     ),
     extra
   )
@@ -468,6 +473,10 @@ time_series_model <- function(subtype, data, orders, include_intercept, transfor
 #' @param include_intercept logical; include an intercept term.
 #' @param transform optional variance-stabilizing transform: `"None"`, `"Logarithmic"`,
 #'   `"BoxCox"`, or `"YeoJohnson"`.
+#' @param training_time_steps number of leading steps used for calibration, the rest held
+#'   back for validation. The model default is `max(30, floor(0.8 * n))`, which exceeds the
+#'   series length for any series shorter than 30 and then fails [model_validate()]; set it
+#'   explicitly for a short series.
 #' @inheritParams model_univariate
 #' @return An object of class `corehydro_model`.
 #' @seealso [ar_analysis()].
@@ -476,10 +485,12 @@ time_series_model <- function(subtype, data, orders, include_intercept, transfor
 #' x <- c(10.2, 11.5, 9.8, 12.1, 13.4, 11.9, 10.6, 12.8, 14.0, 13.1, 11.7, 12.5)
 #' model_ar(x, p = 1)
 model_ar <- function(data, p = 1L, include_intercept = TRUE, transform = NULL,
+                     training_time_steps = NULL,
                      parameters = NULL, parameter_values = NULL,
                      use_default_flat_priors = NULL) {
   time_series_model(
     "ar", data, list(p = as.integer(p)), include_intercept, transform,
+    training_time_steps = training_time_steps,
     parameters = parameters, parameter_values = parameter_values,
     use_default_flat_priors = use_default_flat_priors
   )
@@ -496,10 +507,12 @@ model_ar <- function(data, p = 1L, include_intercept = TRUE, transform = NULL,
 #' x <- c(10.2, 11.5, 9.8, 12.1, 13.4, 11.9, 10.6, 12.8, 14.0, 13.1, 11.7, 12.5)
 #' model_ma(x, q = 1)
 model_ma <- function(data, q = 1L, include_intercept = TRUE, transform = NULL,
+                     training_time_steps = NULL,
                      parameters = NULL, parameter_values = NULL,
                      use_default_flat_priors = NULL) {
   time_series_model(
     "ma", data, list(q = as.integer(q)), include_intercept, transform,
+    training_time_steps = training_time_steps,
     parameters = parameters, parameter_values = parameter_values,
     use_default_flat_priors = use_default_flat_priors
   )
@@ -518,11 +531,13 @@ model_ma <- function(data, q = 1L, include_intercept = TRUE, transform = NULL,
 #' x <- c(10.2, 11.5, 9.8, 12.1, 13.4, 11.9, 10.6, 12.8, 14.0, 13.1, 11.7, 12.5)
 #' model_arima(x, p = 1, d = 0, q = 1)
 model_arima <- function(data, p = 1L, d = 0L, q = 1L, include_intercept = TRUE, transform = NULL,
+                        training_time_steps = NULL,
                         parameters = NULL, parameter_values = NULL,
                         use_default_flat_priors = NULL) {
   time_series_model(
     "arima", data, list(p = as.integer(p), d = as.integer(d), q = as.integer(q)),
     include_intercept, transform,
+    training_time_steps = training_time_steps,
     parameters = parameters, parameter_values = parameter_values,
     use_default_flat_priors = use_default_flat_priors
   )
@@ -546,7 +561,8 @@ model_arima <- function(data, p = 1L, d = 0L, q = 1L, include_intercept = TRUE, 
 #' model_arimax(x, covariates = list(z), p = 1, d = 0, q = 0, b = 0)
 model_arimax <- function(data, covariates, p = 1L, d = 0L, q = 0L, b = 0L,
                          include_intercept = TRUE, transform = NULL, trend_type = NULL,
-                         include_seasonality = NULL, parameters = NULL, parameter_values = NULL,
+                         include_seasonality = NULL, training_time_steps = NULL,
+                         parameters = NULL, parameter_values = NULL,
                          use_default_flat_priors = NULL) {
   if (is.matrix(covariates)) {
     covariates <- lapply(seq_len(ncol(covariates)), function(j) as.double(covariates[, j]))
@@ -567,6 +583,7 @@ model_arimax <- function(data, covariates, p = 1L, d = 0L, q = 0L, b = 0L,
         isTRUE(include_seasonality)
       }
     ),
+    training_time_steps = training_time_steps,
     parameters = parameters, parameter_values = parameter_values,
     use_default_flat_priors = use_default_flat_priors
   )

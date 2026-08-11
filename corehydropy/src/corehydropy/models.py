@@ -523,6 +523,7 @@ def _time_series(
     include_intercept,
     transform,
     extra=None,
+    training_time_steps=None,
     parameters=None,
     parameter_values=None,
     use_default_flat_priors=None,
@@ -540,6 +541,8 @@ def _time_series(
     }
     if transform is not None:
         spec["transform"] = str(transform)
+    if training_time_steps is not None:
+        spec["training_time_steps"] = int(training_time_steps)
     if extra:
         spec.update(extra)
     return _build(spec, [], None, parameters, parameter_values, use_default_flat_priors)
@@ -550,6 +553,7 @@ def model_ar(
     p: int = 1,
     include_intercept: bool = True,
     transform=None,
+    training_time_steps=None,
     parameters=None,
     parameter_values=None,
     use_default_flat_priors=None,
@@ -566,6 +570,11 @@ def model_ar(
         Include an intercept term.
     transform : {"None", "Logarithmic", "BoxCox", "YeoJohnson"}, optional
         Variance-stabilizing transform.
+    training_time_steps : int, optional
+        Leading steps used for calibration, the rest held back for validation. The model
+        default is ``max(30, floor(0.8 * n))``, which exceeds the series length for any series
+        shorter than 30 and then fails :func:`model_validate`; set it explicitly for a short
+        series.
     parameters, parameter_values, use_default_flat_priors
         As in :func:`model_univariate`.
 
@@ -576,6 +585,7 @@ def model_ar(
     """
     return _time_series(
         "ar", data, {"p": int(p)}, include_intercept, transform,
+        training_time_steps=training_time_steps,
         parameters=parameters, parameter_values=parameter_values,
         use_default_flat_priors=use_default_flat_priors,
     )
@@ -586,6 +596,7 @@ def model_ma(
     q: int = 1,
     include_intercept: bool = True,
     transform=None,
+    training_time_steps=None,
     parameters=None,
     parameter_values=None,
     use_default_flat_priors=None,
@@ -602,6 +613,11 @@ def model_ma(
         Include an intercept term.
     transform : {"None", "Logarithmic", "BoxCox", "YeoJohnson"}, optional
         Variance-stabilizing transform.
+    training_time_steps : int, optional
+        Leading steps used for calibration, the rest held back for validation. The model
+        default is ``max(30, floor(0.8 * n))``, which exceeds the series length for any series
+        shorter than 30 and then fails :func:`model_validate`; set it explicitly for a short
+        series.
     parameters, parameter_values, use_default_flat_priors
         As in :func:`model_univariate`.
 
@@ -612,6 +628,7 @@ def model_ma(
     """
     return _time_series(
         "ma", data, {"q": int(q)}, include_intercept, transform,
+        training_time_steps=training_time_steps,
         parameters=parameters, parameter_values=parameter_values,
         use_default_flat_priors=use_default_flat_priors,
     )
@@ -624,6 +641,7 @@ def model_arima(
     q: int = 1,
     include_intercept: bool = True,
     transform=None,
+    training_time_steps=None,
     parameters=None,
     parameter_values=None,
     use_default_flat_priors=None,
@@ -640,6 +658,11 @@ def model_arima(
         Include an intercept term.
     transform : {"None", "Logarithmic", "BoxCox", "YeoJohnson"}, optional
         Variance-stabilizing transform.
+    training_time_steps : int, optional
+        Leading steps used for calibration, the rest held back for validation. The model
+        default is ``max(30, floor(0.8 * n))``, which exceeds the series length for any series
+        shorter than 30 and then fails :func:`model_validate`; set it explicitly for a short
+        series.
     parameters, parameter_values, use_default_flat_priors
         As in :func:`model_univariate`.
 
@@ -650,6 +673,7 @@ def model_arima(
     """
     return _time_series(
         "arima", data, {"p": int(p), "d": int(d), "q": int(q)}, include_intercept, transform,
+        training_time_steps=training_time_steps,
         parameters=parameters, parameter_values=parameter_values,
         use_default_flat_priors=use_default_flat_priors,
     )
@@ -666,6 +690,7 @@ def model_arimax(
     transform=None,
     trend_type=None,
     include_seasonality=None,
+    training_time_steps=None,
     parameters=None,
     parameter_values=None,
     use_default_flat_priors=None,
@@ -713,6 +738,7 @@ def model_arimax(
     return _time_series(
         "arimax", data, {"p": int(p), "d": int(d), "q": int(q), "b": int(b)},
         include_intercept, transform, extra=extra,
+        training_time_steps=training_time_steps,
         parameters=parameters, parameter_values=parameter_values,
         use_default_flat_priors=use_default_flat_priors,
     )
