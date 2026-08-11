@@ -113,10 +113,12 @@ gof
 
 AIC and BIC are defined at a single point estimate, so all three fits report them; DIC is built
 from the posterior draws themselves and only `fit_bayesian()` has those, hence the two `NA`s.
-MAP's AIC is worse than MLE's: the prior trades off some data likelihood at its point estimate in
-exchange for consistency with the outside skew information, and AIC has no way to credit that
-trade. It only sees the likelihood. DIC, which does account for the posterior's effective
-complexity, is close to but not equal to the Bayesian fit's own AIC/BIC.
+MAP's AIC is worse than MLE's because AIC is built from whatever value the estimator maximized:
+the data log-likelihood for MLE, but the log posterior, data log-likelihood plus the prior's own
+log-density, for MAP. Moving the skew toward the prior's mean costs some data log-likelihood, and
+the prior's log-density there adds nothing AIC counts as a credit, so the value AIC sees comes in
+below the data optimum. DIC, which does account for the posterior's effective complexity, is
+close to but not equal to the Bayesian fit's own AIC/BIC.
 
 Not shown in this table: a `fit_gmm()` fit's `aic`/`bic`/log-likelihood are reported as `NA` too,
 for a different reason. GMM is method-of-moments; it never had a likelihood surface to compute
@@ -141,12 +143,15 @@ The Bayesian credible interval turns out to be the widest of the three, about 4%
 MLE profile interval, and MAP's is the narrowest, pulled in by the same prior that shifted its
 point estimate. All three straddle zero: even with the historical record and, for MAP, an
 informative prior, this fit cannot rule out a skew near zero. That ordering is not a sign the
-Bayesian fit is less certain than the others. A profile interval comes from the curvature of the
-likelihood or posterior around a single point estimate, while a credible interval is read
-directly off the spread of the sampled posterior draws, and the two need not land on the same
-width. They also answer different questions to begin with: a probability statement about the
-parameter given the data and prior, versus a repeated-sampling statement about the estimator.
-Close numeric agreement between them, in either direction, was never guaranteed.
+Bayesian fit is less certain than the others. A profile interval traces the log-likelihood (or
+log-posterior) outward from the best fit until it drops by a chi-squared threshold, so it need
+not be symmetric around the point estimate: for the MLE and MAP fits above, each interval's
+distance below its point estimate differs from its distance above. A credible interval, by
+contrast, is read directly off the spread of the sampled posterior draws, and the two need not
+land on the same width. They also answer different questions to begin with: a probability
+statement about the parameter given the data and prior, versus a repeated-sampling statement
+about the estimator. Close numeric agreement between them, in either direction, was never
+guaranteed.
 
 ## R-hat and effective sample size
 
