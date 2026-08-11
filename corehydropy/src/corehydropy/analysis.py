@@ -128,8 +128,9 @@ def univariate_analysis(
     seed : int, default 12345
         PRNG seed for the sampler.
     exceedance_probabilities : array_like of float, optional
-        Exceedance probabilities at which to tabulate the curve; when ``None``, the default
-        ordinates are used.
+        Exceedance probabilities at which to tabulate the curve; when ``None``, the 25 standard
+        default ordinates are used. Must be in **ascending** order (as the defaults are); an
+        unsorted sequence fails validation and the analysis reports itself as not valid.
     thinning_interval : int, default -1
         MCMC thinning interval; ``-1`` keeps the sampler's own default.
 
@@ -198,8 +199,9 @@ def bulletin17c_analysis(
     confidence_level : float, default 0.90
         Confidence level for the intervals.
     exceedance_probabilities : array_like of float, optional
-        Exceedance probabilities at which to tabulate the curve; when ``None``, the default
-        ordinates are used.
+        Exceedance probabilities at which to tabulate the curve; when ``None``, the 25 standard
+        default ordinates are used. Must be in **ascending** order (as the defaults are); an
+        unsorted sequence fails validation and the analysis reports itself as not valid.
 
     Returns
     -------
@@ -275,8 +277,9 @@ def mixture_analysis(
     seed : int, default 12345
         PRNG seed for the sampler.
     exceedance_probabilities : array_like of float, optional
-        Exceedance probabilities at which to tabulate the curve; when ``None``, the default
-        ordinates are used.
+        Exceedance probabilities at which to tabulate the curve; when ``None``, the 25 standard
+        default ordinates are used. Must be in **ascending** order (as the defaults are); an
+        unsorted sequence fails validation and the analysis reports itself as not valid.
     thinning_interval : int, default -1
         MCMC thinning interval; ``-1`` keeps the sampler's own default.
 
@@ -339,8 +342,9 @@ def competing_risk_analysis(
     seed : int, default 12345
         PRNG seed for the sampler.
     exceedance_probabilities : array_like of float, optional
-        Exceedance probabilities at which to tabulate the curve; when ``None``, the default
-        ordinates are used.
+        Exceedance probabilities at which to tabulate the curve; when ``None``, the 25 standard
+        default ordinates are used. Must be in **ascending** order (as the defaults are); an
+        unsorted sequence fails validation and the analysis reports itself as not valid.
     thinning_interval : int, default -1
         MCMC thinning interval; ``-1`` keeps the sampler's own default.
 
@@ -404,8 +408,9 @@ def point_process_analysis(
     seed : int, default 12345
         PRNG seed for the sampler.
     exceedance_probabilities : array_like of float, optional
-        Exceedance probabilities at which to tabulate the curve; when ``None``, the default
-        ordinates are used.
+        Exceedance probabilities at which to tabulate the curve; when ``None``, the 25 standard
+        default ordinates are used. Must be in **ascending** order (as the defaults are); an
+        unsorted sequence fails validation and the analysis reports itself as not valid.
     thinning_interval : int, default -1
         MCMC thinning interval; ``-1`` keeps the sampler's own default.
 
@@ -855,8 +860,9 @@ def composite_analysis(
     seed : int, default 12345
         PRNG seed for the sampler.
     exceedance_probabilities : array_like of float, optional
-        Exceedance probabilities at which to tabulate the curve; when ``None``, the default
-        ordinates are used.
+        Exceedance probabilities at which to tabulate the curve; when ``None``, the 25 standard
+        default ordinates are used. Must be in **ascending** order (as the defaults are); an
+        unsorted sequence fails validation and the analysis reports itself as not valid.
     thinning_interval : int, default -1
         MCMC thinning interval; ``-1`` keeps the sampler's own default.
 

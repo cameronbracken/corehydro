@@ -17,10 +17,14 @@ univariate_analysis(
 )
 }
 \arguments{
-\item{data}{numeric vector of observations.}
+\item{data}{numeric vector of observations, or a \code{\link[=model_univariate]{model_univariate()}} model. A model carries
+its own family, so \code{distribution} is then ignored, and it can bring censored observations
+(see \code{\link[=analysis_data]{analysis_data()}}), nonstationary trends (see \code{\link[=trend]{trend()}}), and parameter bounds or
+priors (see \code{\link[=model_parameter]{model_parameter()}}).}
 
 \item{distribution}{distribution family name (e.g. \code{"Normal"}, \code{"GeneralizedExtremeValue"},
-\code{"LogPearsonTypeIII"}) -- any name the core distribution factory accepts.}
+\code{"LogPearsonTypeIII"}) -- any name the core distribution factory accepts. Ignored when
+\code{data} is a model.}
 
 \item{sampler}{MCMC sampler: \code{"DEMCz"} (default), \code{"DEMCzs"}, \code{"ARWMH"}, or \code{"NUTS"}.}
 
@@ -59,4 +63,13 @@ peaks <- c(12500, 15300, 8900, 22100, 18700, 14200, 9800, 28500, 17400, 11600)
 fit <- univariate_analysis(peaks, "Normal", sampler = "DEMCzs",
                            iterations = 100, output_length = 400, seed = 12345)
 fit$parameters
+
+# The same analysis over a censored record, through a model.
+d <- analysis_data(
+  exact = peaks,
+  interval = data.frame(index = 10, lower = 30000, value = 35000, upper = 40000)
+)
+fit2 <- univariate_analysis(model_univariate("Normal", d), sampler = "DEMCzs",
+                            iterations = 100, output_length = 400, seed = 12345)
+fit2$parameters
 }

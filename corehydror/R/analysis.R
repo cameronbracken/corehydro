@@ -49,7 +49,9 @@ analysis_input <- function(data, build, expected_type = NULL) {
 #' @param credible_level credible-interval width (e.g. `0.90` for a 90% band).
 #' @param seed PRNG seed for the sampler (fixed for reproducibility).
 #' @param exceedance_probabilities optional numeric vector of exceedance probabilities at which to
-#'   tabulate the curve; when `NULL`, the 25 standard default ordinates are used.
+#'   tabulate the curve; when `NULL`, the 25 standard default ordinates are used. Must be in
+#'   **ascending** order (as the defaults are); an unsorted vector fails validation and the
+#'   analysis reports itself as not valid.
 #' @param thinning_interval MCMC thinning interval; `-1` (default) keeps the sampler's own default.
 #' @details The MCMC warmup (burn-in) length is set automatically to `max(50, iterations / 2)`; it
 #'   is not a user parameter.
@@ -117,7 +119,7 @@ fit_distributions <- function(data) {
 #' @param seed PRNG seed for the uncertainty draw.
 #' @param confidence_level confidence level for the intervals (e.g. `0.90`).
 #' @param exceedance_probabilities optional numeric vector of exceedance probabilities; when
-#'   `NULL`, the 25 standard default ordinates are used.
+#'   `NULL`, the 25 standard default ordinates are used. Must be in **ascending** order.
 #' @return A named list: `exceedance_probabilities`, `point_estimates` (log10 space), `lower_ci`,
 #'   `upper_ci` (discharge space), `confidence_level`, `beta1`, `nu`, `quantile_variance`,
 #'   `parameters` (fitted location/scale/shape), and `covariance` (the p x p sandwich covariance).

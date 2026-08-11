@@ -186,17 +186,19 @@ inline DataFrame build_data_frame(const JsonValue& spec) {
     if (spec.value_or("threshold_low_outliers", false)) df.set_low_outliers_from_threshold();
 
     // Honour the port's invalidation contract (see the strategy note in data_frame.hpp): the C#
-    // recomputes plotting positions off the INotifyPropertyChanged cascade that fires when the
-    // low-outlier flags change, and this port replaced that plumbing with an explicit call the
-    // mutating caller owns. This IS that caller. It matters beyond plotting: the Bulletin 17C
-    // ROS imputation (get_nonparametric_moments_ros) reads each ordinate's plotting position,
-    // and without this a censored frame reaches it with every position still at its 0.0 default,
-    // which throws out of the moment machinery.
+    // recomputes plotting positions off the INotifyPropertyChanged cascade its collection and
+    // property setters fire, and this port replaced that plumbing with an explicit call the
+    // mutating caller owns. This IS that caller -- a spec describes a finished frame, so it
+    // leaves one in a fully computed state, exactly like the C# construction paths that end in
+    // `ProcessThresholdSeries(); CalculatePlottingPositions();`.
     //
-    // Guarded on the count rather than run unconditionally: only the two public setters above
-    // maintain number_of_low_outliers_, so this fires exactly for frames they touched and leaves
-    // every frame built from explicit per-ordinate flags exactly as it was.
-    if (df.number_of_low_outliers() > 0) df.calculate_plotting_positions();
+    // It matters well beyond plotting. The Bulletin 17C ROS imputation
+    // (get_nonparametric_moments_ros, reached whenever the frame has low outliers OR a threshold
+    // series) reads each ordinate's plotting position; without this it sees every position at
+    // its 0.0 default, regresses on infinite normal quantiles, and throws out of the moment
+    // machinery. Running it here rather than guarding on one branch's precondition keeps the
+    // contract stated once, at the boundary that owns it.
+    df.calculate_plotting_positions();
 
     return df;
 }

@@ -6,7 +6,7 @@
 \alias{corehydror-package}
 \title{corehydror: Bayesian Flood-Frequency and Extreme-Value Analysis}
 \description{
-R bindings to a shared C++ port of the USACE-RMC Numerics and RMC.BestFit libraries for flood-frequency and extreme-value analysis. This early version exposes the Generalized Extreme Value distribution: density, distribution and quantile functions, moments, parameter estimation (method of moments, L-moments, maximum likelihood), and quantile uncertainty.
+R bindings to a shared C++ port of the USACE-RMC Numerics and RMC.BestFit libraries for flood-frequency and extreme-value analysis. Provides probability distributions with density, distribution and quantile functions, moments, and parameter estimation (product moments, L-moments, maximum likelihood); Markov chain Monte Carlo sampling; and Bayesian, Bulletin 17C, and distribution-fitting analyses with uncertainty. Results are validated value-by-value against Numerics 2.1.4 and RMC.BestFit 2.0.0.
 }
 \seealso{
 Useful links:

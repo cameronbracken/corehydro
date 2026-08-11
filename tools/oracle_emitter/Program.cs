@@ -1858,11 +1858,11 @@ static BestFitModels.DataFrame BuildSpecDataFrame(JsonElement dfSpec)
         df.SetLowOutliersFromMGBT();
     if (dfSpec.TryGetProperty("threshold_low_outliers", out var tlo) && tlo.GetBoolean())
         df.SetLowOutliersFromThreshold();
-    // Mirrors model_spec.hpp's build_data_frame: the two public low-outlier setters change the
-    // flags that the Hirsch-Stedinger positions depend on, and BestFit expects the caller (in
-    // the app, the INotifyPropertyChanged cascade) to recompute them. A headless caller must do
-    // it explicitly, or the Bulletin17C ROS imputation reads positions that are still 0.
-    if (df.NumberOfLowOutliers > 0) df.CalculatePlottingPositions();
+    // Mirrors model_spec.hpp's build_data_frame: a spec describes a finished frame, so leave it
+    // fully computed. BestFit expects the caller (in the app, the INotifyPropertyChanged
+    // cascade) to recompute the Hirsch-Stedinger positions after any edit; a headless caller
+    // must do it explicitly, or the Bulletin17C ROS imputation reads positions that are still 0.
+    df.CalculatePlottingPositions();
     return df;
 }
 

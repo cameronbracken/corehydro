@@ -72,6 +72,43 @@ quartodoc:
         - qgev
         - gev_moments
         - gev_fit
+    - title: Observation data
+      desc: >-
+        Censored observation frames -- historical and paleoflood intervals, perception
+        thresholds, measurement uncertainty, and low outliers -- plus the diagnostics
+        computed off them.
+      contents:
+        - AnalysisData
+        - analysis_data
+        - analysis_data_summary
+        - threshold_diagnostics
+    - title: Models
+      desc: >-
+        The nine RMC.BestFit model families as plain specs, with nonstationary trends and
+        per-parameter bounds and priors. Pass one to any analysis in place of a data
+        sequence.
+      contents:
+        - Model
+        - model_univariate
+        - model_mixture
+        - model_competing_risks
+        - model_point_process
+        - model_bulletin17c
+        - model_ar
+        - model_ma
+        - model_arima
+        - model_arimax
+        - model_spatial_gev
+        - model_rating_curve
+        - model_bivariate
+        - Trend
+        - trend
+        - ModelParameter
+        - model_parameter
+        - model_validate
+        - model_simulate
+        - model_log_likelihood
+        - model_parameters
     - title: Frequency analysis
       desc: The main flood-frequency analysis entry points.
       contents:
