@@ -1,0 +1,279 @@
+---
+title: "25. Estimation methods"
+---
+
+::: {.callout-note appearance="minimal" icon=false}
+Language: **R** (Quarto) - [Python version](python.ipynb)
+:::
+
+`bulletin17c_analysis()` and `univariate_analysis()` are convenience wrappers: pick a model,
+pick a method, get a frequency curve. Underneath them sits a smaller estimation layer that fits
+a model directly and hands back the fit itself -- `fit_mle()`, `fit_map()`, `fit_bayesian()`, and
+`fit_gmm()`. This example fits the same model three different ways over the same censored record
+as [example 23](../23-censored-flood-frequency/r.qmd), and compares what each estimator returns.
+
+## What you'll learn
+
+- Fit one model three ways -- maximum likelihood, maximum a posteriori, and a Bayesian MCMC
+  chain -- and see how an informative prior moves the maximum a posteriori estimate.
+- Compare AIC, BIC, and DIC across estimators, and why a method-of-moments fit like `fit_gmm()`
+  reports none of the three.
+- Set profile-likelihood confidence intervals against posterior credible intervals.
+- Read a Bayesian fit's R-hat and effective sample size.
+
+## Setup
+
+```{r}
+library(corehydror)
+```
+
+## The censored record
+
+The same gauge record and historical information as example 23: forty-eight years of annual
+peaks, two pre-gauge floods known only within a range, and a fifty-year perception threshold
+that makes those two floods usable at all. See that example for the full derivation; here the
+frame is assembled directly.
+
+```{r}
+peak_flows <- c(
+  6290, 2700, 13100, 16900, 14600, 9600, 7740, 8490, 8130, 12000,
+  17200, 15000, 12400, 6960, 6500, 5840, 10400, 18800, 21400, 22600,
+  14200, 11000, 12800, 15700, 4740, 6950, 11800, 12100, 20600, 14600,
+  14600, 8900, 10600, 14200, 14100, 14100, 12500, 7530, 13400, 17600,
+  13400, 19200, 16900, 15500, 14500, 21900, 10400, 7460
+)
+n <- length(peak_flows)
+
+historical <- data.frame(
+  index = c(n, n + 1),
+  lower = c(30000, 26000),
+  value = c(34000, 29000),
+  upper = c(38000, 32000)
+)
+perception <- data.frame(
+  start_index = n, end_index = n + 49, value = 25000, number_above = 2
+)
+flood_data <- analysis_data(exact = peak_flows, interval = historical, threshold = perception)
+```
+
+## An informative prior on skew
+
+`model_univariate()` defaults to flat priors within each parameter's bounds, and the mode of a
+flat-times-likelihood posterior is just the likelihood's own mode -- so a `fit_map()` fit with no
+explicit prior would land exactly on `fit_mle()`'s estimate, and the two would have nothing to
+compare. Log-Pearson III's skew is exactly where a Bulletin 17C analysis leans on outside
+information (a regional skew estimate, in practice), so this model gives it a weakly informative
+prior instead of a flat one.
+
+```{r}
+skew_prior <- distribution("Normal", c(-0.3, 0.5))
+m <- model_univariate(
+  "LogPearsonTypeIII", flood_data,
+  parameters = model_parameter("skew", prior = skew_prior)
+)
+```
+
+## Three fits of the same model
+
+```{r}
+f_mle <- fit_mle(m)
+f_map <- fit_map(m)
+f_bayes <- fit_bayesian(
+  m,
+  sampler = "DEMCzs", iterations = 400, output_length = 2000,
+  seed = 20250811, thinning_interval = 1
+)
+
+params <- rbind(MLE = coef(f_mle), MAP = coef(f_map), Bayesian = coef(f_bayes))
+round(params, 4)
+```
+
+Every `corehydro_fit`, regardless of method, carries a `converged` flag and a `status` string.
+Here both are structurally `TRUE`/`"Success"`: the estimator throws on a genuine failure to
+estimate rather than handing back a failed fit, so these two fields record that the run
+completed, not that it necessarily found a good optimum.
+
+The skew estimate moves from -0.4657 at MLE toward the prior's mean of -0.3 once a prior is in
+play: -0.4189 at MAP, and -0.4263 for the Bayesian fit's own point estimate (a mode-like point
+tracked by the sampler, not the posterior mean reported below in `$summary`). Both parameter
+priors and censored data pull in the same direction here -- pulling the log-Pearson III skew
+away from the strongly negative value example 23 found for the systematic-only record.
+
+## Goodness of fit: AIC, BIC, DIC
+
+```{r}
+gof <- data.frame(
+  method = c("MLE", "MAP", "Bayesian"),
+  aic = c(f_mle$aic, f_map$aic, f_bayes$aic),
+  bic = c(f_mle$bic, f_map$bic, f_bayes$bic),
+  dic = c(NA, NA, f_bayes$dic)
+)
+gof
+```
+
+AIC and BIC are defined at a single point estimate, so all three fits report them; DIC is built
+from the posterior draws themselves and only `fit_bayesian()` has those, hence the two `NA`s.
+MAP's AIC is worse than MLE's: the prior trades off some data likelihood at its point estimate in
+exchange for consistency with the outside skew information, and AIC has no way to credit that
+trade -- it only sees the likelihood. DIC, which does account for the posterior's effective
+complexity, is close to but not equal to the Bayesian fit's own AIC/BIC.
+
+Not shown in this table: a `fit_gmm()` fit's `aic`/`bic`/log-likelihood are reported as `NA` too,
+for a different reason. GMM is method-of-moments; it never had a likelihood surface to compute
+them from in the first place, so they are not "missing" the way a `NULL` DIC on an MLE fit is --
+they are structurally absent. See the GMM section below.
+
+## Profile intervals versus credible intervals
+
+`confint()` dispatches on the fit's own method: MLE and MAP get profile-likelihood confidence
+intervals, and a Bayesian fit gets its posterior credible interval.
+
+```{r}
+ci <- rbind(
+  `MLE (profile)` = confint(f_mle)["Skew (of log) (γ)", ],
+  `MAP (profile)` = confint(f_map)["Skew (of log) (γ)", ],
+  `Bayesian (credible)` = confint(f_bayes)["Skew (of log) (γ)", ]
+)
+round(ci, 4)
+```
+
+The MLE profile interval is the widest of the three and straddles zero -- the systematic-plus-
+historical record alone cannot rule out a skew near zero. MAP's profile interval, built around
+the prior-shifted point estimate, is narrower and shifted toward the prior mean. The Bayesian
+credible interval sits close to the MLE interval's width; a posterior credible interval and a
+profile confidence interval answer different questions (a probability statement about the
+parameter given the data and prior, versus a repeated-sampling statement about the estimator),
+so a close numeric agreement in one direction or the other is not guaranteed, only a similar
+order of magnitude.
+
+## R-hat and effective sample size
+
+```{r}
+round(f_bayes$summary[, c("rhat", "ess")], 3)
+```
+
+R-hat compares between-chain and within-chain variance across the four parallel chains
+`fit_bayesian()` ran; values near 1 indicate the chains agree on where the posterior mass is.
+Effective sample size (ESS) is smaller than the raw `output_length = 2000` retained draws because
+consecutive MCMC draws are autocorrelated -- an ESS in the low hundreds means each parameter's
+posterior is effectively summarized by that many independent draws, not 2000.
+
+## A different estimator entirely: GMM
+
+`fit_gmm()` only fits a `model_bulletin17c()` model -- `IGMMModel` has exactly one implementation
+-- so it is not a fourth entry in the table above, but it is the estimator
+`bulletin17c_analysis()` itself builds on.
+
+```{r}
+f_gmm <- fit_gmm(model_bulletin17c(flood_data))
+gmm_coef <- setNames(coef(f_gmm), c("mean (log10)", "sd (log10)", "skew"))
+round(gmm_coef, 4)
+cat(sprintf(
+  "j-statistic %.4f, p-value %s (always NA: Bulletin 17C is always just-identified)\n",
+  f_gmm$j_stat, format(f_gmm$j_stat_pval)
+))
+```
+
+The J-statistic is GMM's own goodness-of-fit diagnostic, an overidentification test -- it is the
+method-of-moments analogue of a likelihood-based AIC/BIC/DIC, not a value on the same scale as
+any of them, and Bulletin 17C's moment conditions exactly match its parameter count, so there is
+no over-identified case here for the p-value to describe.
+
+`quantile_variance()` gives the delta-method variance of a fitted quantile off a GMM fit's
+sandwich covariance -- useful directly, without going through `bulletin17c_analysis()`'s full
+uncertainty-quantification machinery:
+
+```{r}
+quantile_variance(f_gmm, 0.01)
+```
+
+## Diagnostics off the MAP fit
+
+`fit_diagnostics()` computes Cook's distance and leverage at a point-estimate fit's optimum
+(MAP or GMM), or PSIS-LOO Pareto-k and prior influence off a Bayesian fit's posterior.
+
+```{r}
+diag <- fit_diagnostics(f_map)
+round(head(data.frame(cooks_distance = diag$cooks_distance, leverage = diag$leverage), 5), 4)
+cat(sprintf(
+  "largest Cook's distance: observation %d, a %s cfs peak\n",
+  which.max(diag$cooks_distance),
+  format(peak_flows[which.max(diag$cooks_distance)], big.mark = ",")
+))
+```
+
+The single largest Cook's distance in the record belongs to the second systematic year, 2,700
+cfs -- an unusually small peak that pulls a log-space fit the way example 23's Multiple
+Grubbs-Beck low-outlier screen exists to guard against.
+
+## Reproduction check
+
+```{r}
+# The pipeline is deterministic (MLE/MAP by a deterministic optimizer; the Bayesian fit is
+# seeded), so these literals are what this port computes and what the Python notebook asserts --
+# which is what proves the cross-language identity. The comparisons carry a 1e-15 relative
+# tolerance only because R's decimal parser can land one ulp away from the written literal; the
+# fixture suite is what enforces bit-exactness.
+near <- \(x, literal) abs(x / literal - 1) < 1e-15
+stopifnot(
+  # MLE, MAP, and Bayesian fits of the same model.
+  near(f_mle$parameters[1], 4.0843461309395188),
+  near(f_mle$parameters[2], 0.19914759083044403),
+  near(f_mle$parameters[3], -0.46572405672529588),
+  near(f_mle$aic, 990.14007771522097),
+  near(f_mle$bic, 995.93555461339395),
+
+  near(f_map$parameters[1], 4.0852361248526048),
+  near(f_map$parameters[2], 0.19616835592097398),
+  near(f_map$parameters[3], -0.41891886262810352),
+  near(f_map$aic, 992.39731155402353),
+  near(f_map$bic, 998.19278845219651),
+
+  near(f_bayes$parameters[1], 4.076977143876432),
+  near(f_bayes$parameters[2], 0.20630009688354539),
+  near(f_bayes$parameters[3], -0.42634285952387641),
+  near(f_bayes$aic, 992.67913589176896),
+  near(f_bayes$bic, 998.47461278994194),
+  near(f_bayes$dic, 989.76032492563218),
+
+  # Profile versus credible intervals on skew.
+  near(ci["MLE (profile)", "lower"], -0.82156954677035599),
+  near(ci["MLE (profile)", "upper"], 0.083539324732687284),
+  near(ci["MAP (profile)", "lower"], -0.77253827944035625),
+  near(ci["MAP (profile)", "upper"], 0.053143017857846427),
+  near(ci["Bayesian (credible)", "lower"], -0.86792864849208073),
+  near(ci["Bayesian (credible)", "upper"], 0.073036977766799502),
+
+  # R-hat and ESS.
+  near(f_bayes$summary["Mean (of log) (µ)", "rhat"], 1.0112377055613953),
+  near(f_bayes$summary["Std Dev (of log) (σ)", "rhat"], 1.1271063062090425),
+  near(f_bayes$summary["Skew (of log) (γ)", "rhat"], 1.0830639682776986),
+  near(f_bayes$summary["Mean (of log) (µ)", "ess"], 126.17628141940655),
+  near(f_bayes$summary["Std Dev (of log) (σ)", "ess"], 142.53659604889492),
+  near(f_bayes$summary["Skew (of log) (γ)", "ess"], 120.76568406444153),
+
+  # GMM: the same censored record, a different estimator.
+  near(f_gmm$parameters[1], 4.0862266825545781),
+  near(f_gmm$parameters[2], 0.2031671188484615),
+  near(f_gmm$parameters[3], -0.68625874896060901),
+  near(f_gmm$j_stat, 3.6036312001472797),
+  is.na(f_gmm$j_stat_pval),
+  near(quantile_variance(f_gmm, 0.01), 0.0043287640050973901),
+
+  # Diagnostics off the MAP fit.
+  near(diag$cooks_distance[2], 0.28415694269045783),
+  near(diag$leverage[2], 0.40243088779094255)
+)
+
+# Internal consistency: the informative prior moves MAP away from MLE and toward the prior mean,
+# every confidence/credible interval brackets its own point estimate, and GMM's log-likelihood
+# based fields are structurally NA while its J-statistic is not.
+stopifnot(
+  abs(f_map$parameters[3] - (-0.3)) < abs(f_mle$parameters[3] - (-0.3)),
+  ci["MLE (profile)", "lower"] < f_mle$parameters[3] && f_mle$parameters[3] < ci["MLE (profile)", "upper"],
+  ci["MAP (profile)", "lower"] < f_map$parameters[3] && f_map$parameters[3] < ci["MAP (profile)", "upper"],
+  is.na(f_gmm$aic), is.na(f_gmm$bic), is.na(logLik(f_gmm)),
+  !is.na(f_gmm$j_stat)
+)
+cat("All reproduction checks passed.\n")
+```

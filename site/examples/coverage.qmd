@@ -46,5 +46,6 @@ cross-language identity.
 |---------|--------|
 | [23. Censored flood frequency](23-censored-flood-frequency/python.ipynb) | historical and paleoflood interval observations, perception thresholds, Hirsch-Stedinger plotting positions, Multiple Grubbs-Beck low outliers |
 | [24. Nonstationary frequency analysis](24-nonstationary-trends/python.ipynb) | trends on a distribution parameter, stationary versus nonstationary model comparison by AIC, BIC, and DIC |
+| [25. Estimation methods](25-estimation-methods/python.ipynb) | `fit_mle`, `fit_map`, `fit_bayesian`, and `fit_gmm` on the same censored record; AIC/BIC/DIC, profile versus credible intervals, R-hat/ESS, and estimation diagnostics |
 
 : {tbl-colwidths="[34,66]"}
