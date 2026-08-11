@@ -19,6 +19,7 @@
 // STRING convention applies to assertion values, which never pass through this reader).
 #pragma once
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -85,6 +86,14 @@ class JsonValue {
         out.reserve(items().size());
         for (const JsonValue& v : items()) out.push_back(v.as_double());
         return out;
+    }
+
+    // The object's key/value pairs in insertion (= source) order. Needed by to_json_string
+    // (below) and by fit_runner.hpp's fitted_spec, which re-emits an object's own entries plus
+    // one extra key.
+    const std::vector<std::pair<std::string, JsonValue>>& entries() const {
+        require(Type::Object, "object");
+        return object_;
     }
 
    private:
@@ -335,5 +344,76 @@ class JsonParser {
 };
 
 inline JsonValue parse_json(const std::string& text) { return JsonParser::parse(text); }
+
+// --- Serialization (corehydro ADDITION; json_lite.hpp is otherwise parse-only) --------------
+//
+// A small writer, added for fit_runner.hpp's `fitted_spec`: the runner needs to hand a caller
+// back the parsed `construct.model` object with the fitted values spliced in, and the only way
+// to re-emit an already-parsed JsonValue is to serialize it ourselves (no third-party writer is
+// available -- see the file header on staying dependency-free). Round-trips numbers via
+// `%.17g`, matching the `spec_number` contract the R glue's `jsonlite::toJSON(digits = I(17))`
+// already relies on for exact double round-tripping.
+inline std::string escape_json_string(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    return out;
+}
+
+inline std::string to_json_string(const JsonValue& v) {
+    switch (v.type()) {
+        case JsonValue::Type::Null:
+            return "null";
+        case JsonValue::Type::Boolean:
+            return v.as_bool() ? "true" : "false";
+        case JsonValue::Type::Number: {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.17g", v.as_double());
+            return std::string(buf);
+        }
+        case JsonValue::Type::String:
+            return "\"" + escape_json_string(v.as_string()) + "\"";
+        case JsonValue::Type::Array: {
+            std::string out = "[";
+            const auto& items = v.items();
+            for (std::size_t i = 0; i < items.size(); ++i) {
+                if (i != 0) out += ",";
+                out += to_json_string(items[i]);
+            }
+            out += "]";
+            return out;
+        }
+        case JsonValue::Type::Object: {
+            std::string out = "{";
+            const auto& entries = v.entries();
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                if (i != 0) out += ",";
+                out += "\"" + escape_json_string(entries[i].first) + "\":" +
+                       to_json_string(entries[i].second);
+            }
+            out += "}";
+            return out;
+        }
+    }
+    return "null";  // unreachable; silences -Wreturn-type on some compilers
+}
 
 }  // namespace corehydro::models::spec
