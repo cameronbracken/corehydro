@@ -1252,6 +1252,17 @@ Expected: FAIL, `could not find function "fit_bayesian"`.
 
 - [ ] **Step 3: Implement**
 
+**Warmup default (decided during Task 4's review).** The runner is settings-transparent: an
+absent `warmup_iterations` leaves `BayesianAnalysis`'s class default of 1500 in place, which keeps
+Task 5's delegation byte-identical and moves no oracle. The derived default therefore lives HERE,
+in the verb: when the caller gives no `warmup`, `fit_bayesian()` computes
+`max(50, iterations %/% 2)` and puts it in the construct explicitly, exactly as the analyses
+already document their own warmup. Two reasons it must be explicit rather than left absent: a
+small `iterations` otherwise trips the sampler's `warmup <= iterations / 2` guard and aborts, and
+`fit_diagnostics()` re-runs the fit's own construct, so an explicit value is what makes it agree
+with `estimation_diagnostics()`. Test both: that `fit_bayesian(m, iterations = 200)` succeeds
+without a warmup argument, and that an explicit `warmup` is passed through unchanged.
+
 `fit_bayesian()` validates the sampler in R first (`match.arg(sampler, c("DEMCzs", "DEMCz", "ARWMH", "NUTS"))` produces a message that does not mention `mcmc_sample()`, so write an explicit check instead, matching the C++ message), validates the `...` knobs against the sampler, assembles the construct, and reshapes:
 
 ```r
@@ -1341,7 +1352,8 @@ Expected: FAIL, `ImportError: cannot import name 'fit_mle'`.
 
 - [ ] **Step 3: Implement**
 
-The binding mirrors `ch_fit_run_` and returns a dict. `fit.py` mirrors `fit.R` argument for argument. Reshape the draws with numpy rather than by hand:
+The binding mirrors `ch_fit_run_` and returns a dict. `fit.py` mirrors `fit.R` argument for argument, including the derived warmup default
+(`max(50, iterations // 2)` when the caller gives none, written explicitly into the construct). Reshape the draws with numpy rather than by hand:
 
 ```python
     n_chains, n_iter, n_params = result["chain_dims"]
