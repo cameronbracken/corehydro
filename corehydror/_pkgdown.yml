@@ -80,6 +80,12 @@ reference:
     contents:
       - fit_mle
       - fit_map
+  - title: Bayesian and GMM fits
+    contents:
+      - fit_bayesian
+      - fit_gmm
+      - fit_diagnostics
+      - quantile_variance
   - title: Frequency analysis
     contents:
       - univariate_analysis

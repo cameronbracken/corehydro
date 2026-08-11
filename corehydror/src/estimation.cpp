@@ -472,6 +472,24 @@ static sexp square_or_empty(const std::vector<double>& v, int n) {
     return as_sexp(m);
 }
 
+// Same idea as square_or_empty but rectangular, for FitDiagnostics::observation_influence
+// (n_obs x n_params, row-major -- see fit_runner.hpp's flatten_influence).
+static sexp matrix_or_empty(const std::vector<double>& v, int nrow, int ncol) {
+    if (v.empty()) return as_sexp(writable::doubles(static_cast<R_xlen_t>(0)));
+    writable::doubles_matrix<by_column> m(nrow, ncol);
+    for (int i = 0; i < nrow; ++i)
+        for (int j = 0; j < ncol; ++j) m(i, j) = v[static_cast<std::size_t>(i * ncol + j)];
+    return as_sexp(m);
+}
+
+// Flattens a double vector into an R numeric of the same length. Shared by ch_fit_run_'s new
+// Bayesian/GMM fields below and ch_fit_diagnostics_.
+static writable::doubles doubles_of(const std::vector<double>& v) {
+    writable::doubles out(static_cast<R_xlen_t>(v.size()));
+    for (std::size_t i = 0; i < v.size(); ++i) out[static_cast<R_xlen_t>(i)] = v[i];
+    return out;
+}
+
 // The user-facing fit entry point. ONE function for all four estimators (MaximumLikelihood,
 // MaximumAPosteriori here; BayesianAnalysis and GMM added in a later task): the R verbs in
 // R/fit.R assemble `construct_json` (via fit_input()) and read this named list back, picking
@@ -534,5 +552,72 @@ list ch_fit_run_(std::string target, std::string construct_json, doubles dataset
         "profile_bins"_nm = writable::integers({r.profile_bins}),
         "draws"_nm = draws,
         "chain_dims"_nm = chain_dims,
+        // --- Bayesian-only fields (Task 7); empty for MaximumLikelihood/MaximumAPosteriori ---
+        "acceptance_rates"_nm = doubles_of(r.acceptance_rates),
+        "dic"_nm = writable::doubles({r.dic}),
+        "waic"_nm = writable::doubles({r.waic}),
+        "looic"_nm = writable::doubles({r.looic}),
+        "rhat"_nm = doubles_of(r.rhat),
+        "ess"_nm = doubles_of(r.ess),
+        "summary_mean"_nm = doubles_of(r.summary_mean),
+        "summary_median"_nm = doubles_of(r.summary_median),
+        "summary_sd"_nm = doubles_of(r.summary_sd),
+        "summary_lower"_nm = doubles_of(r.summary_lower),
+        "summary_upper"_nm = doubles_of(r.summary_upper),
+        // --- GMM-only fields (Task 7); NaN/0/false for the other three targets -----------------
+        "j_stat"_nm = writable::doubles({r.j_stat}),
+        "j_stat_pval"_nm = writable::doubles({r.j_stat_pval}),
+        "gmm_iterations"_nm = writable::integers({r.gmm_iterations}),
+        "converged_within_tolerance"_nm =
+            writable::logicals({cpp11::r_bool(r.converged_within_tolerance)}),
+        "optimizer_fallback_count"_nm = writable::integers({r.optimizer_fallback_count}),
     });
+}
+
+// --- Estimation diagnostics off a fit (Task 7) ----------------------------------------------
+//
+// R's fit_diagnostics() reruns the fit's own construct (the JSON fit_input() built, carried on
+// the corehydro_fit as $construct_json) through run_fit_diagnostics -- see that function's
+// header for why an explicit warmup_iterations on the ORIGINAL construct is what makes this
+// agree with the fit it is diagnosing. `target` is one of MaximumAPosteriori/BayesianAnalysis/
+// GMM (matching FitDiagnostics's three populated arms); MaximumLikelihood is rejected R-side
+// (see fit_diagnostics() in R/fit.R) before this is ever called.
+[[cpp11::register]]
+list ch_fit_diagnostics_(std::string target, std::string construct_json, doubles dataset) {
+    std::vector<double> data(dataset.begin(), dataset.end());
+    est::support::FitDiagnostics d =
+        est::support::run_fit_diagnostics(target, construct_json, data);
+
+    // observation_influence is n_obs x n_params, row-major (fit_runner.hpp's flatten_influence);
+    // n_obs is cooks_distance's length (populated together, MAP/GMM only -- see FitDiagnostics's
+    // header), so n_params divides out of the flat length rather than needing a separate field.
+    int n_obs = static_cast<int>(d.cooks_distance.size());
+    int n_params = (n_obs > 0 && !d.observation_influence.empty())
+                       ? static_cast<int>(d.observation_influence.size() /
+                                          static_cast<std::size_t>(n_obs))
+                       : 0;
+
+    writable::strings prior_influence_names(static_cast<R_xlen_t>(d.prior_influence_names.size()));
+    for (std::size_t i = 0; i < d.prior_influence_names.size(); ++i)
+        prior_influence_names[static_cast<R_xlen_t>(i)] = d.prior_influence_names[i];
+
+    return writable::list({
+        "cooks_distance"_nm = doubles_of(d.cooks_distance),
+        "leverage"_nm = doubles_of(d.leverage),
+        "observation_influence"_nm = matrix_or_empty(d.observation_influence, n_obs, n_params),
+        "pareto_k"_nm = doubles_of(d.pareto_k),
+        "max_pareto_k"_nm = writable::doubles({d.max_pareto_k}),
+        "prior_influence"_nm = doubles_of(d.prior_influence),
+        "prior_influence_names"_nm = prior_influence_names,
+    });
+}
+
+// `quantile_variance(fit, aep)`: like ch_estimation_gmm_qvar_ (the fixture-path twin), rebuilds
+// the same deterministic GMM fit from the fit's own construct and evaluates the B17C
+// delta-method Var(Q_p) live -- `aep` is only known at call time, so this cannot be precomputed
+// into ch_fit_run_'s result the way every other GMM field is.
+[[cpp11::register]]
+double ch_fit_quantile_variance_(std::string construct_json, doubles dataset, double aep) {
+    std::vector<double> data(dataset.begin(), dataset.end());
+    return est::support::run_fit_quantile_variance(construct_json, data, aep);
 }

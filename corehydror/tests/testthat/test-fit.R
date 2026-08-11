@@ -132,3 +132,120 @@ test_that("profile is absent when the fit was built without profile = TRUE", {
   f <- fit_mle(model_univariate("Normal", peaks))
   expect_null(f$profile)
 })
+
+test_that("fit_bayesian returns draws as [iteration, chain, parameter]", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", chains = 4, iterations = 200, output_length = 500, seed = 12345
+  )
+  expect_s3_class(f, "corehydro_fit")
+  expect_equal(length(dim(f$draws)), 3L)
+  expect_equal(dim(f$draws)[2], 4L)                       # chains on axis 2
+  expect_equal(dim(f$draws)[3], length(f$parameters))     # parameters on axis 3
+  expect_equal(dimnames(f$draws)[[3]], names(f$parameters))
+  expect_equal(nrow(f$summary), length(f$parameters))
+  expect_true(all(c("rhat", "ess", "median") %in% names(f$summary)))
+  expect_length(f$acceptance_rates, 4L)
+  expect_true(is.finite(f$dic))
+})
+
+test_that("a seeded Bayesian fit is reproducible", {
+  m <- model_univariate("Normal", peaks)
+  a <- fit_bayesian(m, sampler = "DEMCz", iterations = 100, seed = 99)
+  b <- fit_bayesian(m, sampler = "DEMCz", iterations = 100, seed = 99)
+  expect_identical(a$draws, b$draws)
+})
+
+test_that("fit_bayesian rejects a sampler BayesianAnalysis cannot construct", {
+  expect_error(fit_bayesian(model_univariate("Normal", peaks), sampler = "HMC"),
+    "mcmc_sample", fixed = TRUE
+  )
+})
+
+test_that("fit_bayesian derives warmup as max(50, iterations %/% 2) when omitted", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 200, output_length = 300, seed = 1
+  )
+  expect_equal(f$warmup, 100L)
+  # A small `iterations` with the omitted-warmup class default (1500) would trip the sampler's
+  # own `warmup <= iterations / 2` guard -- this fit succeeding at all is part of what this test
+  # is checking.
+  expect_true(is.finite(f$dic))
+})
+
+test_that("an explicit warmup is passed through unchanged", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 200, warmup = 77, output_length = 300, seed = 1
+  )
+  expect_equal(f$warmup, 77L)
+})
+
+test_that("the draws permutation still holds when chains and parameter counts differ", {
+  # Normal has 2 parameters; BayesianAnalysis requires between 4 and 20 chains, so 6 chains is
+  # the smallest valid count that still makes the chain and parameter axes different lengths --
+  # a transposition bug moves a value to the wrong cell instead of silently matching by symmetry.
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", chains = 6, iterations = 150, output_length = 200, seed = 5
+  )
+  expect_equal(dim(f$draws)[2], 6L)
+  expect_equal(dim(f$draws)[3], 2L)
+  expect_equal(dim(f$draws)[3], length(f$parameters))
+})
+
+test_that("fit_bayesian rejects a knob its sampler does not use", {
+  expect_error(
+    fit_bayesian(
+      model_univariate("Normal", peaks),
+      sampler = "DEMCz", iterations = 100, beta = 0.1
+    ),
+    "beta"
+  )
+})
+
+test_that("fit_gmm requires a bulletin17c model", {
+  expect_error(fit_gmm(model_univariate("Normal", peaks)), "bulletin17c")
+})
+
+test_that("fit_gmm returns the GMM bookkeeping", {
+  f <- fit_gmm(model_bulletin17c(peaks))
+  expect_equal(f$method, "GMM")
+  expect_true(f$gmm_iterations > 0)
+  expect_true(is.na(f$j_stat_pval))  # just-identified by construction
+  expect_true(quantile_variance(f, 0.01) > 0)
+})
+
+test_that("quantile_variance rejects a non-GMM fit", {
+  expect_error(quantile_variance(fit_mle(model_univariate("Normal", peaks)), 0.01), "fit_gmm")
+})
+
+test_that("fit_diagnostics returns one value per observation", {
+  d <- fit_diagnostics(fit_map(model_univariate("Normal", peaks)))
+  expect_length(d$cooks_distance, length(peaks))
+})
+
+test_that("fit_diagnostics works off a Bayesian fit and a GMM fit", {
+  db <- fit_diagnostics(fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 100, output_length = 200, seed = 1
+  ))
+  expect_length(db$pareto_k, length(peaks))
+  expect_true(is.finite(db$max_pareto_k))
+
+  dg <- fit_diagnostics(fit_gmm(model_bulletin17c(peaks)))
+  expect_length(dg$cooks_distance, length(peaks))
+  expect_equal(dim(dg$observation_influence)[1], length(peaks))
+})
+
+test_that("fit_diagnostics rejects an MLE fit", {
+  expect_error(fit_diagnostics(fit_mle(model_univariate("Normal", peaks))), "fit_map")
+})
+
+test_that("summary.corehydro_fit shows rhat/ess for a Bayesian fit and SEs for an optimized one", {
+  fb <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 100, output_length = 200, seed = 1
+  )
+  out_b <- capture.output(summary(fb))
+  expect_true(any(grepl("rhat", out_b)))
+
+  fo <- fit_mle(model_univariate("Normal", peaks))
+  out_o <- capture.output(summary(fo))
+  expect_true(any(grepl("standard errors", out_o)))
+})
