@@ -8,14 +8,14 @@ Language: **R** (Quarto) - [Python version](python.ipynb)
 
 `bulletin17c_analysis()` and `univariate_analysis()` are convenience wrappers: pick a model,
 pick a method, get a frequency curve. Underneath them sits a smaller estimation layer that fits
-a model directly and hands back the fit itself -- `fit_mle()`, `fit_map()`, `fit_bayesian()`, and
+a model directly and hands back the fit itself: `fit_mle()`, `fit_map()`, `fit_bayesian()`, and
 `fit_gmm()`. This example fits the same model three different ways over the same censored record
 as [example 23](../23-censored-flood-frequency/r.qmd), and compares what each estimator returns.
 
 ## What you'll learn
 
-- Fit one model three ways -- maximum likelihood, maximum a posteriori, and a Bayesian MCMC
-  chain -- and see how an informative prior moves the maximum a posteriori estimate.
+- Fit one model three ways, by maximum likelihood, maximum a posteriori, and a Bayesian MCMC
+  chain, and see how an informative prior moves the maximum a posteriori estimate.
 - Compare AIC, BIC, and DIC across estimators, and why a method-of-moments fit like `fit_gmm()`
   reports none of the three.
 - Set profile-likelihood confidence intervals against posterior credible intervals.
@@ -59,9 +59,9 @@ flood_data <- analysis_data(exact = peak_flows, interval = historical, threshold
 ## An informative prior on skew
 
 `model_univariate()` defaults to flat priors within each parameter's bounds, and the mode of a
-flat-times-likelihood posterior is just the likelihood's own mode -- so a `fit_map()` fit with no
-explicit prior would land exactly on `fit_mle()`'s estimate, and the two would have nothing to
-compare. Log-Pearson III's skew is exactly where a Bulletin 17C analysis leans on outside
+flat-times-likelihood posterior is just the likelihood's own mode. A `fit_map()` fit with no
+explicit prior would then land exactly on `fit_mle()`'s estimate, leaving nothing to compare.
+Log-Pearson III's skew is exactly where a Bulletin 17C analysis leans on outside
 information (a regional skew estimate, in practice), so this model gives it a weakly informative
 prior instead of a flat one.
 
@@ -96,7 +96,7 @@ completed, not that it necessarily found a good optimum.
 The skew estimate moves from -0.4657 at MLE toward the prior's mean of -0.3 once a prior is in
 play: -0.4189 at MAP, and -0.4263 for the Bayesian fit's own point estimate (a mode-like point
 tracked by the sampler, not the posterior mean reported below in `$summary`). Both parameter
-priors and censored data pull in the same direction here -- pulling the log-Pearson III skew
+priors and censored data pull in the same direction here, pulling the log-Pearson III skew
 away from the strongly negative value example 23 found for the systematic-only record.
 
 ## Goodness of fit: AIC, BIC, DIC
@@ -115,13 +115,13 @@ AIC and BIC are defined at a single point estimate, so all three fits report the
 from the posterior draws themselves and only `fit_bayesian()` has those, hence the two `NA`s.
 MAP's AIC is worse than MLE's: the prior trades off some data likelihood at its point estimate in
 exchange for consistency with the outside skew information, and AIC has no way to credit that
-trade -- it only sees the likelihood. DIC, which does account for the posterior's effective
+trade. It only sees the likelihood. DIC, which does account for the posterior's effective
 complexity, is close to but not equal to the Bayesian fit's own AIC/BIC.
 
 Not shown in this table: a `fit_gmm()` fit's `aic`/`bic`/log-likelihood are reported as `NA` too,
 for a different reason. GMM is method-of-moments; it never had a likelihood surface to compute
-them from in the first place, so they are not "missing" the way a `NULL` DIC on an MLE fit is --
-they are structurally absent. See the GMM section below.
+them from in the first place, so they are not "missing" the way a `NULL` DIC on an MLE fit is.
+They are structurally absent. See the GMM section below.
 
 ## Profile intervals versus credible intervals
 
@@ -137,14 +137,16 @@ ci <- rbind(
 round(ci, 4)
 ```
 
-The MLE profile interval is the widest of the three and straddles zero -- the systematic-plus-
-historical record alone cannot rule out a skew near zero. MAP's profile interval, built around
-the prior-shifted point estimate, is narrower and shifted toward the prior mean. The Bayesian
-credible interval sits close to the MLE interval's width; a posterior credible interval and a
-profile confidence interval answer different questions (a probability statement about the
-parameter given the data and prior, versus a repeated-sampling statement about the estimator),
-so a close numeric agreement in one direction or the other is not guaranteed, only a similar
-order of magnitude.
+The Bayesian credible interval turns out to be the widest of the three, about 4% wider than the
+MLE profile interval, and MAP's is the narrowest, pulled in by the same prior that shifted its
+point estimate. All three straddle zero: even with the historical record and, for MAP, an
+informative prior, this fit cannot rule out a skew near zero. That ordering is not a sign the
+Bayesian fit is less certain than the others. A profile interval comes from the curvature of the
+likelihood or posterior around a single point estimate, while a credible interval is read
+directly off the spread of the sampled posterior draws, and the two need not land on the same
+width. They also answer different questions to begin with: a probability statement about the
+parameter given the data and prior, versus a repeated-sampling statement about the estimator.
+Close numeric agreement between them, in either direction, was never guaranteed.
 
 ## R-hat and effective sample size
 
@@ -155,13 +157,13 @@ round(f_bayes$summary[, c("rhat", "ess")], 3)
 R-hat compares between-chain and within-chain variance across the four parallel chains
 `fit_bayesian()` ran; values near 1 indicate the chains agree on where the posterior mass is.
 Effective sample size (ESS) is smaller than the raw `output_length = 2000` retained draws because
-consecutive MCMC draws are autocorrelated -- an ESS in the low hundreds means each parameter's
+consecutive MCMC draws are autocorrelated. An ESS in the low hundreds means each parameter's
 posterior is effectively summarized by that many independent draws, not 2000.
 
 ## A different estimator entirely: GMM
 
-`fit_gmm()` only fits a `model_bulletin17c()` model -- `IGMMModel` has exactly one implementation
--- so it is not a fourth entry in the table above, but it is the estimator
+`fit_gmm()` only fits a `model_bulletin17c()` model, since `IGMMModel` has exactly one
+implementation, so it is not a fourth entry in the table above. It is, however, the estimator
 `bulletin17c_analysis()` itself builds on.
 
 ```{r}
@@ -174,13 +176,13 @@ cat(sprintf(
 ))
 ```
 
-The J-statistic is GMM's own goodness-of-fit diagnostic, an overidentification test -- it is the
+The J-statistic is GMM's own goodness-of-fit diagnostic, an overidentification test. It is the
 method-of-moments analogue of a likelihood-based AIC/BIC/DIC, not a value on the same scale as
 any of them, and Bulletin 17C's moment conditions exactly match its parameter count, so there is
 no over-identified case here for the p-value to describe.
 
 `quantile_variance()` gives the delta-method variance of a fitted quantile off a GMM fit's
-sandwich covariance -- useful directly, without going through `bulletin17c_analysis()`'s full
+sandwich covariance, useful directly without going through `bulletin17c_analysis()`'s full
 uncertainty-quantification machinery:
 
 ```{r}
@@ -203,7 +205,7 @@ cat(sprintf(
 ```
 
 The single largest Cook's distance in the record belongs to the second systematic year, 2,700
-cfs -- an unusually small peak that pulls a log-space fit the way example 23's Multiple
+cfs, an unusually small peak that pulls a log-space fit the way example 23's Multiple
 Grubbs-Beck low-outlier screen exists to guard against.
 
 ## Reproduction check

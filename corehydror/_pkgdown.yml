@@ -88,7 +88,7 @@ reference:
       - quantile_variance
   - title: Fit accessor methods
     desc: >
-      S3 methods on a `corehydro_fit` (from `fit_mle`, `fit_map`, `fit_bayesian` or `fit_gmm`);
+      S3 methods on a `corehydro_fit` (from `fit_mle`, `fit_map`, `fit_bayesian` or `fit_gmm`).
       `print`, `summary`, `coef` and `vcov` are undocumented plain methods and don't appear here.
     contents:
       - logLik.corehydro_fit
