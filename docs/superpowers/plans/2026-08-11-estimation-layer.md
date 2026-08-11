@@ -89,7 +89,7 @@ Create `core/tests/test_fit_runner.cpp`:
 #include <vector>
 
 #include "corehydro/estimation/support/fit_runner.hpp"
-#include "test_util.hpp"
+#include "check.hpp"
 
 namespace support = corehydro::estimation::support;
 
@@ -100,33 +100,33 @@ static void test_mle_shape() {
     std::string construct = R"({"model":{"family":"Normal"},"optimizer":"NelderMead"})";
     support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
 
-    CH_CHECK(r.method == "MaximumLikelihood");
-    CH_CHECK(r.parameters.size() == 2);
-    CH_CHECK(r.parameter_names.size() == 2);
-    CH_CHECK(!r.parameter_names[0].empty());
-    CH_CHECK(r.converged);
-    CH_CHECK(r.status == "Success");
-    CH_CHECK(r.function_evaluations > 0);
-    CH_CHECK(r.nobs == 10);
-    CH_CHECK(std::isfinite(r.log_likelihood));
-    CH_CHECK(std::isfinite(r.aic));
-    CH_CHECK(std::isfinite(r.bic));
+    CHECK_TRUE(r.method == "MaximumLikelihood");
+    CHECK_TRUE(r.parameters.size() == 2);
+    CHECK_TRUE(r.parameter_names.size() == 2);
+    CHECK_TRUE(!r.parameter_names[0].empty());
+    CHECK_TRUE(r.converged);
+    CHECK_TRUE(r.status == "Success");
+    CHECK_TRUE(r.function_evaluations > 0);
+    CHECK_TRUE(r.nobs == 10);
+    CHECK_TRUE(std::isfinite(r.log_likelihood));
+    CHECK_TRUE(std::isfinite(r.aic));
+    CHECK_TRUE(std::isfinite(r.bic));
     // Hessian stack present and square for a 2-parameter model.
-    CH_CHECK(r.covariance.size() == 4);
-    CH_CHECK(r.standard_errors.size() == 2);
-    CH_CHECK(r.correlation.size() == 4);
+    CHECK_TRUE(r.covariance.size() == 4);
+    CHECK_TRUE(r.standard_errors.size() == 2);
+    CHECK_TRUE(r.correlation.size() == 4);
     // The fitted spec round-trips: it carries the fitted values.
-    CH_CHECK(r.model_spec.find("parameter_values") != std::string::npos);
+    CHECK_TRUE(r.model_spec.find("parameter_values") != std::string::npos);
 }
 
 static void test_hessian_can_be_disabled() {
     std::string construct =
         R"({"model":{"family":"Normal"},"optimizer":"NelderMead","hessian":false})";
     support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
-    CH_CHECK(r.covariance.empty());
-    CH_CHECK(r.standard_errors.empty());
-    CH_CHECK(r.correlation.empty());
-    CH_CHECK(std::isfinite(r.log_likelihood));  // the fit itself still happened
+    CHECK_TRUE(r.covariance.empty());
+    CHECK_TRUE(r.standard_errors.empty());
+    CHECK_TRUE(r.correlation.empty());
+    CHECK_TRUE(std::isfinite(r.log_likelihood));  // the fit itself still happened
 }
 
 static void test_single_parameter_covariance_is_nan_not_zero() {
@@ -134,19 +134,19 @@ static void test_single_parameter_covariance_is_nan_not_zero() {
     // report is NaN, NOT the silent zeros the fixture glue used to return.
     std::string construct = R"({"model":{"family":"Exponential"},"optimizer":"Brent"})";
     support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
-    CH_CHECK(r.parameters.size() == 1);
-    CH_CHECK(r.covariance.size() == 1);
-    CH_CHECK(std::isnan(r.covariance[0]));
-    CH_CHECK(std::isnan(r.standard_errors[0]));
-    CH_CHECK(std::isnan(r.correlation[0]));
+    CHECK_TRUE(r.parameters.size() == 1);
+    CHECK_TRUE(r.covariance.size() == 1);
+    CHECK_TRUE(std::isnan(r.covariance[0]));
+    CHECK_TRUE(std::isnan(r.standard_errors[0]));
+    CHECK_TRUE(std::isnan(r.correlation[0]));
 }
 
 static void test_map_reports_status() {
     std::string construct = R"({"model":{"family":"Normal"},"optimizer":"NelderMead"})";
     support::FitResult r = support::run_fit("MaximumAPosteriori", construct, kPeaks);
-    CH_CHECK(r.method == "MaximumAPosteriori");
-    CH_CHECK(r.status == "Success");
-    CH_CHECK(std::isfinite(r.prior_log_likelihood));
+    CHECK_TRUE(r.method == "MaximumAPosteriori");
+    CHECK_TRUE(r.status == "Success");
+    CHECK_TRUE(std::isfinite(r.prior_log_likelihood));
 }
 
 static void test_unknown_target_throws() {
@@ -156,7 +156,7 @@ static void test_unknown_target_throws() {
     } catch (const std::exception& e) {
         threw = std::string(e.what()).find("NotAnEstimator") != std::string::npos;
     }
-    CH_CHECK(threw);
+    CHECK_TRUE(threw);
 }
 
 static void test_unknown_optimizer_throws_naming_it() {
@@ -167,7 +167,7 @@ static void test_unknown_optimizer_throws_naming_it() {
     } catch (const std::exception& e) {
         threw = std::string(e.what()).find("Simplexx") != std::string::npos;
     }
-    CH_CHECK(threw);
+    CHECK_TRUE(threw);
 }
 
 int main() {
@@ -177,7 +177,7 @@ int main() {
     test_map_reports_status();
     test_unknown_target_throws();
     test_unknown_optimizer_throws_naming_it();
-    return ch_test_summary("test_fit_runner");
+    return chtest::summary("fit_runner");
 }
 ```
 
@@ -426,9 +426,9 @@ Append to `core/tests/test_fit_runner.cpp` and call from `main()`:
 static void test_profile_off_by_default() {
     std::string construct = R"({"model":{"family":"Normal"},"optimizer":"NelderMead"})";
     support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
-    CH_CHECK(r.profile_grid.empty());
-    CH_CHECK(r.profile_lower.empty());
-    CH_CHECK(r.profile_bins == 0);
+    CHECK_TRUE(r.profile_grid.empty());
+    CHECK_TRUE(r.profile_lower.empty());
+    CHECK_TRUE(r.profile_bins == 0);
 }
 
 static void test_profile_on_request() {
@@ -436,15 +436,15 @@ static void test_profile_on_request() {
         R"({"model":{"family":"Normal"},"optimizer":"NelderMead","profile":true,)"
         R"("profile_bins":20,"alpha":0.1})";
     support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
-    CH_CHECK(r.profile_bins == 20);
+    CHECK_TRUE(r.profile_bins == 20);
     // n_params x bins x 2 (parameter value, profile log-likelihood), row-major.
-    CH_CHECK(r.profile_grid.size() == 2u * 20u * 2u);
-    CH_CHECK(r.profile_lower.size() == 2);
-    CH_CHECK(r.profile_upper.size() == 2);
+    CHECK_TRUE(r.profile_grid.size() == 2u * 20u * 2u);
+    CHECK_TRUE(r.profile_lower.size() == 2);
+    CHECK_TRUE(r.profile_upper.size() == 2);
     // The interval brackets the point estimate.
     for (std::size_t i = 0; i < r.parameters.size(); ++i) {
-        CH_CHECK(r.profile_lower[i] <= r.parameters[i]);
-        CH_CHECK(r.profile_upper[i] >= r.parameters[i]);
+        CHECK_TRUE(r.profile_lower[i] <= r.parameters[i]);
+        CHECK_TRUE(r.profile_upper[i] >= r.parameters[i]);
     }
 }
 ```
@@ -544,25 +544,25 @@ static void test_bayesian_block() {
         R"("credible_interval_width":0.9})";
     support::FitResult r = support::run_fit("BayesianAnalysis", construct, kPeaks);
 
-    CH_CHECK(r.method == "BayesianAnalysis");
-    CH_CHECK(r.chain_dims.size() == 3);
-    CH_CHECK(r.chain_dims[0] == 4);            // chains
-    CH_CHECK(r.chain_dims[2] == 2);            // parameters
-    CH_CHECK(r.draws.size() == static_cast<std::size_t>(r.chain_dims[0]) *
+    CHECK_TRUE(r.method == "BayesianAnalysis");
+    CHECK_TRUE(r.chain_dims.size() == 3);
+    CHECK_TRUE(r.chain_dims[0] == 4);            // chains
+    CHECK_TRUE(r.chain_dims[2] == 2);            // parameters
+    CHECK_TRUE(r.draws.size() == static_cast<std::size_t>(r.chain_dims[0]) *
                                    static_cast<std::size_t>(r.chain_dims[1]) *
                                    static_cast<std::size_t>(r.chain_dims[2]));
-    CH_CHECK(r.posterior.size() == r.posterior_rows * 2u);
-    CH_CHECK(r.acceptance_rates.size() == 4);
-    CH_CHECK(r.posterior_mean.size() == 2);
-    CH_CHECK(r.map.size() == 2);
-    CH_CHECK(r.rhat.size() == 2);
-    CH_CHECK(r.ess.size() == 2);
-    CH_CHECK(r.summary_median.size() == 2);
-    CH_CHECK(std::isfinite(r.dic));
-    CH_CHECK(std::isfinite(r.waic));
-    CH_CHECK(std::isfinite(r.looic));
-    CH_CHECK(!r.pareto_k.empty());
-    CH_CHECK(r.converged);   // a completed chain reports converged
+    CHECK_TRUE(r.posterior.size() == r.posterior_rows * 2u);
+    CHECK_TRUE(r.acceptance_rates.size() == 4);
+    CHECK_TRUE(r.posterior_mean.size() == 2);
+    CHECK_TRUE(r.map.size() == 2);
+    CHECK_TRUE(r.rhat.size() == 2);
+    CHECK_TRUE(r.ess.size() == 2);
+    CHECK_TRUE(r.summary_median.size() == 2);
+    CHECK_TRUE(std::isfinite(r.dic));
+    CHECK_TRUE(std::isfinite(r.waic));
+    CHECK_TRUE(std::isfinite(r.looic));
+    CHECK_TRUE(!r.pareto_k.empty());
+    CHECK_TRUE(r.converged);   // a completed chain reports converged
 }
 
 static void test_bayesian_rejects_a_sampler_it_cannot_construct() {
@@ -574,7 +574,7 @@ static void test_bayesian_rejects_a_sampler_it_cannot_construct() {
         std::string m = e.what();
         threw = m.find("HMC") != std::string::npos && m.find("mcmc_sample") != std::string::npos;
     }
-    CH_CHECK(threw);
+    CHECK_TRUE(threw);
 }
 ```
 
@@ -710,13 +710,13 @@ static void test_gmm_block() {
         R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII"},)"
         R"("strategy":"Iterative","optimizer":"BFGS","max_gmm_iterations":50})";
     support::FitResult r = support::run_fit("GMM", construct, kPeaks);
-    CH_CHECK(r.method == "GMM");
-    CH_CHECK(r.parameters.size() == 3);
-    CH_CHECK(r.standard_errors.size() == 3);
-    CH_CHECK(r.gmm_iterations > 0);
+    CHECK_TRUE(r.method == "GMM");
+    CHECK_TRUE(r.parameters.size() == 3);
+    CHECK_TRUE(r.standard_errors.size() == 3);
+    CHECK_TRUE(r.gmm_iterations > 0);
     // B17C GMM is always just-identified, so the J-statistic p-value is structurally NaN.
     // See docs/upstream-csharp-issues.md.
-    CH_CHECK(std::isnan(r.j_stat_pval));
+    CHECK_TRUE(std::isnan(r.j_stat_pval));
 }
 
 static void test_gmm_rejects_a_non_b17c_model() {
@@ -726,7 +726,7 @@ static void test_gmm_rejects_a_non_b17c_model() {
     } catch (const std::exception& e) {
         threw = std::string(e.what()).find("bulletin17c") != std::string::npos;
     }
-    CH_CHECK(threw);
+    CHECK_TRUE(threw);
 }
 
 static void test_quantile_variance_is_finite_and_positive() {
@@ -734,15 +734,15 @@ static void test_quantile_variance_is_finite_and_positive() {
         R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII"},)"
         R"("strategy":"Iterative","optimizer":"BFGS"})";
     double v = support::run_fit_quantile_variance(construct, kPeaks, 0.01);
-    CH_CHECK(std::isfinite(v) && v > 0.0);
+    CHECK_TRUE(std::isfinite(v) && v > 0.0);
 }
 
 static void test_diagnostics_shape() {
     std::string construct = R"({"model":{"family":"Normal"},"optimizer":"NelderMead"})";
     support::FitDiagnostics d =
         support::run_fit_diagnostics("MaximumAPosteriori", construct, kPeaks);
-    CH_CHECK(d.cooks_distance.size() == 10);
-    CH_CHECK(d.leverage.size() == 10);
+    CHECK_TRUE(d.cooks_distance.size() == 10);
+    CHECK_TRUE(d.leverage.size() == 10);
 }
 ```
 
