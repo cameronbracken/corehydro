@@ -7,6 +7,54 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-11
+
+The data and model layer. Censored observations, nonstationary trends, and custom parameter
+bounds and priors are reachable from R and Python for the first time: the analyses previously
+took a plain numeric vector and built their model internally, so the capabilities Bulletin 17C
+exists for had no way in.
+
+### Added
+
+- **`analysis_data()` / `AnalysisData`** -- the ported RMC.BestFit `DataFrame`. Carries exact
+  observations plus the three censored types: historical and paleoflood observations known only
+  within a range, perception thresholds over years with no gauge, and observations whose
+  measurement error is itself a distribution. Low outliers come from the Multiple Grubbs-Beck test
+  or an explicit threshold.
+- **`analysis_data_summary()`** -- Hirsch-Stedinger plotting positions, low-outlier flags, record
+  length, and the arrival rate off a frame.
+- **`threshold_diagnostics()`** -- the mean residual life and GPD parameter stability plots for
+  choosing a peaks-over-threshold cutoff.
+- **Twelve `model_*()` constructors** covering all nine RMC.BestFit model families, plus `trend()`
+  for nonstationary parameters, `model_parameter()` for bounds, fixed flags, and priors, and the
+  verbs `model_validate()`, `model_simulate()`, `model_log_likelihood()`, and `model_parameters()`.
+- **Every analysis accepts a model** in place of its data argument. The existing convenience
+  signatures are unchanged.
+- `training_time_steps` on the four time-series model constructors. It is a model property whose
+  data-driven default exceeds the series length for any series shorter than 30, so a model built
+  outside an analysis previously had no way to set it.
+- Two worked example pairs: censored flood frequency, and nonstationary frequency analysis.
+
+### Fixed
+
+- **Bulletin 17C over a censored record no longer throws.** The regression-on-order-statistics
+  imputation reads each observation's plotting position, and those are recomputed in the C#
+  application by the `INotifyPropertyChanged` cascade that this port replaced with an
+  explicit-call contract. Frames built from a spec now honour that contract, so a record with low
+  outliers or a perception threshold reaches the moment machinery fully computed instead of with
+  every position at its default. The same gap is present in upstream C# for any headless caller;
+  it is written up in `docs/upstream-csharp-issues.md` with the evidence.
+- **`composite_analysis()` no longer drops censoring**, handing each child fit a clone of the
+  frame rather than collapsing it to its exact series.
+- The R package no longer calls `jsonlite` from exported functions while declaring it only in
+  `Suggests`; spec serialization is internal, so the package has no runtime dependency.
+- The core version stamp had drifted a release behind the two packages; all three now read 0.3.0.
+
+### Documentation
+
+- `exceedance_probabilities` must be in ascending order. An unsorted vector fails validation with
+  a message that does not say why.
+
 ## [0.2.0] - 2026-07-22
 
 Upstream sync. corehydro is now validated against **Numerics v2.1.4** and **RMC.BestFit v2.0.0**
