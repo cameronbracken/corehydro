@@ -148,17 +148,23 @@ def _composite_spec(target: str, construct: dict, datasets: dict | None = None) 
 def _fixture_method(method: str) -> str:
     """The fixture method vocabulary predates the runner's; map the differences here.
 
-    No composite case asserts `random_value`, so no seeded-draw convention is spelled here or
-    in _fixture_pick: a composite fixture that grows one should fail loudly out of the runner
-    rather than land on an indexing rule nobody has ever run.
+    `random_value` args are [sample_size, seed, index]: the runner's "random" reads only the
+    first two and returns the whole draw, so the args pass through unchanged and _fixture_pick
+    does the indexing.
     """
-    return "parameters" if method == "param" else method
+    if method == "param":
+        return "parameters"
+    if method == "random_value":
+        return "random"
+    return method
 
 
 def _fixture_pick(result: dict, method: str, args: list):
-    """`param` indexes into the parameter vector the runner returns whole."""
+    """`param` and `random_value` index into the vector the runner returns whole."""
     if method == "param":
         return result["values"][int(args[0])]
+    if method == "random_value":
+        return result["values"][int(args[2])]
     return result["values"][0]
 
 
@@ -1214,15 +1220,35 @@ def _copula_spec(target: str, construct: dict, datasets: dict) -> dict:
 _COPULA_METHOD_ALIASES = {
     "upper_tail_dependence": "tail_dependence",
     "lower_tail_dependence": "tail_dependence",
+    "theta_minimum": "bounds",
+    "theta_maximum": "bounds",
     "or_exceedance": "exceedance_or",
     "and_exceedance": "exceedance_and",
     "random_value": "random",
 }
 
+_COPULA_LOG_LIKELIHOODS = ("log_likelihood_pseudo", "log_likelihood_ifm", "log_likelihood_full")
+
 
 def _fixture_copula_method(method: str) -> str:
-    # pdf, log_pdf, cdf, inverse_cdf, theta, df pass straight through.
+    # pdf, log_pdf, cdf, inverse_cdf, theta, df and the three log_likelihood_* verbs pass
+    # straight through.
     return _COPULA_METHOD_ALIASES.get(method, method)
+
+
+def _copula_sample_args(args: list, datasets: dict) -> list:
+    """The three copula log-likelihood verbs take a paired SAMPLE, which the runner reads as
+    one flat "all x then all y" args array. Spelling 200 numbers per assertion into the
+    fixture would drown the file, so those assertions name their two datasets instead --
+    args = ["<x dataset>", "<y dataset>"] -- and every runner splices the named arrays here.
+    Documented under `bivariate_copula` in fixtures/README.md.
+    """
+    out: list = []
+    for name in args:
+        if name not in (datasets or {}):
+            raise KeyError(f"copula log-likelihood args name an unknown dataset: {name}")
+        out.extend(float(v) for v in datasets[name])
+    return out
 
 
 def _fixture_copula_pick(result: dict, method: str, args: list):
@@ -1232,9 +1258,9 @@ def _fixture_copula_pick(result: dict, method: str, args: list):
     (row, col) with args = [sample_size, seed, row, col] lands at col * sample_size + row.
     """
     values = result["values"]
-    if method == "lower_tail_dependence":
+    if method in ("lower_tail_dependence", "theta_minimum"):
         return values[0]
-    if method == "upper_tail_dependence":
+    if method in ("upper_tail_dependence", "theta_maximum"):
         return values[1]
     if method == "inverse_cdf":
         return values[int(args[2])]
@@ -1274,6 +1300,8 @@ def _run_copula_case(target: str, construct: dict, assertions: list, datasets: d
             side = "marginal_x_parameters" if args[0] == "x" else "marginal_y_parameters"
             _check(_fixture_copula_pick(_core.copula_run(spec_json, side, "[]"), method, args), a)
             continue
+        if method in _COPULA_LOG_LIKELIHOODS:
+            args = _copula_sample_args(args, datasets)
         r = _core.copula_run(spec_json, _fixture_copula_method(method), _json(args))
         _check(_fixture_copula_pick(r, method, args), a)
 

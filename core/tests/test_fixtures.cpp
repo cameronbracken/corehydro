@@ -1031,18 +1031,20 @@ static supp::JsonValue to_spec(const json& j) {
     return corehydro::models::spec::parse_json(j.dump());
 }
 
-// The fixture method vocabulary predates the runner's; map the differences in one place. No
-// composite case asserts `random_value`, so no seeded-draw convention is spelled here or in
-// fixture_pick: a composite fixture that grows one should fail loudly out of run_dist rather
-// than land on an indexing rule nobody has ever run.
+// The fixture method vocabulary predates the runner's; map the differences in one place.
+// `random_value` args are [sample_size, seed, index]: the runner's "random" reads only the
+// first two and returns the whole draw, so the args pass through unchanged and fixture_pick
+// does the indexing.
 static std::string fixture_method(const std::string& m) {
     if (m == "param") return "parameters";
-    return m;  // pdf, log_pdf, cdf, quantile, mean, ..., parameters_valid pass straight through
+    if (m == "random_value") return "random";
+    return m;  // pdf, log_pdf, cdf, quantile, mean, ..., log_likelihood pass straight through
 }
 
-// `param` indexes into the parameter vector the runner returns whole.
+// `param` and `random_value` index into the vector the runner returns whole.
 static double fixture_pick(const supp::DistResult& r, const std::string& m, const json& a) {
     if (m == "param") return r.values.at(static_cast<std::size_t>(a[0].get<int>()));
+    if (m == "random_value") return r.values.at(static_cast<std::size_t>(a[2].get<int>()));
     return r.values.at(0);
 }
 
@@ -1818,18 +1820,21 @@ static json copula_spec(const std::string& target, const json& construct, const 
 
 static std::string fixture_copula_method(const std::string& m) {
     if (m == "upper_tail_dependence" || m == "lower_tail_dependence") return "tail_dependence";
+    if (m == "theta_minimum" || m == "theta_maximum") return "bounds";
     if (m == "or_exceedance") return "exceedance_or";
     if (m == "and_exceedance") return "exceedance_and";
     if (m == "random_value") return "random";
-    return m;  // pdf, log_pdf, cdf, inverse_cdf, theta, df pass straight through
+    // pdf, log_pdf, cdf, inverse_cdf, theta, df and the three log_likelihood_* verbs pass
+    // straight through.
+    return m;
 }
 
 // The runner returns a whole vector for the methods the fixture indexes into. `random` comes
 // back as all the x draws followed by all the y draws, so a fixture (row, col) with
 // args = [sample_size, seed, row, col] lands at col * sample_size + row.
 static double fixture_copula_pick(const supp::DistResult& r, const std::string& m, const json& a) {
-    if (m == "lower_tail_dependence") return r.values.at(0);
-    if (m == "upper_tail_dependence") return r.values.at(1);
+    if (m == "lower_tail_dependence" || m == "theta_minimum") return r.values.at(0);
+    if (m == "upper_tail_dependence" || m == "theta_maximum") return r.values.at(1);
     if (m == "inverse_cdf") return r.values.at(static_cast<std::size_t>(a[2].get<int>()));
     if (m == "marginal_param") return r.values.at(static_cast<std::size_t>(a[1].get<int>()));
     if (m == "random_value") {
@@ -1838,6 +1843,26 @@ static double fixture_copula_pick(const supp::DistResult& r, const std::string& 
                            static_cast<std::size_t>(a[2].get<int>()));
     }
     return r.values.at(0);
+}
+
+// The three copula log-likelihood verbs take a paired SAMPLE, which the runner reads as one
+// flat "all x then all y" args array. Spelling 200 numbers per assertion into the fixture
+// would drown the file, so those assertions name their two datasets instead --
+// args = ["<x dataset>", "<y dataset>"] -- and every runner splices the named arrays here.
+// Documented under `bivariate_copula` in fixtures/README.md.
+static bool is_copula_log_likelihood(const std::string& m) {
+    return m == "log_likelihood_pseudo" || m == "log_likelihood_ifm" || m == "log_likelihood_full";
+}
+
+static json copula_sample_args(const json& a, const json& datasets) {
+    json out = json::array();
+    for (const auto& name : a) {
+        const std::string key = name.get<std::string>();
+        if (!datasets.contains(key))
+            throw std::runtime_error("copula log-likelihood args name an unknown dataset: " + key);
+        for (const auto& v : datasets[key]) out.push_back(parse_num(v));
+    }
+    return out;
 }
 
 static void run_bivariate_copula(const json& spec) {
@@ -1884,6 +1909,7 @@ static void run_bivariate_copula(const json& spec) {
                 check_value(fixture_copula_pick(r, method, args), as, where);
                 continue;
             }
+            if (is_copula_log_likelihood(method)) args = copula_sample_args(args, datasets);
             auto r = supp::run_copula(cspec, fixture_copula_method(method), args.dump());
             check_value(fixture_copula_pick(r, method, args), as, where);
         }

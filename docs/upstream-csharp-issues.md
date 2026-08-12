@@ -1688,6 +1688,75 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   any port change, since it is the same last-ULP reassociation sensitivity the analysis-curve
   findings above describe.
 
+## BUG (C++ port only, no C# counterpart) — `Mixture` computes its central moments with adaptive Gauss-Kronrod where C# uses the 1000-step trapezoidal overload
+
+- **Where:** `Numerics/Distributions/Univariate/Mixture.cs` @ 2a0357a, `ComputeMoments()` line 312,
+  against `core/include/corehydro/numerics/distributions/mixture.hpp`'s `compute_moments()`.
+  Surfaced writing `fixtures/distributions/univariate/mixture.json`'s
+  `moments_log_pdf_log_likelihood_and_seeded_draws` case, the first fixture to pin Mixture skewness
+  or kurtosis at a tight tolerance.
+- **What:** C# `ComputeMoments()` calls `CentralMoments(1000)` — the `int steps` overload on
+  `UnivariateDistributionBase`, a 1000-bin `Stratify` midpoint/trapezoid sum over
+  `[InverseCDF(1e-8), InverseCDF(1-1e-8)]`. The port instead calls adaptive Gauss-Kronrod at
+  relative tolerance 1e-8, mirroring the *other* base overload, `CentralMoments(double tolerance)`.
+  Its own comment says so: "Mirrors C# CentralMoments(double tolerance = 1e-8) from the base class."
+  Both are legitimate quadratures of the same integrals and they agree to about six digits, so
+  nothing downstream is visibly wrong, but they are not the same number.
+- **Measured**, on the three-component Normal mixture `three_normal_pdf_cdf` uses
+  (`0.3*N(10,2) + 0.2*N(20,1) + 0.5*N(30,5)`), C# first and the port second:
+  - mean `21.999999995011922` vs `21.999999428497716`
+  - sd `9.481575923790889` vs `9.4815600742053032`
+  - skewness `-0.00985460360386465` vs `-0.0098548559431184124` (2.5e-7 absolute)
+  - kurtosis `1.8641595464622873` vs `1.8641508578822412` (8.7e-6 absolute)
+
+  Calling the port's own `central_moments(1000)` directly on the same object returns
+  `21.999999995011901 / 9.4815759237909329 / -0.009854603603858628 / 1.8641595464622547` — the C#
+  values to within 1e-14 relative. So the divergence is entirely the choice of overload, not a
+  defect in either quadrature.
+- **Why no earlier fixture caught it:** the only Mixture moment oracles were `mean` (`22`, abs
+  1e-4) and `sd` (`9.481561`, abs 1e-3) — both far too loose to separate the two quadratures. The
+  skewness/kurtosis verbs had no oracle at all until this task.
+- **Port handling:** the new case pins `median`, `mode`, `log_pdf`, `log_likelihood` and the seeded
+  draws, and simply **does not assert** `skewness` or `kurtosis`. There is **NO `oracle_skip` and
+  NO loosened tolerance**, following the Task 9 `TotalFunctionEvaluations` precedent above.
+- **Suggested action:** a one-line fix in `mixture.hpp` — replace the four `agk::integrate` calls in
+  `compute_moments()` with `central_moments(1000)` — would make all four moments reproduce and let
+  the two dropped assertions be pinned exactly. It is deliberately NOT taken here: this task's remit
+  was fixtures and runner arms, and changing a shipped user-facing verb's numerics belongs in its
+  own reviewed change. Both existing loose `mean`/`sd` pins would still pass after it.
+
+## FIDELITY (C++ port only) — `Empirical.Mode` and `KernelDensity.Mode` are grid searches where C# maximizes with BrentSearch
+
+- **Where:** `Numerics/Distributions/Univariate/EmpiricalDistribution.cs` @ 2a0357a `Mode` (line
+  280) and `KernelDensity.cs` `Mode` (line 320), against
+  `core/include/corehydro/numerics/distributions/empirical_distribution.hpp` (line 194) and
+  `kernel_density.hpp` (line 190). Surfaced writing the `palisades_moments_density_and_seeded_draws`
+  and `gaussian_moments_density_and_seeded_draws` cases.
+- **What:** C# builds `new BrentSearch(PDF, InverseCDF(0.001), InverseCDF(0.999))` and calls
+  `Maximize()`. Both ports instead scan a fixed 1000-point uniform grid over the same interval and
+  return the best node — a documented shortcut, stated in the header comments themselves
+  ("Use golden-section search on a fine grid for simplicity; this is not in the fixture").
+- **Measured**, C# first and the port second:
+  - Empirical, the 99-point Palisades at-risk record: `15198.510496728823` vs `8669.7200000000012`.
+  - KernelDensity, Gaussian kernel over the 48-point Tippecanoe record: `13470.180323329003` vs
+    `13478.103364870844`.
+
+  The Empirical gap is large because the surface being maximized is itself jagged: `Empirical.PDF`
+  is a finite-difference derivative of a piecewise-linear CDF, so `BrentSearch.Maximize` stops at
+  whichever local optimum its bracket happens to enclose while the grid scan finds the global one.
+  Neither answer is more "correct" than the other; the C# value is optimizer-defined. The
+  KernelDensity gap is small only because that PDF is smooth and near-unimodal, and it is still one
+  grid step wide.
+- **Port handling:** both new cases pin every other moment (`mean`, `median`, `sd`, `skewness`,
+  `kurtosis` all reproduce to 1e-8 relative) plus `log_pdf`, `log_likelihood` and the seeded draws,
+  and simply **do not assert** `mode`. **NO `oracle_skip`, NO loosened tolerance.** `Mixture.Mode`
+  is the same shortcut (a ternary search) but does reproduce on the smooth three-Normal surface, so
+  it IS pinned, at abs 1e-6.
+- **Suggested action:** route all three `mode()` implementations through the port's own
+  `BrentSearch` (`core/include/corehydro/numerics/math/optimization/brent_search.hpp`, which already
+  has `maximize()`), then pin the two dropped assertions. Same reasoning as the Mixture entry above
+  for why it is not done here.
+
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 
 Every entry above was re-checked against the shipped source at the new pins. This is the summary;

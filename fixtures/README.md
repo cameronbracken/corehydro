@@ -54,14 +54,32 @@ the static `GammaDistribution.PartialKp` utility, independent of the case's own
 plumbing; only `gamma_distribution.json` uses it, to pin the v2.1.4 near-zero-skew
 derivative-limit fix).
 
+`log_likelihood [x0, x1, ...]` sums `LogPDF` over the sample spelled inline in `args`
+(`UnivariateDistributionBase.LogLikelihood(IList<double>)`). The sample is written into the
+assertion rather than named as a dataset because every case that uses it wants a handful of
+points chosen to sit inside the target's support -- inside a `TruncatedDistribution`'s bounds,
+inside an `Empirical` grid -- not a whole record.
+
 #### Composite `univariate_distribution` targets
 
 Five `univariate_distribution` targets are composites over other distributions and use a
-structured `construct` instead of flat `"params"`/`"fit"`. Each of the four runners (C++
-`build_composite` in `core/tests/test_fixtures.cpp`, R `build_composite_data`/
-`dispatch_composite` in `corehydror/tests/testthat/test-fixtures.R`, Python `_build_composite`/
-`_dispatch_composite` in `corehydropy/tests/test_fixtures.py`, and the emitter's `BuildComposite`
-in `tools/oracle_emitter/Program.cs`) implements the same schema:
+structured `construct` instead of flat `"params"`/`"fit"`.
+
+This `construct` schema is no longer a fixture-only convention. It was promoted to the shared
+grammar `core/include/corehydro/numerics/distributions/support/dist_spec.hpp`, which
+`build_univariate`/`build_copula`/`build_multivariate` parse and which the R and Python
+packages' own `distribution()` / `Distribution` constructors serialize to. A fixture case, a
+user's `dist_mixture()` call and an oracle replay therefore build the identical object. Three of
+the four runners (C++ `run_generic` in `core/tests/test_fixtures.cpp`, R `run_composite_case` in
+`corehydror/tests/testthat/test-fixtures.R`, Python `_run_composite_case` in
+`corehydropy/tests/test_fixtures.py`) now do nothing but hand their case's `construct` to that
+grammar; only the emitter's `BuildComposite` in `tools/oracle_emitter/Program.cs` still parses
+the schema itself, because it builds real C# objects. The grammar spells the family key
+`"family"` and the flat parameter vector `"parameters"`, and accepts this corpus's `"target"` and
+`"params"` as aliases of the two, so no pinned fixture had to be rewritten; the runners add only
+the `"family"` key naming the file-level target.
+
+The five composite shapes:
 
 - `TruncatedDistribution`: `{"base": {"target": ..., "params": [...]}, "bounds": [lo, hi]}`.
 - `Empirical`: `{"x": [...], "p": [...], "p_transform": "None" | "NormalZ", "p_descending":
@@ -384,6 +402,27 @@ Assertions use the same `{method, args, expected, mode, tol}` shape as the other
   `multivariate_distribution`'s `random_value`/`lhs_value` -- see that kind's Statefulness note
   above). Every copula has this method (there is no copula-specific `lhs_value` -- copulas only ever
   draw via Latin Hypercube internally, so there's no separate LHS entry point to lock).
+- `theta_minimum`, `theta_maximum` (no args) -- the feasible theta range the concrete copula
+  declares (`ThetaMinimum`/`ThetaMaximum`). Both come back from one `bounds` call, so the runners
+  read the pair and index it, the same way `upper_tail_dependence`/`lower_tail_dependence` index
+  `tail_dependence`. Four families return an infinite bound, spelled `"inf"`/`"-inf"` with
+  `mode: "equal"`.
+- `log_likelihood_pseudo`, `log_likelihood_ifm`, `log_likelihood_full`
+  (`args: ["<x dataset>", "<y dataset>"]`) -- the three log-likelihood surfaces
+  `BivariateCopulaEstimation` optimizes, evaluated at the case's own fixed parameters. **These are
+  the one place `args` names datasets instead of spelling numbers**: the runner method takes one
+  flat "all x then all y" vector, and inlining 200 numbers per assertion would drown the file, so
+  each runner splices the two named arrays (`copula_sample_args` in the C++/R/Python runners, the
+  `Sample()` local in the emitter's `DispatchCopula`). All three take the RAW paired observations.
+  Only the pseudo arm transforms them: `PseudoLogLikelihood` is defined on values already in
+  `(0, 1)` and does not rank internally, so its caller converts the sample to Weibull plotting
+  positions first (`rank / (n + 1)` over `Statistics.RanksInPlace`), exactly as `Test_MPL_Fit`
+  does; that transform lives in the core (`support::plotting_positions` in `dist_spec.hpp`) so R,
+  Python, the fixture runner and the emitter share one implementation. It is idempotent on the
+  plotting positions of a distinct-valued sample, which `clayton_copula.json`'s
+  `log_likelihoods_on_raw_data` case pins directly: its fourth assertion feeds the precomputed
+  `data1_pp`/`data2_pp` arrays and must return the same value as the raw-data assertion. The IFM
+  and full arms need marginals attached and push the raw sample through them themselves.
 
 **Fit tolerance:** every `"fit"` assertion uses `mode: "abs"`/`"rel"` with a tolerance, NEVER
 `"equal"`. `"mpl"`/`"ifm"`/`"mle"` walk BrentSearch/NelderMead, which can diverge from the C#

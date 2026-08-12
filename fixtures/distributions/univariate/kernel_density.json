@@ -43,6 +43,23 @@
       "assertions": [
         { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
       ]
+    },
+    {
+      "name": "gaussian_moments_density_and_seeded_draws",
+      "note": "The nine verbs the R/Python distribution surface exposes that no other KernelDensity case reaches: LogPDF, Mean/Median/StandardDeviation/Skewness/Kurtosis, the summed LogLikelihood over a sample drawn from the tippecanoe record itself, and the seeded MersenneTwister draw stream (KernelDensity does not override GenerateRandomValues, so each draw is InverseCDF of one uniform). Same data and kernel as gaussian_default_pdf above. Mode is deliberately NOT asserted, for the same reason as Empirical's: C# maximizes the PDF with BrentSearch while the port scans a 1000-point grid -- 13470.18 vs 13478.10. NO oracle_skip and NO loosened tolerance; see docs/upstream-csharp-issues.md.",
+      "construct": {"data": "tippecanoe", "kernel": "Gaussian"},
+      "assertions": [
+        { "method": "log_pdf",        "args": [12221.33], "expected": -9.509797646642156, "mode": "rel", "tol": 1e-8, "source": "curated via oracle_emitter --dump" },
+        { "method": "mean",           "args": [], "expected": 12665.208333333334, "mode": "rel", "tol": 1e-8, "source": "curated via oracle_emitter --dump" },
+        { "method": "median",         "args": [], "expected": 12613.148806333598, "mode": "rel", "tol": 1e-6, "source": "curated via oracle_emitter --dump" },
+        { "method": "sd",             "args": [], "expected": 4709.741823155504, "mode": "rel", "tol": 1e-8, "source": "curated via oracle_emitter --dump" },
+        { "method": "skewness",       "args": [], "expected": 0.11936114284892954, "mode": "rel", "tol": 1e-8, "source": "curated via oracle_emitter --dump" },
+        { "method": "kurtosis",       "args": [], "expected": -0.43694485806225725, "mode": "rel", "tol": 1e-8, "source": "curated via oracle_emitter --dump" },
+        { "method": "log_likelihood", "args": [6290, 9600, 12400, 15000, 18800], "expected": -49.112770902031095, "mode": "rel", "tol": 1e-8, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 0], "expected": 10954.79657154445, "mode": "abs", "tol": 1e-6, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 1], "expected": 16550.89788687441, "mode": "abs", "tol": 1e-6, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 4], "expected": 15552.502325375184, "mode": "abs", "tol": 1e-6, "source": "curated via oracle_emitter --dump" }
+      ]
     }
   ]
 }

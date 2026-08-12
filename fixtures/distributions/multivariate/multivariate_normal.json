@@ -1189,6 +1189,70 @@
         { "method": "conditional_covariance", "args": [[1], [4.0], 0, 1], "expected": 0.22, "mode": "abs", "tol": 1e-12 },
         { "method": "conditional_covariance", "args": [[1], [4.0], 1, 1], "expected": 15.51, "mode": "abs", "tol": 1e-12 }
       ]
+    },
+    {
+      "name": "accord_2d_variance_and_covariance",
+      "note": "The two vector/matrix moment verbs the R/Python multivariate surface exposes that no other MultivariateNormal case reaches: Variance (the covariance diagonal) and the pairwise Covariance entries. Same mean and covariance as accord_2d_moments_pdf_cdf above, which pins sd.",
+      "construct": {
+        "mean": [
+          4.0,
+          2.0
+        ],
+        "covariance": [
+          [
+            0.3,
+            0.1
+          ],
+          [
+            0.1,
+            0.7
+          ]
+        ]
+      },
+      "assertions": [
+        {
+          "method": "variance",
+          "args": [
+            0
+          ],
+          "expected": 0.3,
+          "mode": "abs",
+          "tol": 1e-12,
+          "source": "curated via oracle_emitter --dump"
+        },
+        {
+          "method": "variance",
+          "args": [
+            1
+          ],
+          "expected": 0.7,
+          "mode": "abs",
+          "tol": 1e-12,
+          "source": "curated via oracle_emitter --dump"
+        },
+        {
+          "method": "covariance",
+          "args": [
+            0,
+            1
+          ],
+          "expected": 0.1,
+          "mode": "abs",
+          "tol": 1e-12,
+          "source": "curated via oracle_emitter --dump"
+        },
+        {
+          "method": "covariance",
+          "args": [
+            1,
+            1
+          ],
+          "expected": 0.7,
+          "mode": "abs",
+          "tol": 1e-12,
+          "source": "curated via oracle_emitter --dump"
+        }
+      ]
     }
   ]
 }

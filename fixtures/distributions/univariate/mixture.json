@@ -81,6 +81,27 @@
       "assertions": [
         { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
       ]
+    },
+    {
+      "name": "moments_log_pdf_log_likelihood_and_seeded_draws",
+      "note": "The verbs the R/Python distribution surface exposes that no other Mixture case reaches: Median, Mode, LogPDF, the summed LogLikelihood over a sample, and the seeded draw stream from Mixture's own GenerateRandomValues override (component selection, not the base InverseCDF-of-a-uniform path). Same three components and weights as three_normal_pdf_cdf above. Skewness and Kurtosis are deliberately NOT asserted: the port's Mixture::compute_moments integrates with adaptive Gauss-Kronrod where C# ComputeMoments calls the 1000-step CentralMoments(int) overload, so the two land ~2.5e-7 / ~8.7e-6 apart. NO oracle_skip and NO loosened tolerance -- see docs/upstream-csharp-issues.md.",
+      "construct": {
+        "components": [
+          {"target": "Normal", "params": [10, 2]},
+          {"target": "Normal", "params": [20, 1]},
+          {"target": "Normal", "params": [30, 5]}
+        ],
+        "weights": [0.3, 0.2, 0.5]
+      },
+      "assertions": [
+        { "method": "median",         "args": [], "expected": 21.27465332194634, "mode": "abs", "tol": 1e-8,  "source": "curated via oracle_emitter --dump" },
+        { "method": "mode",           "args": [], "expected": 29.99999990517664, "mode": "abs", "tol": 1e-6,  "source": "curated via oracle_emitter --dump" },
+        { "method": "log_pdf",        "args": [20], "expected": -2.4628973326762438, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
+        { "method": "log_likelihood", "args": [8, 12, 19, 21, 28, 33], "expected": -19.168253138297175, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 0], "expected": 20.82933648395096, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 1], "expected": 25.48823684287538, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 4], "expected": 9.72760591980181, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" }
+      ]
     }
   ]
 }

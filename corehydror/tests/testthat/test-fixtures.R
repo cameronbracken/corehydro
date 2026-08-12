@@ -205,15 +205,22 @@ composite_spec <- function(target, construct, datasets) {
   construct
 }
 
-# The fixture method vocabulary predates the runner's; map the differences in one place. No
-# composite case asserts `random_value`, so no seeded-draw convention is spelled here or in
-# fixture_pick: a composite fixture that grows one should fail loudly out of the runner rather
-# than land on an indexing rule nobody has ever run.
-fixture_method <- function(m) if (identical(m, "param")) "parameters" else m
+# The fixture method vocabulary predates the runner's; map the differences in one place.
+# `random_value` args are [sample_size, seed, index]: the runner's "random" reads only the
+# first two and returns the whole draw, so the args pass through unchanged and fixture_pick
+# does the indexing.
+fixture_method <- function(m) {
+  switch(m,
+    param = "parameters",
+    random_value = "random",
+    m  # pdf, log_pdf, cdf, quantile, mean, ..., log_likelihood pass straight through
+  )
+}
 
-# `param` indexes into the parameter vector the runner returns whole.
+# `param` and `random_value` index into the vector the runner returns whole.
 fixture_pick <- function(r, method, args) {
   if (identical(method, "param")) return(r$values[[as.integer(args[[1]]) + 1L]])
+  if (identical(method, "random_value")) return(r$values[[as.integer(args[[3]]) + 1L]])
   r$values[[1]]
 }
 
@@ -614,10 +621,14 @@ fixture_copula_method <- function(m) {
   switch(m,
     upper_tail_dependence = "tail_dependence",
     lower_tail_dependence = "tail_dependence",
+    theta_minimum = "bounds",
+    theta_maximum = "bounds",
     or_exceedance = "exceedance_or",
     and_exceedance = "exceedance_and",
     random_value = "random",
-    m  # pdf, log_pdf, cdf, inverse_cdf, theta, df pass straight through
+    # pdf, log_pdf, cdf, inverse_cdf, theta, df and the three log_likelihood_* verbs pass
+    # straight through.
+    m
   )
 }
 
@@ -627,13 +638,33 @@ fixture_copula_method <- function(m) {
 fixture_copula_pick <- function(r, method, args) {
   switch(method,
     lower_tail_dependence = r$values[[1]],
+    theta_minimum = r$values[[1]],
     upper_tail_dependence = r$values[[2]],
+    theta_maximum = r$values[[2]],
     inverse_cdf = r$values[[as.integer(args[[3]]) + 1L]],
     marginal_param = r$values[[as.integer(args[[2]]) + 1L]],
     random_value = r$values[[as.integer(args[[4]]) * as.integer(args[[1]]) +
                                as.integer(args[[3]]) + 1L]],
     r$values[[1]]
   )
+}
+
+# The three copula log-likelihood verbs take a paired SAMPLE, which the runner reads as one
+# flat "all x then all y" args array. Spelling 200 numbers per assertion into the fixture would
+# drown the file, so those assertions name their two datasets instead --
+# args = ["<x dataset>", "<y dataset>"] -- and every runner splices the named arrays here.
+# Documented under `bivariate_copula` in fixtures/README.md.
+is_copula_log_likelihood <- function(m) {
+  m %in% c("log_likelihood_pseudo", "log_likelihood_ifm", "log_likelihood_full")
+}
+
+copula_sample_args <- function(args, datasets) {
+  as.list(unlist(lapply(args, function(name) {
+    if (is.null(datasets[[name]])) {
+      stop(sprintf("copula log-likelihood args name an unknown dataset: %s", name))
+    }
+    as.double(unlist(datasets[[name]]))
+  })))
 }
 
 run_copula_case <- function(target, construct, assertions, datasets) {
@@ -672,6 +703,7 @@ run_copula_case <- function(target, construct, assertions, datasets) {
       check_assertion(fixture_copula_pick(r, method, args), a)
       next
     }
+    if (is_copula_log_likelihood(method)) args <- copula_sample_args(args, datasets)
     r <- ns$ch_copula_run_(spec, fixture_copula_method(method), to_runner_json(args))
     check_assertion(fixture_copula_pick(r, method, args), a)
   }

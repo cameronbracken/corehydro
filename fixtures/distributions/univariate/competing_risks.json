@@ -232,6 +232,24 @@
       "assertions": [
         { "method": "dependency_change", "args": [0.0, "CorrelationMatrix", 0, 1, "cdf2"], "expected": 0.6666666666666666, "mode": "abs", "tol": 1e-7 }
       ]
+    },
+    {
+      "name": "mode_log_likelihood_and_seeded_draws",
+      "note": "The three verbs the R/Python distribution surface exposes that no other CompetingRisks case reaches: Mode, the summed LogLikelihood over a sample, and the seeded draw stream from CompetingRisks' own GenerateRandomValues override. Same two Normal components and min-of-components rule as two_normal_min_rule above; Dependency stays Independent, so no MultivariateNormal is built and the draw stream is the plain MersenneTwister one.",
+      "construct": {
+        "components": [
+          {"target": "Normal", "params": [100.0, 10.0]},
+          {"target": "Normal", "params": [110.0, 15.0]}
+        ],
+        "minimum_of_random_variables": true
+      },
+      "assertions": [
+        { "method": "mode",           "args": [], "expected": 97.38075467325922, "mode": "abs", "tol": 1e-6, "source": "curated via oracle_emitter --dump" },
+        { "method": "log_likelihood", "args": [85.0, 95.0, 100.0, 105.0, 115.0], "expected": -18.944771162131772, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 0], "expected": 96.80147607403502, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 1], "expected": 96.46471052862614, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "random_value",   "args": [5, 42, 4], "expected": 89.89043556178456, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" }
+      ]
     }
   ]
 }
