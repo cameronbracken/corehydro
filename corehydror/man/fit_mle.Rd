@@ -25,7 +25,7 @@ observations together with \code{distribution}. A model can bring censored obser
 \code{"DifferentialEvolution"}, \code{"MultilevelSingleLinkage"}.}
 
 \item{hessian}{logical; compute the covariance, standard errors and correlation. \code{TRUE} by
-default. A model with fewer than two parameters reports \code{NA} for all three.}
+default. A model with fewer than two parameters reports \code{NaN} for all three.}
 
 \item{profile}{logical; also compute the profile likelihood and profile confidence intervals.
 \code{FALSE} by default because each costs \code{profile_bins * length(parameters)} likelihood

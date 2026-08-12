@@ -353,7 +353,7 @@ fit_optimized <- function(target, model, distribution, optimizer, hessian, profi
 #' @param optimizer one of `"NelderMead"` (default), `"Brent"`, `"BFGS"`, `"Powell"`,
 #'   `"DifferentialEvolution"`, `"MultilevelSingleLinkage"`.
 #' @param hessian logical; compute the covariance, standard errors and correlation. `TRUE` by
-#'   default. A model with fewer than two parameters reports `NA` for all three.
+#'   default. A model with fewer than two parameters reports `NaN` for all three.
 #' @param profile logical; also compute the profile likelihood and profile confidence intervals.
 #'   `FALSE` by default because each costs `profile_bins * length(parameters)` likelihood
 #'   evaluations.

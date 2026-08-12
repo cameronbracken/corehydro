@@ -25,8 +25,9 @@ three that happen to agree.
 - **`fit_bayesian()`** -- Bayesian MCMC fitting over DEMCz, DEMCzs, ARWMH, or NUTS, returning the
   raw chains in the `posterior`-package axis order, the thinned posterior draw matrix, the MAP and
   posterior-mean point estimates, the mean log-likelihood trace, a posterior summary with R-hat and
-  effective sample size, and DIC/WAIC/LOOIC with their standard error and effective parameter
-  counts. `credible_level` sets the width of the reported credible interval, and a setting outside
+  effective sample size, and DIC, WAIC and LOOIC, the last two with their effective parameter
+  counts and LOOIC with its standard error. `credible_level` sets the width of the reported
+  credible interval, and a setting outside
   the range the sampler accepts is reported with the setting named rather than as a bare
   "configuration is not valid".
 - **`fit_gmm()`** -- generalized method of moments for Bulletin 17C models, with the sandwich
@@ -44,14 +45,15 @@ three that happen to agree.
 ### Internal
 
 None of these three reached a released user-facing function. The first two were in the unexported
-fixture glue this release replaced with the shared runner; the third was caught inside this
+fixture glue this release rerouted through the shared runner; the third was caught inside this
 release, before any of it shipped. They are recorded because the new fit surface inherits the
 corrected behaviour.
 
-- A model with fewer than two parameters reports `NA` covariance, standard errors, and correlation
-  rather than zeros. `GetCovarianceMatrix` throws below two parameters in C#, and R does not
-  zero-fill a freshly allocated numeric vector, so the old fixture glue returned whatever was
-  already sitting in that memory.
+- A model with fewer than two parameters reports `NaN` covariance, standard errors, and
+  correlation. `GetCovarianceMatrix` throws below two parameters in C#, and R does not zero-fill a
+  freshly allocated numeric vector, so the old fixture glue returned whatever was already sitting
+  in that memory. The fixture path still writes explicit zeros there, deliberately, because that
+  is the contract its pinned oracles were recorded against.
 - A failed fit names the estimator and the optimizer in its error, rather than the internal message
   "failed for a fixture case" the fixture glue raised.
 - `confint()`'s default level is 0.95 in both languages, matching base R's `confint()` convention.
