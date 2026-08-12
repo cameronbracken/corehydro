@@ -20,10 +20,9 @@ The fitted log-likelihood, with \code{df} (parameter count) and \code{nobs} attr
 }
 \details{
 \code{\link[=fit_gmm]{fit_gmm()}} is method-of-moments: \code{GeneralizedMethodOfMoments} computes no likelihood
-surface, so \code{run_fit()} (\code{fit_runner.hpp}) structurally leaves \code{log_likelihood}/\code{aic}/\code{bic} at
-their \code{NaN} defaults for that target. \code{logLik()} turns that into \code{NA_real_} (still carrying
-\code{df}/\code{nobs}) so base \code{AIC()}/\code{BIC()} come back a self-explanatory \code{NA} rather than a bare
-\code{NaN}. The GMM analogue of a likelihood-based goodness-of-fit summary is the J-statistic
+surface, so a GMM fit reports \code{NA} for \verb{$log_likelihood}, \verb{$aic} and \verb{$bic}, and \code{logLik()}
+returns \code{NA_real_} (still carrying \code{df}/\code{nobs}) so base \code{AIC()}/\code{BIC()} come back a
+self-explanatory \code{NA}. The GMM analogue of a likelihood-based goodness-of-fit summary is the J-statistic
 overidentification diagnostic already on the fit (\code{fit$j_stat}/\code{fit$j_stat_pval}; see
 \code{\link[=fit_gmm]{fit_gmm()}}), which is also what \code{print()} on a \code{corehydro_fit} shows in place of the
 log-likelihood line for a GMM fit.

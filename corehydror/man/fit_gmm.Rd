@@ -24,7 +24,9 @@ default), \code{"NelderMead"}, \code{"Brent"}, \code{"Powell"}, \code{"Different
 own default cap.}
 }
 \value{
-An object of class \code{corehydro_fit} with \code{method == "GMM"}. Bulletin 17C is always
+An object of class \code{corehydro_fit} with \code{method == "GMM"}. Method of moments computes
+no likelihood surface, so \verb{$log_likelihood}, \verb{$aic} and \verb{$bic} are \code{NA}; \verb{$nobs} is the
+record length the estimator fitted against. Bulletin 17C is always
 just-identified (as many moment conditions as parameters), so \verb{$j_stat_pval} is structurally
 \code{NA} -- there is no over-identified case to report a p-value for (see
 \code{docs/upstream-csharp-issues.md}). \verb{$gmm_iterations}, \verb{$converged_within_tolerance}, and

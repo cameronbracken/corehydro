@@ -531,6 +531,13 @@ inline FitResult run_fit(const std::string& target, const std::string& construct
                 r.correlation[static_cast<std::size_t>(i * p + j)] = corr(i, j);
             }
 
+        // The observation count behind the fit, the GMM analogue of the ML/MAP arms'
+        // `pointwise_data_log_likelihood(best).size()`. `GeneralizedMethodOfMoments::sample_size()`
+        // is the n the estimator itself divides its sandwich covariance by, taken from
+        // `IGMMModel::sample_size()` (Bulletin17CDistribution reports the DataFrame's
+        // total_record_length). Without this a GMM fit reported nobs = 0, so `logLik(fit)` carried
+        // a zero `nobs` attribute. No fixture asserts nobs under a GMM target.
+        r.nobs = gmm->sample_size();
         r.j_stat = gmm->jstat();
         r.j_stat_pval = gmm->jstat_pval();
         r.gmm_iterations = gmm->gmm_iterations();

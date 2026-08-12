@@ -56,6 +56,26 @@ _INT_KNOBS = {"max_tree_depth"}
 
 _KNOWN_GMM_STRATEGIES = ("OneStep", "TwoStep", "Iterative")
 
+# The MCMC settings ranges BayesianAnalysis::validate() enforces (core/include/corehydro/
+# estimation/bayesian_analysis.hpp, the "Errors" block). A setting outside its range makes
+# estimate() throw "Bayesian Analysis is not valid. Please check the configuration before running
+# the analysis." with the messages that name the offending setting discarded, so `fit_bayesian`
+# checks the ranges itself and reports which value is out of range. Same table, same wording as
+# corehydror's R/fit.R `bayes_ranges`.
+_BAYES_RANGES = {
+    "chains": (4, 20),
+    "iterations": (100, 1000000),
+    "warmup": (50, 100000),
+    "output_length": (100, 1000000),
+}
+
+
+def _check_bayes_range(name: str, value: int) -> None:
+    """One range check, in the style of the optimizer/sampler/knob validation beside it."""
+    low, high = _BAYES_RANGES[name]
+    if value < low or value > high:
+        raise ValueError(f"`{name}` must be between {low} and {high}; got {value}")
+
 # Point-estimator name -> PointEstimateType, by its C# name (BayesianAnalysis's
 # PointEstimateType enum: PosteriorMean, PosteriorMode -- the MAP). Matches corehydror's R/fit.R
 # `known_point_estimators`.
@@ -71,9 +91,8 @@ def _none_if_nan(x: float):
 
     Only GMM ever leaves ``log_likelihood``/``aic``/``bic`` at the runner's structural NaN
     default (GMM is method-of-moments and has no likelihood surface to report them from). R
-    reports that as ``NA`` through the ``logLik()``/``AIC()``/``BIC()` generics while leaving the
-    fit's own raw list slot untouched; Python has no separate raw-slot-vs-generic split -- a
-    ``Fit`` property IS the public access path -- so ``None`` is applied directly here, chosen
+    reports that as ``NA`` on the fit itself and through the ``logLik()``/``AIC()``/``BIC()``
+    generics; ``None`` is the Python spelling of the same answer, chosen
     over ``math.nan`` because ``is None`` is the idiomatic "not available" check and because a
     stray ``float("nan")` silently poisons any downstream arithmetic a caller does with it,
     which is exactly what "no likelihood surface" should NOT do quietly.
@@ -151,8 +170,8 @@ class Fit:
         The prior half of the log-posterior. Kept as the runner's raw value (including its
         structural ``nan`` for GMM) -- this is bookkeeping, not a primary reporting field.
     nobs : int
-        Number of observations the fit was computed against (``0`` for GMM, which the runner
-        never populates).
+        Number of observations the fit was computed against. For a GMM fit this is the record
+        length the estimator itself divides its sandwich covariance by.
     converged : bool
     status : str
         ``"Success"``, ``"MaximumIterationsReached"``, etc.
@@ -167,6 +186,16 @@ class Fit:
     draws : numpy.ndarray or None
         Bayesian only: the raw chains, shape ``(n_iterations, n_chains, n_params)`` -- the same
         ``[iteration, chain, parameter]`` axis order ``corehydror`` returns.
+    posterior : numpy.ndarray or None
+        Bayesian only: the thinned draw matrix the analyses consume, shape
+        ``(posterior_rows, n_params)``, its columns aligned with :attr:`parameter_names` (the
+        same convention :attr:`draws` uses for its parameter axis).
+    posterior_rows : int or None
+        Bayesian only: the number of retained posterior draws, ``posterior.shape[0]``.
+    map, posterior_mean : dict or None
+        Bayesian only: the two posterior point estimates, parameter name -> value.
+    mean_log_likelihood : numpy.ndarray or None
+        Bayesian only: the chain-averaged log-likelihood trace, one value per iteration.
     posterior_summary : dict or None
         Bayesian only: ``parameter_names`` plus the arrays ``mean``, ``median``, ``sd``,
         ``lower``, ``upper``, ``rhat``, ``ess``, each aligned with ``parameter_names``. (Named
@@ -178,9 +207,13 @@ class Fit:
         Bayesian only: the warmup actually used (see :func:`fit_bayesian`'s derived default).
     credible_level : float or None
         Bayesian only: the credible level :attr:`posterior_summary`'s ``lower``/``upper`` were
-        computed at.
+        computed at (:func:`fit_bayesian`'s `credible_level` argument).
     dic, waic, looic : float or None
         Bayesian only, the usual Bayesian goodness-of-fit scalars.
+    looic_se : float or None
+        Bayesian only: the standard error of :attr:`looic`.
+    waic_pd, loo_pd : float or None
+        Bayesian only: the effective number of parameters behind :attr:`waic` and :attr:`looic`.
     j_stat, j_stat_pval : float or None
         GMM only. Bulletin 17C is always just-identified, so ``j_stat_pval`` is structurally
         ``None`` -- there is no over-identified case to report a p-value for.
@@ -193,8 +226,10 @@ class Fit:
         bic, nobs, converged, status, model, spec, dataset, construct_json,
         covariance=None, standard_errors=None, correlation=None, function_evaluations=None,
         profile=None, profile_intervals=None, optimizer=None,
-        draws=None, posterior_summary=None, acceptance_rates=None, warmup=None,
-        credible_level=None, dic=None, waic=None, looic=None,
+        draws=None, posterior=None, posterior_rows=None, map=None, posterior_mean=None,
+        mean_log_likelihood=None, posterior_summary=None, acceptance_rates=None, warmup=None,
+        credible_level=None, dic=None, waic=None, waic_pd=None, looic=None, looic_se=None,
+        loo_pd=None,
         j_stat=None, j_stat_pval=None, gmm_iterations=None,
         converged_within_tolerance=None, optimizer_fallback_count=None,
     ) -> None:
@@ -216,13 +251,23 @@ class Fit:
         self.profile = profile
         self.optimizer = optimizer
         self.draws = draws
+        self.posterior = posterior
+        self.posterior_rows = posterior_rows
+        # Shadows the builtin `map` only inside this instance's namespace, never at module scope;
+        # the attribute is named for the C# MAP point estimate and matches corehydror's `$map`.
+        self.map = map
+        self.posterior_mean = posterior_mean
+        self.mean_log_likelihood = mean_log_likelihood
         self.posterior_summary = posterior_summary
         self.acceptance_rates = acceptance_rates
         self.warmup = warmup
         self.credible_level = credible_level
         self.dic = dic
         self.waic = waic
+        self.waic_pd = waic_pd
         self.looic = looic
+        self.looic_se = looic_se
+        self.loo_pd = loo_pd
         self.j_stat = j_stat
         self.j_stat_pval = j_stat_pval
         self.gmm_iterations = gmm_iterations
@@ -336,15 +381,15 @@ class Fit:
         the matching level up front.
 
         For Bayesian: :attr:`Fit.posterior_summary`'s ``lower``/``upper`` are already the
-        posterior credible interval at :attr:`Fit.credible_level` (``0.9``, `BayesianAnalysis`'s
-        own class default -- :func:`fit_bayesian` has no argument to change it). When the
-        requested ``level`` matches, those are returned directly; otherwise the identical seeded
-        chain is re-run with ``credible_interval_width`` set to ``level`` (the same
-        lazy-rebuild precedent as the profile path above -- re-sampling with an identical seed
-        reproduces the same chain bit-for-bit, so only the post-hoc credible-interval quantile
-        computation changes). Because a Bayesian fit is always built at the 0.9 credible level
-        and this method's own default is 0.95, calling ``confint()`` with no argument on a
-        Bayesian fit always takes the rebuild path.
+        posterior credible interval at :attr:`Fit.credible_level` (:func:`fit_bayesian`'s
+        `credible_level` argument, ``0.9`` by default). When the requested ``level`` matches,
+        those are returned directly; otherwise the identical seeded chain is re-run with
+        ``credible_interval_width`` set to ``level`` (the same lazy-rebuild precedent as the
+        profile path above -- re-sampling with an identical seed reproduces the same chain
+        bit-for-bit, so only the post-hoc credible-interval quantile computation changes).
+        Because this method's own default is 0.95 and a fit's default is 0.9, a bare
+        ``confint()`` on a Bayesian fit re-runs the chain; ``fit_bayesian(...,
+        credible_level=0.95)`` avoids that.
 
         GMM is method-of-moments and has no likelihood or posterior to draw an interval from;
         calling this raises. Use :meth:`quantile_variance` for the delta-method variance of a
@@ -497,6 +542,12 @@ def _new_fit_bayesian(
     n_chains, n_iter, n_params = result["chain_dims"]
     draws = np.asarray(result["draws"]).reshape(n_chains, n_iter, n_params).transpose(1, 0, 2)
 
+    # The thinned posterior the analyses consume: flat row-major from the binding, reshaped to
+    # (posterior_rows, n_params) so its columns line up with `parameter_names`, the same
+    # convention `draws` uses for its parameter axis.
+    posterior_rows = int(result["posterior_rows"])
+    posterior = np.asarray(result["posterior"]).reshape(posterior_rows, n_params)
+
     posterior_summary = {
         "parameter_names": names,
         "mean": np.asarray(result["summary_mean"]),
@@ -511,13 +562,21 @@ def _new_fit_bayesian(
     return Fit(
         **base,
         draws=draws,
+        posterior=posterior,
+        posterior_rows=posterior_rows,
+        map=dict(zip(names, result["map"])),
+        posterior_mean=dict(zip(names, result["posterior_mean"])),
+        mean_log_likelihood=np.asarray(result["mean_log_likelihood"]),
         posterior_summary=posterior_summary,
         acceptance_rates=np.asarray(result["acceptance_rates"]),
         warmup=warmup,
         credible_level=credible_level,
         dic=result["dic"],
         waic=result["waic"],
+        waic_pd=result["waic_pd"],
         looic=result["looic"],
+        looic_se=result["looic_se"],
+        loo_pd=result["loo_pd"],
     )
 
 
@@ -556,9 +615,14 @@ def _fit_optimized(target, model, distribution, optimizer, hessian, profile, pro
             f"unknown optimizer '{optimizer}'; expected one of {', '.join(_KNOWN_OPTIMIZERS)}"
         )
     profile = bool(profile)
+    # `profile_bins` reaches profile_likelihood(bins) unguarded in the core, where a non-positive
+    # count is a silently empty profile rather than an error, so it is validated here.
+    profile_bins = int(profile_bins)
+    if profile_bins < 1:
+        raise ValueError(f"`profile_bins` must be a positive integer; got {profile_bins}")
     settings = {
         "optimizer": optimizer, "hessian": bool(hessian), "profile": profile,
-        "profile_bins": int(profile_bins),
+        "profile_bins": profile_bins,
     }
     if profile:
         settings["alpha"] = float(alpha)
@@ -666,7 +730,8 @@ def fit_map(model, distribution: str | None = None, optimizer: str = "NelderMead
 def fit_bayesian(
     model, distribution: str | None = None, sampler: str = "DEMCz", chains: int = 4,
     iterations: int = 3000, warmup: int | None = None, output_length: int = 10000,
-    thinning_interval: int = -1, seed: int = 12345, point_estimator: str | None = None, **knobs,
+    thinning_interval: int = -1, seed: int = 12345, point_estimator: str | None = None,
+    credible_level: float = 0.9, **knobs,
 ) -> Fit:
     """Bayesian MCMC fit.
 
@@ -706,6 +771,12 @@ def fit_bayesian(
         ``BayesianAnalysis``'s own class default, which is ``"PosteriorMean"`` -- so by default
         ``.parameters`` is bit-identical to ``.posterior_summary["mean"]``. Pass
         ``"PosteriorMode"`` to report the MAP point instead.
+    credible_level : float, default 0.9
+        Width of the posterior credible interval ``.posterior_summary``'s ``lower``/``upper``
+        report, between 0 and 1. The default is ``BayesianAnalysis``'s own class default.
+        :meth:`Fit.confint` reuses these bounds when its `level` matches and otherwise re-runs
+        the identical seeded chain, so setting it here is how a bare ``confint()`` avoids that
+        rebuild.
     **knobs
         Sampler-specific tuning knobs. Passing a knob the chosen `sampler` does not use is an
         error: ``"DEMCz"`` accepts ``jump``, ``jump_threshold``, ``noise``; ``"DEMCzs"``
@@ -716,12 +787,26 @@ def fit_bayesian(
     -------
     Fit
         A fit with ``.method == "BayesianAnalysis"``. ``.draws`` is a 3-D array
-        ``[iteration, chain, parameter]``. ``.posterior_summary`` has one entry per metric
+        ``[iteration, chain, parameter]``; ``.posterior`` is the thinned draw matrix the analyses
+        consume, ``(.posterior_rows, len(.parameters))``, its columns aligned with
+        ``.parameter_names``. ``.posterior_summary`` has one entry per metric
         (``mean``, ``median``, ``sd``, ``lower``, ``upper``, ``rhat``, ``ess``), each an array
-        aligned with ``.parameter_names``. ``.acceptance_rates`` has one entry per chain.
-        ``.warmup`` records the warmup actually used. ``.dic``, ``.waic``, ``.looic`` are the
-        usual Bayesian goodness-of-fit scalars. See :func:`fit_diagnostics` for leverage/
-        influence diagnostics off a Bayesian fit.
+        aligned with ``.parameter_names``. ``.map`` and ``.posterior_mean`` are the two posterior
+        point estimates. ``.mean_log_likelihood`` has one entry per iteration.
+        ``.acceptance_rates`` has one entry per chain.
+        ``.warmup`` records the warmup actually used and ``.credible_level`` the width
+        ``.posterior_summary``'s bounds were computed at. ``.dic``, ``.waic``, ``.looic`` are the
+        usual Bayesian goodness-of-fit scalars, ``.looic_se`` the standard error of ``.looic``,
+        and ``.waic_pd``/``.loo_pd`` their effective parameter counts. See
+        :func:`fit_diagnostics` for leverage/influence diagnostics off a Bayesian fit.
+
+    Raises
+    ------
+    ValueError
+        When a setting falls outside the range ``BayesianAnalysis`` accepts: `chains` between 4
+        and 20, `iterations` between 100 and 1,000,000, `warmup` between 50 and 100,000,
+        `output_length` between 100 and 1,000,000, `seed` not negative, and `credible_level`
+        strictly between 0 and 1.
 
     See Also
     --------
@@ -760,14 +845,35 @@ def fit_bayesian(
 
     iterations = int(iterations)
     warmup = max(50, iterations // 2) if warmup is None else int(warmup)
+    chains = int(chains)
+    output_length = int(output_length)
+    seed = int(seed)
+
+    # The ranges BayesianAnalysis::validate() enforces. Without these checks an out-of-range
+    # setting reaches estimate(), which throws with its own diagnosis discarded.
+    _check_bayes_range("chains", chains)
+    _check_bayes_range("iterations", iterations)
+    _check_bayes_range("warmup", warmup)
+    _check_bayes_range("output_length", output_length)
+    if seed < 0:
+        raise ValueError(f"`seed` cannot be negative; got {seed}")
+    credible_level = float(credible_level)
+    if not 0.0 < credible_level < 1.0:
+        raise ValueError(
+            f"`credible_level` must be greater than 0 and less than 1; got {credible_level}"
+        )
 
     settings = {
         "sampler": sampler,
-        "seed": int(seed),
+        "seed": seed,
         "iterations": iterations,
         "warmup_iterations": warmup,
-        "number_of_chains": int(chains),
-        "output_length": int(output_length),
+        "number_of_chains": chains,
+        "output_length": output_length,
+        # Always written, never derived: at the 0.9 default this is BayesianAnalysis's own class
+        # default, so a fit built without touching the argument is numerically unchanged, and
+        # Fit.confint's reuse shortcut can compare against a level the construct actually states.
+        "credible_interval_width": credible_level,
     }
     thinning_interval = int(thinning_interval)
     if thinning_interval > 0:
@@ -781,7 +887,9 @@ def fit_bayesian(
 
     construct_json, dataset, base_spec = _fit_input(model, distribution, settings)
     result = _fit_run("BayesianAnalysis", construct_json, dataset)
-    return _new_fit_bayesian(result, base_spec, dataset, construct_json, warmup)
+    return _new_fit_bayesian(
+        result, base_spec, dataset, construct_json, warmup, credible_level=credible_level
+    )
 
 
 def fit_gmm(

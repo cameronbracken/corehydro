@@ -15,6 +15,7 @@ fit_bayesian(
   thinning_interval = -1L,
   seed = 12345L,
   point_estimator = NULL,
+  credible_level = 0.9,
   ...
 )
 }
@@ -51,6 +52,11 @@ identical draws in R and Python).}
 which is \code{"PosteriorMean"} -- so by default \verb{$parameters} is bit-identical to
 \verb{$summary$mean}. Pass \code{"PosteriorMode"} to report the MAP point instead.}
 
+\item{credible_level}{width of the posterior credible interval \verb{$summary}'s \code{lower}/\code{upper}
+columns report, between 0 and 1. Defaults to \code{0.9}, \code{BayesianAnalysis}'s own class default.
+\code{confint()} reuses these bounds when its \code{level} matches and otherwise re-runs the identical
+seeded chain, so setting it here is how a bare \code{confint(f)} avoids that rebuild.}
+
 \item{...}{sampler-specific tuning knobs. Passing a knob the chosen \code{sampler} does not use is an
 error: \code{"DEMCz"} accepts \code{jump}, \code{jump_threshold}, \code{noise}; \code{"DEMCzs"} additionally accepts
 \code{snooker_threshold}; \code{"ARWMH"} accepts \code{scale}, \code{beta}; \code{"NUTS"} accepts \code{max_tree_depth}.}
@@ -58,12 +64,18 @@ error: \code{"DEMCz"} accepts \code{jump}, \code{jump_threshold}, \code{noise}; 
 \value{
 An object of class \code{corehydro_fit} with \code{method == "BayesianAnalysis"}. \verb{$draws} is a
 3-D array \verb{[iteration, chain, parameter]}, the axis order \code{posterior::as_draws_array()}
-expects, so it can be handed to the posterior or coda packages with no reshaping. \verb{$summary}
+expects, so it can be handed to the posterior or coda packages with no reshaping.
+\verb{$posterior} is the thinned draw matrix the analyses consume, \verb{$posterior_rows} by
+\code{length(coef(f))}, with the parameter names on its columns. \verb{$summary}
 is a data frame (one row per parameter, named to match \code{coef()}) with columns \code{mean},
-\code{median}, \code{sd}, \code{lower}, \code{upper}, \code{rhat}, \code{ess}. \verb{$acceptance_rates} has one entry per chain.
-\verb{$warmup} records the warmup actually used. \verb{$dic}, \verb{$waic}, \verb{$looic} are the usual Bayesian
-goodness-of-fit scalars. See \code{\link[=fit_diagnostics]{fit_diagnostics()}} for leverage/influence diagnostics off a
-Bayesian fit.
+\code{median}, \code{sd}, \code{lower}, \code{upper}, \code{rhat}, \code{ess}. \verb{$map} and \verb{$posterior_mean} are the two
+posterior point estimates, named to match \code{coef()}. \verb{$mean_log_likelihood} has one entry per
+iteration, the chain-averaged log-likelihood trace. \verb{$acceptance_rates} has one entry per
+chain. \verb{$warmup} records the warmup actually used and \verb{$credible_level} the width \verb{$summary}'s
+\code{lower}/\code{upper} were computed at. \verb{$dic}, \verb{$waic}, \verb{$looic} are the usual Bayesian
+goodness-of-fit scalars, \verb{$looic_se} the standard error of \verb{$looic}, and \verb{$waic_pd}/\verb{$loo_pd}
+their effective parameter counts. See \code{\link[=fit_diagnostics]{fit_diagnostics()}} for leverage/influence diagnostics
+off a Bayesian fit.
 }
 \description{
 Fit a model with a Bayesian MCMC analysis and return a fit object carrying the raw chains, the
@@ -72,6 +84,13 @@ usual Bayesian goodness-of-fit scalars. Wraps the shared C++ \code{BayesianAnaly
 USACE-RMC RMC.BestFit -- the same estimator \code{\link[=univariate_analysis]{univariate_analysis()}} and
 \code{\link[=estimation_diagnostics]{estimation_diagnostics()}} build on.
 }
+\section{Accepted ranges}{
+ \code{BayesianAnalysis} rejects a configuration outside these bounds, so
+\code{fit_bayesian()} checks them up front and names the offending value: \code{chains} between 4 and
+20, \code{iterations} between 100 and 1,000,000, \code{warmup} between 50 and 100,000, \code{output_length}
+between 100 and 1,000,000, \code{seed} not negative, and \code{credible_level} strictly between 0 and 1.
+}
+
 \examples{
 peaks <- c(12500, 15300, 8900, 22100, 18700, 14200, 9800, 28500, 17400, 11600)
 f <- fit_bayesian(model_univariate("Normal", peaks),

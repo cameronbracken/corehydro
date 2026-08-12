@@ -547,10 +547,21 @@ void register_estimation(py::module_& m) {
             out["draws"] = r.draws;
             out["chain_dims"] = r.chain_dims;
             // --- Bayesian-only fields; empty/NaN for MaximumLikelihood/MaximumAPosteriori/GMM --
+            // `posterior` is the THINNED draw block the analyses consume, kept flat row-major
+            // alongside `posterior_rows` (fit.py reshapes it to posterior_rows x n_params with
+            // numpy, exactly as it reshapes `draws`); the raw chains stay in `draws` above.
+            out["posterior"] = r.posterior;
+            out["posterior_rows"] = r.posterior_rows;
+            out["map"] = r.map;
+            out["posterior_mean"] = r.posterior_mean;
+            out["mean_log_likelihood"] = r.mean_log_likelihood;
             out["acceptance_rates"] = r.acceptance_rates;
             out["dic"] = r.dic;
             out["waic"] = r.waic;
+            out["waic_pd"] = r.waic_pd;
             out["looic"] = r.looic;
+            out["looic_se"] = r.looic_se;
+            out["loo_pd"] = r.loo_pd;
             out["rhat"] = r.rhat;
             out["ess"] = r.ess;
             out["summary_mean"] = r.summary_mean;

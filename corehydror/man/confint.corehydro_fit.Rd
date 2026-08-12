@@ -32,15 +32,14 @@ intervals are the ones the original fit would have carried had \code{profile = T
 at the matching level up front.
 
 For \code{\link[=fit_bayesian]{fit_bayesian()}}: \verb{$summary}'s \code{lower}/\code{upper} columns are already the posterior credible
-interval at the level \code{BayesianAnalysis}'s own class default (0.9) computes them at --
-\code{fit_bayesian()} has no argument to change that. When the requested \code{level} matches, those
-columns are returned directly; otherwise the identical seeded chain is re-run with
-\code{credible_interval_width} set to \code{level} (the same lazy-rebuild precedent as the profile path
-above -- re-sampling with an identical seed reproduces the same chain bit-for-bit, so only the
-post-hoc credible-interval quantile computation changes). Because a Bayesian fit is always
-built at the 0.9 credible level and \code{confint()}'s own default is 0.95 (the base R \code{confint}
-convention), calling \code{confint(f)} with no \code{level} on a Bayesian fit always takes the rebuild
-path.
+interval at the fit's own \verb{$credible_level} (the \code{credible_level} argument, 0.9 by default).
+When the requested \code{level} matches, those columns are returned directly; otherwise the
+identical seeded chain is re-run with \code{credible_interval_width} set to \code{level} (the same
+lazy-rebuild precedent as the profile path above -- re-sampling with an identical seed
+reproduces the same chain bit-for-bit, so only the post-hoc credible-interval quantile
+computation changes). Because \code{confint()}'s own default is 0.95 (the base R \code{confint}
+convention) and a fit's default is 0.9, a bare \code{confint(f)} on a Bayesian fit re-runs the
+chain; \code{fit_bayesian(..., credible_level = 0.95)} avoids that.
 
 \code{\link[=fit_gmm]{fit_gmm()}} is method-of-moments and has no likelihood or posterior to draw an interval from;
 calling \code{confint()} on one errors. Use \code{\link[=quantile_variance]{quantile_variance()}} for the delta-method variance of a

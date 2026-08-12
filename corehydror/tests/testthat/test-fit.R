@@ -70,8 +70,8 @@ test_that("confint returns posterior credible intervals for a Bayesian fit", {
   f <- fit_bayesian(model_univariate("Normal", peaks),
     sampler = "DEMCz", iterations = 200, output_length = 500, seed = 123
   )
-  # fit_bayesian() never sets credible_interval_width, so the fit was built at
-  # BayesianAnalysis's own class default, 0.9.
+  # credible_level defaults to 0.9, BayesianAnalysis's own class default, so the fit was built
+  # at 0.9.
   ci <- confint(f, level = 0.9)
   expect_equal(dim(ci), c(2L, 2L))
   expect_equal(colnames(ci), c("lower", "upper"))
@@ -105,9 +105,9 @@ test_that("confint() with no level argument defaults to 0.95, triggering a Bayes
   f <- fit_bayesian(model_univariate("Normal", peaks),
     sampler = "DEMCz", iterations = 200, output_length = 500, seed = 123
   )
-  # fit_bayesian() builds the chain at BayesianAnalysis's own class default, 0.9; confint(f)
+  # fit_bayesian() builds the chain at 0.9 unless `credible_level` says otherwise; confint(f)
   # with no `level` asks for 0.95 (base R's confint() convention), which does not match
-  # `credible_level`, so it always takes the rebuild path -- this pins the cross-language
+  # `credible_level` here, so it takes the rebuild path -- this pins the cross-language
   # default-level parity finding (Python's confint() default was 0.9; now matches R's 0.95).
   expect_equal(confint(f), confint(f, level = 0.95))
   expect_false(isTRUE(all.equal(confint(f), confint(f, level = 0.9))))
@@ -329,4 +329,79 @@ test_that("summary.corehydro_fit shows rhat/ess for a Bayesian fit and SEs for a
   fo <- fit_mle(model_univariate("Normal", peaks))
   out_o <- capture.output(summary(fo))
   expect_true(any(grepl("standard errors", out_o)))
+})
+
+test_that("a Bayesian fit surfaces the thinned posterior and the point estimates", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", chains = 4, iterations = 200, output_length = 500, seed = 12345
+  )
+  expect_equal(dim(f$posterior), c(f$posterior_rows, length(f$parameters)))
+  expect_equal(nrow(f$posterior), f$posterior_rows)
+  expect_equal(colnames(f$posterior), names(f$parameters))
+  expect_named(f$map, names(f$parameters))
+  expect_named(f$posterior_mean, names(f$parameters))
+  # point_estimator defaults to the posterior mean, so $parameters IS $posterior_mean.
+  expect_equal(unname(f$posterior_mean), unname(f$parameters))
+  expect_length(f$mean_log_likelihood, 200L)
+  expect_true(is.finite(f$looic_se))
+  expect_true(is.finite(f$waic_pd))
+  expect_true(is.finite(f$loo_pd))
+})
+
+test_that("confint() reuses the stored bounds at the fit's own credible_level", {
+  f <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 200, output_length = 500, seed = 123,
+    credible_level = 0.95
+  )
+  expect_equal(f$credible_level, 0.95)
+  stored <- cbind(lower = f$summary$lower, upper = f$summary$upper)
+  rownames(stored) <- rownames(f$summary)
+  # confint()'s own default level is 0.95, so this takes the reuse path and returns exactly the
+  # bounds the fit already carries rather than re-running the chain.
+  expect_identical(confint(f), stored)
+  # And the reuse path agrees with the rebuild path: a fit built at the default 0.9 asked for
+  # 0.95 re-runs the identical seeded chain and lands on the same bounds.
+  rebuilt <- fit_bayesian(model_univariate("Normal", peaks),
+    sampler = "DEMCz", iterations = 200, output_length = 500, seed = 123
+  )
+  expect_equal(confint(rebuilt), confint(f))
+})
+
+test_that("credible_level does not move the fit itself", {
+  m <- model_univariate("Normal", peaks)
+  a <- fit_bayesian(m, sampler = "DEMCz", iterations = 200, output_length = 500, seed = 4)
+  b <- fit_bayesian(m,
+    sampler = "DEMCz", iterations = 200, output_length = 500, seed = 4, credible_level = 0.5
+  )
+  expect_identical(a$draws, b$draws)
+  expect_identical(a$parameters, b$parameters)
+})
+
+test_that("fit_bayesian names the setting and the range BayesianAnalysis rejects", {
+  m <- model_univariate("Normal", peaks)
+  expect_error(fit_bayesian(m, chains = 2), "`chains` must be between 4 and 20; got 2",
+    fixed = TRUE
+  )
+  expect_error(fit_bayesian(m, chains = 21), "between 4 and 20")
+  expect_error(fit_bayesian(m, iterations = 50), "`iterations`")
+  expect_error(fit_bayesian(m, iterations = 200, warmup = 10), "`warmup`")
+  expect_error(fit_bayesian(m, output_length = 50), "`output_length`")
+  expect_error(fit_bayesian(m, seed = -1), "negative")
+  expect_error(fit_bayesian(m, credible_level = 1), "`credible_level`")
+})
+
+test_that("profile_bins must be positive", {
+  m <- model_univariate("Normal", peaks)
+  expect_error(fit_mle(m, profile = TRUE, profile_bins = 0), "positive")
+  expect_error(fit_map(m, profile_bins = -5), "positive")
+})
+
+test_that("a GMM fit reports NA, not NaN, where it has no likelihood surface", {
+  f <- fit_gmm(model_bulletin17c(peaks))
+  for (field in c("log_likelihood", "aic", "bic")) {
+    expect_true(is.na(f[[field]]))
+    expect_false(is.nan(f[[field]]))
+  }
+  # nobs is the record length the estimator fitted against, not 0.
+  expect_equal(f$nobs, length(peaks))
 })

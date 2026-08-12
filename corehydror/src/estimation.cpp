@@ -553,10 +553,22 @@ list ch_fit_run_(std::string target, std::string construct_json, doubles dataset
         "draws"_nm = draws,
         "chain_dims"_nm = chain_dims,
         // --- Bayesian-only fields (Task 7); empty for MaximumLikelihood/MaximumAPosteriori ---
+        // `posterior` is the THINNED draw matrix the analyses consume (posterior_rows x n_params,
+        // row-major in FitResult), reshaped here into a real R matrix the way `covariance` is; the
+        // raw chains stay in `draws` above. `posterior_rows` rides along so the R side can check
+        // the shape without dividing the flat length.
+        "posterior"_nm = matrix_or_empty(r.posterior, static_cast<int>(r.posterior_rows), n),
+        "posterior_rows"_nm = writable::integers({static_cast<int>(r.posterior_rows)}),
+        "map"_nm = doubles_of(r.map),
+        "posterior_mean"_nm = doubles_of(r.posterior_mean),
+        "mean_log_likelihood"_nm = doubles_of(r.mean_log_likelihood),
         "acceptance_rates"_nm = doubles_of(r.acceptance_rates),
         "dic"_nm = writable::doubles({r.dic}),
         "waic"_nm = writable::doubles({r.waic}),
+        "waic_pd"_nm = writable::doubles({r.waic_pd}),
         "looic"_nm = writable::doubles({r.looic}),
+        "looic_se"_nm = writable::doubles({r.looic_se}),
+        "loo_pd"_nm = writable::doubles({r.loo_pd}),
         "rhat"_nm = doubles_of(r.rhat),
         "ess"_nm = doubles_of(r.ess),
         "summary_mean"_nm = doubles_of(r.summary_mean),

@@ -13,11 +13,10 @@
 #   - "a fit round-trips through save and load" (R: saveRDS/readRDS): the Python analogue is
 #     stdlib pickle, translated below as test_a_fit_round_trips_through_pickle.
 #
-# One R behaviour is NOT reproduced here on purpose: R's model_simulate()/model_validate()/
-# model_log_likelihood() transparently unwrap a corehydro_fit via check_model() (model.R).
-# corehydropy's model_*() verbs do not do this -- extending them is out of Task 8's scope (it
-# would touch models.py, not listed in the brief) -- so the "fitted model simulates identically"
-# test below compares Fit.model against Fit.to_model() instead of exercising an auto-unwrap.
+# R's model_simulate()/model_validate()/model_log_likelihood() transparently unwrap a
+# corehydro_fit via check_model() (model.R); corehydropy's model_*() verbs do the same through
+# _check_model()'s duck-typed `.model` lookup (models.py), so the "fitted model simulates
+# identically" test below exercises that unwrap in both languages.
 
 from __future__ import annotations
 
@@ -36,8 +35,11 @@ from corehydropy import (
     fit_map,
     fit_mle,
     model_bulletin17c,
+    model_log_likelihood,
+    model_parameters,
     model_simulate,
     model_univariate,
+    model_validate,
     quantile_variance,
 )
 from corehydropy import fit as _fit_mod
@@ -104,8 +106,8 @@ def test_confint_computes_on_demand_when_the_fit_was_built_without_profile():
 def test_confint_returns_posterior_credible_intervals_for_a_bayesian_fit():
     f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=200,
                       output_length=500, seed=123)
-    # fit_bayesian() never sets credible_interval_width, so the fit was built at
-    # BayesianAnalysis's own class default, 0.9.
+    # credible_level defaults to 0.9, BayesianAnalysis's own class default, so the fit was built
+    # at 0.9.
     ci = f.confint(level=0.9)
     assert set(ci) == {"lower", "upper"}
     assert list(ci["lower"]) == f.parameter_names
@@ -140,23 +142,19 @@ def test_confint_default_level_is_0_95_triggering_a_bayesian_rebuild():
     # Twin of test-fit.R's "confint() with no level argument defaults to 0.95, triggering a
     # Bayesian rebuild" -- pins the fix for the divergence where Fit.confint's default was 0.9
     # (BayesianAnalysis's own class default) while R's confint.corehydro_fit defaulted to 0.95
-    # (base R's confint() convention). fit_bayesian() always builds the chain at 0.9, so a
-    # no-argument confint() call always asks for a different level and takes the rebuild path.
+    # (base R's confint() convention). fit_bayesian() builds the chain at 0.9 unless
+    # `credible_level` says otherwise, so a no-argument confint() call here asks for a different
+    # level and takes the rebuild path.
     f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=200,
                       output_length=500, seed=123)
     assert f.confint() == f.confint(level=0.95)
     assert f.confint() != f.confint(level=0.9)
 
 
-def test_confint_default_level_matches_r_for_the_identical_seeded_bayesian_fit():
-    # Cross-language check for the same divergence: this pytest suite has no established way to
-    # invoke R (no rpy2/subprocess-to-Rscript harness anywhere in this test tree), so per the
-    # project's "do not invent one" instruction this only carries the Python half, structurally
-    # (no R-derived literal hardcoded here -- oracle values live in fixtures/*.json, not
-    # behavioural tests). The actual cross-language numeric comparison for this identical model/
-    # sampler/seed was run by hand and is recorded in .superpowers/sdd/task-8-report.md: R's
-    # `confint(f)` (no `level`) and Python's `f.confint()` (no `level`) agree to every printed
-    # digit.
+def test_confint_default_bounds_bracket_the_posterior_mean():
+    # The no-argument confint() bounds are usable, not just present: each parameter's credible
+    # interval brackets its posterior mean. Oracle VALUES live in fixtures/*.json; this file
+    # asserts shape and behaviour, so nothing here is a hardcoded number from either language.
     f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=200,
                       output_length=500, seed=123)
     ci = f.confint()
@@ -167,14 +165,26 @@ def test_confint_default_level_matches_r_for_the_identical_seeded_bayesian_fit()
 
 
 def test_the_fit_carries_a_fitted_model_that_simulates_identically():
+    # Twin of test-fit.R's "the fit carries a fitted model that simulates identically": the
+    # model_*() verbs take the fit itself, unwrapping it to the fitted model.
     f = fit_mle(model_univariate("Normal", PEAKS))
     assert isinstance(f.model, Model)
     assert f.to_model() is f.model
     assert np.array_equal(
+        model_simulate(f, n=25, seed=7),
         model_simulate(f.model, n=25, seed=7),
-        model_simulate(f.to_model(), n=25, seed=7),
     )
     assert list(f.model.spec["parameter_values"]) == pytest.approx(list(f.parameters.values()))
+
+
+def test_the_model_verbs_accept_a_fit_in_place_of_a_model():
+    # Twin of R's check_model() unwrap (model.R): every model_*() verb takes a Fit directly.
+    f = fit_mle(model_univariate("Normal", PEAKS))
+    assert model_log_likelihood(f) == model_log_likelihood(f.model)
+    assert model_validate(f) == model_validate(f.model)
+    assert model_parameters(f) == model_parameters(f.model)
+    with pytest.raises(TypeError, match="model_"):
+        model_simulate("not a model", n=5, seed=1)
 
 
 def test_a_fit_round_trips_through_pickle():
@@ -320,7 +330,6 @@ def test_log_likelihood_aic_bic_are_none_not_nan_for_a_gmm_fit():
     assert f.log_likelihood is None
     assert f.aic is None
     assert f.bic is None
-    assert f.nobs == 0
 
 
 def test_quantile_variance_rejects_a_non_gmm_fit():
@@ -367,3 +376,76 @@ def test_bayesian_draws_axis_order_matches_r():
     assert f.draws.ndim == 3
     assert f.draws.shape[1] == 6
     assert f.draws.shape[2] == len(f.parameters) == 2
+
+
+def test_a_bayesian_fit_surfaces_the_thinned_posterior_and_the_point_estimates():
+    f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", chains=4,
+                      iterations=200, output_length=500, seed=12345)
+    assert f.posterior.shape == (f.posterior_rows, len(f.parameters))
+    assert f.posterior.shape[0] == f.posterior_rows
+    assert list(f.map) == f.parameter_names
+    assert list(f.posterior_mean) == f.parameter_names
+    # point_estimator defaults to the posterior mean, so .parameters IS .posterior_mean.
+    assert list(f.posterior_mean.values()) == pytest.approx(list(f.parameters.values()))
+    assert len(f.mean_log_likelihood) == 200
+    assert math.isfinite(f.looic_se)
+    assert math.isfinite(f.waic_pd)
+    assert math.isfinite(f.loo_pd)
+
+
+def test_confint_reuses_the_stored_bounds_at_the_fits_own_credible_level():
+    f = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=200,
+                      output_length=500, seed=123, credible_level=0.95)
+    assert f.credible_level == 0.95
+    stored = {
+        "lower": dict(zip(f.parameter_names, f.posterior_summary["lower"])),
+        "upper": dict(zip(f.parameter_names, f.posterior_summary["upper"])),
+    }
+    # confint()'s own default level is 0.95, so this takes the reuse path and returns exactly the
+    # bounds the fit already carries rather than re-running the chain.
+    assert f.confint() == stored
+    # And the reuse path agrees with the rebuild path: a fit built at the default 0.9 asked for
+    # 0.95 re-runs the identical seeded chain and lands on the same bounds.
+    rebuilt = fit_bayesian(model_univariate("Normal", PEAKS), sampler="DEMCz", iterations=200,
+                            output_length=500, seed=123)
+    assert rebuilt.confint() == f.confint()
+
+
+def test_credible_level_does_not_move_the_fit_itself():
+    m = model_univariate("Normal", PEAKS)
+    a = fit_bayesian(m, sampler="DEMCz", iterations=200, output_length=500, seed=4)
+    b = fit_bayesian(m, sampler="DEMCz", iterations=200, output_length=500, seed=4,
+                      credible_level=0.5)
+    assert np.array_equal(a.draws, b.draws)
+    assert a.parameters == b.parameters
+
+
+def test_fit_bayesian_names_the_setting_and_the_range_bayesiananalysis_rejects():
+    m = model_univariate("Normal", PEAKS)
+    with pytest.raises(ValueError, match=r"`chains` must be between 4 and 20; got 2"):
+        fit_bayesian(m, chains=2)
+    with pytest.raises(ValueError, match="between 4 and 20"):
+        fit_bayesian(m, chains=21)
+    with pytest.raises(ValueError, match="`iterations`"):
+        fit_bayesian(m, iterations=50)
+    with pytest.raises(ValueError, match="`warmup`"):
+        fit_bayesian(m, iterations=200, warmup=10)
+    with pytest.raises(ValueError, match="`output_length`"):
+        fit_bayesian(m, output_length=50)
+    with pytest.raises(ValueError, match="negative"):
+        fit_bayesian(m, seed=-1)
+    with pytest.raises(ValueError, match="`credible_level`"):
+        fit_bayesian(m, credible_level=1)
+
+
+def test_profile_bins_must_be_positive():
+    m = model_univariate("Normal", PEAKS)
+    with pytest.raises(ValueError, match="positive"):
+        fit_mle(m, profile=True, profile_bins=0)
+    with pytest.raises(ValueError, match="positive"):
+        fit_map(m, profile_bins=-5)
+
+
+def test_a_gmm_fit_reports_the_record_length_as_nobs():
+    # The record length the estimator fitted against, not 0.
+    assert fit_gmm(model_bulletin17c(PEAKS)).nobs == len(PEAKS)

@@ -57,10 +57,17 @@ fit_input <- function(model, distribution, settings) {
 # call passed through `...`, since a corehydro_fit does not carry those back out; splicing into
 # the already-built JSON avoids that. Every construct this package builds (fit_input(), above) is
 # a single well-formed top-level JSON object with no trailing content, so overriding is just
-# replacing the final closing brace -- `credible_interval_width` is never already a key (only
-# this rebuild path ever sets it), so there is no duplicate-key ambiguity for json_lite.hpp to
-# resolve.
+# replacing the final closing brace.
+#
+# fit_bayesian() now always writes its own `credible_interval_width` (the `credible_level`
+# argument), so the key IS already present here. json_lite.hpp's JsonValue::at() returns the
+# FIRST match by insertion order, which would resurrect the original width and silently ignore
+# the override, so the existing entry is dropped before the new one is appended. The pattern is
+# exact rather than approximate: this package writes the key in only one place, always as
+# `,"credible_interval_width":<number>` from spec_number(), and a JSON number never contains a
+# comma or a brace.
 inject_credible_interval_width <- function(construct_json, level) {
+  construct_json <- sub(",\"credible_interval_width\":[^,}]*", "", construct_json)
   paste0(
     substr(construct_json, 1L, nchar(construct_json) - 1L),
     ",\"credible_interval_width\":", spec_number(level), "}"
@@ -195,16 +202,30 @@ new_fit <- function(result, base_spec, dataset, optimizer, level, construct_json
 # `d <- res$chain_dims` / the aperm() below permutes the runner's CHAIN-major flatten (chain,
 # iteration, parameter) into [iteration, chain, parameter], the axis order
 # posterior::as_draws_array() expects (see fit_bayesian()'s header note for the full rationale).
-# `credible_level` records the width `$summary`'s lower/upper columns were computed at --
-# fit_bayesian() never sets `credible_interval_width` in the construct, so BayesianAnalysis's own
-# class default (0.9) always applies; confint.corehydro_fit() compares its requested `level`
-# against this field to decide whether `$summary` already answers the call or a rebuild is
-# needed.
+# `credible_level` records the width `$summary`'s lower/upper columns were computed at, which is
+# fit_bayesian()'s `credible_level` argument (default 0.9, BayesianAnalysis's own class default);
+# confint.corehydro_fit() compares its requested `level` against this field to decide whether
+# `$summary` already answers the call or a rebuild is needed.
 new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup,
                              credible_level = 0.9) {
   d <- result$chain_dims
   draws <- aperm(array(result$draws, dim = c(d[3], d[2], d[1])), c(2L, 3L, 1L))
   dimnames(draws) <- list(NULL, paste0("chain", seq_len(d[1])), result$parameter_names)
+
+  # The thinned posterior (posterior_rows x n_params) the analyses consume. ch_fit_run_() already
+  # returns it as a proper R matrix (built element-by-element in matrix_or_empty, the same
+  # row-major reshape `covariance` gets), so only the column names are applied here -- see
+  # name_square()'s note on why this must NOT be re-flattened through matrix(byrow = TRUE).
+  posterior <- result$posterior
+  if (length(posterior)) colnames(posterior) <- result$parameter_names
+
+  named <- function(x) {
+    if (!length(x)) {
+      return(NULL)
+    }
+    names(x) <- result$parameter_names
+    x
+  }
 
   summary <- data.frame(
     mean = result$summary_mean,
@@ -222,13 +243,21 @@ new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup,
       new_fit_base(result, base_spec, dataset, construct_json),
       list(
         draws = draws,
+        posterior = posterior,
+        posterior_rows = result$posterior_rows,
+        map = named(result$map),
+        posterior_mean = named(result$posterior_mean),
+        mean_log_likelihood = result$mean_log_likelihood,
         summary = summary,
         acceptance_rates = result$acceptance_rates,
         warmup = warmup,
         credible_level = credible_level,
         dic = result$dic,
         waic = result$waic,
-        looic = result$looic
+        waic_pd = result$waic_pd,
+        looic = result$looic,
+        looic_se = result$looic_se,
+        loo_pd = result$loo_pd
       )
     ),
     class = "corehydro_fit"
@@ -239,6 +268,15 @@ new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup,
 # covariance stack (same shape as new_fit()'s, GMM's own sandwich covariance rather than a
 # Hessian) plus the GMM-specific bookkeeping (J-statistic, iteration/convergence counters).
 new_fit_gmm <- function(result, base_spec, dataset, construct_json) {
+  base <- new_fit_base(result, base_spec, dataset, construct_json)
+  # GMM is method-of-moments: run_fit() leaves log_likelihood/aic/bic at their structural NaN
+  # defaults because there is no likelihood surface to report them from. Report that as NA, the R
+  # spelling of "not available", so it agrees with logLik()/AIC()/BIC() on the same fit (which
+  # have always returned NA), with the documentation, and with the Python surface (None).
+  base$log_likelihood <- NA_real_
+  base$aic <- NA_real_
+  base$bic <- NA_real_
+
   covariance <- name_square(result$covariance, result$parameter_names)
   correlation <- name_square(result$correlation, result$parameter_names)
   standard_errors <- if (length(result$standard_errors)) {
@@ -251,7 +289,7 @@ new_fit_gmm <- function(result, base_spec, dataset, construct_json) {
 
   structure(
     c(
-      new_fit_base(result, base_spec, dataset, construct_json),
+      base,
       list(
         covariance = covariance,
         standard_errors = standard_errors,
@@ -284,9 +322,15 @@ fit_optimized <- function(target, model, distribution, optimizer, hessian, profi
     ), call. = FALSE)
   }
   profile <- isTRUE(profile)
+  # `profile_bins` reaches profile_likelihood(bins) unguarded in the core, where a non-positive
+  # count is a silently empty profile rather than an error, so it is validated here.
+  profile_bins <- as.integer(profile_bins)
+  if (is.na(profile_bins) || profile_bins < 1L) {
+    stop("`profile_bins` must be a positive integer; got ", format(profile_bins), call. = FALSE)
+  }
   settings <- list(
     optimizer = optimizer, hessian = isTRUE(hessian), profile = profile,
-    profile_bins = as.integer(profile_bins)
+    profile_bins = profile_bins
   )
   if (profile) settings$alpha <- as.double(alpha)
 
@@ -373,6 +417,32 @@ sampler_knobs <- list(
   NUTS   = c("max_tree_depth")
 )
 
+# The MCMC settings ranges BayesianAnalysis::validate() enforces (core/include/corehydro/
+# estimation/bayesian_analysis.hpp, the "Errors" block). A setting outside its range makes
+# estimate() throw "Bayesian Analysis is not valid. Please check the configuration before running
+# the analysis." with the messages that name the offending setting discarded, so fit_bayesian()
+# checks the ranges itself and reports which value is out of range. Kept as a table so the two
+# languages read the same list.
+bayes_ranges <- list(
+  chains = c(4, 20),
+  iterations = c(100, 1000000),
+  warmup = c(50, 100000),
+  output_length = c(100, 1000000)
+)
+
+# Internal: one range check, in the style of the optimizer/sampler/knob validation beside it.
+check_bayes_range <- function(name, value) {
+  range <- bayes_ranges[[name]]
+  if (is.na(value) || value < range[1] || value > range[2]) {
+    stop(sprintf(
+      "`%s` must be between %s and %s; got %s",
+      name, format(range[1], scientific = FALSE), format(range[2], scientific = FALSE),
+      format(value, scientific = FALSE)
+    ), call. = FALSE)
+  }
+  invisible(value)
+}
+
 #' Bayesian MCMC fit
 #'
 #' Fit a model with a Bayesian MCMC analysis and return a fit object carrying the raw chains, the
@@ -399,17 +469,31 @@ sampler_knobs <- list(
 #'   `"PosteriorMode"` (the MAP). `NULL` (default) leaves `BayesianAnalysis`'s own class default,
 #'   which is `"PosteriorMean"` -- so by default `$parameters` is bit-identical to
 #'   `$summary$mean`. Pass `"PosteriorMode"` to report the MAP point instead.
+#' @param credible_level width of the posterior credible interval `$summary`'s `lower`/`upper`
+#'   columns report, between 0 and 1. Defaults to `0.9`, `BayesianAnalysis`'s own class default.
+#'   `confint()` reuses these bounds when its `level` matches and otherwise re-runs the identical
+#'   seeded chain, so setting it here is how a bare `confint(f)` avoids that rebuild.
 #' @param ... sampler-specific tuning knobs. Passing a knob the chosen `sampler` does not use is an
 #'   error: `"DEMCz"` accepts `jump`, `jump_threshold`, `noise`; `"DEMCzs"` additionally accepts
 #'   `snooker_threshold`; `"ARWMH"` accepts `scale`, `beta`; `"NUTS"` accepts `max_tree_depth`.
+#' @section Accepted ranges: `BayesianAnalysis` rejects a configuration outside these bounds, so
+#'   `fit_bayesian()` checks them up front and names the offending value: `chains` between 4 and
+#'   20, `iterations` between 100 and 1,000,000, `warmup` between 50 and 100,000, `output_length`
+#'   between 100 and 1,000,000, `seed` not negative, and `credible_level` strictly between 0 and 1.
 #' @return An object of class `corehydro_fit` with `method == "BayesianAnalysis"`. `$draws` is a
 #'   3-D array `[iteration, chain, parameter]`, the axis order `posterior::as_draws_array()`
-#'   expects, so it can be handed to the posterior or coda packages with no reshaping. `$summary`
+#'   expects, so it can be handed to the posterior or coda packages with no reshaping.
+#'   `$posterior` is the thinned draw matrix the analyses consume, `$posterior_rows` by
+#'   `length(coef(f))`, with the parameter names on its columns. `$summary`
 #'   is a data frame (one row per parameter, named to match `coef()`) with columns `mean`,
-#'   `median`, `sd`, `lower`, `upper`, `rhat`, `ess`. `$acceptance_rates` has one entry per chain.
-#'   `$warmup` records the warmup actually used. `$dic`, `$waic`, `$looic` are the usual Bayesian
-#'   goodness-of-fit scalars. See [fit_diagnostics()] for leverage/influence diagnostics off a
-#'   Bayesian fit.
+#'   `median`, `sd`, `lower`, `upper`, `rhat`, `ess`. `$map` and `$posterior_mean` are the two
+#'   posterior point estimates, named to match `coef()`. `$mean_log_likelihood` has one entry per
+#'   iteration, the chain-averaged log-likelihood trace. `$acceptance_rates` has one entry per
+#'   chain. `$warmup` records the warmup actually used and `$credible_level` the width `$summary`'s
+#'   `lower`/`upper` were computed at. `$dic`, `$waic`, `$looic` are the usual Bayesian
+#'   goodness-of-fit scalars, `$looic_se` the standard error of `$looic`, and `$waic_pd`/`$loo_pd`
+#'   their effective parameter counts. See [fit_diagnostics()] for leverage/influence diagnostics
+#'   off a Bayesian fit.
 #' @seealso [fit_mle()], [fit_map()], [fit_gmm()], [fit_diagnostics()], [univariate_analysis()].
 #' @export
 #' @examples
@@ -420,7 +504,8 @@ sampler_knobs <- list(
 #' f$summary
 fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains = 4L,
                          iterations = 3000L, warmup = NULL, output_length = 10000L,
-                         thinning_interval = -1L, seed = 12345L, point_estimator = NULL, ...) {
+                         thinning_interval = -1L, seed = 12345L, point_estimator = NULL,
+                         credible_level = 0.9, ...) {
   known_samplers <- c("DEMCz", "DEMCzs", "ARWMH", "NUTS")
   sampler <- as.character(sampler)
   if (!sampler %in% known_samplers) {
@@ -457,14 +542,38 @@ fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains =
 
   iterations <- as.integer(iterations)
   warmup <- if (is.null(warmup)) max(50L, iterations %/% 2L) else as.integer(warmup)
+  chains <- as.integer(chains)
+  output_length <- as.integer(output_length)
+  seed <- as.integer(seed)
+
+  # The ranges BayesianAnalysis::validate() enforces. Without these checks an out-of-range
+  # setting reaches estimate(), which throws with its own diagnosis discarded.
+  check_bayes_range("chains", chains)
+  check_bayes_range("iterations", iterations)
+  check_bayes_range("warmup", warmup)
+  check_bayes_range("output_length", output_length)
+  if (is.na(seed) || seed < 0L) {
+    stop("`seed` cannot be negative; got ", format(seed), call. = FALSE)
+  }
+  credible_level <- as.double(credible_level)
+  if (is.na(credible_level) || credible_level <= 0 || credible_level >= 1) {
+    stop("`credible_level` must be greater than 0 and less than 1; got ",
+      format(credible_level),
+      call. = FALSE
+    )
+  }
 
   settings <- list(
     sampler = sampler,
-    seed = as.integer(seed),
+    seed = seed,
     iterations = iterations,
     warmup_iterations = warmup,
-    number_of_chains = as.integer(chains),
-    output_length = as.integer(output_length)
+    number_of_chains = chains,
+    output_length = output_length,
+    # Always written, never derived: at the 0.9 default this is BayesianAnalysis's own class
+    # default, so a fit built without touching the argument is numerically unchanged, and
+    # confint()'s reuse shortcut can compare against a level the construct actually states.
+    credible_interval_width = credible_level
   )
   thinning_interval <- as.integer(thinning_interval)
   if (thinning_interval > 0L) settings$thinning_interval <- thinning_interval
@@ -477,7 +586,7 @@ fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains =
 
   fi <- fit_input(model, distribution, settings)
   result <- ch_fit_run_("BayesianAnalysis", fi$json, fi$dataset)
-  new_fit_bayesian(result, fi$spec, fi$dataset, fi$json, warmup)
+  new_fit_bayesian(result, fi$spec, fi$dataset, fi$json, warmup, credible_level = credible_level)
 }
 
 #' Generalized method of moments fit (Bulletin 17C)
@@ -497,7 +606,9 @@ fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains =
 #' @param strategy GMM estimation strategy: `"Iterative"` (default), `"OneStep"`, or `"TwoStep"`.
 #' @param max_gmm_iterations maximum number of GMM iterations; `0` (default) keeps the estimator's
 #'   own default cap.
-#' @return An object of class `corehydro_fit` with `method == "GMM"`. Bulletin 17C is always
+#' @return An object of class `corehydro_fit` with `method == "GMM"`. Method of moments computes
+#'   no likelihood surface, so `$log_likelihood`, `$aic` and `$bic` are `NA`; `$nobs` is the
+#'   record length the estimator fitted against. Bulletin 17C is always
 #'   just-identified (as many moment conditions as parameters), so `$j_stat_pval` is structurally
 #'   `NA` -- there is no over-identified case to report a p-value for (see
 #'   `docs/upstream-csharp-issues.md`). `$gmm_iterations`, `$converged_within_tolerance`, and
@@ -613,10 +724,9 @@ print.corehydro_fit <- function(x, ...) {
   cat(sprintf("<corehydro_fit> %s (%s)\n", x$method, x$status))
   cat("  parameters:\n")
   print(x$parameters)
-  # GMM is a method-of-moments fit, not a likelihood-based one: run_fit() (fit_runner.hpp)
-  # structurally leaves log_likelihood/aic/bic/nobs at their NaN/0 defaults for that target (GMM
-  # has no likelihood surface to report them from), so printing them would just be clutter --
-  # the J-statistic line below is GMM's analogous goodness-of-fit summary.
+  # GMM is a method-of-moments fit, not a likelihood-based one: log_likelihood/aic/bic are NA for
+  # that target (GMM has no likelihood surface to report them from), so printing them would just
+  # be clutter -- the J-statistic line below is GMM's analogous goodness-of-fit summary.
   if (!identical(x$method, "GMM")) {
     cat(sprintf(
       "  log-likelihood: %g   aic: %g   bic: %g   nobs: %d\n",
@@ -665,10 +775,9 @@ vcov.corehydro_fit <- function(object, ...) object$covariance
 #' `AIC()`/`BIC()` work directly off it.
 #'
 #' @details [fit_gmm()] is method-of-moments: `GeneralizedMethodOfMoments` computes no likelihood
-#'   surface, so `run_fit()` (`fit_runner.hpp`) structurally leaves `log_likelihood`/`aic`/`bic` at
-#'   their `NaN` defaults for that target. `logLik()` turns that into `NA_real_` (still carrying
-#'   `df`/`nobs`) so base `AIC()`/`BIC()` come back a self-explanatory `NA` rather than a bare
-#'   `NaN`. The GMM analogue of a likelihood-based goodness-of-fit summary is the J-statistic
+#'   surface, so a GMM fit reports `NA` for `$log_likelihood`, `$aic` and `$bic`, and `logLik()`
+#'   returns `NA_real_` (still carrying `df`/`nobs`) so base `AIC()`/`BIC()` come back a
+#'   self-explanatory `NA`. The GMM analogue of a likelihood-based goodness-of-fit summary is the J-statistic
 #'   overidentification diagnostic already on the fit (`fit$j_stat`/`fit$j_stat_pval`; see
 #'   [fit_gmm()]), which is also what `print()` on a `corehydro_fit` shows in place of the
 #'   log-likelihood line for a GMM fit.
@@ -698,15 +807,14 @@ logLik.corehydro_fit <- function(object, ...) {
 #' at the matching level up front.
 #'
 #' For [fit_bayesian()]: `$summary`'s `lower`/`upper` columns are already the posterior credible
-#' interval at the level `BayesianAnalysis`'s own class default (0.9) computes them at --
-#' `fit_bayesian()` has no argument to change that. When the requested `level` matches, those
-#' columns are returned directly; otherwise the identical seeded chain is re-run with
-#' `credible_interval_width` set to `level` (the same lazy-rebuild precedent as the profile path
-#' above -- re-sampling with an identical seed reproduces the same chain bit-for-bit, so only the
-#' post-hoc credible-interval quantile computation changes). Because a Bayesian fit is always
-#' built at the 0.9 credible level and `confint()`'s own default is 0.95 (the base R `confint`
-#' convention), calling `confint(f)` with no `level` on a Bayesian fit always takes the rebuild
-#' path.
+#' interval at the fit's own `$credible_level` (the `credible_level` argument, 0.9 by default).
+#' When the requested `level` matches, those columns are returned directly; otherwise the
+#' identical seeded chain is re-run with `credible_interval_width` set to `level` (the same
+#' lazy-rebuild precedent as the profile path above -- re-sampling with an identical seed
+#' reproduces the same chain bit-for-bit, so only the post-hoc credible-interval quantile
+#' computation changes). Because `confint()`'s own default is 0.95 (the base R `confint`
+#' convention) and a fit's default is 0.9, a bare `confint(f)` on a Bayesian fit re-runs the
+#' chain; `fit_bayesian(..., credible_level = 0.95)` avoids that.
 #'
 #' [fit_gmm()] is method-of-moments and has no likelihood or posterior to draw an interval from;
 #' calling `confint()` on one errors. Use [quantile_variance()] for the delta-method variance of a
