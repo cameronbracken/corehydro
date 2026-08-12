@@ -397,6 +397,27 @@ extern "C" SEXP _corehydror_ch_cr_dependency_change_(SEXP comp_targets, SEXP com
     return cpp11::as_sexp(ch_cr_dependency_change_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<bool>>(minimum_of_rv), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency2), cpp11::as_cpp<cpp11::decay_t<list>>(correlation), cpp11::as_cpp<cpp11::decay_t<double>>(x), cpp11::as_cpp<cpp11::decay_t<std::string>>(field), cpp11::as_cpp<cpp11::decay_t<int>>(i), cpp11::as_cpp<cpp11::decay_t<int>>(j)));
   END_CPP11
 }
+// dist_spec.cpp
+list ch_dist_spec_run_(std::string spec_json, std::string method, std::string args_json);
+extern "C" SEXP _corehydror_ch_dist_spec_run_(SEXP spec_json, SEXP method, SEXP args_json) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_dist_spec_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(args_json)));
+  END_CPP11
+}
+// dist_spec.cpp
+list ch_copula_run_(std::string spec_json, std::string method, std::string args_json);
+extern "C" SEXP _corehydror_ch_copula_run_(SEXP spec_json, SEXP method, SEXP args_json) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_copula_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(args_json)));
+  END_CPP11
+}
+// dist_spec.cpp
+list ch_mvdist_run_(std::string spec_json, std::string method, std::string args_json);
+extern "C" SEXP _corehydror_ch_mvdist_run_(SEXP spec_json, SEXP method, SEXP args_json) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_mvdist_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(args_json)));
+  END_CPP11
+}
 // estimation.cpp
 list ch_estimation_run_(std::string target, std::string model_json, doubles dataset, std::string optimizer, int sample_size, int seed);
 extern "C" SEXP _corehydror_ch_estimation_run_(SEXP target, SEXP model_json, SEXP dataset, SEXP optimizer, SEXP sample_size, SEXP seed) {
@@ -764,6 +785,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_bve_cdf_after_set_parameters_", (DL_FUNC) &_corehydror_ch_bve_cdf_after_set_parameters_, 11},
     {"_corehydror_ch_cop_fit_",                      (DL_FUNC) &_corehydror_ch_cop_fit_,                       6},
     {"_corehydror_ch_cop_val_",                      (DL_FUNC) &_corehydror_ch_cop_val_,                       8},
+    {"_corehydror_ch_copula_run_",                   (DL_FUNC) &_corehydror_ch_copula_run_,                    3},
     {"_corehydror_ch_cr_cdf_",                       (DL_FUNC) &_corehydror_ch_cr_cdf_,                        6},
     {"_corehydror_ch_cr_dependency_change_",         (DL_FUNC) &_corehydror_ch_cr_dependency_change_,         10},
     {"_corehydror_ch_cr_log_pdf_",                   (DL_FUNC) &_corehydror_ch_cr_log_pdf_,                    6},
@@ -788,6 +810,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_dist_quantile_",                (DL_FUNC) &_corehydror_ch_dist_quantile_,                 3},
     {"_corehydror_ch_dist_quantile_v_",              (DL_FUNC) &_corehydror_ch_dist_quantile_v_,               3},
     {"_corehydror_ch_dist_random_",                  (DL_FUNC) &_corehydror_ch_dist_random_,                   4},
+    {"_corehydror_ch_dist_spec_run_",                (DL_FUNC) &_corehydror_ch_dist_spec_run_,                 3},
     {"_corehydror_ch_dist_valid_",                   (DL_FUNC) &_corehydror_ch_dist_valid_,                    2},
     {"_corehydror_ch_emp_cdf_",                      (DL_FUNC) &_corehydror_ch_emp_cdf_,                       5},
     {"_corehydror_ch_emp_moments_",                  (DL_FUNC) &_corehydror_ch_emp_moments_,                   4},
@@ -831,6 +854,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_model_simulate_",               (DL_FUNC) &_corehydror_ch_model_simulate_,                4},
     {"_corehydror_ch_model_validate_",               (DL_FUNC) &_corehydror_ch_model_validate_,                2},
     {"_corehydror_ch_multinomial_val_",              (DL_FUNC) &_corehydror_ch_multinomial_val_,               4},
+    {"_corehydror_ch_mvdist_run_",                   (DL_FUNC) &_corehydror_ch_mvdist_run_,                    3},
     {"_corehydror_ch_mvn_cdf_seq_",                  (DL_FUNC) &_corehydror_ch_mvn_cdf_seq_,                   5},
     {"_corehydror_ch_mvn_conditional_covariance_",   (DL_FUNC) &_corehydror_ch_mvn_conditional_covariance_,    6},
     {"_corehydror_ch_mvn_conditional_dimension_",    (DL_FUNC) &_corehydror_ch_mvn_conditional_dimension_,     4},

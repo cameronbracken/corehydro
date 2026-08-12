@@ -43,6 +43,8 @@ to_spec_json <- function(x) {
     return("null")
   }
   if (inherits(x, "corehydro_dist")) {
+    # A composite carries its own nested spec; a flat family serializes from family + params.
+    if (!is.null(x$spec)) return(x$spec)
     return(to_spec_json(list(family = x$family, parameters = spec_array(x$params))))
   }
 

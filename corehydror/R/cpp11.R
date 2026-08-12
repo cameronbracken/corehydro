@@ -224,6 +224,18 @@ ch_cr_dependency_change_ <- function(comp_targets, comp_params_list, minimum_of_
   .Call(`_corehydror_ch_cr_dependency_change_`, comp_targets, comp_params_list, minimum_of_rv, dependency, dependency2, correlation, x, field, i, j)
 }
 
+ch_dist_spec_run_ <- function(spec_json, method, args_json) {
+  .Call(`_corehydror_ch_dist_spec_run_`, spec_json, method, args_json)
+}
+
+ch_copula_run_ <- function(spec_json, method, args_json) {
+  .Call(`_corehydror_ch_copula_run_`, spec_json, method, args_json)
+}
+
+ch_mvdist_run_ <- function(spec_json, method, args_json) {
+  .Call(`_corehydror_ch_mvdist_run_`, spec_json, method, args_json)
+}
+
 ch_estimation_run_ <- function(target, model_json, dataset, optimizer, sample_size, seed) {
   .Call(`_corehydror_ch_estimation_run_`, target, model_json, dataset, optimizer, sample_size, seed)
 }

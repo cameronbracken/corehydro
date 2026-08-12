@@ -4,15 +4,21 @@
 \alias{distribution_names}
 \title{List the supported distribution families}
 \usage{
-distribution_names()
+distribution_names(kind = c("flat", "structured", "all"))
+}
+\arguments{
+\item{kind}{\code{"flat"} (the default) for families \code{\link[=distribution]{distribution()}} constructs directly from
+a parameter vector; \code{"structured"} for the five composite families constructed by
+\code{\link[=dist_truncated]{dist_truncated()}}, \code{\link[=dist_mixture]{dist_mixture()}}, \code{\link[=dist_competing_risks]{dist_competing_risks()}}, \code{\link[=dist_empirical]{dist_empirical()}}, and
+\code{\link[=dist_kde]{dist_kde()}}; or \code{"all"} for the union of both.}
 }
 \value{
-A character vector of the distribution family names accepted by
-\code{\link[=distribution]{distribution()}} and \code{\link[=dist_fit]{dist_fit()}}.
+A character vector of distribution family names.
 }
 \description{
 List the supported distribution families
 }
 \examples{
 distribution_names()
+distribution_names("structured")
 }
