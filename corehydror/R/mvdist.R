@@ -343,6 +343,11 @@ mvdist_interval <- function(mv, lower, upper) {
 #' Restricts a [mvdist_normal()] to a subset of its dimensions. Available for
 #' `"MultivariateNormal"` only; every other family errors naming itself, not a raw C++ throw.
 #'
+#' The returned distribution inherits `mv`'s Genz integrator settings: `seed`,
+#' `max_evaluations`, `abs_error`, and `rel_error` all carry over. A seeded parent therefore gives
+#' a seeded child, whose [mvdist_cdf()] above dimension two is reproducible and agrees between R
+#' and Python. A parent left clock-seeded gives a clock-seeded child.
+#'
 #' @param mv a `corehydro_mvdist` of family `"MultivariateNormal"`.
 #' @param indices the 1-based dimensions to keep.
 #' @return a `corehydro_mvdist` over those dimensions.
@@ -360,6 +365,9 @@ mvdist_marginal <- function(mv, indices) {
 #'
 #' The distribution of the remaining dimensions of a [mvdist_normal()] given fixed values for a
 #' subset. Available for `"MultivariateNormal"` only.
+#'
+#' The returned distribution inherits `mv`'s Genz integrator settings, as [mvdist_marginal()]
+#' does: `seed`, `max_evaluations`, `abs_error`, and `rel_error` all carry over.
 #'
 #' @param mv a `corehydro_mvdist` of family `"MultivariateNormal"`.
 #' @param given the 1-based dimensions being conditioned on.

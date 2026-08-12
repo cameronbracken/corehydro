@@ -205,6 +205,46 @@ int main() {
         CHECK_TRUE(std::fabs(t.values.at(0) - l.values.at(0)) > 0.0);
     }
 
+    // A derived child inherits the parent's integrator settings. Both children below are
+    // dimension 3, where the CDF is the Genz quasi-Monte-Carlo integral off the instance's own
+    // Mersenne Twister; if the seed did not travel into the child spec each call would clock-seed
+    // and the two figures would differ (and R and Python could not agree on either).
+    {
+        const char* parent = R"({"family":"MultivariateNormal","mean":[0,0,0,0],
+            "covariance":[[1,0.3,0.2,0.1],[0.3,1,0.4,0.2],[0.2,0.4,1,0.3],[0.1,0.2,0.3,1]],
+            "seed":12345})";
+        supp::DistResult marg = supp::run_mvdist(parent, "marginal", "[0,1,2]");
+        CHECK_EQ(static_cast<int>(supp::run_mvdist(marg.spec, "dimension", "[]").values.at(0)), 3);
+        supp::DistResult m1 = supp::run_mvdist(marg.spec, "cdf", "[1,1,1]");
+        supp::DistResult m2 = supp::run_mvdist(marg.spec, "cdf", "[1,1,1]");
+        CHECK_NEAR(m1.values.at(0), m2.values.at(0), 0.0);
+        CHECK_TRUE(m1.values.at(0) > 0.0 && m1.values.at(0) < 1.0);
+
+        supp::DistResult cond = supp::run_mvdist(parent, "conditional", "[3,0.5]");
+        CHECK_EQ(static_cast<int>(supp::run_mvdist(cond.spec, "dimension", "[]").values.at(0)), 3);
+        supp::DistResult c1 = supp::run_mvdist(cond.spec, "cdf", "[1,1,1]");
+        supp::DistResult c2 = supp::run_mvdist(cond.spec, "cdf", "[1,1,1]");
+        CHECK_NEAR(c1.values.at(0), c2.values.at(0), 0.0);
+        CHECK_TRUE(c1.values.at(0) > 0.0 && c1.values.at(0) < 1.0);
+
+        // The other three integrator settings travel too: a one-evaluation budget cannot
+        // converge, so the child it produces disagrees with the default-budget child.
+        const char* tight = R"({"family":"MultivariateNormal","mean":[0,0,0,0],
+            "covariance":[[1,0.3,0.2,0.1],[0.3,1,0.4,0.2],[0.2,0.4,1,0.3],[0.1,0.2,0.3,1]],
+            "seed":12345,"max_evaluations":1,"abs_error":1e-12,"rel_error":1e-12})";
+        supp::DistResult tmarg = supp::run_mvdist(tight, "marginal", "[0,1,2]");
+        supp::DistResult t1 = supp::run_mvdist(tmarg.spec, "cdf", "[1,1,1]");
+        CHECK_TRUE(std::fabs(t1.values.at(0) - m1.values.at(0)) > 0.0);
+    }
+    // A parent with no integrator settings produces a child with none either: the grammar copies
+    // what is there and invents nothing.
+    {
+        const char* bare = R"({"family":"MultivariateNormal","mean":[1,2,3],
+                               "covariance":[[1,0,0],[0,1,0],[0,0,1]]})";
+        supp::DistResult r = supp::run_mvdist(bare, "marginal", "[0,1]");
+        CHECK_EQ(r.spec.find("seed") == std::string::npos, true);
+    }
+
     CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"MultivariateStudentT","df":5,"location":[0,0]})", "marginal", "[0]"), "MultivariateStudentT");
     // --- the seven accessor verbs --------------------------------------------------------
     {

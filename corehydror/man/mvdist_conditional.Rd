@@ -20,6 +20,10 @@ a \code{corehydro_mvdist} over the complement of \code{given}.
 The distribution of the remaining dimensions of a \code{\link[=mvdist_normal]{mvdist_normal()}} given fixed values for a
 subset. Available for \code{"MultivariateNormal"} only.
 }
+\details{
+The returned distribution inherits \code{mv}'s Genz integrator settings, as \code{\link[=mvdist_marginal]{mvdist_marginal()}}
+does: \code{seed}, \code{max_evaluations}, \code{abs_error}, and \code{rel_error} all carry over.
+}
 \examples{
 mvdist_mean(mvdist_conditional(mvdist_normal(c(1, 2, 3), diag(3)), given = 2, values = 5))
 }

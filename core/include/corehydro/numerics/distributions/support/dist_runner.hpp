@@ -243,7 +243,13 @@ inline DistResult run_copula(const std::string& spec_json, const std::string& me
 // Serializes a MultivariateNormal back into the grammar so `DistResult::spec` round-trips
 // (the marginal/conditional methods below hand a child spec back rather than a C++ object, so
 // they compose without anything crossing the language boundary).
-inline std::string mvn_spec_string(const MultivariateNormal& m) {
+//
+// The four Genz-integrator keys are copied through from `parent`, the spec the child was derived
+// from. Without that the child clock-seeds its own integrator and its CDF above dimension two is
+// irreproducible, in one language and between them -- the exact failure the `seed` key closes for
+// the parent. They are read from the parent SPEC rather than from the parent object because
+// MultivariateNormal exposes getters for three of the four but none for the seed.
+inline std::string mvn_spec_string(const MultivariateNormal& m, const JsonValue& parent) {
     std::string out = R"({"family":"MultivariateNormal","mean":[)";
     const std::vector<double>& mu = m.mean();
     for (std::size_t i = 0; i < mu.size(); ++i) {
@@ -264,7 +270,24 @@ inline std::string mvn_spec_string(const MultivariateNormal& m) {
         }
         out += "]";
     }
-    out += "]}";
+    out += "]";
+    auto copy_int = [&](const char* key) {
+        if (!parent.contains(key)) return;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), ",\"%s\":%d", key, parent.at(key).as_int());
+        out += buf;
+    };
+    auto copy_double = [&](const char* key) {
+        if (!parent.contains(key)) return;
+        char buf[80];
+        std::snprintf(buf, sizeof(buf), ",\"%s\":%.17g", key, parent.at(key).as_double());
+        out += buf;
+    };
+    copy_int("seed");
+    copy_int("max_evaluations");
+    copy_double("abs_error");
+    copy_double("rel_error");
+    out += "}";
     return out;
 }
 
@@ -282,6 +305,8 @@ inline std::string mvn_spec_string(const MultivariateNormal& m) {
 //   interval                args = lower then upper,     values = 1        (MultivariateNormal)
 //   marginal                args = 0-based indices,      spec = the child (MultivariateNormal)
 //   conditional             args = indices then values,  spec = the child (MultivariateNormal)
+//     both children inherit the parent's Genz-integrator settings (seed, max_evaluations,
+//     abs_error, rel_error), so a seeded parent yields a seeded child -- see mvn_spec_string.
 //   degrees_of_freedom      args = [],                   values = 1        (MultivariateStudentT)
 //   alpha                   args = [],                   values = dimension        (Dirichlet)
 //   alpha_sum               args = [],                   values = 1                (Dirichlet)
@@ -325,7 +350,7 @@ inline DistResult run_mvdist(const std::string& spec_json, const std::string& me
         std::vector<int> idx;
         for (double v : detail::arg_numbers(args)) idx.push_back(static_cast<int>(v));
         MultivariateNormal child = mvn->marginal(idx);
-        r.spec = mvn_spec_string(child);
+        r.spec = mvn_spec_string(child, spec);
         return r;
     }
     if (method == "conditional") {
@@ -337,7 +362,7 @@ inline DistResult run_mvdist(const std::string& spec_json, const std::string& me
         for (std::size_t i = 0; i < h; ++i) idx.push_back(static_cast<int>(all[i]));
         std::vector<double> vals(all.begin() + h, all.end());
         MultivariateNormal child = mvn->conditional(idx, vals);
-        r.spec = mvn_spec_string(child);
+        r.spec = mvn_spec_string(child, spec);
         return r;
     }
     if (method == "interval") {

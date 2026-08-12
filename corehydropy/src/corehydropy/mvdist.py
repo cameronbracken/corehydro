@@ -13,6 +13,7 @@ import json
 import numpy as np
 
 from . import _core
+from .distributions import _single_number
 
 __all__ = [
     "MultivariateDistribution",
@@ -255,6 +256,13 @@ class MultivariateDistribution:
         -------
         MultivariateDistribution
             Over those dimensions.
+
+        Notes
+        -----
+        The returned distribution inherits this one's Genz integrator settings: ``seed``,
+        ``max_evaluations``, ``abs_error``, and ``rel_error`` all carry over. A seeded parent
+        therefore gives a seeded child, whose :meth:`cdf` above dimension two is reproducible and
+        agrees between R and Python. A parent left clock-seeded gives a clock-seeded child.
         """
         idx = _mv_indices(indices, self.dimension(), "indices")
         res = self._run("marginal", idx)
@@ -277,6 +285,12 @@ class MultivariateDistribution:
         -------
         MultivariateDistribution
             Over the complement of `given`.
+
+        Notes
+        -----
+        The returned distribution inherits this one's Genz integrator settings, as
+        :meth:`marginal` does: ``seed``, ``max_evaluations``, ``abs_error``, and ``rel_error`` all
+        carry over.
         """
         given_arr = np.atleast_1d(np.asarray(given))
         values_arr = np.atleast_1d(np.asarray(values, dtype=float))
@@ -435,10 +449,9 @@ def mvdist_student_t(df: float, location, scale=None, seed: int | None = None) -
     >>> mvdist_student_t(5, [0, 0]).dimension()
     2
     """
-    if not np.isfinite(df):
-        raise ValueError("`df` must be a single finite number")
+    df = _single_number(df, "`df` must be a single finite number")
     location_v = [float(v) for v in np.asarray(location, dtype=float).ravel()]
-    spec: dict = {"family": "MultivariateStudentT", "df": float(df), "location": location_v}
+    spec: dict = {"family": "MultivariateStudentT", "df": df, "location": location_v}
     if scale is not None:
         scale_arr = np.asarray(scale, dtype=float)
         if scale_arr.ndim != 2 or scale_arr.shape[0] != scale_arr.shape[1] or scale_arr.shape[0] != len(location_v):
