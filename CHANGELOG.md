@@ -23,10 +23,15 @@ three that happen to agree.
   Hessian-based covariance, optional profile-likelihood confidence intervals, and a choice of six
   optimizers (Nelder-Mead, Brent, BFGS, Powell, Differential Evolution, Multilevel Single Linkage).
 - **`fit_bayesian()`** -- Bayesian MCMC fitting over DEMCz, DEMCzs, ARWMH, or NUTS, returning the
-  raw chains in the `posterior`-package axis order, a posterior summary with R-hat and effective
-  sample size, and DIC/WAIC/LOOIC.
+  raw chains in the `posterior`-package axis order, the thinned posterior draw matrix, the MAP and
+  posterior-mean point estimates, the mean log-likelihood trace, a posterior summary with R-hat and
+  effective sample size, and DIC/WAIC/LOOIC with their standard error and effective parameter
+  counts. `credible_level` sets the width of the reported credible interval, and a setting outside
+  the range the sampler accepts is reported with the setting named rather than as a bare
+  "configuration is not valid".
 - **`fit_gmm()`** -- generalized method of moments for Bulletin 17C models, with the sandwich
-  covariance and the J-statistic overidentification test.
+  covariance and the J-statistic overidentification test. Method of moments computes no likelihood,
+  so the fit reports `NA` (`None` in Python) for the log-likelihood, AIC, and BIC.
 - **`fit_diagnostics()`** -- Cook's distance, leverage, and observation influence off a MAP or GMM
   fit; leverage, PSIS-LOO Pareto-k, and prior influence off a Bayesian fit.
 - **`quantile_variance()`** -- the Cohn-style delta-method variance of a fitted quantile at a given
@@ -36,16 +41,21 @@ three that happen to agree.
 - A worked example pair on fitting a Log-Pearson Type III record by all four methods and comparing
   the resulting quantile estimates.
 
-### Fixed
+### Internal
 
-- **A model with fewer than two parameters no longer returns garbage covariance, standard errors,
-  or correlation from R.** `GetCovarianceMatrix` throws below two parameters in C#, and R does not
-  zero-fill a freshly allocated numeric vector, so the old fixture glue was handing back whatever
-  was already sitting in that memory rather than the zeros it appeared to return.
-- **A failed fit now names the estimator and the optimizer in its error**, rather than the internal
-  message "failed for a fixture case" that leaked through from the pre-phase glue.
-- **`confint()`'s default level agreed between R and Python before this shipped, not after**: both
-  now default to 0.95, matching base R's `confint()` convention.
+None of these three reached a released user-facing function. The first two were in the unexported
+fixture glue this release replaced with the shared runner; the third was caught inside this
+release, before any of it shipped. They are recorded because the new fit surface inherits the
+corrected behaviour.
+
+- A model with fewer than two parameters reports `NA` covariance, standard errors, and correlation
+  rather than zeros. `GetCovarianceMatrix` throws below two parameters in C#, and R does not
+  zero-fill a freshly allocated numeric vector, so the old fixture glue returned whatever was
+  already sitting in that memory.
+- A failed fit names the estimator and the optimizer in its error, rather than the internal message
+  "failed for a fixture case" the fixture glue raised.
+- `confint()`'s default level is 0.95 in both languages, matching base R's `confint()` convention.
+  The Python half briefly defaulted to 0.9 during development of this release.
 
 ### Documentation
 
