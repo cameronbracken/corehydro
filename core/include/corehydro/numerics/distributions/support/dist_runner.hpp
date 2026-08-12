@@ -123,7 +123,7 @@ inline DistResult run_dist(const std::string& spec_json, const std::string& meth
 
 // Evaluates `method` against the copula described by `spec_json`.
 //
-//   pdf / log_pdf / cdf              args = [u, v],       values = 1
+//   pdf / log_pdf / cdf              args = all u then all v, values = n (one per pair)
 //   inverse_cdf                      args = [u, v],       values = 2
 //   tail_dependence                  args = [],           values = 2, names {lower, upper}
 //   exceedance_or / exceedance_and   args = [u, v],       values = 1
@@ -136,6 +136,15 @@ inline DistResult run_dist(const std::string& spec_json, const std::string& meth
 //                                    args = x then y,     values = 1
 //   marginal_x_parameters / marginal_y_parameters
 //                                    args = [],           values = that marginal's parameters
+//
+// pdf / log_pdf / cdf take the same split-at-the-halfway-point layout the three log-likelihood
+// methods use, so one call evaluates a whole vector of pairs; args = [u, v] is that layout with
+// n = 1 and is unchanged.
+//
+// `log_likelihood_pseudo` transforms x and y to their plotting positions before evaluating:
+// BivariateCopula::PseudoLogLikelihood is defined on values already on (0, 1) and does not rank
+// internally, so its caller passes the raw paired observations here exactly as it does for the
+// IFM and full log-likelihoods (see support::plotting_positions).
 inline DistResult run_copula(const std::string& spec_json, const std::string& method,
                              const std::string& args_json) {
     JsonValue spec = models::spec::parse_json(spec_json);
@@ -153,12 +162,17 @@ inline DistResult run_copula(const std::string& spec_json, const std::string& me
                               std::vector<double>(all.begin() + h, all.end()));
     };
 
-    if (method == "pdf") { r.values = {c->pdf(detail::arg_at(args, 0, "pdf"),
-                                              detail::arg_at(args, 1, "pdf"))}; return r; }
-    if (method == "log_pdf") { r.values = {c->log_pdf(detail::arg_at(args, 0, "log_pdf"),
-                                                      detail::arg_at(args, 1, "log_pdf"))}; return r; }
-    if (method == "cdf") { r.values = {c->cdf(detail::arg_at(args, 0, "cdf"),
-                                              detail::arg_at(args, 1, "cdf"))}; return r; }
+    if (method == "pdf" || method == "log_pdf" || method == "cdf") {
+        auto uv = split_xy();
+        if (uv.first.empty())
+            throw std::runtime_error("copula method '" + method + "' needs at least one (u, v) pair");
+        for (std::size_t i = 0; i < uv.first.size(); ++i) {
+            if (method == "pdf") r.values.push_back(c->pdf(uv.first[i], uv.second[i]));
+            else if (method == "log_pdf") r.values.push_back(c->log_pdf(uv.first[i], uv.second[i]));
+            else r.values.push_back(c->cdf(uv.first[i], uv.second[i]));
+        }
+        return r;
+    }
     if (method == "inverse_cdf") {
         std::array<double, 2> uv = c->inverse_cdf(detail::arg_at(args, 0, "inverse_cdf"),
                                                   detail::arg_at(args, 1, "inverse_cdf"));
@@ -208,7 +222,8 @@ inline DistResult run_copula(const std::string& spec_json, const std::string& me
         method == "log_likelihood_full") {
         auto xy = split_xy();
         if (method == "log_likelihood_pseudo")
-            r.values = {c->pseudo_log_likelihood(xy.first, xy.second)};
+            r.values = {c->pseudo_log_likelihood(plotting_positions(xy.first),
+                                                 plotting_positions(xy.second))};
         else if (method == "log_likelihood_ifm")
             r.values = {c->ifm_log_likelihood(xy.first, xy.second)};
         else

@@ -20,6 +20,16 @@ test_that("marginal takes 1-based indices and returns a new object", {
   expect_equal(mvdist_mean(m), c(1, 3))
 })
 
+test_that("a fractional or repeated index is refused rather than truncated", {
+  mv <- mvdist_normal(c(1, 2, 3), S)
+  expect_error(mvdist_marginal(mv, c(1.9, 3)), "whole numbers")
+  expect_error(mvdist_marginal(mv, c(1, 1)), "must not repeat")
+  expect_error(mvdist_marginal(mv, c(1, 4)), "between 1 and 3")
+  expect_error(mvdist_marginal(mv, integer(0)), "non-empty")
+  expect_error(mvdist_conditional(mv, given = c(2.5), values = 5), "whole numbers")
+  expect_error(mvdist_conditional(mv, given = c(2, 2), values = c(5, 5)), "must not repeat")
+})
+
 test_that("conditional takes 1-based indices and returns the complement", {
   mv <- mvdist_normal(c(1, 2, 3), S)
   cd <- mvdist_conditional(mv, given = 2, values = 5)

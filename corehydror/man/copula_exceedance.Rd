@@ -18,8 +18,9 @@ copula_exceedance(cop, u, v, type = c("and", "or"))
 a single numeric in \verb{[0, 1]}.
 }
 \description{
-\code{P(U > u, V > v)} (\code{type = "and"}) or \verb{P(U > u \\\\| V > v)}'s complement,
-\verb{P(U > u OR V > v)} (\code{type = "or"}).
+The probability that both variables exceed their thresholds, \code{P(U > u, V > v)}
+(\code{type = "and"}), or that at least one does, \verb{P(U > u or V > v) = 1 - C(u, v)}
+(\code{type = "or"}).
 }
 \examples{
 copula_exceedance(copula("Gumbel", theta = 2), 0.9, 0.9, type = "and")

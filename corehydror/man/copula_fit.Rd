@@ -16,7 +16,7 @@ copula_fit(
 \arguments{
 \item{family}{one of \code{\link[=copula_names]{copula_names()}}.}
 
-\item{x, y}{numeric vectors of paired observations, the same length.}
+\item{x, y}{numeric vectors of raw paired observations, the same length.}
 
 \item{method}{\code{"mpl"} (maximum pseudo-likelihood, the default), \code{"ifm"} (inference from
 margins), \code{"mle"} (full maximum likelihood), or \code{"tau"} (Kendall's tau inversion; Clayton,
@@ -33,14 +33,22 @@ parameters, that marginal's own parameters -- from a paired sample. Mirrors the 
 \code{BivariateCopulaEstimation} methods of the Numerics library.
 }
 \details{
+\code{x} and \code{y} are the raw paired observations for every method. \code{method = "mpl"} maximizes the
+pseudo-likelihood, which is defined on the plotting positions \code{rank / (n + 1)} rather than on
+the data scale; that transform happens inside the shared C++ core, so R and Python fit the
+same numbers from the same input.
+
 \code{margin_x} and \code{margin_y} accept EITHER a family-name string or a \code{corehydro_dist}, and the
 two are handled differently:
 \itemize{
 \item a \strong{name} (e.g. \code{margin_x = "Normal"}) is fitted by maximum likelihood to \code{x} (or \code{y})
 before the copula is estimated. This is what Inference From Margins (\code{method = "ifm"})
-requires, and is the usual case for \code{"ifm"} and \code{"mle"}.
-\item a \strong{\code{corehydro_dist}} (e.g. \code{margin_x = distribution("Normal", c(0, 1))}) is attached
-exactly as given and is NOT refitted. Use this when you want a literal, fixed marginal.
+requires, and it is accepted for \code{"ifm"} and \code{"mle"} only: \code{"mpl"} and \code{"tau"} ignore the
+marginals entirely, so a name there would be reported back unfitted.
+\item a \strong{\code{corehydro_dist}} (e.g. \code{margin_x = distribution("Normal", c(0, 1))}) is accepted for
+all four methods. \code{"mpl"} and \code{"tau"} attach it untouched (so \code{\link[=copula_random]{copula_random()}} can draw on
+the data scale), \code{"ifm"} takes it as the given margin, and \code{"mle"} re-estimates it jointly
+with theta.
 }
 
 \code{method = "tau"} inverts Kendall's tau into theta directly and is only implemented upstream

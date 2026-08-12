@@ -49,6 +49,32 @@ test_that("copula_fit returns a usable copula", {
   expect_true(is.finite(copula_pdf(cop, 0.3, 0.7)))
 })
 
+test_that("the mpl fit takes raw data and ranks it internally", {
+  # The pseudo-likelihood is a function of the ranks alone, so fitting the raw sample and
+  # fitting its plotting positions must land on the same theta -- that identity is what the
+  # in-core transform buys, and it needs no oracle value.
+  raw <- copula_fit("Clayton", x, y, method = "mpl")$theta
+  pp <- copula_fit("Clayton", rank(x) / (length(x) + 1), rank(y) / (length(y) + 1),
+                   method = "mpl")$theta
+  expect_equal(raw, pp)
+  # A copula that ignored the ranking would sit at an arbitrary interior point of the theta
+  # bounds because every log_pdf evaluation lands off the unit square. A real Clayton fit to
+  # this strongly concordant sample is well above the weak-dependence range.
+  expect_true(raw > 1)
+  expect_true(is.finite(copula_log_likelihood(copula("Clayton", theta = raw), x, y)))
+})
+
+test_that("a named marginal is refused for the methods that never fit one", {
+  expect_error(copula_fit("Clayton", x, y, method = "mpl", margin_x = "Normal"), "does not use")
+  expect_error(copula_fit("Clayton", x, y, method = "tau", margin_y = "Normal"), "does not use")
+  # A parameterized corehydro_dist stays allowed: it is attached as given, not fitted.
+  cop <- copula_fit("Clayton", x, y, method = "mpl",
+                    margin_x = distribution("Normal", c(110, 20)),
+                    margin_y = distribution("Normal", c(1.4, 0.3)))
+  expect_equal(unname(dist_params(cop$margin_x)), c(110, 20))
+  expect_equal(dim(copula_random(cop, 3, seed = 1)), c(3L, 2L))
+})
+
 test_that("the tau method is refused where upstream has no SetThetaFromTau", {
   expect_error(copula_fit("Joe", x, y, method = "tau"), "tau")
 })
@@ -61,6 +87,23 @@ test_that("the three log-likelihoods run and differ", {
   ll_ps  <- copula_log_likelihood(cop, x, y, method = "pseudo")
   expect_true(is.finite(ll_ifm) && is.finite(ll_ps))
   expect_false(isTRUE(all.equal(ll_ifm, ll_ps)))
+})
+
+test_that("the density verbs evaluate a whole vector of pairs", {
+  cop <- copula("Clayton", theta = 2)
+  u <- c(0.3, 0.5, 0.8)
+  v <- c(0.7, 0.9, 0.2)
+  expect_equal(copula_pdf(cop, u, v),
+               vapply(seq_along(u), function(i) copula_pdf(cop, u[i], v[i]), numeric(1)))
+  expect_equal(copula_cdf(cop, u, v),
+               vapply(seq_along(u), function(i) copula_cdf(cop, u[i], v[i]), numeric(1)))
+  expect_equal(copula_log_pdf(cop, u, v), log(copula_pdf(cop, u, v)))
+  # A scalar recycles against a vector, one value per pair.
+  expect_equal(copula_pdf(cop, 0.3, v),
+               vapply(v, function(vi) copula_pdf(cop, 0.3, vi), numeric(1)))
+  expect_length(copula_pdf(cop, u, 0.5), 3L)
+  expect_error(copula_pdf(cop, c(0.2, 0.4, 0.6), c(0.1, 0.9)), "recyclable")
+  expect_error(copula_pdf(cop, numeric(0), 0.5), "non-empty")
 })
 
 test_that("copula_names lists the seven families", {

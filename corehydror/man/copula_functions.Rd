@@ -19,13 +19,15 @@ copula_cdf(cop, u, v)
 \item{u, v}{numeric vectors in \verb{(0, 1)}, the copula's two arguments.}
 }
 \value{
-a numeric vector, recycled over \code{u}/\code{v}.
+a numeric vector, one value per recycled \verb{(u, v)} pair.
 }
 \description{
-Density, log-density, and CDF for a \code{\link[=copula]{copula()}} object, evaluated on the unit square.
+Density, log-density, and CDF for a \code{\link[=copula]{copula()}} object, evaluated on the unit square. \code{u} and
+\code{v} are recycled to a common length and evaluated pairwise, one returned value per pair.
 }
 \examples{
 cop <- copula("Clayton", theta = 2)
 copula_pdf(cop, 0.3, 0.7)
+copula_pdf(cop, c(0.3, 0.5), c(0.7, 0.9))
 copula_cdf(cop, 0.3, 0.7)
 }

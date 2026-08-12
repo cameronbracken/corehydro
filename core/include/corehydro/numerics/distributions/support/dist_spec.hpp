@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "corehydro/models/json_lite.hpp"
+#include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
@@ -234,6 +235,23 @@ inline corehydro::numerics::data::Transform parse_bivariate_transform(const std:
     throw std::runtime_error("unknown transform '" + t + "'; expected None, Logarithmic or NormalZ");
 }
 
+// The Weibull plotting positions of a sample, rank / (n + 1), over the ported
+// Statistics::RanksInPlace (ties take the average rank of their run). This is the transform the
+// pseudo-likelihood surface is defined on: BivariateCopula::PseudoLogLikelihood takes values
+// already on (0, 1) and does NOT rank internally, and the C# BivariateCopulaEstimation.MPL
+// carries the same contract in its own remarks ("sample data ... should be the plotting
+// positions of the data"). Doing it here rather than in each binding keeps R, Python, the
+// fixture runner and the oracle emitter on one implementation.
+//
+// It is idempotent on values that are already plotting positions of a distinct-valued sample,
+// so a caller that pre-transformed (every `mpl` fixture case does) is unaffected.
+inline std::vector<double> plotting_positions(const std::vector<double>& sample) {
+    std::vector<double> pp = corehydro::numerics::data::ranks_in_place(sample);
+    const double denominator = static_cast<double>(pp.size()) + 1.0;
+    for (double& v : pp) v /= denominator;
+    return pp;
+}
+
 // MLE-fits a marginal to its own sample when, and only when, its spec named a family without
 // parameters. IFM (BivariateCopulaEstimation's `ifm`) optimizes theta ALONE and takes the
 // marginals as already fitted, so a bare family left default-constructed would have theta
@@ -257,6 +275,9 @@ inline void prefit_marginal(UnivariateDistributionBase* marginal, const JsonValu
 // ({"fit": {"x", "y", "method", "margin_x"?, "margin_y"?}}). Marginals attach in both forms.
 // In the fit form a marginal that names a family with no parameters is MLE-fitted to its own
 // sample first (x for margin_x, y for margin_y) -- see prefit_marginal above.
+//
+// "x" and "y" are always the raw paired observations, for every method: the "mpl" arm converts
+// them to plotting positions itself (see plotting_positions above).
 inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& spec) {
     std::string family = spec_family(spec);
     std::unique_ptr<copulas::BivariateCopula> c;
@@ -296,7 +317,11 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
                                          "'; upstream implements SetThetaFromTau for Clayton, "
                                          "Gumbel and AliMikhailHaq only");
         } else if (method == "mpl") {
-            copulas::estimate(*c, x, y, copulas::CopulaEstimationMethod::PseudoLikelihood);
+            // Pseudo-likelihood is defined on the plotting positions, not on the data scale --
+            // see plotting_positions above. Ranking here means a caller passes raw paired
+            // observations for every method.
+            copulas::estimate(*c, plotting_positions(x), plotting_positions(y),
+                              copulas::CopulaEstimationMethod::PseudoLikelihood);
         } else if (method == "ifm") {
             copulas::estimate(*c, x, y, copulas::CopulaEstimationMethod::InferenceFromMargins);
         } else if (method == "mle") {

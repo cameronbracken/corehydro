@@ -3,13 +3,31 @@
 
 kCopulaFamilies <- c("AliMikhailHaq", "Clayton", "Frank", "Gumbel", "Joe", "Normal", "StudentT")
 
-# Internal: run a method against a corehydro_copula and return the numeric result. `args` is
-# always serialized as a JSON array, even when it has length one.
+# Internal: run a method and return the numeric result. `cop` is either a corehydro_copula or an
+# already-serialized spec string (copula_fit() has no corehydro_copula yet when it reads its own
+# fit back). `args` is always serialized as a JSON array, even when it has length one.
 copula_run <- function(cop, method, args = numeric(0)) {
-  res <- ch_copula_run_(cop$spec, method, to_spec_json(spec_array(as.double(args))))
+  spec <- if (is.character(cop)) cop else cop$spec
+  res <- ch_copula_run_(spec, method, to_spec_json(spec_array(as.double(args))))
   out <- res$values
   if (length(res$names)) names(out) <- res$names
   out
+}
+
+# Internal: recycle a pair of vectors to a common length and lay them out as all `u` then all
+# `v`, the split-at-the-halfway-point layout run_copula's pdf / log_pdf / cdf arms read.
+copula_pairs <- function(u, v, method) {
+  u <- as.double(u)
+  v <- as.double(v)
+  if (length(u) == 0L || length(v) == 0L) {
+    stop(sprintf("`u` and `v` must both be non-empty in %s()", method), call. = FALSE)
+  }
+  n <- max(length(u), length(v))
+  if (n %% length(u) != 0L || n %% length(v) != 0L) {
+    stop(sprintf("`u` (length %d) and `v` (length %d) are not recyclable to a common length",
+                 length(u), length(v)), call. = FALSE)
+  }
+  c(rep_len(u, n), rep_len(v, n))
 }
 
 check_copula <- function(cop) {
@@ -83,19 +101,27 @@ print.corehydro_copula <- function(x, ...) {
 #' parameters, that marginal's own parameters -- from a paired sample. Mirrors the C#
 #' `BivariateCopulaEstimation` methods of the Numerics library.
 #'
+#' `x` and `y` are the raw paired observations for every method. `method = "mpl"` maximizes the
+#' pseudo-likelihood, which is defined on the plotting positions `rank / (n + 1)` rather than on
+#' the data scale; that transform happens inside the shared C++ core, so R and Python fit the
+#' same numbers from the same input.
+#'
 #' `margin_x` and `margin_y` accept EITHER a family-name string or a `corehydro_dist`, and the
 #' two are handled differently:
 #' * a **name** (e.g. `margin_x = "Normal"`) is fitted by maximum likelihood to `x` (or `y`)
 #'   before the copula is estimated. This is what Inference From Margins (`method = "ifm"`)
-#'   requires, and is the usual case for `"ifm"` and `"mle"`.
-#' * a **`corehydro_dist`** (e.g. `margin_x = distribution("Normal", c(0, 1))`) is attached
-#'   exactly as given and is NOT refitted. Use this when you want a literal, fixed marginal.
+#'   requires, and it is accepted for `"ifm"` and `"mle"` only: `"mpl"` and `"tau"` ignore the
+#'   marginals entirely, so a name there would be reported back unfitted.
+#' * a **`corehydro_dist`** (e.g. `margin_x = distribution("Normal", c(0, 1))`) is accepted for
+#'   all four methods. `"mpl"` and `"tau"` attach it untouched (so [copula_random()] can draw on
+#'   the data scale), `"ifm"` takes it as the given margin, and `"mle"` re-estimates it jointly
+#'   with theta.
 #'
 #' `method = "tau"` inverts Kendall's tau into theta directly and is only implemented upstream
 #' for Clayton, Gumbel, and AliMikhailHaq (`SetThetaFromTau`); it errors for every other family.
 #'
 #' @param family one of [copula_names()].
-#' @param x,y numeric vectors of paired observations, the same length.
+#' @param x,y numeric vectors of raw paired observations, the same length.
 #' @param method `"mpl"` (maximum pseudo-likelihood, the default), `"ifm"` (inference from
 #'   margins), `"mle"` (full maximum likelihood), or `"tau"` (Kendall's tau inversion; Clayton,
 #'   Gumbel, and AliMikhailHaq only).
@@ -114,23 +140,41 @@ copula_fit <- function(family, x, y, method = c("mpl", "ifm", "mle", "tau"),
   }
   method <- match.arg(method)
   if (length(x) != length(y)) stop("`x` and `y` must have the same length", call. = FALSE)
-  margin_spec <- function(m) {
+  margin_spec <- function(m, nm) {
     if (is.null(m)) return(NULL)
-    if (is.character(m) && length(m) == 1L) return(list(family = m))
+    if (is.character(m) && length(m) == 1L) {
+      # "mpl" and "tau" never look at the marginals, so a named family would come back a
+      # default Normal(0, 1) presented as though it had been fitted.
+      if (method %in% c("mpl", "tau")) {
+        stop(sprintf(paste0("method = \"%s\" does not use marginals, so `%s = \"%s\"` would be ",
+                            "left unfitted; pass a parameterized corehydro_dist (see ",
+                            "distribution()) to attach a fixed marginal for later sampling, or ",
+                            "use method = \"ifm\" or \"mle\" to fit one"),
+                     method, nm, m), call. = FALSE)
+      }
+      return(list(family = m))
+    }
     if (inherits(m, "corehydro_dist")) return(m)
-    stop("marginals must be a family-name string or a corehydro_dist", call. = FALSE)
+    stop(sprintf("`%s` must be a family-name string or a corehydro_dist", nm), call. = FALSE)
   }
   fit <- list(x = spec_array(as.double(x)), y = spec_array(as.double(y)), method = method,
-              margin_x = margin_spec(margin_x), margin_y = margin_spec(margin_y))
+              margin_x = margin_spec(margin_x, "margin_x"),
+              margin_y = margin_spec(margin_y, "margin_y"))
   spec <- to_spec_json(list(family = family, fit = fit))
-  theta <- unname(rjson_run(spec, "theta"))
-  df <- if (identical(family, "StudentT")) unname(rjson_run(spec, "df")) else NULL
-  # Read the (possibly MLE-fitted) marginal back as a corehydro_dist, so a fitted copula is
-  # fully parameterized and usable by copula_random() exactly like one built by copula().
+  # One "parameters" call carries theta and, for StudentT, df -- the estimation runs once per
+  # runner call, so asking for them separately would refit the copula twice.
+  pars <- unname(copula_run(spec, "parameters"))
+  theta <- pars[1L]
+  df <- if (identical(family, "StudentT")) pars[2L] else NULL
+  # Read a marginal back as a corehydro_dist only when the fit actually moved it: "mle"
+  # re-estimates both marginals jointly, and a named marginal is MLE-fitted before an "ifm"
+  # fit. A corehydro_dist under "mpl"/"tau"/"ifm" is used exactly as given, so it is already
+  # the answer and needs no second estimation run.
   fitted_margin <- function(m, which) {
     if (is.null(m)) return(NULL)
+    if (!identical(method, "mle") && inherits(m, "corehydro_dist")) return(m)
     fam <- if (is.character(m)) m else m$family
-    distribution(fam, unname(rjson_run(spec, paste0("marginal_", which, "_parameters"))))
+    distribution(fam, unname(copula_run(spec, paste0("marginal_", which, "_parameters"))))
   }
   structure(list(family = family, theta = theta, df = df,
                  margin_x = fitted_margin(margin_x, "x"), margin_y = fitted_margin(margin_y, "y"),
@@ -138,26 +182,19 @@ copula_fit <- function(family, x, y, method = c("mpl", "ifm", "mle", "tau"),
             class = "corehydro_copula")
 }
 
-# Internal: run a method against an already-serialized spec string (used by copula_fit(), which
-# has no corehydro_copula yet to hand to copula_run()).
-rjson_run <- function(spec, method, args = numeric(0)) {
-  res <- ch_copula_run_(spec, method, to_spec_json(spec_array(as.double(args))))
-  out <- res$values
-  if (length(res$names)) names(out) <- res$names
-  out
-}
-
 #' Copula density, distribution, and inverse functions
 #'
-#' Density, log-density, and CDF for a [copula()] object, evaluated on the unit square.
+#' Density, log-density, and CDF for a [copula()] object, evaluated on the unit square. `u` and
+#' `v` are recycled to a common length and evaluated pairwise, one returned value per pair.
 #'
 #' @param cop a `corehydro_copula` from [copula()] or [copula_fit()].
 #' @param u,v numeric vectors in `(0, 1)`, the copula's two arguments.
-#' @return a numeric vector, recycled over `u`/`v`.
+#' @return a numeric vector, one value per recycled `(u, v)` pair.
 #' @name copula_functions
 #' @examples
 #' cop <- copula("Clayton", theta = 2)
 #' copula_pdf(cop, 0.3, 0.7)
+#' copula_pdf(cop, c(0.3, 0.5), c(0.7, 0.9))
 #' copula_cdf(cop, 0.3, 0.7)
 NULL
 
@@ -165,21 +202,21 @@ NULL
 #' @export
 copula_pdf <- function(cop, u, v) {
   check_copula(cop)
-  unname(copula_run(cop, "pdf", c(u, v)))
+  unname(copula_run(cop, "pdf", copula_pairs(u, v, "copula_pdf")))
 }
 
 #' @rdname copula_functions
 #' @export
 copula_log_pdf <- function(cop, u, v) {
   check_copula(cop)
-  unname(copula_run(cop, "log_pdf", c(u, v)))
+  unname(copula_run(cop, "log_pdf", copula_pairs(u, v, "copula_log_pdf")))
 }
 
 #' @rdname copula_functions
 #' @export
 copula_cdf <- function(cop, u, v) {
   check_copula(cop)
-  unname(copula_run(cop, "cdf", c(u, v)))
+  unname(copula_run(cop, "cdf", copula_pairs(u, v, "copula_cdf")))
 }
 
 #' Copula inverse CDF
@@ -211,8 +248,9 @@ copula_tail_dependence <- function(cop) {
 
 #' Copula joint exceedance probability
 #'
-#' `P(U > u, V > v)` (`type = "and"`) or `P(U > u \\| V > v)`'s complement,
-#' `P(U > u OR V > v)` (`type = "or"`).
+#' The probability that both variables exceed their thresholds, `P(U > u, V > v)`
+#' (`type = "and"`), or that at least one does, `P(U > u or V > v) = 1 - C(u, v)`
+#' (`type = "or"`).
 #'
 #' @param cop a `corehydro_copula`.
 #' @param u,v numeric scalars in `(0, 1)`.
@@ -289,16 +327,15 @@ copula_random <- function(cop, n, seed = NULL) {
 #' copula density, and the full log-likelihood adds the marginal log-densities to that. `method =
 #' "ifm"` and `"full"` need `margin_x`/`margin_y` attached (see [copula()]).
 #'
-#' Upstream's pseudo log-likelihood is defined on values already on `(0, 1)` (the "plotting
-#' positions" of the sample), not on the data's own scale -- a raw `x`/`y` fed to it directly
-#' would fall outside the copula's domain. `method = "pseudo"` therefore converts `x` and `y` to
-#' pseudo-observations via `rank(x) / (n + 1)` before evaluating, matching the Weibull plotting
-#' position the C++ `BivariateCopulaEstimation` machinery itself uses to seed its MPL step (see
-#' `bivariate_copula_estimation.hpp`'s internal `rank / (n + 1)` transform). `method = "ifm"` and
-#' `"full"` take `x`/`y` on their own data scale and transform through the marginals internally.
+#' All three methods take `x` and `y` as raw paired observations on their own data scale.
+#' Upstream's pseudo log-likelihood is defined on values already on `(0, 1)`, so `"pseudo"`
+#' converts the sample to its plotting positions, `rank / (n + 1)`, first; that transform happens
+#' inside the shared C++ core (the same one [copula_fit()]'s `"mpl"` fit uses), so R and Python
+#' return the same number for the same input. `"ifm"` and `"full"` transform through the attached
+#' marginal CDFs instead.
 #'
 #' @param cop a `corehydro_copula`.
-#' @param x,y numeric vectors of paired observations, the same length.
+#' @param x,y numeric vectors of raw paired observations, the same length.
 #' @param method `"pseudo"` (the default), `"ifm"`, or `"full"`.
 #' @return a single numeric.
 #' @examples
@@ -313,11 +350,6 @@ copula_log_likelihood <- function(cop, x, y, method = c("pseudo", "ifm", "full")
   check_copula(cop)
   method <- match.arg(method)
   if (length(x) != length(y)) stop("`x` and `y` must have the same length", call. = FALSE)
-  if (identical(method, "pseudo")) {
-    n <- length(x)
-    x <- rank(x) / (n + 1)
-    y <- rank(y) / (n + 1)
-  }
   m <- switch(method, pseudo = "log_likelihood_pseudo", ifm = "log_likelihood_ifm",
               full = "log_likelihood_full")
   unname(copula_run(cop, m, c(as.double(x), as.double(y))))

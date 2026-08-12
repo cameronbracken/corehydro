@@ -19,11 +19,24 @@ check_mvdist <- function(mv) {
 }
 
 # Internal: user-facing indices are 1-based (matching trend()/model_parameter()); the spec and
-# the C++ take 0-based.
+# the C++ take 0-based. A fractional index is rejected rather than truncated, and duplicates are
+# rejected here so the message names the argument (the C++ validate_indices rejects them too).
 mv_indices <- function(idx, n, what) {
+  if (!is.numeric(idx) || length(idx) == 0L || anyNA(idx)) {
+    stop(sprintf("`%s` must be a non-empty numeric vector of dimension indices", what),
+         call. = FALSE)
+  }
+  if (any(idx != trunc(idx))) {
+    stop(sprintf("`%s` must be whole numbers; got %s", what,
+                 paste(idx[idx != trunc(idx)], collapse = ", ")), call. = FALSE)
+  }
   idx <- as.integer(idx)
   if (any(idx < 1L) || any(idx > n)) {
     stop(sprintf("`%s` must be between 1 and %d", what, n), call. = FALSE)
+  }
+  if (anyDuplicated(idx)) {
+    stop(sprintf("`%s` must not repeat a dimension; got %s", what,
+                 paste(idx[duplicated(idx)], collapse = ", ")), call. = FALSE)
   }
   idx - 1L
 }

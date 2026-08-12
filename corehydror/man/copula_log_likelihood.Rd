@@ -9,7 +9,7 @@ copula_log_likelihood(cop, x, y, method = c("pseudo", "ifm", "full"))
 \arguments{
 \item{cop}{a \code{corehydro_copula}.}
 
-\item{x, y}{numeric vectors of paired observations, the same length.}
+\item{x, y}{numeric vectors of raw paired observations, the same length.}
 
 \item{method}{\code{"pseudo"} (the default), \code{"ifm"}, or \code{"full"}.}
 }
@@ -23,13 +23,12 @@ from margins) transforms the raw data through the attached marginal CDFs then ev
 copula density, and the full log-likelihood adds the marginal log-densities to that. \code{method = "ifm"} and \code{"full"} need \code{margin_x}/\code{margin_y} attached (see \code{\link[=copula]{copula()}}).
 }
 \details{
-Upstream's pseudo log-likelihood is defined on values already on \verb{(0, 1)} (the "plotting
-positions" of the sample), not on the data's own scale -- a raw \code{x}/\code{y} fed to it directly
-would fall outside the copula's domain. \code{method = "pseudo"} therefore converts \code{x} and \code{y} to
-pseudo-observations via \code{rank(x) / (n + 1)} before evaluating, matching the Weibull plotting
-position the C++ \code{BivariateCopulaEstimation} machinery itself uses to seed its MPL step (see
-\code{bivariate_copula_estimation.hpp}'s internal \code{rank / (n + 1)} transform). \code{method = "ifm"} and
-\code{"full"} take \code{x}/\code{y} on their own data scale and transform through the marginals internally.
+All three methods take \code{x} and \code{y} as raw paired observations on their own data scale.
+Upstream's pseudo log-likelihood is defined on values already on \verb{(0, 1)}, so \code{"pseudo"}
+converts the sample to its plotting positions, \code{rank / (n + 1)}, first; that transform happens
+inside the shared C++ core (the same one \code{\link[=copula_fit]{copula_fit()}}'s \code{"mpl"} fit uses), so R and Python
+return the same number for the same input. \code{"ifm"} and \code{"full"} transform through the attached
+marginal CDFs instead.
 }
 \examples{
 cop <- copula("Clayton", theta = 2,
