@@ -1,0 +1,24 @@
+{
+  "target": "Mixture",
+  "kind": "univariate_distribution",
+  "source": "Task 9 (cross-language digest fixtures) -- see fixtures/distributions/univariate/mixture.json for the primary Mixture coverage; this file exists only to pin a second, larger seeded draw stream shared verbatim by all four runners.",
+  "reference": "Not a C# unit test transcription -- expected values are curated via `tools/oracle_emitter --dump` against the real Numerics Mixture.GenerateRandomValues and reproduced by tools/verify_oracles.py, per fixtures/README.md's curation path.",
+  "note": "A two-component Normal mixture (distinct from the three-component construct mixture.json's own seeded_sampling case uses), n = 20 draws seeded at 12345 -- both the component count and the seed are new coverage, not a repeat of the existing seed-42/n-5 pin. The point of this fixture is the CROSS-LANGUAGE guarantee: the same three pinned draws (first, middle, last of the stream) are asserted by the C++, R and Python runners off the identical JSON literal, so R and Python agreeing is proven by both independently reproducing the real C# Mersenne-Twister/component-selection stream rather than by a separate comparison step.",
+  "cases": [
+    {
+      "name": "two_normal_seeded_digest",
+      "construct": {
+        "components": [
+          {"target": "Normal", "params": [0, 1]},
+          {"target": "Normal", "params": [10, 2]}
+        ],
+        "weights": [0.4, 0.6]
+      },
+      "assertions": [
+        {"method": "random_value", "args": [20, 12345, 0], "expected": 12.454702643514093, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "random_value", "args": [20, 12345, 9], "expected": 7.969332288598064, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "random_value", "args": [20, 12345, 19], "expected": 6.719718578739573, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "target": "MultivariateNormal",
+  "kind": "multivariate_distribution",
+  "source": "Task 9 (cross-language digest fixtures) -- see fixtures/distributions/multivariate/multivariate_normal.json for the primary MultivariateNormal coverage; this file exists only to pin a second, larger seeded Latin hypercube stream shared verbatim by all four runners.",
+  "reference": "Not a C# unit test transcription -- expected values are curated via `tools/oracle_emitter --dump` against the real Numerics MultivariateNormal.LatinHypercubeRandomValues and reproduced by tools/verify_oracles.py, per fixtures/README.md's curation path.",
+  "note": "A 3-dimensional MultivariateNormal (mean/covariance borrowed from this file's own marginal_subset_and_values / conditional_trivariate_schur_complement cases, which never exercise sampling), n = 20 LHS draws seeded at 12345 -- the dimension, seed and sample size are all new coverage relative to the existing seeded_sampling case (2-dimensional, seed 7, n 5). Asserts three coordinates spanning rows and columns of the n x dimension block. The point of this fixture is the CROSS-LANGUAGE guarantee: the same three pinned coordinates are asserted by the C++, R and Python runners off the identical JSON literal, so R and Python agreeing is proven by both independently reproducing the real C# seeded LatinHypercube stream rather than by a separate comparison step.",
+  "cases": [
+    {
+      "name": "trivariate_lhs_seeded_digest",
+      "construct": {
+        "mean": [1.0, 2.0, 3.0],
+        "covariance": [[4.0, 1.2, 0.5], [1.2, 9.0, 2.1], [0.5, 2.1, 16.0]]
+      },
+      "assertions": [
+        {"method": "lhs_value", "args": [20, 12345, 0, 0], "expected": -0.256420212462507, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "lhs_value", "args": [20, 12345, 9, 1], "expected": 3.226163760986415, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "lhs_value", "args": [20, 12345, 19, 2], "expected": -2.763807980185689, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"}
+      ]
+    }
+  ]
+}
