@@ -47,5 +47,7 @@ cross-language identity.
 | [23. Censored flood frequency](23-censored-flood-frequency/python.ipynb) | historical and paleoflood interval observations, perception thresholds, Hirsch-Stedinger plotting positions, Multiple Grubbs-Beck low outliers |
 | [24. Nonstationary frequency analysis](24-nonstationary-trends/python.ipynb) | trends on a distribution parameter, stationary versus nonstationary model comparison by AIC, BIC, and DIC |
 | [25. Estimation methods](25-estimation-methods/python.ipynb) | `fit_mle`, `fit_map`, `fit_bayesian`, and `fit_gmm` on the same censored record; AIC/BIC/DIC, profile versus credible intervals, R-hat/ESS, and estimation diagnostics |
+| [26. Copulas and joint frequency](26-copulas-and-joint-frequency/python.ipynb) | bivariate copulas fitted by pseudo-likelihood, Kendall's tau, and inference from margins; tail dependence; and-joint exceedance of a coincident event; the multivariate normal rectangle probability; cross-check against `bivariate_analysis` |
+| [27. Composite distributions](27-composite-distributions/python.ipynb) | two-component mixtures through `model_mixture` and `fit_mle` rebuilt as `dist_mixture`; kernel density with an explicit bandwidth and `bounded_by_data`; `dist_truncated` renormalization onto a physical range |
 
 : {tbl-colwidths="[34,66]"}
