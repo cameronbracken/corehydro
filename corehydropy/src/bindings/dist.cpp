@@ -18,8 +18,6 @@
 #include "corehydro/numerics/distributions/empirical_distribution.hpp"
 #include "corehydro/numerics/distributions/gamma_distribution.hpp"
 #include "corehydro/numerics/distributions/kernel_density.hpp"
-#include "corehydro/numerics/distributions/mixture.hpp"
-#include "corehydro/numerics/distributions/truncated_distribution.hpp"
 #include "bindings.hpp"
 
 namespace py = pybind11;
@@ -131,50 +129,19 @@ void register_distributions(py::module_& m) {
     });
     m.def("dist_names", []() { return dist::distribution_names(); });
 
-    // --- Composite glue: TruncatedDistribution -----------------------------------------
-    // Accepts (base_target, base_params, lo, hi) and exposes the full distribution surface.
-    // Future composites (Empirical, KernelDensity, Mixture, CompetingRisks) follow the same
-    // pattern with their own trunc_<name>_* / empirical_* / etc. module-level functions.
-
-    m.def("trunc_moments", [](const std::string& bt, const std::vector<double>& bp,
-                               double lo, double hi) {
-        auto base = dist::create_distribution(bt);
-        base->set_parameters(bp);
-        dist::TruncatedDistribution td(std::move(base), lo, hi);
-        return std::map<std::string, double>{
-            {"mean", td.mean()},         {"median", td.median()},
-            {"mode", td.mode()},         {"sd", td.standard_deviation()},
-            {"skewness", td.skewness()}, {"kurtosis", td.kurtosis()},
-            {"minimum", td.minimum()},   {"maximum", td.maximum()}};
-    });
-    m.def("trunc_pdf", [](const std::string& bt, const std::vector<double>& bp,
-                           double lo, double hi, double x) {
-        auto base = dist::create_distribution(bt);
-        base->set_parameters(bp);
-        return dist::TruncatedDistribution(std::move(base), lo, hi).pdf(x);
-    });
-    m.def("trunc_cdf", [](const std::string& bt, const std::vector<double>& bp,
-                           double lo, double hi, double x) {
-        auto base = dist::create_distribution(bt);
-        base->set_parameters(bp);
-        return dist::TruncatedDistribution(std::move(base), lo, hi).cdf(x);
-    });
-    m.def("trunc_quantile", [](const std::string& bt, const std::vector<double>& bp,
-                                double lo, double hi, double prob) {
-        auto base = dist::create_distribution(bt);
-        base->set_parameters(bp);
-        return dist::TruncatedDistribution(std::move(base), lo, hi).inverse_cdf(prob);
-    });
-    m.def("trunc_valid", [](const std::string& bt, const std::vector<double>& bp,
-                             double lo, double hi) {
-        auto base = dist::create_distribution(bt);
-        base->set_parameters(bp);
-        return dist::TruncatedDistribution(std::move(base), lo, hi).parameters_valid();
-    });
+    // --- Composite glue: the fixture cases the shared runner cannot serve ---------------
+    // Everything else about a composite distribution (TruncatedDistribution / Empirical /
+    // KernelDensity / Mixture / CompetingRisks) now goes through _core.dist_spec_run in
+    // dist_spec.cpp, which drives the same dist_runner.hpp entry point the C++ fixture runner,
+    // the R glue and the dotnet oracle emitter drive. Three fixture cases cannot: the runner's
+    // JSON grammar has no NaN/Infinity literal, so Empirical's non-finite `p` and
+    // KernelDensity's non-finite `bandwidth` validity cases keep a narrow constructor call
+    // here, and `dependency_change` (which mutates one CompetingRisks object mid-call) has no
+    // runner verb. See test_fixtures.py's delegation comment.
 
     // --- Composite glue: EmpiricalDistribution -----------------------------------------
-    // Accepts (x_vals, p_vals, p_transform, p_descending) and exposes the full distribution
-    // surface. p_transform: "NormalZ" (default) or "None". p_descending (v2.1.4): DECLARES
+    // Accepts (x_vals, p_vals, p_transform, p_descending). p_transform: "NormalZ" (default)
+    // or "None". p_descending (v2.1.4): DECLARES
     // the probability order (mirrors C#'s explicit `probabilityOrder` argument -- NOT
     // auto-detected from the data; see empirical_distribution.hpp's header note) -- false
     // (the ordinary ascending-CDF case) unless the fixture opts into the descending
@@ -187,37 +154,6 @@ void register_distributions(py::module_& m) {
         return dist::EmpiricalTransform::NormalZ;  // unreachable
     };
 
-    m.def("emp_moments", [parse_emp_transform](const std::vector<double>& xv,
-                                                const std::vector<double>& pv,
-                                                const std::string& pt_str, bool p_descending) {
-        dist::EmpiricalDistribution d(xv, pv, parse_emp_transform(pt_str), p_descending);
-        return std::map<std::string, double>{
-            {"mean", d.mean()},         {"median", d.median()},
-            {"mode", d.mode()},         {"sd", d.standard_deviation()},
-            {"skewness", d.skewness()}, {"kurtosis", d.kurtosis()},
-            {"minimum", d.minimum()},   {"maximum", d.maximum()}};
-    });
-    m.def("emp_pdf", [parse_emp_transform](const std::vector<double>& xv,
-                                            const std::vector<double>& pv,
-                                            const std::string& pt_str, bool p_descending,
-                                            double x) {
-        return dist::EmpiricalDistribution(xv, pv, parse_emp_transform(pt_str), p_descending)
-            .pdf(x);
-    });
-    m.def("emp_cdf", [parse_emp_transform](const std::vector<double>& xv,
-                                            const std::vector<double>& pv,
-                                            const std::string& pt_str, bool p_descending,
-                                            double x) {
-        return dist::EmpiricalDistribution(xv, pv, parse_emp_transform(pt_str), p_descending)
-            .cdf(x);
-    });
-    m.def("emp_quantile", [parse_emp_transform](const std::vector<double>& xv,
-                                                 const std::vector<double>& pv,
-                                                 const std::string& pt_str, bool p_descending,
-                                                 double prob) {
-        return dist::EmpiricalDistribution(xv, pv, parse_emp_transform(pt_str), p_descending)
-            .inverse_cdf(prob);
-    });
     m.def("emp_valid", [parse_emp_transform](const std::vector<double>& xv,
                                               const std::vector<double>& pv,
                                               const std::string& pt_str, bool p_descending) {
@@ -226,7 +162,7 @@ void register_distributions(py::module_& m) {
     });
 
     // --- Composite glue: KernelDensity -------------------------------------------------
-    // Accepts (data, kernel, bandwidth, bounded_by_data) and exposes the full surface.
+    // Accepts (data, kernel, bandwidth, bounded_by_data).
     // kernel: "Gaussian" | "Epanechnikov" | "Triangular" | "Uniform"
     // bandwidth: negative value means use Silverman's rule (auto).
 
@@ -251,99 +187,9 @@ void register_distributions(py::module_& m) {
         return kde;
     };
 
-    m.def("kde_moments", [make_kde](const std::vector<double>& data, const std::string& kernel,
-                                     double bandwidth, bool bounded_by_data) {
-        auto d = make_kde(data, kernel, bandwidth, bounded_by_data);
-        return std::map<std::string, double>{
-            {"mean", d.mean()},         {"median", d.median()},
-            {"mode", d.mode()},         {"sd", d.standard_deviation()},
-            {"skewness", d.skewness()}, {"kurtosis", d.kurtosis()},
-            {"minimum", d.minimum()},   {"maximum", d.maximum()}};
-    });
-    m.def("kde_pdf", [make_kde](const std::vector<double>& data, const std::string& kernel,
-                                 double bandwidth, bool bounded_by_data, double x) {
-        return make_kde(data, kernel, bandwidth, bounded_by_data).pdf(x);
-    });
-    m.def("kde_cdf", [make_kde](const std::vector<double>& data, const std::string& kernel,
-                                 double bandwidth, bool bounded_by_data, double x) {
-        return make_kde(data, kernel, bandwidth, bounded_by_data).cdf(x);
-    });
-    m.def("kde_quantile", [make_kde](const std::vector<double>& data, const std::string& kernel,
-                                      double bandwidth, bool bounded_by_data, double prob) {
-        return make_kde(data, kernel, bandwidth, bounded_by_data).inverse_cdf(prob);
-    });
     m.def("kde_valid", [make_kde](const std::vector<double>& data, const std::string& kernel,
                                    double bandwidth, bool bounded_by_data) {
         return make_kde(data, kernel, bandwidth, bounded_by_data).parameters_valid();
-    });
-
-    // --- Composite glue: Mixture -------------------------------------------------------
-    // Accepts (comp_targets, comp_params, weights, zero_inflated, zero_weight) where
-    // comp_params is a list of param vectors (one per component). Exposes the full
-    // distribution surface. zero_inflated/zero_weight mirror the v2.1.4 IsZeroInflated/
-    // ZeroWeight setters (default False/0.0 at the Python call sites); set in that order
-    // since the setters renormalize component weights as a side effect (mixture.hpp's
-    // header note).
-
-    auto make_mixture = [](const std::vector<std::string>& comp_targets,
-                            const std::vector<std::vector<double>>& comp_params,
-                            const std::vector<double>& weights, bool zero_inflated,
-                            double zero_weight) {
-        int K = static_cast<int>(comp_targets.size());
-        std::vector<std::unique_ptr<dist::UnivariateDistributionBase>> comps;
-        comps.reserve(K);
-        for (int i = 0; i < K; ++i) {
-            auto d = dist::create_distribution(comp_targets[i]);
-            d->set_parameters(comp_params[i]);
-            comps.push_back(std::move(d));
-        }
-        dist::Mixture mix(weights, std::move(comps));
-        mix.set_is_zero_inflated(zero_inflated);
-        mix.set_zero_weight(zero_weight);
-        return mix;
-    };
-
-    m.def("mix_moments", [make_mixture](const std::vector<std::string>& ct,
-                                         const std::vector<std::vector<double>>& cp,
-                                         const std::vector<double>& wts, bool zi, double zw) {
-        auto d = make_mixture(ct, cp, wts, zi, zw);
-        return std::map<std::string, double>{
-            {"mean", d.mean()},         {"median", d.median()},
-            {"mode", d.mode()},         {"sd", d.standard_deviation()},
-            {"skewness", d.skewness()}, {"kurtosis", d.kurtosis()},
-            {"minimum", d.minimum()},   {"maximum", d.maximum()}};
-    });
-    m.def("mix_pdf", [make_mixture](const std::vector<std::string>& ct,
-                                     const std::vector<std::vector<double>>& cp,
-                                     const std::vector<double>& wts, bool zi, double zw,
-                                     double x) {
-        return make_mixture(ct, cp, wts, zi, zw).pdf(x);
-    });
-    m.def("mix_cdf", [make_mixture](const std::vector<std::string>& ct,
-                                     const std::vector<std::vector<double>>& cp,
-                                     const std::vector<double>& wts, bool zi, double zw,
-                                     double x) {
-        return make_mixture(ct, cp, wts, zi, zw).cdf(x);
-    });
-    m.def("mix_quantile", [make_mixture](const std::vector<std::string>& ct,
-                                          const std::vector<std::vector<double>>& cp,
-                                          const std::vector<double>& wts, bool zi, double zw,
-                                          double prob) {
-        return make_mixture(ct, cp, wts, zi, zw).inverse_cdf(prob);
-    });
-    m.def("mix_valid", [make_mixture](const std::vector<std::string>& ct,
-                                       const std::vector<std::vector<double>>& cp,
-                                       const std::vector<double>& wts, bool zi, double zw) {
-        return make_mixture(ct, cp, wts, zi, zw).parameters_valid();
-    });
-    // GetParameters() as a flat vector: [w0, ..., wK-1, component0 params..., ...] -- the
-    // composite-target analogue of the generic "param" dispatch; needed because Mixture's
-    // weights are recomputed inside C++ by the zero-inflation setters (unlike
-    // TruncatedDistribution's "param", which reads straight off the known construct params).
-    m.def("mix_params", [make_mixture](const std::vector<std::string>& ct,
-                                        const std::vector<std::vector<double>>& cp,
-                                        const std::vector<double>& wts, bool zi, double zw) {
-        return make_mixture(ct, cp, wts, zi, zw).get_parameters();
     });
 
     // --- Composite glue: CompetingRisks -----------------------------------------------
@@ -389,57 +235,6 @@ void register_distributions(py::module_& m) {
         return cr;
     };
 
-    m.def("cr_moments", [make_competing_risks](const std::vector<std::string>& ct,
-                                                const std::vector<std::vector<double>>& cp,
-                                                bool minimum_of_rv, const std::string& dependency,
-                                                const std::vector<std::vector<double>>& correlation) {
-        auto d = make_competing_risks(ct, cp, minimum_of_rv, dependency, correlation);
-        return std::map<std::string, double>{
-            {"mean", d.mean()},         {"median", d.median()},
-            {"mode", d.mode()},         {"sd", d.standard_deviation()},
-            {"skewness", d.skewness()}, {"kurtosis", d.kurtosis()},
-            {"minimum", d.minimum()},   {"maximum", d.maximum()}};
-    });
-    m.def("cr_pdf", [make_competing_risks](const std::vector<std::string>& ct,
-                                            const std::vector<std::vector<double>>& cp,
-                                            bool minimum_of_rv, const std::string& dependency,
-                                            const std::vector<std::vector<double>>& correlation,
-                                            double x) {
-        return make_competing_risks(ct, cp, minimum_of_rv, dependency, correlation).pdf(x);
-    });
-    m.def("cr_log_pdf", [make_competing_risks](const std::vector<std::string>& ct,
-                                                const std::vector<std::vector<double>>& cp,
-                                                bool minimum_of_rv, const std::string& dependency,
-                                                const std::vector<std::vector<double>>& correlation,
-                                                double x) {
-        return make_competing_risks(ct, cp, minimum_of_rv, dependency, correlation).log_pdf(x);
-    });
-    m.def("cr_cdf", [make_competing_risks](const std::vector<std::string>& ct,
-                                            const std::vector<std::vector<double>>& cp,
-                                            bool minimum_of_rv, const std::string& dependency,
-                                            const std::vector<std::vector<double>>& correlation,
-                                            double x) {
-        return make_competing_risks(ct, cp, minimum_of_rv, dependency, correlation).cdf(x);
-    });
-    m.def("cr_quantile", [make_competing_risks](const std::vector<std::string>& ct,
-                                                  const std::vector<std::vector<double>>& cp,
-                                                  bool minimum_of_rv, const std::string& dependency,
-                                                  const std::vector<std::vector<double>>& correlation,
-                                                  double prob) {
-        return make_competing_risks(ct, cp, minimum_of_rv, dependency, correlation).inverse_cdf(prob);
-    });
-    m.def("cr_valid", [make_competing_risks](const std::vector<std::string>& ct,
-                                              const std::vector<std::vector<double>>& cp,
-                                              bool minimum_of_rv, const std::string& dependency,
-                                              const std::vector<std::vector<double>>& correlation) {
-        return make_competing_risks(ct, cp, minimum_of_rv, dependency, correlation).parameters_valid();
-    });
-    // v2.1.4: verifies the Dependency setter fix (changing Dependency mid-lifetime
-    // invalidates the cached MVN) and that PerfectlyNegative no longer zeroes the public
-    // CorrelationMatrix. ONE self-contained call (Python has no persistent object across
-    // fixture assertions): CDF under the FIRST dependency, read CorrelationMatrix[i, j]
-    // back, then switch to `dependency2` and CDF again -- returns the value the fixture
-    // asked for via `field` ("cdf1", "correlation", "cdf2").
     m.def("cr_dependency_change", [make_competing_risks, parse_dependency](
                                        const std::vector<std::string>& ct,
                                        const std::vector<std::vector<double>>& cp, bool minimum_of_rv,

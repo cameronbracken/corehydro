@@ -16,8 +16,6 @@
 #include "corehydro/numerics/distributions/empirical_distribution.hpp"
 #include "corehydro/numerics/distributions/gamma_distribution.hpp"
 #include "corehydro/numerics/distributions/kernel_density.hpp"
-#include "corehydro/numerics/distributions/mixture.hpp"
-#include "corehydro/numerics/distributions/truncated_distribution.hpp"
 
 namespace dist = corehydro::numerics::distributions;
 using namespace cpp11;
@@ -157,53 +155,16 @@ strings ch_dist_names_() {
     return out;
 }
 
-// --- Composite glue: TruncatedDistribution ------------------------------------------
-// Accepts (base_target, base_params, lo, hi) and exposes the full distribution surface.
-// Mirrors the ch_gev_* pattern: bespoke entry points that the R fixture runner uses.
-// Future composites (Empirical, KernelDensity, Mixture, CompetingRisks) follow the same
-// pattern with their own ch_<name>_* functions; the R runner dispatches by target string.
-
-static dist::TruncatedDistribution make_trunc(const std::string& base_target,
-                                               doubles base_params,
-                                               double lo, double hi) {
-    auto base = dist::create_distribution(base_target);
-    base->set_parameters(std::vector<double>(base_params.begin(), base_params.end()));
-    return dist::TruncatedDistribution(std::move(base), lo, hi);
-}
-
-[[cpp11::register]]
-doubles ch_trunc_moments_(std::string base_target, doubles base_params,
-                           double lo, double hi) {
-    auto td = make_trunc(base_target, base_params, lo, hi);
-    writable::doubles out({td.mean(), td.median(), td.mode(), td.standard_deviation(),
-                           td.skewness(), td.kurtosis(), td.minimum(), td.maximum()});
-    out.names() = {"mean", "median", "mode", "sd", "skewness", "kurtosis", "minimum", "maximum"};
-    return out;
-}
-
-[[cpp11::register]]
-double ch_trunc_pdf_(std::string base_target, doubles base_params, double lo, double hi, double x) {
-    return make_trunc(base_target, base_params, lo, hi).pdf(x);
-}
-
-[[cpp11::register]]
-double ch_trunc_cdf_(std::string base_target, doubles base_params, double lo, double hi, double x) {
-    return make_trunc(base_target, base_params, lo, hi).cdf(x);
-}
-
-[[cpp11::register]]
-double ch_trunc_quantile_(std::string base_target, doubles base_params,
-                           double lo, double hi, double p) {
-    return make_trunc(base_target, base_params, lo, hi).inverse_cdf(p);
-}
-
-[[cpp11::register]]
-bool ch_trunc_valid_(std::string base_target, doubles base_params, double lo, double hi) {
-    return make_trunc(base_target, base_params, lo, hi).parameters_valid();
-}
+// --- Composite glue: the fixture cases the shared distribution runner cannot serve --------
+// Everything else about a composite distribution (TruncatedDistribution / Empirical /
+// KernelDensity / Mixture / CompetingRisks) now goes through ch_dist_spec_run_ in dist_spec.cpp,
+// which drives the same dist_runner.hpp entry point the C++ fixture runner, the Python glue and
+// the dotnet oracle emitter drive. Three fixture cases cannot: the runner's JSON grammar has no
+// NaN/Infinity literal, so Empirical's non-finite `p` and KernelDensity's non-finite `bandwidth`
+// validity cases keep a narrow constructor call here, and `dependency_change` (which mutates one
+// CompetingRisks object mid-call) has no runner verb. See test-fixtures.R's delegation comment.
 
 // --- Composite glue: EmpiricalDistribution ------------------------------------------
-// Accepts (x, p, p_transform, p_descending) and exposes the full distribution surface.
 // p_transform: "NormalZ" (default) or "None". p_descending (v2.1.4): DECLARES the
 // probability order (mirrors C#'s explicit `probabilityOrder` argument -- NOT auto-detected
 // from the data; see empirical_distribution.hpp's header note) -- false (the ordinary
@@ -219,40 +180,11 @@ static dist::EmpiricalDistribution make_empirical(doubles x_vals, doubles p_vals
 }
 
 [[cpp11::register]]
-doubles ch_emp_moments_(doubles x_vals, doubles p_vals, std::string p_transform,
-                        bool p_descending) {
-    auto d = make_empirical(x_vals, p_vals, p_transform, p_descending);
-    writable::doubles out({d.mean(), d.median(), d.mode(), d.standard_deviation(),
-                           d.skewness(), d.kurtosis(), d.minimum(), d.maximum()});
-    out.names() = {"mean", "median", "mode", "sd", "skewness", "kurtosis", "minimum", "maximum"};
-    return out;
-}
-
-[[cpp11::register]]
-double ch_emp_pdf_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending,
-                   double x) {
-    return make_empirical(x_vals, p_vals, p_transform, p_descending).pdf(x);
-}
-
-[[cpp11::register]]
-double ch_emp_cdf_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending,
-                   double x) {
-    return make_empirical(x_vals, p_vals, p_transform, p_descending).cdf(x);
-}
-
-[[cpp11::register]]
-double ch_emp_quantile_(doubles x_vals, doubles p_vals, std::string p_transform,
-                        bool p_descending, double prob) {
-    return make_empirical(x_vals, p_vals, p_transform, p_descending).inverse_cdf(prob);
-}
-
-[[cpp11::register]]
 bool ch_emp_valid_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending) {
     return make_empirical(x_vals, p_vals, p_transform, p_descending).parameters_valid();
 }
 
 // --- Composite glue: KernelDensity --------------------------------------------------
-// Accepts (data, kernel, bandwidth=-1 means auto, bounded_by_data).
 // kernel: "Gaussian" | "Epanechnikov" | "Triangular" | "Uniform"
 // bandwidth: negative value means use Silverman's rule (auto).
 
@@ -276,123 +208,17 @@ static dist::KernelDensity make_kde(doubles data, std::string kernel,
 }
 
 [[cpp11::register]]
-doubles ch_kde_moments_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data) {
-    auto d = make_kde(data, kernel, bandwidth, bounded_by_data);
-    writable::doubles out({d.mean(), d.median(), d.mode(), d.standard_deviation(),
-                           d.skewness(), d.kurtosis(), d.minimum(), d.maximum()});
-    out.names() = {"mean", "median", "mode", "sd", "skewness", "kurtosis", "minimum", "maximum"};
-    return out;
-}
-
-[[cpp11::register]]
-double ch_kde_pdf_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data,
-                   double x) {
-    return make_kde(data, kernel, bandwidth, bounded_by_data).pdf(x);
-}
-
-[[cpp11::register]]
-double ch_kde_cdf_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data,
-                   double x) {
-    return make_kde(data, kernel, bandwidth, bounded_by_data).cdf(x);
-}
-
-[[cpp11::register]]
-double ch_kde_quantile_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data,
-                        double prob) {
-    return make_kde(data, kernel, bandwidth, bounded_by_data).inverse_cdf(prob);
-}
-
-[[cpp11::register]]
 bool ch_kde_valid_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data) {
     return make_kde(data, kernel, bandwidth, bounded_by_data).parameters_valid();
 }
 
-// --- Composite glue: Mixture --------------------------------------------------------
-// Accepts (component_targets, component_params_list, weights, zero_inflated, zero_weight)
-// and exposes the full distribution surface. component_params_list is a list-of-doubles R
-// list. zero_inflated/zero_weight mirror the v2.1.4 IsZeroInflated/ZeroWeight setters
-// (default FALSE/0.0 at the R call sites below); set in that order since the setters
-// renormalize component weights as a side effect (mixture.hpp's header note).
-// Mirrors the ch_trunc_* and ch_kde_* pattern; R fixture runner dispatches by target.
-
-static dist::Mixture make_mixture(strings comp_targets,
-                                  list comp_params_list,
-                                  doubles weights,
-                                  bool zero_inflated,
-                                  double zero_weight) {
-    int K = static_cast<int>(comp_targets.size());
-    std::vector<double> wts(weights.begin(), weights.end());
-    std::vector<std::unique_ptr<dist::UnivariateDistributionBase>> comps;
-    comps.reserve(K);
-    for (int i = 0; i < K; ++i) {
-        auto d = dist::create_distribution(std::string(comp_targets[i]));
-        doubles p = comp_params_list[i];
-        d->set_parameters(std::vector<double>(p.begin(), p.end()));
-        comps.push_back(std::move(d));
-    }
-    dist::Mixture mix(std::move(wts), std::move(comps));
-    mix.set_is_zero_inflated(zero_inflated);
-    mix.set_zero_weight(zero_weight);
-    return mix;
-}
-
-[[cpp11::register]]
-doubles ch_mix_moments_(strings comp_targets, list comp_params_list, doubles weights,
-                        bool zero_inflated, double zero_weight) {
-    auto d = make_mixture(comp_targets, comp_params_list, weights, zero_inflated, zero_weight);
-    writable::doubles out({d.mean(), d.median(), d.mode(), d.standard_deviation(),
-                           d.skewness(), d.kurtosis(), d.minimum(), d.maximum()});
-    out.names() = {"mean", "median", "mode", "sd", "skewness", "kurtosis", "minimum", "maximum"};
-    return out;
-}
-
-[[cpp11::register]]
-double ch_mix_pdf_(strings comp_targets, list comp_params_list, doubles weights,
-                   bool zero_inflated, double zero_weight, double x) {
-    return make_mixture(comp_targets, comp_params_list, weights, zero_inflated, zero_weight).pdf(x);
-}
-
-[[cpp11::register]]
-double ch_mix_cdf_(strings comp_targets, list comp_params_list, doubles weights,
-                   bool zero_inflated, double zero_weight, double x) {
-    return make_mixture(comp_targets, comp_params_list, weights, zero_inflated, zero_weight).cdf(x);
-}
-
-[[cpp11::register]]
-double ch_mix_quantile_(strings comp_targets, list comp_params_list, doubles weights,
-                        bool zero_inflated, double zero_weight, double prob) {
-    return make_mixture(comp_targets, comp_params_list, weights, zero_inflated, zero_weight)
-        .inverse_cdf(prob);
-}
-
-[[cpp11::register]]
-bool ch_mix_valid_(strings comp_targets, list comp_params_list, doubles weights,
-                   bool zero_inflated, double zero_weight) {
-    return make_mixture(comp_targets, comp_params_list, weights, zero_inflated, zero_weight)
-        .parameters_valid();
-}
-
-// GetParameters() as a flat vector: [w0, ..., wK-1, component0 params..., ...] -- the
-// composite-target analogue of the generic "param" dispatch (which reads straight off the
-// already-known `construct.params`; Mixture's weights are recomputed inside C++ by the
-// zero-inflation setters, so unlike TruncatedDistribution's "param" case, this needs an
-// actual round trip through the real object rather than a client-side reconstruction).
-[[cpp11::register]]
-doubles ch_mix_params_(strings comp_targets, list comp_params_list, doubles weights,
-                       bool zero_inflated, double zero_weight) {
-    auto d = make_mixture(comp_targets, comp_params_list, weights, zero_inflated, zero_weight);
-    auto p = d.get_parameters();
-    return writable::doubles(p.begin(), p.end());
-}
-
 // --- Composite glue: CompetingRisks -------------------------------------------------
 // Accepts (component_targets, component_params_list, minimum_of_rv, dependency,
-// correlation) and exposes the full distribution surface. component_params_list is a
-// list-of-doubles R list. minimum_of_rv = TRUE for min-of-components (series system,
-// default); FALSE for max-of-components (parallel system). dependency is one of
-// "Independent"/"PerfectlyPositive"/"PerfectlyNegative"/"CorrelationMatrix"; correlation
-// is a list of numeric row vectors (only consulted when dependency == "CorrelationMatrix",
-// may be an empty list otherwise).
+// correlation). component_params_list is a list-of-doubles R list. minimum_of_rv = TRUE for
+// min-of-components (series system, default); FALSE for max-of-components (parallel system).
+// dependency is one of "Independent"/"PerfectlyPositive"/"PerfectlyNegative"/
+// "CorrelationMatrix"; correlation is a list of numeric row vectors (only consulted when
+// dependency == "CorrelationMatrix", may be an empty list otherwise).
 
 static corehydro::numerics::data::probability::DependencyType parse_dependency(
     const std::string& d) {
@@ -437,52 +263,6 @@ static dist::CompetingRisks make_competing_risks(strings comp_targets,
         cr.set_correlation_matrix(std::move(corr));
     }
     return cr;
-}
-
-[[cpp11::register]]
-doubles ch_cr_moments_(strings comp_targets, list comp_params_list, bool minimum_of_rv,
-                        std::string dependency, list correlation) {
-    auto d = make_competing_risks(comp_targets, comp_params_list, minimum_of_rv, dependency,
-                                   correlation);
-    writable::doubles out({d.mean(), d.median(), d.mode(), d.standard_deviation(),
-                           d.skewness(), d.kurtosis(), d.minimum(), d.maximum()});
-    out.names() = {"mean", "median", "mode", "sd", "skewness", "kurtosis", "minimum", "maximum"};
-    return out;
-}
-
-[[cpp11::register]]
-double ch_cr_pdf_(strings comp_targets, list comp_params_list, bool minimum_of_rv,
-                   std::string dependency, list correlation, double x) {
-    return make_competing_risks(comp_targets, comp_params_list, minimum_of_rv, dependency,
-                                 correlation).pdf(x);
-}
-
-[[cpp11::register]]
-double ch_cr_log_pdf_(strings comp_targets, list comp_params_list, bool minimum_of_rv,
-                       std::string dependency, list correlation, double x) {
-    return make_competing_risks(comp_targets, comp_params_list, minimum_of_rv, dependency,
-                                 correlation).log_pdf(x);
-}
-
-[[cpp11::register]]
-double ch_cr_cdf_(strings comp_targets, list comp_params_list, bool minimum_of_rv,
-                   std::string dependency, list correlation, double x) {
-    return make_competing_risks(comp_targets, comp_params_list, minimum_of_rv, dependency,
-                                 correlation).cdf(x);
-}
-
-[[cpp11::register]]
-double ch_cr_quantile_(strings comp_targets, list comp_params_list, bool minimum_of_rv,
-                        std::string dependency, list correlation, double prob) {
-    return make_competing_risks(comp_targets, comp_params_list, minimum_of_rv, dependency,
-                                 correlation).inverse_cdf(prob);
-}
-
-[[cpp11::register]]
-bool ch_cr_valid_(strings comp_targets, list comp_params_list, bool minimum_of_rv,
-                   std::string dependency, list correlation) {
-    return make_competing_risks(comp_targets, comp_params_list, minimum_of_rv, dependency,
-                                 correlation).parameters_valid();
 }
 
 // v2.1.4: verifies the Dependency setter fix (changing Dependency mid-lifetime invalidates

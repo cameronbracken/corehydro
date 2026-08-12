@@ -1,8 +1,13 @@
-// pybind11 glue exposing the multivariate-distribution surface (Dirichlet, Multinomial,
-// BivariateEmpirical, MultivariateNormal, MultivariateStudentT) of the shared C++ core to
-// Python. Mirrors the trunc_*/emp_* style in dist.cpp: bespoke per-target module
-// functions, generic-by-method-string rather than one function per method, so each new
-// multivariate target only adds one more <name>_val function here.
+// pybind11 glue for the multivariate-distribution fixture surface the shared distribution
+// runner cannot serve. Every user-facing multivariate verb now goes through _core.mvdist_run in
+// dist_spec.cpp, which drives the same dist_runner.hpp entry point the C++ fixture runner, the R
+// glue and the dotnet oracle emitter drive. Three groups stay here (see test_fixtures.py's
+// delegation comment): the MVNDST integrator internals and Dirichlet's static
+// LogMultivariateBeta, which have no runner verb; the non-finite constructs and evaluation
+// points, which the runner's JSON grammar has no literal for; and MultivariateNormal's seeded
+// MVNUNI sequences, which pin a run of values off ONE object and so cannot come from a
+// stateless runner. Entry points are generic-by-method-string rather than one function per
+// method, so each retains the arms it had before even where only one is reached today.
 // Core headers are vendored under ../corehydro_core/include (a symlink into core/; regenerate real files with tools/materialize_core.py).
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -14,7 +19,6 @@
 #include "corehydro/numerics/data/interpolation/transform.hpp"
 #include "corehydro/numerics/distributions/multivariate/bivariate_empirical.hpp"
 #include "corehydro/numerics/distributions/multivariate/dirichlet.hpp"
-#include "corehydro/numerics/distributions/multivariate/multinomial.hpp"
 #include "corehydro/numerics/distributions/multivariate/multivariate_normal.hpp"
 #include "corehydro/numerics/distributions/multivariate/multivariate_student_t.hpp"
 #include "bindings.hpp"
@@ -57,29 +61,6 @@ void register_multivariate(py::module_& m) {
             return sample[static_cast<std::size_t>(args[2])][static_cast<std::size_t>(args[3])];
         }
         throw py::value_error("unknown Dirichlet fixture method: " + method);
-    });
-
-    // --- Multinomial ---------------------------------------------------------------------
-    // Methods: dimension, parameters_valid, number_of_trials, mean, variance, covariance,
-    // pdf, log_pdf, random_value (args = [sample_size, seed, row, col]; stateless; no LHS --
-    // Multinomial has no LatinHypercubeRandomValues in the C# source).
-    m.def("multinomial_val", [](const std::string& method, int n, const std::vector<double>& p,
-                                 const std::vector<double>& args) {
-        mvd::Multinomial d(n, p);
-        if (method == "dimension") return static_cast<double>(d.dimension());
-        if (method == "parameters_valid") return d.parameters_valid() ? 1.0 : 0.0;
-        if (method == "number_of_trials") return static_cast<double>(d.number_of_trials());
-        if (method == "mean") return d.mean()[static_cast<std::size_t>(args[0])];
-        if (method == "variance") return d.variance()[static_cast<std::size_t>(args[0])];
-        if (method == "covariance")
-            return d.covariance(static_cast<int>(args[0]), static_cast<int>(args[1]));
-        if (method == "pdf") return d.pdf(args);
-        if (method == "log_pdf") return d.log_pdf(args);
-        if (method == "random_value") {
-            auto sample = d.generate_random_values(static_cast<int>(args[0]), static_cast<int>(args[1]));
-            return sample[static_cast<std::size_t>(args[2])][static_cast<std::size_t>(args[3])];
-        }
-        throw py::value_error("unknown Multinomial fixture method: " + method);
     });
 
     // --- BivariateEmpirical -------------------------------------------------------------
@@ -199,64 +180,15 @@ void register_multivariate(py::module_& m) {
         throw py::value_error("unknown MultivariateNormal fixture method: " + method);
     });
 
-    // v2.1.4 Marginal/Conditional: dedicated entry points (not the flattened `args`)
-    // since these take a variable-length INDEX vector (Conditional: a second same-length
-    // VALUES vector) -- Python's own flattening convention can't disambiguate two
-    // adjacent variable-length vectors either. Stateless per-call, matching mvn_val.
-    m.def("mvn_marginal_mean", [](const std::vector<double>& mean,
-                                   const std::vector<std::vector<double>>& covariance,
-                                   const std::vector<int>& indices, int idx) {
-        mvd::MultivariateNormal n(mean, covariance);
-        return n.marginal(indices).mean()[static_cast<std::size_t>(idx)];
-    });
-    m.def("mvn_marginal_covariance", [](const std::vector<double>& mean,
-                                         const std::vector<std::vector<double>>& covariance,
-                                         const std::vector<int>& indices, int i, int j) {
-        mvd::MultivariateNormal n(mean, covariance);
-        return n.marginal(indices).covariance(i, j);
-    });
-    m.def("mvn_marginal_log_pdf", [](const std::vector<double>& mean,
-                                      const std::vector<std::vector<double>>& covariance,
-                                      const std::vector<int>& indices, const std::vector<double>& point) {
-        mvd::MultivariateNormal n(mean, covariance);
-        return n.marginal(indices).log_pdf(point);
-    });
-    m.def("mvn_marginal_dimension", [](const std::vector<double>& mean,
-                                        const std::vector<std::vector<double>>& covariance,
-                                        const std::vector<int>& indices) {
-        mvd::MultivariateNormal n(mean, covariance);
-        return n.marginal(indices).dimension();
-    });
-    m.def("mvn_conditional_mean", [](const std::vector<double>& mean,
-                                      const std::vector<std::vector<double>>& covariance,
-                                      const std::vector<int>& obs_indices,
-                                      const std::vector<double>& obs_values, int idx) {
-        mvd::MultivariateNormal n(mean, covariance);
-        return n.conditional(obs_indices, obs_values).mean()[static_cast<std::size_t>(idx)];
-    });
-    m.def("mvn_conditional_covariance", [](const std::vector<double>& mean,
-                                            const std::vector<std::vector<double>>& covariance,
-                                            const std::vector<int>& obs_indices,
-                                            const std::vector<double>& obs_values, int i, int j) {
-        mvd::MultivariateNormal n(mean, covariance);
-        return n.conditional(obs_indices, obs_values).covariance(i, j);
-    });
-    m.def("mvn_conditional_dimension", [](const std::vector<double>& mean,
-                                           const std::vector<std::vector<double>>& covariance,
-                                           const std::vector<int>& obs_indices,
-                                           const std::vector<double>& obs_values) {
-        mvd::MultivariateNormal n(mean, covariance);
-        return n.conditional(obs_indices, obs_values).dimension();
-    });
-
     // --- MultivariateNormal (seeded batch methods) ---------------------------------------
-    // `cdf` for dim>=3 and `interval` both draw from the seeded MVNUNI stream (via
-    // MVNDST); `mvndst` is the Fortran-oracle entry point itself. Each needs a SINGLE
-    // persistent instance across a whole run of k sequential calls -- rebuilding per call
-    // the way mvn_val does would silently reset the seeded RNG between assertions. The
-    // Python fixture runner groups consecutive same-method seeded assertions within a
-    // case and calls these once per run, comparing results element-wise (see
-    // test_fixtures.py).
+    // `cdf` for dim>=3 draws from the seeded MVNUNI stream (via MVNDST); `mvndst` is the
+    // Fortran-oracle entry point itself. Each needs a SINGLE persistent instance across a
+    // whole run of k sequential calls -- rebuilding per call the way mvn_val does would
+    // silently reset the seeded RNG between assertions. The Python fixture runner groups
+    // consecutive same-method seeded assertions within a case and calls these once per run,
+    // comparing results element-wise (see test_fixtures.py). `Interval` also consumes the
+    // stream, but the corpus's only Interval case makes exactly one such call, so it delegates
+    // through the grammar's `seed` key and needs no batch entry point here.
     m.def("mvn_cdf_seq", [](const std::vector<double>& mean,
                              const std::vector<std::vector<double>>& covariance, int seed,
                              const std::vector<std::vector<double>>& xs) {
@@ -265,18 +197,6 @@ void register_multivariate(py::module_& m) {
         std::vector<double> out;
         out.reserve(xs.size());
         for (const auto& x : xs) out.push_back(n.cdf(x));
-        return out;
-    });
-
-    m.def("mvn_interval_seq", [](const std::vector<double>& mean,
-                                  const std::vector<std::vector<double>>& covariance, int seed,
-                                  const std::vector<std::vector<double>>& lowers,
-                                  const std::vector<std::vector<double>>& uppers) {
-        mvd::MultivariateNormal n(mean, covariance);
-        n.set_mvnuni_seed(seed);
-        std::vector<double> out;
-        out.reserve(lowers.size());
-        for (std::size_t i = 0; i < lowers.size(); ++i) out.push_back(n.interval(lowers[i], uppers[i]));
         return out;
     });
 

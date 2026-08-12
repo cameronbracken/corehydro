@@ -61,13 +61,6 @@ extern "C" SEXP _corehydror_ch_cop_val_(SEXP type, SEXP params, SEXP method, SEX
     return cpp11::as_sexp(ch_cop_val_(cpp11::as_cpp<cpp11::decay_t<std::string>>(type), cpp11::as_cpp<cpp11::decay_t<doubles>>(params), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<doubles>>(args), cpp11::as_cpp<cpp11::decay_t<std::string>>(marg_x_target), cpp11::as_cpp<cpp11::decay_t<doubles>>(marg_x_params), cpp11::as_cpp<cpp11::decay_t<std::string>>(marg_y_target), cpp11::as_cpp<cpp11::decay_t<doubles>>(marg_y_params)));
   END_CPP11
 }
-// copula.cpp
-list ch_cop_fit_(std::string type, doubles x, doubles y, std::string method, std::string marg_x, std::string marg_y);
-extern "C" SEXP _corehydror_ch_cop_fit_(SEXP type, SEXP x, SEXP y, SEXP method, SEXP marg_x, SEXP marg_y) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_cop_fit_(cpp11::as_cpp<cpp11::decay_t<std::string>>(type), cpp11::as_cpp<cpp11::decay_t<doubles>>(x), cpp11::as_cpp<cpp11::decay_t<doubles>>(y), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(marg_x), cpp11::as_cpp<cpp11::decay_t<std::string>>(marg_y)));
-  END_CPP11
-}
 // data.cpp
 list ch_data_frame_summary_(std::string data_frame_json, double plotting_parameter);
 extern "C" SEXP _corehydror_ch_data_frame_summary_(SEXP data_frame_json, SEXP plotting_parameter) {
@@ -202,69 +195,6 @@ extern "C" SEXP _corehydror_ch_dist_names_() {
   END_CPP11
 }
 // dist.cpp
-doubles ch_trunc_moments_(std::string base_target, doubles base_params, double lo, double hi);
-extern "C" SEXP _corehydror_ch_trunc_moments_(SEXP base_target, SEXP base_params, SEXP lo, SEXP hi) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_trunc_moments_(cpp11::as_cpp<cpp11::decay_t<std::string>>(base_target), cpp11::as_cpp<cpp11::decay_t<doubles>>(base_params), cpp11::as_cpp<cpp11::decay_t<double>>(lo), cpp11::as_cpp<cpp11::decay_t<double>>(hi)));
-  END_CPP11
-}
-// dist.cpp
-double ch_trunc_pdf_(std::string base_target, doubles base_params, double lo, double hi, double x);
-extern "C" SEXP _corehydror_ch_trunc_pdf_(SEXP base_target, SEXP base_params, SEXP lo, SEXP hi, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_trunc_pdf_(cpp11::as_cpp<cpp11::decay_t<std::string>>(base_target), cpp11::as_cpp<cpp11::decay_t<doubles>>(base_params), cpp11::as_cpp<cpp11::decay_t<double>>(lo), cpp11::as_cpp<cpp11::decay_t<double>>(hi), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_trunc_cdf_(std::string base_target, doubles base_params, double lo, double hi, double x);
-extern "C" SEXP _corehydror_ch_trunc_cdf_(SEXP base_target, SEXP base_params, SEXP lo, SEXP hi, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_trunc_cdf_(cpp11::as_cpp<cpp11::decay_t<std::string>>(base_target), cpp11::as_cpp<cpp11::decay_t<doubles>>(base_params), cpp11::as_cpp<cpp11::decay_t<double>>(lo), cpp11::as_cpp<cpp11::decay_t<double>>(hi), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_trunc_quantile_(std::string base_target, doubles base_params, double lo, double hi, double p);
-extern "C" SEXP _corehydror_ch_trunc_quantile_(SEXP base_target, SEXP base_params, SEXP lo, SEXP hi, SEXP p) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_trunc_quantile_(cpp11::as_cpp<cpp11::decay_t<std::string>>(base_target), cpp11::as_cpp<cpp11::decay_t<doubles>>(base_params), cpp11::as_cpp<cpp11::decay_t<double>>(lo), cpp11::as_cpp<cpp11::decay_t<double>>(hi), cpp11::as_cpp<cpp11::decay_t<double>>(p)));
-  END_CPP11
-}
-// dist.cpp
-bool ch_trunc_valid_(std::string base_target, doubles base_params, double lo, double hi);
-extern "C" SEXP _corehydror_ch_trunc_valid_(SEXP base_target, SEXP base_params, SEXP lo, SEXP hi) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_trunc_valid_(cpp11::as_cpp<cpp11::decay_t<std::string>>(base_target), cpp11::as_cpp<cpp11::decay_t<doubles>>(base_params), cpp11::as_cpp<cpp11::decay_t<double>>(lo), cpp11::as_cpp<cpp11::decay_t<double>>(hi)));
-  END_CPP11
-}
-// dist.cpp
-doubles ch_emp_moments_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending);
-extern "C" SEXP _corehydror_ch_emp_moments_(SEXP x_vals, SEXP p_vals, SEXP p_transform, SEXP p_descending) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_emp_moments_(cpp11::as_cpp<cpp11::decay_t<doubles>>(x_vals), cpp11::as_cpp<cpp11::decay_t<doubles>>(p_vals), cpp11::as_cpp<cpp11::decay_t<std::string>>(p_transform), cpp11::as_cpp<cpp11::decay_t<bool>>(p_descending)));
-  END_CPP11
-}
-// dist.cpp
-double ch_emp_pdf_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending, double x);
-extern "C" SEXP _corehydror_ch_emp_pdf_(SEXP x_vals, SEXP p_vals, SEXP p_transform, SEXP p_descending, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_emp_pdf_(cpp11::as_cpp<cpp11::decay_t<doubles>>(x_vals), cpp11::as_cpp<cpp11::decay_t<doubles>>(p_vals), cpp11::as_cpp<cpp11::decay_t<std::string>>(p_transform), cpp11::as_cpp<cpp11::decay_t<bool>>(p_descending), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_emp_cdf_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending, double x);
-extern "C" SEXP _corehydror_ch_emp_cdf_(SEXP x_vals, SEXP p_vals, SEXP p_transform, SEXP p_descending, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_emp_cdf_(cpp11::as_cpp<cpp11::decay_t<doubles>>(x_vals), cpp11::as_cpp<cpp11::decay_t<doubles>>(p_vals), cpp11::as_cpp<cpp11::decay_t<std::string>>(p_transform), cpp11::as_cpp<cpp11::decay_t<bool>>(p_descending), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_emp_quantile_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending, double prob);
-extern "C" SEXP _corehydror_ch_emp_quantile_(SEXP x_vals, SEXP p_vals, SEXP p_transform, SEXP p_descending, SEXP prob) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_emp_quantile_(cpp11::as_cpp<cpp11::decay_t<doubles>>(x_vals), cpp11::as_cpp<cpp11::decay_t<doubles>>(p_vals), cpp11::as_cpp<cpp11::decay_t<std::string>>(p_transform), cpp11::as_cpp<cpp11::decay_t<bool>>(p_descending), cpp11::as_cpp<cpp11::decay_t<double>>(prob)));
-  END_CPP11
-}
-// dist.cpp
 bool ch_emp_valid_(doubles x_vals, doubles p_vals, std::string p_transform, bool p_descending);
 extern "C" SEXP _corehydror_ch_emp_valid_(SEXP x_vals, SEXP p_vals, SEXP p_transform, SEXP p_descending) {
   BEGIN_CPP11
@@ -272,122 +202,10 @@ extern "C" SEXP _corehydror_ch_emp_valid_(SEXP x_vals, SEXP p_vals, SEXP p_trans
   END_CPP11
 }
 // dist.cpp
-doubles ch_kde_moments_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data);
-extern "C" SEXP _corehydror_ch_kde_moments_(SEXP data, SEXP kernel, SEXP bandwidth, SEXP bounded_by_data) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_kde_moments_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(kernel), cpp11::as_cpp<cpp11::decay_t<double>>(bandwidth), cpp11::as_cpp<cpp11::decay_t<bool>>(bounded_by_data)));
-  END_CPP11
-}
-// dist.cpp
-double ch_kde_pdf_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data, double x);
-extern "C" SEXP _corehydror_ch_kde_pdf_(SEXP data, SEXP kernel, SEXP bandwidth, SEXP bounded_by_data, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_kde_pdf_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(kernel), cpp11::as_cpp<cpp11::decay_t<double>>(bandwidth), cpp11::as_cpp<cpp11::decay_t<bool>>(bounded_by_data), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_kde_cdf_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data, double x);
-extern "C" SEXP _corehydror_ch_kde_cdf_(SEXP data, SEXP kernel, SEXP bandwidth, SEXP bounded_by_data, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_kde_cdf_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(kernel), cpp11::as_cpp<cpp11::decay_t<double>>(bandwidth), cpp11::as_cpp<cpp11::decay_t<bool>>(bounded_by_data), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_kde_quantile_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data, double prob);
-extern "C" SEXP _corehydror_ch_kde_quantile_(SEXP data, SEXP kernel, SEXP bandwidth, SEXP bounded_by_data, SEXP prob) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_kde_quantile_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(kernel), cpp11::as_cpp<cpp11::decay_t<double>>(bandwidth), cpp11::as_cpp<cpp11::decay_t<bool>>(bounded_by_data), cpp11::as_cpp<cpp11::decay_t<double>>(prob)));
-  END_CPP11
-}
-// dist.cpp
 bool ch_kde_valid_(doubles data, std::string kernel, double bandwidth, bool bounded_by_data);
 extern "C" SEXP _corehydror_ch_kde_valid_(SEXP data, SEXP kernel, SEXP bandwidth, SEXP bounded_by_data) {
   BEGIN_CPP11
     return cpp11::as_sexp(ch_kde_valid_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(kernel), cpp11::as_cpp<cpp11::decay_t<double>>(bandwidth), cpp11::as_cpp<cpp11::decay_t<bool>>(bounded_by_data)));
-  END_CPP11
-}
-// dist.cpp
-doubles ch_mix_moments_(strings comp_targets, list comp_params_list, doubles weights, bool zero_inflated, double zero_weight);
-extern "C" SEXP _corehydror_ch_mix_moments_(SEXP comp_targets, SEXP comp_params_list, SEXP weights, SEXP zero_inflated, SEXP zero_weight) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mix_moments_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<doubles>>(weights), cpp11::as_cpp<cpp11::decay_t<bool>>(zero_inflated), cpp11::as_cpp<cpp11::decay_t<double>>(zero_weight)));
-  END_CPP11
-}
-// dist.cpp
-double ch_mix_pdf_(strings comp_targets, list comp_params_list, doubles weights, bool zero_inflated, double zero_weight, double x);
-extern "C" SEXP _corehydror_ch_mix_pdf_(SEXP comp_targets, SEXP comp_params_list, SEXP weights, SEXP zero_inflated, SEXP zero_weight, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mix_pdf_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<doubles>>(weights), cpp11::as_cpp<cpp11::decay_t<bool>>(zero_inflated), cpp11::as_cpp<cpp11::decay_t<double>>(zero_weight), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_mix_cdf_(strings comp_targets, list comp_params_list, doubles weights, bool zero_inflated, double zero_weight, double x);
-extern "C" SEXP _corehydror_ch_mix_cdf_(SEXP comp_targets, SEXP comp_params_list, SEXP weights, SEXP zero_inflated, SEXP zero_weight, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mix_cdf_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<doubles>>(weights), cpp11::as_cpp<cpp11::decay_t<bool>>(zero_inflated), cpp11::as_cpp<cpp11::decay_t<double>>(zero_weight), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_mix_quantile_(strings comp_targets, list comp_params_list, doubles weights, bool zero_inflated, double zero_weight, double prob);
-extern "C" SEXP _corehydror_ch_mix_quantile_(SEXP comp_targets, SEXP comp_params_list, SEXP weights, SEXP zero_inflated, SEXP zero_weight, SEXP prob) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mix_quantile_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<doubles>>(weights), cpp11::as_cpp<cpp11::decay_t<bool>>(zero_inflated), cpp11::as_cpp<cpp11::decay_t<double>>(zero_weight), cpp11::as_cpp<cpp11::decay_t<double>>(prob)));
-  END_CPP11
-}
-// dist.cpp
-bool ch_mix_valid_(strings comp_targets, list comp_params_list, doubles weights, bool zero_inflated, double zero_weight);
-extern "C" SEXP _corehydror_ch_mix_valid_(SEXP comp_targets, SEXP comp_params_list, SEXP weights, SEXP zero_inflated, SEXP zero_weight) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mix_valid_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<doubles>>(weights), cpp11::as_cpp<cpp11::decay_t<bool>>(zero_inflated), cpp11::as_cpp<cpp11::decay_t<double>>(zero_weight)));
-  END_CPP11
-}
-// dist.cpp
-doubles ch_mix_params_(strings comp_targets, list comp_params_list, doubles weights, bool zero_inflated, double zero_weight);
-extern "C" SEXP _corehydror_ch_mix_params_(SEXP comp_targets, SEXP comp_params_list, SEXP weights, SEXP zero_inflated, SEXP zero_weight) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mix_params_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<doubles>>(weights), cpp11::as_cpp<cpp11::decay_t<bool>>(zero_inflated), cpp11::as_cpp<cpp11::decay_t<double>>(zero_weight)));
-  END_CPP11
-}
-// dist.cpp
-doubles ch_cr_moments_(strings comp_targets, list comp_params_list, bool minimum_of_rv, std::string dependency, list correlation);
-extern "C" SEXP _corehydror_ch_cr_moments_(SEXP comp_targets, SEXP comp_params_list, SEXP minimum_of_rv, SEXP dependency, SEXP correlation) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_cr_moments_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<bool>>(minimum_of_rv), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency), cpp11::as_cpp<cpp11::decay_t<list>>(correlation)));
-  END_CPP11
-}
-// dist.cpp
-double ch_cr_pdf_(strings comp_targets, list comp_params_list, bool minimum_of_rv, std::string dependency, list correlation, double x);
-extern "C" SEXP _corehydror_ch_cr_pdf_(SEXP comp_targets, SEXP comp_params_list, SEXP minimum_of_rv, SEXP dependency, SEXP correlation, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_cr_pdf_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<bool>>(minimum_of_rv), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency), cpp11::as_cpp<cpp11::decay_t<list>>(correlation), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_cr_log_pdf_(strings comp_targets, list comp_params_list, bool minimum_of_rv, std::string dependency, list correlation, double x);
-extern "C" SEXP _corehydror_ch_cr_log_pdf_(SEXP comp_targets, SEXP comp_params_list, SEXP minimum_of_rv, SEXP dependency, SEXP correlation, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_cr_log_pdf_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<bool>>(minimum_of_rv), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency), cpp11::as_cpp<cpp11::decay_t<list>>(correlation), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_cr_cdf_(strings comp_targets, list comp_params_list, bool minimum_of_rv, std::string dependency, list correlation, double x);
-extern "C" SEXP _corehydror_ch_cr_cdf_(SEXP comp_targets, SEXP comp_params_list, SEXP minimum_of_rv, SEXP dependency, SEXP correlation, SEXP x) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_cr_cdf_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<bool>>(minimum_of_rv), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency), cpp11::as_cpp<cpp11::decay_t<list>>(correlation), cpp11::as_cpp<cpp11::decay_t<double>>(x)));
-  END_CPP11
-}
-// dist.cpp
-double ch_cr_quantile_(strings comp_targets, list comp_params_list, bool minimum_of_rv, std::string dependency, list correlation, double prob);
-extern "C" SEXP _corehydror_ch_cr_quantile_(SEXP comp_targets, SEXP comp_params_list, SEXP minimum_of_rv, SEXP dependency, SEXP correlation, SEXP prob) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_cr_quantile_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<bool>>(minimum_of_rv), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency), cpp11::as_cpp<cpp11::decay_t<list>>(correlation), cpp11::as_cpp<cpp11::decay_t<double>>(prob)));
-  END_CPP11
-}
-// dist.cpp
-bool ch_cr_valid_(strings comp_targets, list comp_params_list, bool minimum_of_rv, std::string dependency, list correlation);
-extern "C" SEXP _corehydror_ch_cr_valid_(SEXP comp_targets, SEXP comp_params_list, SEXP minimum_of_rv, SEXP dependency, SEXP correlation) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_cr_valid_(cpp11::as_cpp<cpp11::decay_t<strings>>(comp_targets), cpp11::as_cpp<cpp11::decay_t<list>>(comp_params_list), cpp11::as_cpp<cpp11::decay_t<bool>>(minimum_of_rv), cpp11::as_cpp<cpp11::decay_t<std::string>>(dependency), cpp11::as_cpp<cpp11::decay_t<list>>(correlation)));
   END_CPP11
 }
 // dist.cpp
@@ -580,13 +398,6 @@ extern "C" SEXP _corehydror_ch_dirichlet_val_(SEXP method, SEXP alpha, SEXP args
   END_CPP11
 }
 // mvd.cpp
-double ch_multinomial_val_(std::string method, int n, doubles p, doubles args);
-extern "C" SEXP _corehydror_ch_multinomial_val_(SEXP method, SEXP n, SEXP p, SEXP args) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_multinomial_val_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<int>>(n), cpp11::as_cpp<cpp11::decay_t<doubles>>(p), cpp11::as_cpp<cpp11::decay_t<doubles>>(args)));
-  END_CPP11
-}
-// mvd.cpp
 double ch_bve_cdf_(std::string method, doubles x1, doubles x2, doubles p_flat, int nrow, strings transforms, doubles args);
 extern "C" SEXP _corehydror_ch_bve_cdf_(SEXP method, SEXP x1, SEXP x2, SEXP p_flat, SEXP nrow, SEXP transforms, SEXP args) {
   BEGIN_CPP11
@@ -608,66 +419,10 @@ extern "C" SEXP _corehydror_ch_mvn_val_(SEXP method, SEXP mean, SEXP cov_flat, S
   END_CPP11
 }
 // mvd.cpp
-double ch_mvn_marginal_mean_(doubles mean, doubles cov_flat, integers indices, int idx);
-extern "C" SEXP _corehydror_ch_mvn_marginal_mean_(SEXP mean, SEXP cov_flat, SEXP indices, SEXP idx) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_marginal_mean_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<integers>>(indices), cpp11::as_cpp<cpp11::decay_t<int>>(idx)));
-  END_CPP11
-}
-// mvd.cpp
-double ch_mvn_marginal_covariance_(doubles mean, doubles cov_flat, integers indices, int i, int j);
-extern "C" SEXP _corehydror_ch_mvn_marginal_covariance_(SEXP mean, SEXP cov_flat, SEXP indices, SEXP i, SEXP j) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_marginal_covariance_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<integers>>(indices), cpp11::as_cpp<cpp11::decay_t<int>>(i), cpp11::as_cpp<cpp11::decay_t<int>>(j)));
-  END_CPP11
-}
-// mvd.cpp
-double ch_mvn_marginal_log_pdf_(doubles mean, doubles cov_flat, integers indices, doubles point);
-extern "C" SEXP _corehydror_ch_mvn_marginal_log_pdf_(SEXP mean, SEXP cov_flat, SEXP indices, SEXP point) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_marginal_log_pdf_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<integers>>(indices), cpp11::as_cpp<cpp11::decay_t<doubles>>(point)));
-  END_CPP11
-}
-// mvd.cpp
-double ch_mvn_marginal_dimension_(doubles mean, doubles cov_flat, integers indices);
-extern "C" SEXP _corehydror_ch_mvn_marginal_dimension_(SEXP mean, SEXP cov_flat, SEXP indices) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_marginal_dimension_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<integers>>(indices)));
-  END_CPP11
-}
-// mvd.cpp
-double ch_mvn_conditional_mean_(doubles mean, doubles cov_flat, integers obs_indices, doubles obs_values, int idx);
-extern "C" SEXP _corehydror_ch_mvn_conditional_mean_(SEXP mean, SEXP cov_flat, SEXP obs_indices, SEXP obs_values, SEXP idx) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_conditional_mean_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<integers>>(obs_indices), cpp11::as_cpp<cpp11::decay_t<doubles>>(obs_values), cpp11::as_cpp<cpp11::decay_t<int>>(idx)));
-  END_CPP11
-}
-// mvd.cpp
-double ch_mvn_conditional_covariance_(doubles mean, doubles cov_flat, integers obs_indices, doubles obs_values, int i, int j);
-extern "C" SEXP _corehydror_ch_mvn_conditional_covariance_(SEXP mean, SEXP cov_flat, SEXP obs_indices, SEXP obs_values, SEXP i, SEXP j) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_conditional_covariance_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<integers>>(obs_indices), cpp11::as_cpp<cpp11::decay_t<doubles>>(obs_values), cpp11::as_cpp<cpp11::decay_t<int>>(i), cpp11::as_cpp<cpp11::decay_t<int>>(j)));
-  END_CPP11
-}
-// mvd.cpp
-double ch_mvn_conditional_dimension_(doubles mean, doubles cov_flat, integers obs_indices, doubles obs_values);
-extern "C" SEXP _corehydror_ch_mvn_conditional_dimension_(SEXP mean, SEXP cov_flat, SEXP obs_indices, SEXP obs_values) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_conditional_dimension_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<integers>>(obs_indices), cpp11::as_cpp<cpp11::decay_t<doubles>>(obs_values)));
-  END_CPP11
-}
-// mvd.cpp
 doubles ch_mvn_cdf_seq_(doubles mean, doubles cov_flat, int seed, doubles xs_flat, int k);
 extern "C" SEXP _corehydror_ch_mvn_cdf_seq_(SEXP mean, SEXP cov_flat, SEXP seed, SEXP xs_flat, SEXP k) {
   BEGIN_CPP11
     return cpp11::as_sexp(ch_mvn_cdf_seq_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<int>>(seed), cpp11::as_cpp<cpp11::decay_t<doubles>>(xs_flat), cpp11::as_cpp<cpp11::decay_t<int>>(k)));
-  END_CPP11
-}
-// mvd.cpp
-doubles ch_mvn_interval_seq_(doubles mean, doubles cov_flat, int seed, doubles lowers_flat, doubles uppers_flat, int k);
-extern "C" SEXP _corehydror_ch_mvn_interval_seq_(SEXP mean, SEXP cov_flat, SEXP seed, SEXP lowers_flat, SEXP uppers_flat, SEXP k) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_mvn_interval_seq_(cpp11::as_cpp<cpp11::decay_t<doubles>>(mean), cpp11::as_cpp<cpp11::decay_t<doubles>>(cov_flat), cpp11::as_cpp<cpp11::decay_t<int>>(seed), cpp11::as_cpp<cpp11::decay_t<doubles>>(lowers_flat), cpp11::as_cpp<cpp11::decay_t<doubles>>(uppers_flat), cpp11::as_cpp<cpp11::decay_t<int>>(k)));
   END_CPP11
 }
 // mvd.cpp
@@ -783,16 +538,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_box_cox_lambda_",               (DL_FUNC) &_corehydror_ch_box_cox_lambda_,                1},
     {"_corehydror_ch_bve_cdf_",                      (DL_FUNC) &_corehydror_ch_bve_cdf_,                       7},
     {"_corehydror_ch_bve_cdf_after_set_parameters_", (DL_FUNC) &_corehydror_ch_bve_cdf_after_set_parameters_, 11},
-    {"_corehydror_ch_cop_fit_",                      (DL_FUNC) &_corehydror_ch_cop_fit_,                       6},
     {"_corehydror_ch_cop_val_",                      (DL_FUNC) &_corehydror_ch_cop_val_,                       8},
     {"_corehydror_ch_copula_run_",                   (DL_FUNC) &_corehydror_ch_copula_run_,                    3},
-    {"_corehydror_ch_cr_cdf_",                       (DL_FUNC) &_corehydror_ch_cr_cdf_,                        6},
     {"_corehydror_ch_cr_dependency_change_",         (DL_FUNC) &_corehydror_ch_cr_dependency_change_,         10},
-    {"_corehydror_ch_cr_log_pdf_",                   (DL_FUNC) &_corehydror_ch_cr_log_pdf_,                    6},
-    {"_corehydror_ch_cr_moments_",                   (DL_FUNC) &_corehydror_ch_cr_moments_,                    5},
-    {"_corehydror_ch_cr_pdf_",                       (DL_FUNC) &_corehydror_ch_cr_pdf_,                        6},
-    {"_corehydror_ch_cr_quantile_",                  (DL_FUNC) &_corehydror_ch_cr_quantile_,                   6},
-    {"_corehydror_ch_cr_valid_",                     (DL_FUNC) &_corehydror_ch_cr_valid_,                      5},
     {"_corehydror_ch_data_frame_summary_",           (DL_FUNC) &_corehydror_ch_data_frame_summary_,            2},
     {"_corehydror_ch_dirichlet_val_",                (DL_FUNC) &_corehydror_ch_dirichlet_val_,                 3},
     {"_corehydror_ch_dist_cdf_",                     (DL_FUNC) &_corehydror_ch_dist_cdf_,                      3},
@@ -812,10 +560,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_dist_random_",                  (DL_FUNC) &_corehydror_ch_dist_random_,                   4},
     {"_corehydror_ch_dist_spec_run_",                (DL_FUNC) &_corehydror_ch_dist_spec_run_,                 3},
     {"_corehydror_ch_dist_valid_",                   (DL_FUNC) &_corehydror_ch_dist_valid_,                    2},
-    {"_corehydror_ch_emp_cdf_",                      (DL_FUNC) &_corehydror_ch_emp_cdf_,                       5},
-    {"_corehydror_ch_emp_moments_",                  (DL_FUNC) &_corehydror_ch_emp_moments_,                   4},
-    {"_corehydror_ch_emp_pdf_",                      (DL_FUNC) &_corehydror_ch_emp_pdf_,                       5},
-    {"_corehydror_ch_emp_quantile_",                 (DL_FUNC) &_corehydror_ch_emp_quantile_,                  5},
     {"_corehydror_ch_emp_valid_",                    (DL_FUNC) &_corehydror_ch_emp_valid_,                     4},
     {"_corehydror_ch_estimation_bayes_run_",         (DL_FUNC) &_corehydror_ch_estimation_bayes_run_,         10},
     {"_corehydror_ch_estimation_bic_",               (DL_FUNC) &_corehydror_ch_estimation_bic_,                5},
@@ -835,35 +579,16 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_gev_quantile_gradient_",        (DL_FUNC) &_corehydror_ch_gev_quantile_gradient_,         4},
     {"_corehydror_ch_gev_quantile_variance_",        (DL_FUNC) &_corehydror_ch_gev_quantile_variance_,         5},
     {"_corehydror_ch_gev_valid_",                    (DL_FUNC) &_corehydror_ch_gev_valid_,                     3},
-    {"_corehydror_ch_kde_cdf_",                      (DL_FUNC) &_corehydror_ch_kde_cdf_,                       5},
-    {"_corehydror_ch_kde_moments_",                  (DL_FUNC) &_corehydror_ch_kde_moments_,                   4},
-    {"_corehydror_ch_kde_pdf_",                      (DL_FUNC) &_corehydror_ch_kde_pdf_,                       5},
-    {"_corehydror_ch_kde_quantile_",                 (DL_FUNC) &_corehydror_ch_kde_quantile_,                  5},
     {"_corehydror_ch_kde_valid_",                    (DL_FUNC) &_corehydror_ch_kde_valid_,                     4},
     {"_corehydror_ch_latin_hypercube_",              (DL_FUNC) &_corehydror_ch_latin_hypercube_,               4},
     {"_corehydror_ch_mcmc_run_",                     (DL_FUNC) &_corehydror_ch_mcmc_run_,                      5},
     {"_corehydror_ch_mgbt_test_",                    (DL_FUNC) &_corehydror_ch_mgbt_test_,                     1},
-    {"_corehydror_ch_mix_cdf_",                      (DL_FUNC) &_corehydror_ch_mix_cdf_,                       6},
-    {"_corehydror_ch_mix_moments_",                  (DL_FUNC) &_corehydror_ch_mix_moments_,                   5},
-    {"_corehydror_ch_mix_params_",                   (DL_FUNC) &_corehydror_ch_mix_params_,                    5},
-    {"_corehydror_ch_mix_pdf_",                      (DL_FUNC) &_corehydror_ch_mix_pdf_,                       6},
-    {"_corehydror_ch_mix_quantile_",                 (DL_FUNC) &_corehydror_ch_mix_quantile_,                  6},
-    {"_corehydror_ch_mix_valid_",                    (DL_FUNC) &_corehydror_ch_mix_valid_,                     5},
     {"_corehydror_ch_model_data_frame_",             (DL_FUNC) &_corehydror_ch_model_data_frame_,              2},
     {"_corehydror_ch_model_log_likelihood_",         (DL_FUNC) &_corehydror_ch_model_log_likelihood_,          3},
     {"_corehydror_ch_model_simulate_",               (DL_FUNC) &_corehydror_ch_model_simulate_,                4},
     {"_corehydror_ch_model_validate_",               (DL_FUNC) &_corehydror_ch_model_validate_,                2},
-    {"_corehydror_ch_multinomial_val_",              (DL_FUNC) &_corehydror_ch_multinomial_val_,               4},
     {"_corehydror_ch_mvdist_run_",                   (DL_FUNC) &_corehydror_ch_mvdist_run_,                    3},
     {"_corehydror_ch_mvn_cdf_seq_",                  (DL_FUNC) &_corehydror_ch_mvn_cdf_seq_,                   5},
-    {"_corehydror_ch_mvn_conditional_covariance_",   (DL_FUNC) &_corehydror_ch_mvn_conditional_covariance_,    6},
-    {"_corehydror_ch_mvn_conditional_dimension_",    (DL_FUNC) &_corehydror_ch_mvn_conditional_dimension_,     4},
-    {"_corehydror_ch_mvn_conditional_mean_",         (DL_FUNC) &_corehydror_ch_mvn_conditional_mean_,          5},
-    {"_corehydror_ch_mvn_interval_seq_",             (DL_FUNC) &_corehydror_ch_mvn_interval_seq_,              6},
-    {"_corehydror_ch_mvn_marginal_covariance_",      (DL_FUNC) &_corehydror_ch_mvn_marginal_covariance_,       5},
-    {"_corehydror_ch_mvn_marginal_dimension_",       (DL_FUNC) &_corehydror_ch_mvn_marginal_dimension_,        3},
-    {"_corehydror_ch_mvn_marginal_log_pdf_",         (DL_FUNC) &_corehydror_ch_mvn_marginal_log_pdf_,          4},
-    {"_corehydror_ch_mvn_marginal_mean_",            (DL_FUNC) &_corehydror_ch_mvn_marginal_mean_,             4},
     {"_corehydror_ch_mvn_mvndst_seq_",               (DL_FUNC) &_corehydror_ch_mvn_mvndst_seq_,               10},
     {"_corehydror_ch_mvn_val_",                      (DL_FUNC) &_corehydror_ch_mvn_val_,                       4},
     {"_corehydror_ch_mvt_val_",                      (DL_FUNC) &_corehydror_ch_mvt_val_,                       5},
@@ -872,11 +597,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_sobol_generate_",               (DL_FUNC) &_corehydror_ch_sobol_generate_,                3},
     {"_corehydror_ch_sobol_skip_to_",                (DL_FUNC) &_corehydror_ch_sobol_skip_to_,                 3},
     {"_corehydror_ch_threshold_diagnostics_",        (DL_FUNC) &_corehydror_ch_threshold_diagnostics_,         6},
-    {"_corehydror_ch_trunc_cdf_",                    (DL_FUNC) &_corehydror_ch_trunc_cdf_,                     5},
-    {"_corehydror_ch_trunc_moments_",                (DL_FUNC) &_corehydror_ch_trunc_moments_,                 4},
-    {"_corehydror_ch_trunc_pdf_",                    (DL_FUNC) &_corehydror_ch_trunc_pdf_,                     5},
-    {"_corehydror_ch_trunc_quantile_",               (DL_FUNC) &_corehydror_ch_trunc_quantile_,                5},
-    {"_corehydror_ch_trunc_valid_",                  (DL_FUNC) &_corehydror_ch_trunc_valid_,                   4},
     {"_corehydror_ch_yeo_johnson_",                  (DL_FUNC) &_corehydror_ch_yeo_johnson_,                   2},
     {"_corehydror_ch_yeo_johnson_inverse_",          (DL_FUNC) &_corehydror_ch_yeo_johnson_inverse_,           2},
     {"_corehydror_ch_yeo_johnson_lambda_",           (DL_FUNC) &_corehydror_ch_yeo_johnson_lambda_,            1},
