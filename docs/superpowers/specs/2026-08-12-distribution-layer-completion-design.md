@@ -165,10 +165,13 @@ Three behaviours change:
   `distribution_names("structured")` lists the five families that need constructors. The C++
   factory name list is untouched, so the model and spec paths are unaffected.
 
-The three upstream stubs raise at the language layer, naming the limitation: `mvdist_cdf` on
-Dirichlet or Multinomial, `mvdist_pdf` on BivariateEmpirical, and `mvdist_marginal` /
-`mvdist_conditional` / `mvdist_interval` on MultivariateStudentT. The runner stays faithful, so
-the fixture path still sees the NaN and the upstream throw.
+The three upstream stubs raise in the runner, naming the limitation, so R and Python get the same
+message from one place: `mvdist_cdf` on Dirichlet or Multinomial, `mvdist_pdf` on
+BivariateEmpirical, and `mvdist_marginal` / `mvdist_conditional` / `mvdist_interval` on
+MultivariateStudentT. Guarding in the runner rather than in each language costs nothing here,
+because no fixture pins any of the three: `bivariate_empirical.json` asserts `cdf` and never
+`pdf`, and Dirichlet and Multinomial assert `pdf` and `log_pdf` and never `cdf`. If a later phase
+needs to pin the raw NaN, the guard moves up into the two language layers.
 
 ## The Python surface
 
