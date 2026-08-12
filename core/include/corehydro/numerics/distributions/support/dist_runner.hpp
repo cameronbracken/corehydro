@@ -13,11 +13,14 @@
 // bespoke *_seq entry points this replaces.
 #pragma once
 
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "corehydro/models/json_lite.hpp"
@@ -116,6 +119,282 @@ inline DistResult run_dist(const std::string& spec_json, const std::string& meth
                                  "'; no composite distribution implements ILinearMomentEstimation "
                                  "upstream");
     throw std::runtime_error("unknown distribution method: " + method);
+}
+
+// Evaluates `method` against the copula described by `spec_json`.
+//
+//   pdf / log_pdf / cdf              args = [u, v],       values = 1
+//   inverse_cdf                      args = [u, v],       values = 2
+//   tail_dependence                  args = [],           values = 2, names {lower, upper}
+//   exceedance_or / exceedance_and   args = [u, v],       values = 1
+//   theta / df                       args = [],           values = 1
+//   bounds                           args = [],           values = 2, names {minimum, maximum}
+//   parameters                       args = [],           values = the copula parameter vector
+//   parameters_valid                 args = [],           values = 1
+//   random                           args = [n, seed],    values = 2n (all x, then all y)
+//   log_likelihood_pseudo / _ifm / _full
+//                                    args = x then y,     values = 1
+//   marginal_x_parameters / marginal_y_parameters
+//                                    args = [],           values = that marginal's parameters
+inline DistResult run_copula(const std::string& spec_json, const std::string& method,
+                             const std::string& args_json) {
+    JsonValue spec = models::spec::parse_json(spec_json);
+    JsonValue args = models::spec::parse_json(args_json);
+    std::unique_ptr<copulas::BivariateCopula> c = build_copula(spec);
+    DistResult r;
+
+    auto split_xy = [&]() {
+        std::vector<double> all = detail::arg_numbers(args);
+        if (all.size() % 2 != 0)
+            throw std::runtime_error("copula method '" + method +
+                                     "' needs an even number of arguments (x then y)");
+        std::size_t h = all.size() / 2;
+        return std::make_pair(std::vector<double>(all.begin(), all.begin() + h),
+                              std::vector<double>(all.begin() + h, all.end()));
+    };
+
+    if (method == "pdf") { r.values = {c->pdf(detail::arg_at(args, 0, "pdf"),
+                                              detail::arg_at(args, 1, "pdf"))}; return r; }
+    if (method == "log_pdf") { r.values = {c->log_pdf(detail::arg_at(args, 0, "log_pdf"),
+                                                      detail::arg_at(args, 1, "log_pdf"))}; return r; }
+    if (method == "cdf") { r.values = {c->cdf(detail::arg_at(args, 0, "cdf"),
+                                              detail::arg_at(args, 1, "cdf"))}; return r; }
+    if (method == "inverse_cdf") {
+        std::array<double, 2> uv = c->inverse_cdf(detail::arg_at(args, 0, "inverse_cdf"),
+                                                  detail::arg_at(args, 1, "inverse_cdf"));
+        r.values = {uv[0], uv[1]};
+        return r;
+    }
+    if (method == "tail_dependence") {
+        r.values = {c->lower_tail_dependence(), c->upper_tail_dependence()};
+        r.names = {"lower", "upper"};
+        return r;
+    }
+    if (method == "exceedance_or") {
+        r.values = {c->or_joint_exceedance_probability(detail::arg_at(args, 0, "exceedance_or"),
+                                                       detail::arg_at(args, 1, "exceedance_or"))};
+        return r;
+    }
+    if (method == "exceedance_and") {
+        r.values = {c->and_joint_exceedance_probability(detail::arg_at(args, 0, "exceedance_and"),
+                                                        detail::arg_at(args, 1, "exceedance_and"))};
+        return r;
+    }
+    if (method == "theta") { r.values = {c->theta()}; return r; }
+    if (method == "df") {
+        std::vector<double> p = c->get_copula_parameters();
+        if (p.size() < 2)
+            throw std::runtime_error("copula '" + spec_family(spec) +
+                                     "' has no degrees-of-freedom parameter");
+        r.values = {p[1]};
+        return r;
+    }
+    if (method == "bounds") {
+        r.values = {c->theta_minimum(), c->theta_maximum()};
+        r.names = {"minimum", "maximum"};
+        return r;
+    }
+    if (method == "parameters") { r.values = c->get_copula_parameters(); return r; }
+    if (method == "parameters_valid") { r.values = {c->parameters_valid() ? 1.0 : 0.0}; return r; }
+    if (method == "random") {
+        int n = static_cast<int>(detail::arg_at(args, 0, "random"));
+        int seed = static_cast<int>(detail::arg_at(args, 1, "random"));
+        auto m = c->generate_random_values(n, seed);
+        for (const auto& row : m) r.values.push_back(row[0]);
+        for (const auto& row : m) r.values.push_back(row[1]);
+        return r;
+    }
+    if (method == "log_likelihood_pseudo" || method == "log_likelihood_ifm" ||
+        method == "log_likelihood_full") {
+        auto xy = split_xy();
+        if (method == "log_likelihood_pseudo")
+            r.values = {c->pseudo_log_likelihood(xy.first, xy.second)};
+        else if (method == "log_likelihood_ifm")
+            r.values = {c->ifm_log_likelihood(xy.first, xy.second)};
+        else
+            r.values = {c->log_likelihood(xy.first, xy.second)};
+        return r;
+    }
+    if (method == "marginal_x_parameters" || method == "marginal_y_parameters") {
+        const auto& m = method == "marginal_x_parameters" ? c->marginal_distribution_x
+                                                          : c->marginal_distribution_y;
+        if (!m) throw std::runtime_error("copula method '" + method + "': no marginal is attached");
+        r.values = m->get_parameters();
+        return r;
+    }
+    throw std::runtime_error("unknown copula method: " + method);
+}
+
+// Serializes a MultivariateNormal back into the grammar so `DistResult::spec` round-trips
+// (the marginal/conditional methods below hand a child spec back rather than a C++ object, so
+// they compose without anything crossing the language boundary).
+inline std::string mvn_spec_string(const MultivariateNormal& m) {
+    std::string out = R"({"family":"MultivariateNormal","mean":[)";
+    const std::vector<double>& mu = m.mean();
+    for (std::size_t i = 0; i < mu.size(); ++i) {
+        if (i) out += ",";
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.17g", mu[i]);
+        out += buf;
+    }
+    out += R"(],"covariance":[)";
+    for (int i = 0; i < m.dimension(); ++i) {
+        if (i) out += ",";
+        out += "[";
+        for (int j = 0; j < m.dimension(); ++j) {
+            if (j) out += ",";
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.17g", m.covariance(i, j));
+            out += buf;
+        }
+        out += "]";
+    }
+    out += "]}";
+    return out;
+}
+
+// Evaluates `method` against the multivariate distribution described by `spec_json`.
+//
+//   pdf / log_pdf / cdf     args = the point,            values = 1
+//   mahalanobis             args = the point,            values = 1
+//   dimension               args = [],                   values = 1
+//   mean / variance / sd    args = [],                   values = dimension
+//   covariance              args = [],                   values = dimension^2, row-major
+//   random                  args = [n, seed],            values = n * dimension, row-major
+//   random_lhs              args = [n, seed],            values = n * dimension, row-major
+//   interval                args = lower then upper,     values = 1        (MultivariateNormal)
+//   marginal                args = 0-based indices,      spec = the child (MultivariateNormal)
+//   conditional             args = indices then values,  spec = the child (MultivariateNormal)
+//   parameters_valid        args = [],                   values = 1
+//
+// `cdf` on Dirichlet or Multinomial and `pdf` on BivariateEmpirical are upstream stubs; both
+// surface here as a throw naming the family, not a NaN.
+inline DistResult run_mvdist(const std::string& spec_json, const std::string& method,
+                             const std::string& args_json) {
+    JsonValue spec = models::spec::parse_json(spec_json);
+    JsonValue args = models::spec::parse_json(args_json);
+    std::string family = spec_family(spec);
+    std::unique_ptr<MultivariateDistribution> d = build_multivariate(spec);
+    DistResult r;
+
+    auto* mvn = dynamic_cast<MultivariateNormal*>(d.get());
+
+    if (method == "cdf" && (family == "Dirichlet" || family == "Multinomial"))
+        throw std::runtime_error("cdf is not implemented for '" + family + "' upstream");
+    if (method == "pdf" && family == "BivariateEmpirical")
+        throw std::runtime_error("pdf is not implemented for 'BivariateEmpirical' upstream "
+                                 "(it returns NaN)");
+    if ((method == "marginal" || method == "conditional" || method == "interval") && !mvn)
+        throw std::runtime_error("'" + method + "' is available for MultivariateNormal only; '" +
+                                 family + "' has no such member upstream");
+
+    if (method == "pdf") { r.values = {d->pdf(detail::arg_numbers(args))}; return r; }
+    if (method == "log_pdf") { r.values = {d->log_pdf(detail::arg_numbers(args))}; return r; }
+    if (method == "cdf") { r.values = {d->cdf(detail::arg_numbers(args))}; return r; }
+    if (method == "dimension") { r.values = {static_cast<double>(d->dimension())}; return r; }
+    if (method == "parameters_valid") { r.values = {d->parameters_valid() ? 1.0 : 0.0}; return r; }
+    if (method == "marginal") {
+        std::vector<int> idx;
+        for (double v : detail::arg_numbers(args)) idx.push_back(static_cast<int>(v));
+        MultivariateNormal child = mvn->marginal(idx);
+        r.spec = mvn_spec_string(child);
+        return r;
+    }
+    if (method == "conditional") {
+        std::vector<double> all = detail::arg_numbers(args);
+        if (all.size() % 2 != 0)
+            throw std::runtime_error("'conditional' needs indices then the same number of values");
+        std::size_t h = all.size() / 2;
+        std::vector<int> idx;
+        for (std::size_t i = 0; i < h; ++i) idx.push_back(static_cast<int>(all[i]));
+        std::vector<double> vals(all.begin() + h, all.end());
+        MultivariateNormal child = mvn->conditional(idx, vals);
+        r.spec = mvn_spec_string(child);
+        return r;
+    }
+    if (method == "interval") {
+        std::vector<double> all = detail::arg_numbers(args);
+        if (all.size() % 2 != 0)
+            throw std::runtime_error("'interval' needs a lower vector then an upper vector");
+        std::size_t h = all.size() / 2;
+        r.values = {mvn->interval(std::vector<double>(all.begin(), all.begin() + h),
+                                  std::vector<double>(all.begin() + h, all.end()))};
+        return r;
+    }
+    // The remaining methods have no shared base signature: MultivariateNormal and
+    // MultivariateStudentT carry the accessors, Dirichlet and Multinomial carry their own, and
+    // BivariateEmpirical carries none. One branch per concrete type, dynamic_cast up front.
+    auto* mvt = dynamic_cast<MultivariateStudentT*>(d.get());
+    auto* dir = dynamic_cast<Dirichlet*>(d.get());
+    auto* mn = dynamic_cast<Multinomial*>(d.get());
+
+    auto flatten = [&r](const std::vector<std::vector<double>>& m) {
+        for (const auto& row : m)
+            for (double v : row) r.values.push_back(v);
+    };
+    auto no_such = [&](const char* what) -> DistResult {
+        throw std::runtime_error(std::string("'") + what + "' is not available for '" + family +
+                                 "' upstream");
+    };
+
+    if (method == "mahalanobis") {
+        if (mvn) r.values = {mvn->mahalanobis(detail::arg_numbers(args))};
+        else if (mvt) r.values = {mvt->mahalanobis(detail::arg_numbers(args))};
+        else return no_such("mahalanobis");
+        return r;
+    }
+    if (method == "mean") {
+        if (mvn) r.values = mvn->mean();
+        else if (mvt) r.values = mvt->mean();
+        else if (dir) r.values = dir->mean();
+        else if (mn) r.values = mn->mean();
+        else return no_such("mean");
+        return r;
+    }
+    if (method == "variance") {
+        if (mvn) r.values = mvn->variance();
+        else if (mvt) r.values = mvt->variance();
+        else if (dir) r.values = dir->variance();
+        else if (mn) r.values = mn->variance();
+        else return no_such("variance");
+        return r;
+    }
+    if (method == "sd") {
+        if (mvn) r.values = mvn->standard_deviation();
+        else if (mvt) r.values = mvt->standard_deviation();
+        else return no_such("sd");
+        return r;
+    }
+    if (method == "covariance") {
+        int n = d->dimension();
+        if (mvn || mvt || dir || mn) {
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j)
+                    r.values.push_back(mvn   ? mvn->covariance(i, j)
+                                       : mvt ? mvt->covariance(i, j)
+                                       : dir ? dir->covariance(i, j)
+                                             : mn->covariance(i, j));
+            return r;
+        }
+        return no_such("covariance");
+    }
+    if (method == "random" || method == "random_lhs") {
+        int n = static_cast<int>(detail::arg_at(args, 0, method.c_str()));
+        int seed = static_cast<int>(detail::arg_at(args, 1, method.c_str()));
+        if (method == "random_lhs") {
+            if (mvn) flatten(mvn->latin_hypercube_random_values(n, seed));
+            else if (mvt) flatten(mvt->latin_hypercube_random_values(n, seed));
+            else return no_such("random_lhs");
+        } else {
+            if (mvn) flatten(mvn->generate_random_values(n, seed));
+            else if (mvt) flatten(mvt->generate_random_values(n, seed));
+            else if (dir) flatten(dir->generate_random_values(n, seed));
+            else if (mn) flatten(mn->generate_random_values(n, seed));
+            else return no_such("random");
+        }
+        return r;
+    }
+    throw std::runtime_error("unknown multivariate method: " + method);
 }
 
 }  // namespace corehydro::numerics::distributions::support

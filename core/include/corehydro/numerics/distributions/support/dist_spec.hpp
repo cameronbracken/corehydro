@@ -32,9 +32,17 @@
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_factory.hpp"
 #include "corehydro/numerics/distributions/competing_risks.hpp"
+#include "corehydro/numerics/distributions/copulas/base/bivariate_copula_estimation.hpp"
+#include "corehydro/numerics/distributions/copulas/base/copula_factory.hpp"
 #include "corehydro/numerics/distributions/empirical_distribution.hpp"
 #include "corehydro/numerics/distributions/kernel_density.hpp"
 #include "corehydro/numerics/distributions/mixture.hpp"
+#include "corehydro/numerics/distributions/multivariate/base/multivariate_distribution.hpp"
+#include "corehydro/numerics/distributions/multivariate/bivariate_empirical.hpp"
+#include "corehydro/numerics/distributions/multivariate/dirichlet.hpp"
+#include "corehydro/numerics/distributions/multivariate/multinomial.hpp"
+#include "corehydro/numerics/distributions/multivariate/multivariate_normal.hpp"
+#include "corehydro/numerics/distributions/multivariate/multivariate_student_t.hpp"
 #include "corehydro/numerics/distributions/truncated_distribution.hpp"
 
 namespace corehydro::numerics::distributions::support {
@@ -173,6 +181,141 @@ inline std::unique_ptr<UnivariateDistributionBase> build_univariate(const JsonVa
 
     if (spec.contains("set_parameters")) out->set_parameters(spec.at("set_parameters").as_double_vector());
     return out;
+}
+
+}  // namespace corehydro::numerics::distributions::support
+
+// corehydro ADDITION, placed in the vendored `copulas` namespace (not `support`) so
+// build_copula below can call it unqualified as `copulas::set_theta_from_tau`. SetThetaFromTau
+// is a member of each concrete Archimedean class in the C# source, not part of
+// IBivariateCopula/IArchimedeanCopula, so it cannot be called through the BivariateCopula base
+// pointer. Lifted from the fixture runner's `set_theta_from_tau_dispatch`
+// (test_fixtures.cpp:1588-1605) -- the exact branch set: Clayton, AliMikhailHaq, Gumbel (Joe
+// has no SetThetaFromTau in the C# source). Returns false rather than throwing for any other
+// family, so the caller composes its own error message naming the family.
+namespace corehydro::numerics::distributions::copulas {
+
+inline bool set_theta_from_tau(BivariateCopula& copula, const std::vector<double>& x,
+                               const std::vector<double>& y) {
+    if (auto* c = dynamic_cast<ClaytonCopula*>(&copula)) {
+        c->set_theta_from_tau(x, y);
+        return true;
+    }
+    if (auto* c = dynamic_cast<AMHCopula*>(&copula)) {
+        c->set_theta_from_tau(x, y);
+        return true;
+    }
+    if (auto* c = dynamic_cast<GumbelCopula*>(&copula)) {
+        c->set_theta_from_tau(x, y);
+        return true;
+    }
+    return false;
+}
+
+}  // namespace corehydro::numerics::distributions::copulas
+
+namespace corehydro::numerics::distributions::support {
+
+// Lifted from the fixture runner's `build_multivariate`'s local `parse_transform` lambda
+// (test_fixtures.cpp:1366-1375). Same accepted strings as BivariateEmpirical's transform
+// grammar.
+inline corehydro::numerics::data::Transform parse_bivariate_transform(const std::string& t) {
+    using corehydro::numerics::data::Transform;
+    if (t == "None") return Transform::None;
+    if (t == "Logarithmic") return Transform::Logarithmic;
+    if (t == "NormalZ") return Transform::NormalZ;
+    throw std::runtime_error("unknown transform '" + t + "'; expected None, Logarithmic or NormalZ");
+}
+
+// A copula spec is either parameterized ({"theta": x, "df"?: y}) or fitted
+// ({"fit": {"x", "y", "method", "margin_x"?, "margin_y"?}}). Marginals attach in both forms.
+inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& spec) {
+    std::string family = spec_family(spec);
+    std::unique_ptr<copulas::BivariateCopula> c;
+    try {
+        c = copulas::create_copula(family);
+    } catch (const std::exception&) {
+        throw std::runtime_error("unknown copula family '" + family +
+                                 "'; expected AliMikhailHaq, Clayton, Frank, Gumbel, Joe, "
+                                 "Normal or StudentT");
+    }
+
+    auto attach = [&](const JsonValue& holder) {
+        if (holder.contains("margin_x"))
+            c->marginal_distribution_x =
+                std::shared_ptr<UnivariateDistributionBase>(build_univariate(holder.at("margin_x")));
+        if (holder.contains("margin_y"))
+            c->marginal_distribution_y =
+                std::shared_ptr<UnivariateDistributionBase>(build_univariate(holder.at("margin_y")));
+    };
+
+    if (spec.contains("fit")) {
+        const JsonValue& fit = spec.at("fit");
+        attach(fit);
+        std::vector<double> x = fit.at("x").as_double_vector();
+        std::vector<double> y = fit.at("y").as_double_vector();
+        std::string method = fit.value_or("method", "mpl");
+        if (method == "tau") {
+            // Only three concrete copulas implement SetThetaFromTau upstream.
+            if (!copulas::set_theta_from_tau(*c, x, y))
+                throw std::runtime_error("method 'tau' is not available for '" + family +
+                                         "'; upstream implements SetThetaFromTau for Clayton, "
+                                         "Gumbel and AliMikhailHaq only");
+        } else if (method == "mpl") {
+            copulas::estimate(*c, x, y, copulas::CopulaEstimationMethod::PseudoLikelihood);
+        } else if (method == "ifm") {
+            copulas::estimate(*c, x, y, copulas::CopulaEstimationMethod::InferenceFromMargins);
+        } else if (method == "mle") {
+            copulas::estimate(*c, x, y, copulas::CopulaEstimationMethod::FullLikelihood);
+        } else {
+            throw std::runtime_error("unknown copula fit method '" + method +
+                                     "'; expected mpl, ifm, mle or tau");
+        }
+        return c;
+    }
+
+    std::vector<double> params = {spec.at("theta").as_double()};
+    if (spec.contains("df")) params.push_back(spec.at("df").as_double());
+    c->set_copula_parameters(params);
+    attach(spec);
+    return c;
+}
+
+inline std::unique_ptr<MultivariateDistribution> build_multivariate(const JsonValue& spec) {
+    std::string family = spec_family(spec);
+    auto rows = [](const JsonValue& m) {
+        std::vector<std::vector<double>> out;
+        for (const JsonValue& row : m.items()) out.push_back(row.as_double_vector());
+        return out;
+    };
+    if (family == "MultivariateNormal") {
+        std::vector<double> mean = spec.at("mean").as_double_vector();
+        if (!spec.contains("covariance"))
+            return std::make_unique<MultivariateNormal>(std::move(mean));
+        return std::make_unique<MultivariateNormal>(std::move(mean), rows(spec.at("covariance")));
+    }
+    if (family == "MultivariateStudentT") {
+        double df = spec.at("df").as_double();
+        std::vector<double> loc = spec.at("location").as_double_vector();
+        if (!spec.contains("scale"))
+            return std::make_unique<MultivariateStudentT>(df, std::move(loc));
+        return std::make_unique<MultivariateStudentT>(df, std::move(loc), rows(spec.at("scale")));
+    }
+    if (family == "Dirichlet") return std::make_unique<Dirichlet>(spec.at("alpha").as_double_vector());
+    if (family == "Multinomial")
+        return std::make_unique<Multinomial>(spec.at("trials").as_int(),
+                                             spec.at("probabilities").as_double_vector());
+    if (family == "BivariateEmpirical") {
+        auto tf = [&](const char* key) {
+            return parse_bivariate_transform(spec.value_or(key, "None"));
+        };
+        return std::make_unique<BivariateEmpirical>(
+            spec.at("x1").as_double_vector(), spec.at("x2").as_double_vector(),
+            rows(spec.at("p")), tf("x1_transform"), tf("x2_transform"), tf("p_transform"));
+    }
+    throw std::runtime_error("unknown multivariate family '" + family +
+                             "'; expected MultivariateNormal, MultivariateStudentT, Dirichlet, "
+                             "Multinomial or BivariateEmpirical");
 }
 
 }  // namespace corehydro::numerics::distributions::support

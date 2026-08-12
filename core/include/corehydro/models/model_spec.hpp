@@ -100,6 +100,7 @@
 #include "corehydro/numerics/distributions/base/univariate_distribution_factory.hpp"
 #include "corehydro/numerics/distributions/copulas/base/copula_estimation_method.hpp"
 #include "corehydro/numerics/distributions/copulas/base/copula_type.hpp"
+#include "corehydro/numerics/distributions/support/dist_spec.hpp"
 
 namespace corehydro::models::spec {
 
@@ -119,13 +120,12 @@ inline trend_functions::TrendModelType parse_trend_model_type(const std::string&
     throw std::runtime_error("unknown trend model type: " + name);
 }
 
-// A `{ "family": ..., "parameters": [...] }` distribution spec -> a parameterized
-// distribution through the same factory every other fixture kind uses.
+// A `{ "family": ..., "parameters": [...] }` distribution spec -> a parameterized distribution.
+// Since phase 3 this is the shared nested builder, so a prior may itself be a composite (a
+// truncated Normal, a mixture) with no change at any call site.
 inline std::unique_ptr<numerics::distributions::UnivariateDistributionBase>
 build_spec_distribution(const JsonValue& spec) {
-    auto dist = numerics::distributions::create_distribution(spec.at("family").as_string());
-    if (spec.contains("parameters")) dist->set_parameters(spec.at("parameters").as_double_vector());
-    return dist;
+    return numerics::distributions::support::build_univariate(spec);
 }
 
 // A `data_frame` spec object -> a DataFrame (threshold processing happens later, at the
