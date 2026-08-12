@@ -104,9 +104,10 @@ the top two: the Normal copula leads, the Gumbel follows, and both stand well cl
 three. Both are carried forward below, because they turn out to disagree about exactly the part
 of the sample the design question asks about.
 
-`method = "tau"` inverts Kendall's tau into the dependence parameter with no optimization at all.
-Upstream implements that inversion for Clayton, Gumbel, and AliMikhailHaq only, so asking any
-other family for it is an error rather than a silent fallback.
+`method = "tau"` inverts Kendall's tau into the dependence parameter with no likelihood
+optimization at all. Upstream implements that inversion for Clayton, Gumbel, and AliMikhailHaq
+only, closed form for the first two and a root solve for the third, so asking any other family
+for it is an error rather than a silent fallback.
 
 ```{r}
 round(c(
@@ -122,9 +123,10 @@ cat(tryCatch(copula_fit("Frank", peak, volume, method = "tau"),
 
 Inference from margins fits each marginal by maximum likelihood first, then estimates the copula
 with those marginals held fixed. Naming a family in `margin_x` or `margin_y` is what asks for
-that first step; passing an already-parameterized `distribution()` object attaches it as given
-and skips the fit. A named marginal is rejected under `"mpl"` and `"tau"`, since neither method
-looks at marginals and the name would come back unfitted.
+that first step; under `"ifm"` an already-parameterized `distribution()` object is attached as
+given and skips the fit, while `method = "mle"` re-estimates both marginals jointly with the
+dependence parameter. A named marginal is rejected under `"mpl"` and `"tau"`, since neither
+method looks at marginals and the name would come back unfitted.
 
 ```{r}
 gumbel <- copula_fit("Gumbel", peak, volume, method = "ifm",
@@ -226,7 +228,7 @@ at 0.002: upper tail dependence hardly matters in the body of the distribution a
 the joint probability in its corner. Independence falls away far faster than either.
 
 ```{r}
-#| fig-alt: "And-joint exceedance probability against common marginal annual exceedance probability for the Gumbel copula, the Normal copula, and independence, on logarithmic axes."
+#| fig-alt: "And-joint exceedance probability against common marginal annual exceedance probability on logarithmic axes: the Gumbel copula solid, the Normal copula dashed, and independence dotted."
 grid_aep <- 10^seq(log10(0.5), log10(0.001), length.out = 60)
 g_curve <- sapply(1 - grid_aep, \(a) copula_exceedance(gumbel, a, a, "and"))
 n_curve <- sapply(1 - grid_aep, \(a) copula_exceedance(normal, a, a, "and"))
@@ -238,11 +240,11 @@ plot(grid_aep, g_curve,
   ylab = "P(both exceeded)",
   main = "Joint exceedance along the diagonal"
 )
-lines(grid_aep, n_curve, lwd = 2, col = "#6b7f3f")
+lines(grid_aep, n_curve, lwd = 2, lty = 2, col = "#6b7f3f")
 lines(grid_aep, grid_aep^2, lwd = 2, lty = 3, col = "#4d6b8a")
 legend("bottomright",
   legend = c("Gumbel copula", "Normal copula", "Independence"),
-  col = c("#8c5a3b", "#6b7f3f", "#4d6b8a"), lwd = 2, lty = c(1, 1, 3), bty = "n"
+  col = c("#8c5a3b", "#6b7f3f", "#4d6b8a"), lwd = 2, lty = c(1, 2, 3), bty = "n"
 )
 ```
 
@@ -268,7 +270,7 @@ cat(sprintf("Normal copula   %.15f\nMVN rectangle   %.15f\nrelative difference %
             p_norm_copula, rect, rect / p_norm_copula - 1))
 ```
 
-`mvdist_normal()` takes a `seed` because the Genz integrator draws from a per-instance Mersenne
+`mvdist_normal()` takes a `seed` because the Genz integrator draws from its own Mersenne
 Twister. Leave it out and the instance is clock-seeded, so any value that depends on those draws
 stops being reproducible run to run, let alone across languages. `mvdist_cdf()` avoids the
 integrator entirely at dimension one and two, where the ported code uses closed forms.

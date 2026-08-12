@@ -185,9 +185,11 @@ cat(sprintf("density at 30,000 cfs identical either way: %s\n",
             dist_pdf(kde, 30000) == dist_pdf(kde_open, 30000)))
 ```
 
-That is the honest limit of a kernel density for design work. It describes the record it was
-built from and will not extrapolate past it, which is exactly why the parametric fits above still
-have a job.
+That is the honest limit of a kernel density for design work. With `bounded_by_data` left on it
+describes the record it was built from and will not return a quantile past it, which is exactly
+why the parametric fits above still have a job. Turned off, the support runs three bandwidths
+beyond the largest observation, and the 0.2% AEP quantile lands at 23,424.8 cfs against a record
+maximum of 20,340.
 
 ```{r}
 round(data.frame(
@@ -222,8 +224,9 @@ cat(sprintf("1 / (F(max) - F(min)):       %.10f\n",
             1 / (dist_cdf(single, 1e6) - dist_cdf(single, 1000))))
 ```
 
-Removing the impossible lower tail pushes every quantile up, proportionally most at the median
-and least in the tail that mattered anyway.
+Removing the impossible lower tail pushes every quantile up, and the proportional shift shrinks
+as the quantile rises: 1.0706 at the median against 1.0178 at the 0.2% AEP quantile, the part of
+the curve a design study reads.
 
 ```{r}
 shifted <- data.frame(
