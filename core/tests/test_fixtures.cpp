@@ -993,12 +993,12 @@ static prob::DependencyType parse_dependency(const std::string& d) {
 //   2. The runner is stateless by construction -- one call builds an object, evaluates once
 //      and drops it -- and it exposes the user-facing verb set, not the whole fixture
 //      vocabulary. Two groups therefore stay on the bespoke dispatcher: methods with no
-//      runner counterpart (`mvndst*`, `alpha_sum`, `log_multivariate_beta`, `cdf_xy`,
-//      `median`, `mode`, `inverse_cdf`, `degrees_of_freedom`, `number_of_trials`,
-//      `dependency_change`, ...), and MultivariateNormal's `cdf`/`interval`/`mvndst`, which
-//      draw from the instance's persistent MVNUNI stream and are pinned as a SEQUENCE across
-//      a case's assertions (r_mvtnorm_4d_sequential asserts eleven advancing cdf values off
-//      one object).
+//      runner counterpart (`mvndst` and its two status arms, `log_multivariate_beta`,
+//      `cdf_xy(_after_set_parameters)`, `dependency_change`), and MultivariateNormal's
+//      `cdf`/`interval` in a case that consumes the persistent MVNUNI stream more than once,
+//      since those pin a SEQUENCE off one object (r_mvtnorm_4d_sequential asserts eleven
+//      advancing cdf values). A case that consumes the stream at most once delegates: `seed`
+//      is a grammar key, so a rebuilt object starts the same stream.
 
 static bool json_has_non_finite(const json& v) {
     if (v.is_string()) {
@@ -1031,19 +1031,18 @@ static supp::JsonValue to_spec(const json& j) {
     return corehydro::models::spec::parse_json(j.dump());
 }
 
-// The fixture method vocabulary predates the runner's; map the differences in one place.
+// The fixture method vocabulary predates the runner's; map the differences in one place. No
+// composite case asserts `random_value`, so no seeded-draw convention is spelled here or in
+// fixture_pick: a composite fixture that grows one should fail loudly out of run_dist rather
+// than land on an indexing rule nobody has ever run.
 static std::string fixture_method(const std::string& m) {
     if (m == "param") return "parameters";
-    if (m == "random_value") return "random";
     return m;  // pdf, log_pdf, cdf, quantile, mean, ..., parameters_valid pass straight through
 }
 
-// `param` and `random_value` index into a vector the runner returns whole. The univariate
-// random_value convention is args = [sample_size, seed, index] (the runner takes [n, seed]
-// and ignores the trailing index).
+// `param` indexes into the parameter vector the runner returns whole.
 static double fixture_pick(const supp::DistResult& r, const std::string& m, const json& a) {
     if (m == "param") return r.values.at(static_cast<std::size_t>(a[0].get<int>()));
-    if (m == "random_value") return r.values.at(static_cast<std::size_t>(a[2].get<int>()));
     return r.values.at(0);
 }
 
@@ -1079,9 +1078,15 @@ static std::unique_ptr<dist::UnivariateDistributionBase> build_non_finite_compos
         else if (kernel_str == "Triangular")   kt = dist::KernelType::Triangular;
         else if (kernel_str == "Uniform")      kt = dist::KernelType::Uniform;
         else throw std::runtime_error("unknown kernel type: " + kernel_str);
-        // parse_num (not .get<double>()) so the "nan"/"inf" string literal parses.
-        auto kde = std::make_unique<dist::KernelDensity>(std::move(data), kt,
-                                                          parse_num(construct["bandwidth"]));
+        std::unique_ptr<dist::KernelDensity> kde;
+        if (construct.contains("bandwidth"))
+            // parse_num (not .get<double>()) so a "nan"/"inf" string literal (the v2.1.4
+            // Bandwidth NaN/Infinity-rejection case) parses instead of throwing a JSON
+            // type_error.
+            kde = std::make_unique<dist::KernelDensity>(std::move(data), kt,
+                                                        parse_num(construct["bandwidth"]));
+        else
+            kde = std::make_unique<dist::KernelDensity>(std::move(data), kt);
         if (construct.contains("bounded_by_data"))
             kde->set_bounded_by_data(construct["bounded_by_data"].get<bool>());
         return kde;
@@ -1402,8 +1407,8 @@ static std::vector<int> parse_int_vec(const json& arr) {
 
 // Translates a fixture multivariate construct into the dist_spec grammar. The only schema
 // difference is Multinomial's parameter spelling (n / p here, trials / probabilities there);
-// the four MultivariateNormal integrator knobs below have no grammar key at all and are
-// applied to the locally built object instead.
+// the four MultivariateNormal integrator settings (seed / max_evaluations / abs_error /
+// rel_error) are grammar keys now and pass straight through.
 static json mvdist_spec(const std::string& target, const json& construct) {
     json out = construct;
     out["family"] = target;
@@ -1417,9 +1422,9 @@ static json mvdist_spec(const std::string& target, const json& construct) {
 }
 
 // The object the bespoke arms use: built through the shared spec builder wherever the grammar
-// reaches, then given the MultivariateNormal integrator settings the grammar has no key for
-// (`seed` in particular pins the MVNUNI stream every cdf/mvndst oracle in this corpus depends
-// on). BivariateEmpirical's non-finite validity cases are limitation 1 and are built directly.
+// reaches, which now includes the four MultivariateNormal integrator settings (`seed`,
+// `max_evaluations`, `abs_error`, `rel_error`). BivariateEmpirical's non-finite validity cases
+// are limitation 1 and are built directly.
 static std::unique_ptr<dist::MultivariateDistribution> build_multivariate_local(
     const std::string& target, const json& construct) {
     if (target == "BivariateEmpirical" && json_has_non_finite(construct)) {
@@ -1441,15 +1446,7 @@ static std::unique_ptr<dist::MultivariateDistribution> build_multivariate_local(
             std::move(x1), std::move(x2), std::move(p), parse_transform("x1_transform"),
             parse_transform("x2_transform"), parse_transform("p_transform"));
     }
-    auto d = supp::build_multivariate(to_spec(mvdist_spec(target, construct)));
-    if (auto* mvn = dynamic_cast<dist::MultivariateNormal*>(d.get())) {
-        if (construct.contains("seed")) mvn->set_mvnuni_seed(construct["seed"].get<int>());
-        if (construct.contains("max_evaluations"))
-            mvn->set_max_evaluations(construct["max_evaluations"].get<int>());
-        if (construct.contains("abs_error")) mvn->set_absolute_error(construct["abs_error"].get<double>());
-        if (construct.contains("rel_error")) mvn->set_relative_error(construct["rel_error"].get<double>());
-    }
-    return d;
+    return supp::build_multivariate(to_spec(mvdist_spec(target, construct)));
 }
 
 // Shared lookup for the "random_value"/"lhs_value" seeded-sampling oracle methods, common
@@ -1607,16 +1604,32 @@ static double dispatch_multivariate(dist::MultivariateDistribution& d, const std
     throw std::runtime_error("unknown multivariate fixture method: " + target + "/" + m);
 }
 
-// Methods run_mvdist covers. Everything else -- alpha, alpha_sum, mode, median, inverse_cdf,
-// log_multivariate_beta, number_of_trials, cdf_xy(_after_set_parameters), degrees_of_freedom,
-// mvndst and its two status arms -- has no runner counterpart and stays on
-// dispatch_multivariate (limitation 2), as do MultivariateNormal's cdf and interval: both draw
-// from the instance's persistent MVNUNI stream, which several cases pin as an advancing
-// sequence across their assertions.
-static bool mv_delegated(const std::string& target, const std::string& m) {
-    if (target == "MultivariateNormal" && (m == "cdf" || m == "interval")) return false;
+// MultivariateNormal's CDF above dimension 2, its Interval, and MVNDST itself all draw from the
+// instance's persistent MVNUNI stream, so each call ADVANCES it. A case that makes more than one
+// such call pins a sequence off one object, which a stateless runner cannot reproduce by
+// construction.
+static bool mvn_consumes_stream(const std::string& m) {
+    return m == "cdf" || m == "interval" || m == "mvndst" || m == "mvndst_inform" ||
+           m == "mvndst_error";
+}
+
+// Methods run_mvdist covers. What is left on dispatch_multivariate is exactly three groups:
+// the MVNDST integrator internals (mvndst and its two status arms), BivariateEmpirical's
+// cdf_xy(_after_set_parameters) and Dirichlet's static log_multivariate_beta, which have no
+// runner verb; and MultivariateNormal's cdf/interval in a case that makes more than one
+// stream-consuming call (`mvn_stream_isolated` false -- r_mvtnorm_4d_sequential's eleven
+// advancing cdf values are the reason). With `seed` in the grammar a SINGLE such call
+// reproduces exactly, so those cases delegate.
+static bool mv_delegated(const std::string& target, const std::string& m,
+                         bool mvn_stream_isolated) {
+    if (m == "mvndst" || m == "mvndst_inform" || m == "mvndst_error") return false;
+    if (target == "MultivariateNormal" && (m == "cdf" || m == "interval") && !mvn_stream_isolated)
+        return false;
     return m == "dimension" || m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis" ||
            m == "mean" || m == "variance" || m == "sd" || m == "covariance" ||
+           m == "median" || m == "mode" || m == "inverse_cdf" || m == "interval" ||
+           m == "degrees_of_freedom" || m == "alpha" || m == "alpha_sum" ||
+           m == "number_of_trials" ||
            m == "random_value" || m == "lhs_value" || m == "marginal_dimension" ||
            m == "marginal_mean" || m == "marginal_covariance" || m == "marginal_log_pdf" ||
            m == "conditional_dimension" || m == "conditional_mean" ||
@@ -1631,7 +1644,8 @@ static std::size_t square_dim(std::size_t n) {
 
 // run_mvdist returns whole vectors, so every fixture method that names one element indexes in
 // here. Conventions preserved verbatim from the deleted dispatch_multivariate arms:
-// mean/variance/sd take [i]; covariance takes [i, j] against a row-major dimension^2 block;
+// mean/variance/sd/median/mode/alpha take [i]; covariance takes [i, j] against a row-major
+// dimension^2 block; inverse_cdf takes [probabilities, i] and interval [lower, upper];
 // random_value/lhs_value take [sample_size, seed, row, col] against a row-major
 // sample_size x dimension block; marginal_* take [indices, ...] and conditional_* take
 // [indices, values, ...], both evaluated against the child distribution the runner hands back
@@ -1641,10 +1655,20 @@ static double dispatch_multivariate_delegated(const std::string& spec, const std
     auto run = [&](const std::string& s, const std::string& method, const json& args) {
         return supp::run_mvdist(s, method, args.dump());
     };
-    if (m == "dimension") return run(spec, "dimension", json::array()).values.at(0);
+    if (m == "dimension" || m == "alpha_sum" || m == "degrees_of_freedom" ||
+        m == "number_of_trials")
+        return run(spec, m, json::array()).values.at(0);
     if (m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis")
         return run(spec, m, a[0]).values.at(0);
-    if (m == "mean" || m == "variance" || m == "sd")
+    if (m == "inverse_cdf")
+        return run(spec, m, a[0]).values.at(static_cast<std::size_t>(a[1].get<int>()));
+    if (m == "interval") {
+        json bounds = a[0];
+        for (const auto& v : a[1]) bounds.push_back(v);
+        return run(spec, "interval", bounds).values.at(0);
+    }
+    if (m == "mean" || m == "variance" || m == "sd" || m == "median" || m == "mode" ||
+        m == "alpha")
         return run(spec, m, json::array()).values.at(static_cast<std::size_t>(a[0].get<int>()));
     if (m == "covariance") {
         auto r = run(spec, "covariance", json::array());
@@ -1694,6 +1718,13 @@ static void run_multivariate(const json& spec) {
         const bool encodable = !json_has_non_finite(c["construct"]);
         const std::string cspec =
             encodable ? mvdist_spec(target, c["construct"]).dump() : std::string();
+        // A case whose MVNUNI stream is consumed at most once has no sequence to preserve, so
+        // its cdf/interval delegates; anything more stays whole on the local object below.
+        int stream_calls = 0;
+        if (target == "MultivariateNormal")
+            for (const auto& as : c["assertions"])
+                if (mvn_consumes_stream(as["method"].get<std::string>())) ++stream_calls;
+        const bool stream_isolated = stream_calls <= 1;
         // Built lazily and held for the whole case, so the bespoke arms see one object in
         // assertion order exactly as they did before -- MultivariateNormal's MVNUNI stream
         // advances across a case's cdf/mvndst assertions and the oracles pin that sequence.
@@ -1724,7 +1755,7 @@ static void run_multivariate(const json& spec) {
                 check_bool(r.values.at(0) != 0.0, as, where);
                 continue;
             }
-            if (mv_delegated(target, method))
+            if (mv_delegated(target, method, stream_isolated))
                 check_value(dispatch_multivariate_delegated(cspec, method, args), as, where);
             else
                 check_value(dispatch_multivariate(local_object(), target, method, args), as, where);
@@ -1743,22 +1774,11 @@ static void run_multivariate(const json& spec) {
 
 namespace cop = corehydro::numerics::distributions::copulas;
 
-// The fixture's `ifm` convention carries an implicit step the grammar has no verb for: a bare
-// marginal FAMILY name means "MLE-fit that marginal on the sample first", because
-// BivariateCopulaEstimation's IFM path takes the marginals as already fitted (it optimizes
-// theta alone -- see bivariate_copula_estimation.hpp's `ifm`). The pre-fit therefore happens
-// here and the fitted parameters go into the spec.
-static json mle_marginal_parameters(const std::string& family, const std::vector<double>& sample) {
-    auto d = dist::create_distribution(family);
-    auto* est = dynamic_cast<dist::IEstimation*>(d.get());
-    if (est == nullptr) throw std::runtime_error(family + " does not support estimation");
-    est->estimate(sample, dist::ParameterEstimationMethod::MaximumLikelihood);
-    return json(d->get_parameters());
-}
-
 // Translates a fixture copula construct into the dist_spec grammar. The schema differences are
 // the marginal spelling (positional "marginals" here, margin_x / margin_y there) and the fit
-// samples (dataset NAMES here, inline arrays there).
+// samples (dataset NAMES here, inline arrays there). The fixture's bare-family marginal
+// convention needs no translation: dist_spec's build_copula MLE-fits a parameterless marginal
+// to its own sample, which is what the fixture means and what IFM requires.
 static json copula_spec(const std::string& target, const json& construct, const json& datasets) {
     auto margin = [](const std::string& family, const json& params) {
         json m;
@@ -1787,10 +1807,9 @@ static json copula_spec(const std::string& target, const json& construct, const 
         if (fit.contains("marginals")) {
             const std::string fx = fit["marginals"][0].get<std::string>();
             const std::string fy = fit["marginals"][1].get<std::string>();
-            const bool prefit = fit["method"].get<std::string>() == "ifm";
             f.erase("marginals");
-            f["margin_x"] = margin(fx, prefit ? mle_marginal_parameters(fx, x) : json());
-            f["margin_y"] = margin(fy, prefit ? mle_marginal_parameters(fy, y) : json());
+            f["margin_x"] = margin(fx, json());
+            f["margin_y"] = margin(fy, json());
         }
         out["fit"] = f;
     }

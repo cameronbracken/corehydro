@@ -16,6 +16,11 @@
 //   {"family": "KernelDensity", "data": [...], "kernel": "Gaussian", "bandwidth": h,
 //    "bounded_by_data": true}
 //
+// A MultivariateNormal spec accepts four optional integrator settings beside its mean and
+// covariance -- "seed", "max_evaluations", "abs_error" and "rel_error". They configure the Genz
+// quasi-Monte-Carlo integrator behind the CDF for dimension >= 3; without "seed" the instance
+// clock-seeds and repeated calls disagree. An absent key leaves the ported default untouched.
+//
 // `target`/`params` are accepted as aliases of `family`/`parameters` because every fixture file
 // spells them that way; renaming keys across the pinned corpus would buy nothing.
 //
@@ -29,6 +34,8 @@
 #include <vector>
 
 #include "corehydro/models/json_lite.hpp"
+#include "corehydro/numerics/distributions/base/i_estimation.hpp"
+#include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_factory.hpp"
 #include "corehydro/numerics/distributions/competing_risks.hpp"
@@ -227,8 +234,29 @@ inline corehydro::numerics::data::Transform parse_bivariate_transform(const std:
     throw std::runtime_error("unknown transform '" + t + "'; expected None, Logarithmic or NormalZ");
 }
 
+// MLE-fits a marginal to its own sample when, and only when, its spec named a family without
+// parameters. IFM (BivariateCopulaEstimation's `ifm`) optimizes theta ALONE and takes the
+// marginals as already fitted, so a bare family left default-constructed would have theta
+// optimized against a standard Normal(0, 1) instead of against the data -- a wrong answer with
+// no error. Full MLE re-estimates the marginals itself, so the pre-fit only supplies the
+// starting object there; MPL ignores the marginals and `tau` does not use them.
+inline void prefit_marginal(UnivariateDistributionBase* marginal, const JsonValue& margin_spec,
+                            const std::vector<double>& sample, const char* which) {
+    if (marginal == nullptr) return;
+    if (!spec_parameters(margin_spec).empty()) return;  // used exactly as given
+    auto* est = dynamic_cast<IEstimation*>(marginal);
+    if (est == nullptr)
+        throw std::runtime_error(std::string("copula fit: ") + which + " names '" +
+                                 spec_family(margin_spec) +
+                                 "' without parameters, but that family does not implement "
+                                 "IEstimation, so it cannot be fitted to the sample");
+    est->estimate(sample, ParameterEstimationMethod::MaximumLikelihood);
+}
+
 // A copula spec is either parameterized ({"theta": x, "df"?: y}) or fitted
 // ({"fit": {"x", "y", "method", "margin_x"?, "margin_y"?}}). Marginals attach in both forms.
+// In the fit form a marginal that names a family with no parameters is MLE-fitted to its own
+// sample first (x for margin_x, y for margin_y) -- see prefit_marginal above.
 inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& spec) {
     std::string family = spec_family(spec);
     std::unique_ptr<copulas::BivariateCopula> c;
@@ -255,6 +283,12 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
         std::vector<double> x = fit.at("x").as_double_vector();
         std::vector<double> y = fit.at("y").as_double_vector();
         std::string method = fit.value_or("method", "mpl");
+        if (method == "ifm" || method == "mle") {
+            if (fit.contains("margin_x"))
+                prefit_marginal(c->marginal_distribution_x.get(), fit.at("margin_x"), x, "margin_x");
+            if (fit.contains("margin_y"))
+                prefit_marginal(c->marginal_distribution_y.get(), fit.at("margin_y"), y, "margin_y");
+        }
         if (method == "tau") {
             // Only three concrete copulas implement SetThetaFromTau upstream.
             if (!copulas::set_theta_from_tau(*c, x, y))
@@ -290,9 +324,21 @@ inline std::unique_ptr<MultivariateDistribution> build_multivariate(const JsonVa
     };
     if (family == "MultivariateNormal") {
         std::vector<double> mean = spec.at("mean").as_double_vector();
-        if (!spec.contains("covariance"))
-            return std::make_unique<MultivariateNormal>(std::move(mean));
-        return std::make_unique<MultivariateNormal>(std::move(mean), rows(spec.at("covariance")));
+        std::unique_ptr<MultivariateNormal> m =
+            spec.contains("covariance")
+                ? std::make_unique<MultivariateNormal>(std::move(mean), rows(spec.at("covariance")))
+                : std::make_unique<MultivariateNormal>(std::move(mean));
+        // The four Genz-integrator settings, applied AFTER construction because
+        // set_parameters resets max_evaluations to its 1000 x dimension default. An absent key
+        // leaves the ported default untouched. `seed` is what makes a dimension >= 3 CDF
+        // reproducible at all: MVNDST draws from the instance's own Mersenne Twister, which
+        // clock-seeds otherwise.
+        if (spec.contains("seed")) m->set_mvnuni_seed(spec.at("seed").as_int());
+        if (spec.contains("max_evaluations"))
+            m->set_max_evaluations(spec.at("max_evaluations").as_int());
+        if (spec.contains("abs_error")) m->set_absolute_error(spec.at("abs_error").as_double());
+        if (spec.contains("rel_error")) m->set_relative_error(spec.at("rel_error").as_double());
+        return m;
     }
     if (family == "MultivariateStudentT") {
         double df = spec.at("df").as_double();

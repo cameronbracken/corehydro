@@ -128,6 +128,31 @@ int main() {
     }
     CHECK_THROWS_MSG(supp::run_copula(R"({"family":"Joe","fit":{"x":[1,2],"y":[1,2],"method":"tau"}})", "theta", "[]"), "tau");
 
+    // A bare-family marginal in a fit spec is MLE-fitted to the sample first, as IFM requires.
+    // Without the pre-fit theta is optimized against a default Normal(0,1) and comes out wrong.
+    {
+        const char* fitted = R"({"family":"Clayton","fit":{
+            "x":[135.9,104.1,108.7,99.3,134.7,91.0,77.3,115.4,109.0,79.0],
+            "y":[1.9,1.3,1.4,1.2,1.8,1.1,0.9,1.5,1.4,1.0],
+            "method":"ifm","margin_x":{"family":"Normal"},"margin_y":{"family":"Normal"}}})";
+        supp::DistResult mx = supp::run_copula(fitted, "marginal_x_parameters", "[]");
+        // The x sample has mean ~105.4, sd ~19: a fitted marginal, not the default (0, 1).
+        CHECK_TRUE(mx.values.at(0) > 50.0);
+        CHECK_TRUE(mx.values.at(1) > 5.0);
+    }
+
+    // An explicitly parameterized marginal is used as given and NOT refitted.
+    {
+        const char* given = R"({"family":"Clayton","fit":{
+            "x":[135.9,104.1,108.7,99.3,134.7,91.0,77.3,115.4,109.0,79.0],
+            "y":[1.9,1.3,1.4,1.2,1.8,1.1,0.9,1.5,1.4,1.0],
+            "method":"ifm","margin_x":{"family":"Normal","parameters":[100,20]},
+            "margin_y":{"family":"Normal","parameters":[1.4,0.3]}}})";
+        supp::DistResult mx = supp::run_copula(given, "marginal_x_parameters", "[]");
+        CHECK_NEAR(mx.values.at(0), 100.0, 1e-12);
+        CHECK_NEAR(mx.values.at(1), 20.0, 1e-12);
+    }
+
     // --- multivariate -------------------------------------------------------------------
     {
         const char* spec = R"({"family":"MultivariateNormal","mean":[0,0],
@@ -155,7 +180,92 @@ int main() {
         supp::DistResult r = supp::run_mvdist(spec, "interval", "[-100,-100,100,100]");
         CHECK_NEAR(r.values.at(0), 1.0, 1e-6);
     }
+    // A seeded MVN CDF is reproducible. Above dimension 2 the CDF is Genz quasi-Monte-Carlo off a
+    // per-instance Mersenne Twister; without a seed key in the grammar it clock-seeds and R and
+    // Python cannot agree.
+    {
+        const char* spec = R"({"family":"MultivariateNormal","mean":[0,0,0],
+            "covariance":[[1,0.3,0.2],[0.3,1,0.4],[0.2,0.4,1]],"seed":12345})";
+        supp::DistResult a = supp::run_mvdist(spec, "cdf", "[1,1,1]");
+        supp::DistResult b = supp::run_mvdist(spec, "cdf", "[1,1,1]");
+        CHECK_NEAR(a.values.at(0), b.values.at(0), 0.0);
+        CHECK_TRUE(a.values.at(0) > 0.0 && a.values.at(0) < 1.0);
+    }
+
+    // The three accuracy knobs are honoured too: a one-point budget cannot converge, so it
+    // returns a different (unconverged) value than the default budget does.
+    {
+        const char* tight = R"({"family":"MultivariateNormal","mean":[0,0,0],
+            "covariance":[[1,0.3,0.2],[0.3,1,0.4],[0.2,0.4,1]],"seed":12345,
+            "max_evaluations":1,"abs_error":1e-12,"rel_error":1e-12})";
+        const char* loose = R"({"family":"MultivariateNormal","mean":[0,0,0],
+            "covariance":[[1,0.3,0.2],[0.3,1,0.4],[0.2,0.4,1]],"seed":12345})";
+        supp::DistResult t = supp::run_mvdist(tight, "cdf", "[1,1,1]");
+        supp::DistResult l = supp::run_mvdist(loose, "cdf", "[1,1,1]");
+        CHECK_TRUE(std::fabs(t.values.at(0) - l.values.at(0)) > 0.0);
+    }
+
     CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"MultivariateStudentT","df":5,"location":[0,0]})", "marginal", "[0]"), "MultivariateStudentT");
+    // --- the seven accessor verbs --------------------------------------------------------
+    {
+        const char* mvn = R"({"family":"MultivariateNormal","mean":[1,2,3],
+                              "covariance":[[4,0,0],[0,9,0],[0,0,16]]})";
+        // A Gaussian's median and mode are its mean, elementwise.
+        supp::DistResult mean = supp::run_mvdist(mvn, "mean", "[]");
+        supp::DistResult med = supp::run_mvdist(mvn, "median", "[]");
+        supp::DistResult mod = supp::run_mvdist(mvn, "mode", "[]");
+        CHECK_EQ(static_cast<int>(med.values.size()), 3);
+        CHECK_EQ(static_cast<int>(mod.values.size()), 3);
+        CHECK_NEAR(med.values.at(1), mean.values.at(1), 0.0);
+        CHECK_NEAR(mod.values.at(2), mean.values.at(2), 0.0);
+        // Diagonal covariance: inverse_cdf is the elementwise univariate Normal quantile, so
+        // probability 0.5 in every dimension maps back to the mean.
+        supp::DistResult inv = supp::run_mvdist(mvn, "inverse_cdf", "[0.5,0.5,0.5]");
+        CHECK_EQ(static_cast<int>(inv.values.size()), 3);
+        CHECK_NEAR(inv.values.at(0), 1.0, 1e-9);
+        CHECK_NEAR(inv.values.at(2), 3.0, 1e-9);
+    }
+    {
+        const char* mvt = R"({"family":"MultivariateStudentT","df":7,"location":[1,2],
+                              "scale":[[1,0],[0,1]]})";
+        supp::DistResult df = supp::run_mvdist(mvt, "degrees_of_freedom", "[]");
+        CHECK_NEAR(df.values.at(0), 7.0, 0.0);
+        supp::DistResult med = supp::run_mvdist(mvt, "median", "[]");
+        supp::DistResult mod = supp::run_mvdist(mvt, "mode", "[]");
+        CHECK_NEAR(med.values.at(0), 1.0, 0.0);
+        CHECK_NEAR(mod.values.at(1), 2.0, 0.0);
+        // MVT's inverse_cdf takes Dimension + 1 probabilities (the last drives the chi-squared
+        // mixing variable) and returns a point of length Dimension.
+        supp::DistResult inv = supp::run_mvdist(mvt, "inverse_cdf", "[0.5,0.5,0.5]");
+        CHECK_EQ(static_cast<int>(inv.values.size()), 2);
+        CHECK_NEAR(inv.values.at(0), 1.0, 1e-9);
+        CHECK_THROWS_MSG(supp::run_mvdist(mvt, "inverse_cdf", "[0.5,0.5]"), "Dimension");
+    }
+    {
+        const char* dir = R"({"family":"Dirichlet","alpha":[2,3,5]})";
+        supp::DistResult a = supp::run_mvdist(dir, "alpha", "[]");
+        supp::DistResult s = supp::run_mvdist(dir, "alpha_sum", "[]");
+        CHECK_EQ(static_cast<int>(a.values.size()), 3);
+        // alpha_sum is the sum of alpha.
+        CHECK_NEAR(s.values.at(0), a.values.at(0) + a.values.at(1) + a.values.at(2), 1e-12);
+        supp::DistResult mod = supp::run_mvdist(dir, "mode", "[]");
+        CHECK_EQ(static_cast<int>(mod.values.size()), 3);
+        // Dirichlet mode_i = (alpha_i - 1) / (alpha_sum - K).
+        CHECK_NEAR(mod.values.at(0), 1.0 / 7.0, 1e-12);
+    }
+    {
+        supp::DistResult n =
+            supp::run_mvdist(R"({"family":"Multinomial","trials":12,"probabilities":[0.2,0.3,0.5]})",
+                             "number_of_trials", "[]");
+        CHECK_NEAR(n.values.at(0), 12.0, 0.0);
+    }
+    // Each verb names the family it is missing from rather than returning a wrong shape.
+    CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"Dirichlet","alpha":[2,3]})", "median", "[]"), "Dirichlet");
+    CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"Multinomial","trials":4,"probabilities":[0.5,0.5]})", "mode", "[]"), "Multinomial");
+    CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"MultivariateNormal","mean":[0,0]})", "alpha", "[]"), "MultivariateNormal");
+    CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"MultivariateNormal","mean":[0,0]})", "degrees_of_freedom", "[]"), "MultivariateNormal");
+    CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"Dirichlet","alpha":[2,3]})", "number_of_trials", "[]"), "Dirichlet");
+
     CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"Dirichlet","alpha":[2,3]})", "cdf", "[0.5,0.5]"), "Dirichlet");
 
     // A model prior may now be a composite, which no spec could express before.

@@ -259,13 +259,26 @@ inline std::string mvn_spec_string(const MultivariateNormal& m) {
 //   mahalanobis             args = the point,            values = 1
 //   dimension               args = [],                   values = 1
 //   mean / variance / sd    args = [],                   values = dimension
+//   median / mode           args = [],                   values = dimension
 //   covariance              args = [],                   values = dimension^2, row-major
+//   inverse_cdf             args = probabilities,        values = dimension
 //   random                  args = [n, seed],            values = n * dimension, row-major
 //   random_lhs              args = [n, seed],            values = n * dimension, row-major
 //   interval                args = lower then upper,     values = 1        (MultivariateNormal)
 //   marginal                args = 0-based indices,      spec = the child (MultivariateNormal)
 //   conditional             args = indices then values,  spec = the child (MultivariateNormal)
+//   degrees_of_freedom      args = [],                   values = 1        (MultivariateStudentT)
+//   alpha                   args = [],                   values = dimension        (Dirichlet)
+//   alpha_sum               args = [],                   values = 1                (Dirichlet)
+//   number_of_trials        args = [],                   values = 1               (Multinomial)
 //   parameters_valid        args = [],                   values = 1
+//
+// `median` and `mode` are MultivariateNormal and MultivariateStudentT (both return the centre)
+// plus Dirichlet's `mode`; no other family defines them upstream. `inverse_cdf` is the
+// Cholesky map upstream implements, NOT a true multivariate quantile: it turns a vector of
+// independent uniforms into one point. MultivariateNormal takes `dimension` probabilities;
+// MultivariateStudentT takes `dimension + 1` (the last drives the chi-squared mixing variable)
+// and still returns `dimension` values.
 //
 // `cdf` on Dirichlet or Multinomial and `pdf` on BivariateEmpirical are upstream stubs; both
 // surface here as a throw naming the family, not a NaN.
@@ -363,6 +376,45 @@ inline DistResult run_mvdist(const std::string& spec_json, const std::string& me
         if (mvn) r.values = mvn->standard_deviation();
         else if (mvt) r.values = mvt->standard_deviation();
         else return no_such("sd");
+        return r;
+    }
+    if (method == "median") {
+        if (mvn) r.values = mvn->median();
+        else if (mvt) r.values = mvt->median();
+        else return no_such("median");
+        return r;
+    }
+    if (method == "mode") {
+        if (mvn) r.values = mvn->mode();
+        else if (mvt) r.values = mvt->mode();
+        else if (dir) r.values = dir->mode();
+        else return no_such("mode");
+        return r;
+    }
+    if (method == "inverse_cdf") {
+        if (mvn) r.values = mvn->inverse_cdf(detail::arg_numbers(args));
+        else if (mvt) r.values = mvt->inverse_cdf(detail::arg_numbers(args));
+        else return no_such("inverse_cdf");
+        return r;
+    }
+    if (method == "degrees_of_freedom") {
+        if (!mvt) return no_such("degrees_of_freedom");
+        r.values = {mvt->degrees_of_freedom()};
+        return r;
+    }
+    if (method == "alpha") {
+        if (!dir) return no_such("alpha");
+        r.values = dir->alpha();
+        return r;
+    }
+    if (method == "alpha_sum") {
+        if (!dir) return no_such("alpha_sum");
+        r.values = {dir->alpha_sum()};
+        return r;
+    }
+    if (method == "number_of_trials") {
+        if (!mn) return no_such("number_of_trials");
+        r.values = {static_cast<double>(mn->number_of_trials())};
         return r;
     }
     if (method == "covariance") {
