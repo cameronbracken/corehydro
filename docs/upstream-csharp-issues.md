@@ -1783,6 +1783,79 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   TruncatedDistribution's existing `mode` pin was re-pinned to the full-precision C# value and
   agrees to 1 ulp. No `oracle_skip`, no loosened tolerance.
 
+---
+
+## BUG (port surface, open) — `fit_mle()` / `fit_map()` on a `model_bivariate()` Archimedean copula returns a wrong answer under the default optimizer
+
+- **Where:** `corehydror/R/fit.R` and `corehydropy/src/corehydropy/fit.py` (the `optimizer`
+  default, NelderMead), over
+  `core/include/corehydro/models/bivariate_distribution/bivariate_distribution.hpp:581-585`
+  (`initial_value_for`) and each Archimedean copula's `parameter_constraints`
+  (`gumbel_copula.hpp:117` `{1, 100}`, `clayton_copula.hpp:116` `{-1, 100}`). Found writing
+  `site/examples/26-copulas-and-joint-frequency/`.
+- **What:** the fit reports `Success` and a parameter that is not the maximum. Measured on that
+  page's 48-pair peak/volume record with both marginals fixed at their IFM values:
+
+  ```
+  Gumbel   NelderMead              theta=1.000000   logLik=0.000000   status Success
+  Clayton  NelderMead              theta=54.450000  logLik=-Inf       status Success
+  Gumbel   DifferentialEvolution   theta=2.712260   logLik=29.900498
+  Gumbel   Powell                  theta=2.712294   logLik=29.900498
+  Clayton  DifferentialEvolution   theta=1.344345   logLik=17.332637
+  ```
+
+  Python agrees with R: `fit_mle(..., optimizer="NelderMead")` returns `theta=1.0`,
+  `log_likelihood=-2.2e-15`; DifferentialEvolution returns `theta=2.7122604712670535`,
+  `log_likelihood=29.900498219016548`. `fit_map()` behaves the same way, returning `theta=1`.
+- **Cause: optimizer initialization, not missing sample data.** An earlier report blamed a
+  missing `set_sample_data()` call. That is wrong: the call does happen, through
+  `set_copula_type()` to `set_copula()` to `set_default_parameters()` to `set_sample_data()`. The
+  real cause is where the local search starts. `initial_value_for` sets `ModelParameter.value()`
+  to the midpoint of the copula's constraint range, so `model_parameters()` reports `50.5` for
+  Gumbel and `49.5` for Clayton. Measured data log-likelihoods at those starts: Gumbel `-1022.56`
+  at 50.5 against `29.90` at the optimum; Clayton `-Inf` at 49.5, 50.5 and 54.45 alike. NelderMead
+  is a local search, so from a start that far out on a steep ridge (Gumbel) or on a flat `-Inf`
+  plateau (Clayton) it collapses onto a bound or stalls one simplex step from where it began, and
+  still reports convergence.
+- **Scope:** `bivariate_analysis()` is unaffected, because `BayesianAnalysis` initializes
+  through a global DE/MAP search rather than from `ModelParameter.value()`. No pinned fixture
+  value is affected either: the bivariate estimation fixtures use NelderMead only with the Normal
+  and StudentT copulas, whose midpoint starts (correlation 0, degrees of freedom 5) are benign.
+- **Where a fix belongs:** NOT in the core. `initial_value_for` is a faithful port of the C#
+  `InitialValueFor` and reproduces it exactly. The tractable fixes are at the R and Python
+  surface: pick a global optimizer by default for this model family, or seed the start from a
+  Kendall's tau inversion, or refuse to report `Success` on a non-finite objective. Each of those
+  is a behaviour change that needs its own fixtures.
+- **Status: open, deliberate.** Recorded here as a known issue for a follow-up branch, not fixed
+  on the branch that found it.
+
+---
+
+## BUG (port surface, open) — Python `Fit.parameters` silently drops values when parameter names repeat
+
+- **Where:** `corehydropy/src/corehydropy/fit.py:468`
+  (`parameters = dict(zip(names, result["parameters"]))`), and the same pattern at `:499`
+  (`standard_errors`), `:512-513` (`profile_lower` / `profile_upper`), `:567-568` (`map` /
+  `posterior_mean`), and `:434-435` (the credible-interval dicts).
+- **What:** the fit's parameter vector is exposed as a dict keyed by parameter name, and names are
+  not unique. A two-component mixture's names are
+  `['Weight (w1)', 'Weight (w2)', 'D1', 'D1', 'D2', 'D2']`, so six fitted values collapse to four
+  dict entries and the two component location parameters are lost with no warning. The `repr` and
+  the summary text are built from the same dict, so they under-report as well.
+- **Scope:** every Python consumer of `Fit.parameters`, `.standard_errors`, `.map`,
+  `.posterior_mean`, the profile intervals and the credible intervals, for any model whose
+  parameter names repeat. The ordered vector is still reachable from
+  `fit.model.spec["parameter_values"]`, which is what
+  `site/examples/27-composite-distributions/python.ipynb` reads, with a comment saying why. R's
+  `coef()` is unaffected: a named numeric vector tolerates duplicate names.
+- **Where a fix belongs:** the Python surface only. Either disambiguate the repeated names when
+  building the dicts, or return an ordered structure and keep the name lookup as a secondary
+  accessor. Either choice is a public-API change and needs its own fixtures plus an R/Python
+  cross-check.
+- **Status: open, deliberate.** Recorded here as a known issue for a follow-up branch.
+
+---
+
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 
 Every entry above was re-checked against the shipped source at the new pins. This is the summary;
