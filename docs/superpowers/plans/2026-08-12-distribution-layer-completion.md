@@ -23,7 +23,7 @@
 - Every new R export must appear in `corehydror/_pkgdown.yml`. Every new Python export must appear in the `quartodoc.sections` of `site/_quarto.yml`. pkgdown errors on a missing entry.
 - This phase adds NO numerical code. Every verb it exposes already exists in the core. If a verb appears to be missing, it is missing upstream too: surface an error, do not implement it.
 - Target version at the end of the phase: **0.5.0** in `corehydror/DESCRIPTION`, `corehydropy/pyproject.toml`, and the core version stamp.
-- Baselines are measured in Task 0 and must not regress.
+- Baselines measured at branch cut, which must not regress: **ctest 80/80, oracle gate 4623 reproduced / 0 failed / 11 skipped, testthat 4655/0, pytest 935**.
 
 ---
 
@@ -186,7 +186,7 @@ Create `core/tests/test_dist_runner.cpp`:
 #include <cmath>
 #include <string>
 
-#include "test_helpers.hpp"
+#include "check.hpp"
 
 namespace supp = corehydro::numerics::distributions::support;
 
@@ -195,16 +195,16 @@ int main() {
     {
         supp::DistResult r =
             supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "pdf", "[0]");
-        chtest::check_close(r.values.at(0), 0.3989422804014327, 1e-12, "normal/pdf");
-        chtest::check_eq(static_cast<int>(r.values.size()), 1, "normal/pdf/size");
+        CHECK_NEAR(r.values.at(0), 0.3989422804014327, 1e-12);
+        CHECK_EQ(static_cast<int>(r.values.size()), 1);
     }
 
     // The pointwise verbs vectorize: args length in, values length out.
     {
         supp::DistResult r =
             supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "cdf", "[-1,0,1]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 3, "normal/cdf/vectorized");
-        chtest::check_close(r.values.at(1), 0.5, 1e-12, "normal/cdf/median");
+        CHECK_EQ(static_cast<int>(r.values.size()), 3);
+        CHECK_NEAR(r.values.at(1), 0.5, 1e-12);
     }
 
     // The fixture key spelling is an accepted alias.
@@ -212,7 +212,7 @@ int main() {
         supp::DistResult a =
             supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "pdf", "[0]");
         supp::DistResult b = supp::run_dist(R"({"target":"Normal","params":[0,1]})", "pdf", "[0]");
-        chtest::check_close(a.values.at(0), b.values.at(0), 0.0, "alias/target_params");
+        CHECK_NEAR(a.values.at(0), b.values.at(0), 0.0);
     }
 
     // Composites nest to any depth: a truncated mixture is one spec.
@@ -224,79 +224,84 @@ int main() {
                     "weights":[0.5,0.5]},
             "bounds":[-2,7]})";
         supp::DistResult r = supp::run_dist(spec, "cdf", "[7]");
-        chtest::check_close(r.values.at(0), 1.0, 1e-9, "truncated_mixture/cdf_at_upper");
+        CHECK_NEAR(r.values.at(0), 1.0, 1e-9);
     }
 
     // moments returns eight values with their names attached.
     {
         supp::DistResult r =
             supp::run_dist(R"({"family":"Normal","parameters":[3,2]})", "moments", "[]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 8, "moments/size");
-        chtest::check_eq(static_cast<int>(r.names.size()), 8, "moments/names");
-        chtest::check_eq(r.names.at(0) == "mean", true, "moments/first_name");
-        chtest::check_close(r.values.at(0), 3.0, 1e-12, "moments/mean");
+        CHECK_EQ(static_cast<int>(r.values.size()), 8);
+        CHECK_EQ(static_cast<int>(r.names.size()), 8);
+        CHECK_EQ(r.names.at(0) == "mean", true);
+        CHECK_NEAR(r.values.at(0), 3.0, 1e-12);
     }
 
     // A seeded draw comes back whole, so a rebuild never splits a stream.
     {
         supp::DistResult r =
             supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "random", "[5,12345]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 5, "random/size");
+        CHECK_EQ(static_cast<int>(r.values.size()), 5);
         supp::DistResult again =
             supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "random", "[5,12345]");
-        chtest::check_close(r.values.at(4), again.values.at(4), 0.0, "random/reproducible");
+        CHECK_NEAR(r.values.at(4), again.values.at(4), 0.0);
     }
 
     // log_likelihood takes the whole sample in args.
     {
         supp::DistResult r = supp::run_dist(R"({"family":"Normal","parameters":[0,1]})",
                                             "log_likelihood", "[-1,0,1]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 1, "log_likelihood/size");
-        chtest::check_eq(std::isfinite(r.values.at(0)), true, "log_likelihood/finite");
+        CHECK_EQ(static_cast<int>(r.values.size()), 1);
+        CHECK_EQ(std::isfinite(r.values.at(0)), true);
     }
 
     // KernelDensity takes its data inline and defaults the bandwidth to the Silverman rule.
     {
         supp::DistResult r = supp::run_dist(
             R"({"family":"KernelDensity","data":[1,2,3,4,5,6,7,8,9,10]})", "cdf", "[5.5]");
-        chtest::check_close(r.values.at(0), 0.5, 0.05, "kde/cdf_at_center");
+        CHECK_NEAR(r.values.at(0), 0.5, 0.05);
     }
 
     // Guards.
-    chtest::check_throws([] { supp::run_dist(R"({"family":"NotAFamily"})", "pdf", "[0]"); },
-                         "unknown distribution family");
-    chtest::check_throws(
-        [] { supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "not_a_method", "[0]"); },
-        "unknown distribution method");
-    chtest::check_throws(
-        [] { supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "linear_moments", "[]"); },
-        "linear moments");
+    CHECK_THROWS_MSG(supp::run_dist(R"({"family":"NotAFamily"})", "pdf", "[0]"), "unknown distribution family");
+    CHECK_THROWS_MSG(supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "not_a_method", "[0]"), "unknown distribution method");
+    CHECK_THROWS_MSG(supp::run_dist(R"({"family":"Normal","parameters":[0,1]})", "linear_moments", "[]"), "linear moments");
 
     return chtest::summary("dist_runner");
 }
 ```
 
-If `chtest::check_throws` does not exist in `core/tests/test_helpers.hpp`, add it there in this task:
+The harness is `core/tests/check.hpp` (`CHECK_EQ`, `CHECK_TRUE`, `CHECK_NEAR`, `CHECK_THROWS`, and `chtest::summary` for the exit code). It has no message-matching throw assertion, and this phase's error messages are a deliverable in their own right: each one names the upstream limitation it is reporting. Add one macro to `check.hpp` in this task, beside `CHECK_THROWS`:
 
 ```cpp
-// Runs `fn` and passes when it throws a std::exception whose message contains `needle`.
-template <typename F>
-inline void check_throws(F&& fn, const std::string& needle) {
-    try {
-        fn();
-    } catch (const std::exception& e) {
-        if (std::string(e.what()).find(needle) != std::string::npos) {
-            ++passed;
-            return;
-        }
-        fail("expected a message containing '" + needle + "', got '" + e.what() + "'");
-        return;
-    }
-    fail("expected a throw containing '" + needle + "', but nothing was thrown");
-}
+// Like CHECK_THROWS, but also asserts the message names the thing that went wrong. Used where
+// the message IS the feature (the phase-3 distribution runner reports which upstream limitation
+// it hit, and a message that stops naming it is a regression users would feel).
+#define CHECK_THROWS_MSG(expr, needle)                                                     \
+    do {                                                                                   \
+        bool _threw = false;                                                               \
+        std::string _what;                                                                 \
+        try {                                                                              \
+            (void)(expr);                                                                  \
+        } catch (const std::exception& _e) {                                               \
+            _threw = true;                                                                 \
+            _what = _e.what();                                                             \
+        } catch (...) {                                                                    \
+            _threw = true;                                                                 \
+        }                                                                                  \
+        if (_threw && _what.find(needle) != std::string::npos) {                           \
+            ::chtest::report_pass();                                                       \
+        } else if (!_threw) {                                                              \
+            ::chtest::report_fail(__FILE__, __LINE__, std::string(#expr) + " did not throw"); \
+        } else {                                                                           \
+            ::chtest::report_fail(__FILE__, __LINE__,                                      \
+                                  std::string(#expr) + " threw \"" + _what +               \
+                                      "\", which does not contain \"" + (needle) + "\"");  \
+        }                                                                                  \
+    } while (0)
 ```
 
-Match the surrounding names in `test_helpers.hpp` (`passed`, `fail`) to whatever that file actually uses; read it first.
+`check.hpp` already includes `<string>` and `<cstdio>`; no new include is needed.
 
 - [ ] **Step 2: Register the test and run it to verify it fails**
 
@@ -631,7 +636,7 @@ Expected: the Task 0 count plus one (the new `test_dist_runner`), 0 failures.
 ```bash
 git add core/include/corehydro/numerics/distributions/support/dist_spec.hpp \
         core/include/corehydro/numerics/distributions/support/dist_runner.hpp \
-        core/tests/test_dist_runner.cpp core/tests/test_helpers.hpp core/CMakeLists.txt \
+        core/tests/test_dist_runner.cpp core/tests/check.hpp core/CMakeLists.txt \
         docs/superpowers/plans/2026-08-12-distribution-layer-completion.md
 git commit -m "feat: the shared distribution spec grammar and runner
 
@@ -687,21 +692,21 @@ Append to `core/tests/test_dist_runner.cpp`, before `return chtest::summary(...)
     {
         supp::DistResult r =
             supp::run_copula(R"({"family":"Clayton","theta":2})", "pdf", "[0.3,0.7]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 1, "clayton/pdf/size");
-        chtest::check_eq(std::isfinite(r.values.at(0)), true, "clayton/pdf/finite");
+        CHECK_EQ(static_cast<int>(r.values.size()), 1);
+        CHECK_EQ(std::isfinite(r.values.at(0)), true);
     }
     {
         supp::DistResult r =
             supp::run_copula(R"({"family":"Clayton","theta":2})", "tail_dependence", "[]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 2, "clayton/tail/size");
-        chtest::check_eq(r.names.at(0) == "lower", true, "clayton/tail/names");
+        CHECK_EQ(static_cast<int>(r.values.size()), 2);
+        CHECK_EQ(r.names.at(0) == "lower", true);
         // Closed form for Clayton: lambda_L = 2^(-1/theta).
-        chtest::check_close(r.values.at(0), std::pow(2.0, -0.5), 1e-12, "clayton/tail/lower");
+        CHECK_NEAR(r.values.at(0), std::pow(2.0, -0.5), 1e-12);
     }
     {
         supp::DistResult r =
             supp::run_copula(R"({"family":"Clayton","theta":2})", "bounds", "[]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 2, "clayton/bounds/size");
+        CHECK_EQ(static_cast<int>(r.values.size()), 2);
     }
     {
         // A copula with marginals attached samples pairs; 2n values, x-major then y.
@@ -709,7 +714,7 @@ Append to `core/tests/test_dist_runner.cpp`, before `return chtest::summary(...)
             "margin_x":{"family":"Normal","parameters":[0,1]},
             "margin_y":{"family":"Normal","parameters":[0,1]}})";
         supp::DistResult r = supp::run_copula(spec, "random", "[4,12345]");
-        chtest::check_eq(static_cast<int>(r.values.size()), 8, "clayton/random/size");
+        CHECK_EQ(static_cast<int>(r.values.size()), 8);
     }
     {
         // The three log-likelihoods take x then y, split at the halfway point.
@@ -718,12 +723,9 @@ Append to `core/tests/test_dist_runner.cpp`, before `return chtest::summary(...)
             "margin_y":{"family":"Normal","parameters":[0,1]}})";
         supp::DistResult r =
             supp::run_copula(spec, "log_likelihood_ifm", "[-1,0,1,-0.5,0.2,0.9]");
-        chtest::check_eq(std::isfinite(r.values.at(0)), true, "clayton/ifm_ll/finite");
+        CHECK_EQ(std::isfinite(r.values.at(0)), true);
     }
-    chtest::check_throws(
-        [] { supp::run_copula(R"({"family":"Joe","fit":{"x":[1,2],"y":[1,2],"method":"tau"}})",
-                              "theta", "[]"); },
-        "tau");
+    CHECK_THROWS_MSG(supp::run_copula(R"({"family":"Joe","fit":{"x":[1,2],"y":[1,2],"method":"tau"}})", "theta", "[]"), "tau");
 
     // --- multivariate -------------------------------------------------------------------
     {
@@ -732,36 +734,28 @@ Append to `core/tests/test_dist_runner.cpp`, before `return chtest::summary(...)
         supp::DistResult r = supp::run_mvdist(spec, "pdf", "[0,0]");
         // Standard bivariate normal at the origin: 1 / (2 pi). std::acos(-1.0) rather than
         // M_PI, which is absent under strict -std=c++17 on Linux and on MSVC.
-        chtest::check_close(r.values.at(0), 1.0 / (2.0 * std::acos(-1.0)), 1e-12,
-                            "mvn/pdf/center");
+        CHECK_NEAR(r.values.at(0), 1.0 / (2.0 * std::acos(-1.0)), 1e-12);
     }
     {
         const char* spec = R"({"family":"MultivariateNormal","mean":[1,2,3],
                                "covariance":[[1,0,0],[0,1,0],[0,0,1]]})";
         // marginal returns a child spec, 0-based indices at this layer.
         supp::DistResult r = supp::run_mvdist(spec, "marginal", "[0,2]");
-        chtest::check_eq(r.spec.empty(), false, "mvn/marginal/spec");
+        CHECK_EQ(r.spec.empty(), false);
         supp::DistResult child = supp::run_mvdist(r.spec, "dimension", "[]");
-        chtest::check_close(child.values.at(0), 2.0, 0.0, "mvn/marginal/dimension");
+        CHECK_NEAR(child.values.at(0), 2.0, 0.0);
         supp::DistResult mean = supp::run_mvdist(r.spec, "mean", "[]");
-        chtest::check_close(mean.values.at(1), 3.0, 1e-12, "mvn/marginal/mean");
+        CHECK_NEAR(mean.values.at(1), 3.0, 1e-12);
     }
     {
         const char* spec = R"({"family":"MultivariateNormal","mean":[0,0],
                                "covariance":[[1,0],[0,1]]})";
         // interval takes lower then upper, split at the halfway point.
         supp::DistResult r = supp::run_mvdist(spec, "interval", "[-100,-100,100,100]");
-        chtest::check_close(r.values.at(0), 1.0, 1e-6, "mvn/interval/whole_plane");
+        CHECK_NEAR(r.values.at(0), 1.0, 1e-6);
     }
-    chtest::check_throws(
-        [] {
-            supp::run_mvdist(R"({"family":"MultivariateStudentT","df":5,"location":[0,0]})",
-                             "marginal", "[0]");
-        },
-        "MultivariateStudentT");
-    chtest::check_throws(
-        [] { supp::run_mvdist(R"({"family":"Dirichlet","alpha":[2,3]})", "cdf", "[0.5,0.5]"); },
-        "Dirichlet");
+    CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"MultivariateStudentT","df":5,"location":[0,0]})", "marginal", "[0]"), "MultivariateStudentT");
+    CHECK_THROWS_MSG(supp::run_mvdist(R"({"family":"Dirichlet","alpha":[2,3]})", "cdf", "[0.5,0.5]"), "Dirichlet");
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -1189,7 +1183,7 @@ Add the covering test to `core/tests/test_dist_runner.cpp`:
             "base":{"family":"Normal","parameters":[0,1]},"bounds":[-1,1]})";
         auto d = corehydro::models::spec::build_spec_distribution(
             corehydro::models::spec::parse_json(prior));
-        chtest::check_close(d->cdf(1.0), 1.0, 1e-9, "model_spec/composite_prior");
+        CHECK_NEAR(d->cdf(1.0), 1.0, 1e-9);
     }
 ```
 
