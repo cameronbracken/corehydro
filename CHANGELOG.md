@@ -7,6 +7,81 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-12
+
+The distribution layer is complete. Five composite univariate distributions, all seven bivariate
+copulas, and five multivariate distributions are reachable from R and Python for the first time,
+each through one shared grammar and one runner (`dist_spec.hpp`/`dist_runner.hpp`) that the R
+glue, the Python glue, the C++ fixture runner, and the dotnet oracle emitter all drive, so a
+fixture case and a user's `dist_pdf()` call are the same code path.
+
+### Added
+
+- **`dist_truncated()`, `dist_mixture()`, `dist_competing_risks()`, `dist_empirical()`,
+  `dist_kde()`** -- the five composite distributions, each returning the same `corehydro_dist` /
+  `Distribution` object that every existing distribution verb already accepts (`dist_pdf`,
+  `dist_cdf`, `dist_quantile`, moments, `dist_random`, and so on).
+- **`copula()` / `copula_fit()`** -- all seven bivariate copulas (Clayton, AliMikhailHaq, Frank,
+  Gumbel, Joe, Normal, StudentT), with verbs for density, distribution, inverse CDF, tail
+  dependence, joint exceedance probability, the three log-likelihoods (full, pseudo, and
+  IFM-conditional), and theta bounds. `copula_fit()`'s `margin_x`/`margin_y` accept either a
+  family name, fit as part of the tau/MPL/IFM/MLE estimation, or an already-fitted distribution,
+  used as given.
+- **`mvdist_normal()`, `mvdist_student_t()`, `mvdist_dirichlet()`, `mvdist_multinomial()`,
+  `mvdist_bivariate_empirical()`** -- the five multivariate distributions. MultivariateNormal adds
+  `mvdist_marginal()`, `mvdist_conditional()`, and rectangle probability, plus `seed` and the Genz
+  quasi-Monte-Carlo integrator settings on the CDF so a call at dimension three or higher is
+  reproducible instead of clock-seeded.
+- Two worked example pairs: copulas and joint frequency analysis, and composite distributions.
+
+### Fixed
+
+- **`copula_fit(method = "mpl")`, the default, returned a meaningless theta.** The
+  pseudo-likelihood objective expects plotting positions and does not rank internally; the fit
+  path handed it raw data instead, every log-density landed off the unit square, the objective
+  was a constant, and BrentSearch returned an arbitrary interior point (theta 0.335 where the true
+  fit is 65.229). The plotting-position transform now lives in the shared C++ grammar, so both
+  languages get it from the same compiled code rather than each needing its own port.
+- **A copula spec naming a bare marginal family under IFM fit its theta against a default
+  Normal(0, 1)** instead of the fitted marginal. The grammar now MLE-fits a parameterless marginal
+  before the copula fit runs.
+- **A MultivariateNormal CDF at dimension three or higher had no seed in the spec grammar**, so it
+  ran the Genz integrator off a clock seed and repeated calls, including calls across R and
+  Python, disagreed. `seed`, `max_evaluations`, `abs_error`, and `rel_error` are now spec keys,
+  applied after construction because the constructor resets the integrator's defaults.
+- `copula_pdf()`, `copula_log_pdf()`, and `copula_cdf()` are now vectorized over their second
+  argument in the core, so both languages inherit it; previously the vectorization was documented
+  but not implemented, and extra values were silently dropped.
+
+### Internal
+
+Restored fidelity to the C# source at eight sites, found only once the composite distributions
+got their first real oracle:
+
+- Central moments on Mixture, CompetingRisks, and TruncatedDistribution now call the fixed
+  1000-step quadrature overload the C# calls, replacing an adaptive Gauss-Kronrod integration.
+- `mode()` on Mixture, CompetingRisks, TruncatedDistribution, Empirical, and KernelDensity now
+  runs the same bounded BrentSearch the C# runs (over the 0.001/0.999 inverse-CDF bracket),
+  replacing a grid scan, a ternary search, or a base-mode clamp depending on the class. The
+  Empirical mode was 43% off (8669.72 against the C# value of 15198.51) and is now bit-exact.
+- TruncatedDistribution's central moments integrated over the truncation bounds instead of the two
+  1e-8 quantiles of the truncated distribution, a third bug found while fixing the first two.
+- About thirty fixture-only glue functions per language, one per composite/copula/multivariate
+  case that used to need its own entry point, are deleted; every one of those paths now goes
+  through the shared runner.
+
+### Documentation
+
+- Reference entries for every new R export and Python name (41 R exports plus two S3 methods, 15
+  Python names).
+
+### Validation
+
+ctest 81/81; oracle gate 4767 reproduced, 0 failed, 11 skipped (the documented GEV standard-error
+set, unchanged); testthat 4886/0; pytest 1007 passed. `R CMD check --as-cran` holds at three NOTEs
+(the CRAN-incoming non-FOSS-license note, the long-path note listing vendored core headers, and a
+local HTML-tidy-version note) with no WARNING.
+
 ## [0.4.0] - 2026-08-11
 
 The estimation layer. A model built with `model_univariate()`, `model_bulletin17c()`, or any of
@@ -223,7 +298,8 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/cameronbracken/corehydro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cameronbracken/corehydro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cameronbracken/corehydro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cameronbracken/corehydro/compare/v0.1.0...v0.2.0

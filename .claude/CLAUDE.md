@@ -53,6 +53,32 @@ copulas (Clayton, AliMikhailHaq, Frank, Gumbel, Joe, Normal, StudentT), the shar
 `BivariateCopula`/`ArchimedeanCopula` base classes, `BivariateCopulaEstimation` (tau/MPL/IFM/MLE
 fits), the `IMaximumLikelihoodEstimation` mixin, and the copula factory.
 
+`distributions/support/dist_spec.hpp` + `dist_runner.hpp` (both corehydro additions with no
+upstream C# counterpart, siblings of `models/model_spec.hpp` and
+`estimation/support/fit_runner.hpp`) are the one place a distribution, copula, or multivariate
+object is built from a spec and the one place a method on it is dispatched. `dist_spec.hpp` is the
+fixture `construct` schema promoted to a first-class contract -- `{"family": ..., "parameters":
+[...]}` down through the composite forms (`TruncatedDistribution`/`Mixture`/`CompetingRisks`/
+`Empirical`/`KernelDensity`, each nesting child specs) and the copula/multivariate forms, plus the
+MultivariateNormal Genz-integrator settings (`seed`/`max_evaluations`/`abs_error`/`rel_error`,
+applied after construction since the constructor resets them) and an `ifm`/`mle` marginal
+pre-fit so a copula spec naming a bare family fits it before use rather than evaluating against a
+default-constructed Normal(0,1). `dist_runner.hpp` dispatches `run_dist`/`run_copula`/`run_mvdist`
+over that built object and returns a flat `DistResult` (`values`/`names`/`spec`); it is stateless
+by construction; a seeded `random` call returns the whole draw vector in one call so a rebuild can
+never split the RNG stream. Four callers drive this pair and none owns any evaluation logic: the
+cpp11 glue (`corehydror/src/dist_spec.cpp`), the pybind11 glue
+(`corehydropy/src/bindings/dist_spec.cpp`), the C++ fixture runner
+(`core/tests/test_fixtures.cpp`), and the dotnet oracle emitter -- each serializes its native
+construct to the grammar and calls the runner, so a fixture case, an oracle replay, and a user's
+`dist_pdf()` (or `copula_pdf()`, `mvdist_pdf()`) call are the same code path. The five composite
+univariate distributions (`dist_truncated`/`dist_mixture`/`dist_competing_risks`/`dist_empirical`/
+`dist_kde`), the copula surface (`copula`/`copula_fit` plus the pdf/cdf/inverse-cdf/tail-dependence/
+joint-exceedance/log-likelihood/theta-bounds verbs), and the five multivariate distributions
+(`mvdist_normal`/`mvdist_student_t`/`mvdist_dirichlet`/`mvdist_multinomial`/
+`mvdist_bivariate_empirical`, with MultivariateNormal's marginal/conditional/rectangle-probability)
+all reach both languages through this one pair of headers rather than per-family glue.
+
 `core/include/corehydro/numerics/sampling/mcmc/` holds the MCMC subsystem: `mcmc_sampler.hpp` (the
 shared base -- seeding cascade, chain initialization incl. the MAP/DE/Hessian path, the serial
 `sample()` driver), all 8 concrete samplers (`rwmh.hpp`, `arwmh.hpp`, `demcz.hpp`, `demczs.hpp`,
@@ -564,3 +590,30 @@ gate; the version bump to **0.4.0** records it. Final numbers: **ctest 80/80; or
 reproduced, 0 failed, 11 skipped; testthat 4624/0; pytest 928**; `R CMD check --as-cran` holds at
 three NOTEs (the CRAN-incoming non-FOSS-license note, the long-path note listing vendored core
 headers, and a local HTML-tidy-version note) with no WARNING.
+
+The distribution layer (branch `surface-distribution-layer`, August 2026) made three families
+reachable from both languages for the first time: the five composite univariate distributions
+(`dist_truncated`/`dist_mixture`/`dist_competing_risks`/`dist_empirical`/`dist_kde`), all seven
+bivariate copulas over a `copula()`/`copula_fit()` surface, and the five multivariate
+distributions, with MultivariateNormal's marginal, conditional, and rectangle probability. All
+three go through one shared JSON spec grammar and one runner,
+`core/include/corehydro/numerics/distributions/support/dist_spec.hpp` and `dist_runner.hpp` (see
+"Layout & the vendoring invariant" above), that the R glue, the Python glue, the C++ fixture
+runner, and the dotnet oracle emitter all drive, replacing about thirty fixture-only glue
+functions per language with the same one-runner pattern the estimation layer established for
+fitting. Three bugs surfaced and were fixed because these paths got their first real oracle:
+`copula_fit(method = "mpl")`, the default, returned a meaningless theta (0.335 where the true fit
+is 65.229) because the pseudo-likelihood objective needs plotting positions and was handed raw
+data instead; the grammar had no key for the MultivariateNormal Genz integrator seed, so a CDF
+above dimension two was not reproducible and R and Python could not agree; and the IFM copula fit
+path evaluated a bare marginal family name against a default-constructed Normal(0,1) instead of
+fitting it first. Fixing the port fidelity at eight further C# sites turned up a third class of
+bug: central moments on Mixture/CompetingRisks/TruncatedDistribution now use the fixed-1000-step
+quadrature C# calls rather than adaptive Gauss-Kronrod, and `mode()` on five classes now runs the
+same bounded BrentSearch C# runs; the Empirical mode had been 43% wrong (8669.72 against the C#
+value of 15198.51), invisible until the verb got its first oracle. The version bump to **0.5.0**
+records it. Final numbers: **ctest 81/81; oracle gate 4767 reproduced, 0 failed, 11 skipped;
+testthat 4886/0; pytest 1007**; `R CMD check --as-cran` holds at the same three NOTEs with no
+WARNING. The end-to-end cross-language check (a mixture pdf and seeded draw, a Clayton copula MPL
+fit and joint exceedance probability, and a trivariate normal conditional mean) reproduces byte
+for byte between R and Python.
