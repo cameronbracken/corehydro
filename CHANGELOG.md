@@ -7,6 +7,62 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-11
+
+The estimation layer. A model built with `model_univariate()`, `model_bulletin17c()`, or any of
+the other `model_*()` constructors can now be fit directly: maximum likelihood, maximum a
+posteriori, Bayesian MCMC, and generalized method of moments are each one function call, returning
+a fit object with `coef()`, `confint()`, `AIC()`, `logLik()`, and `summary()` methods rather than a
+bag of raw numbers. Every fit runs through one shared C++ entry point, so a fixture case, the
+dotnet oracle gate, and a user's `fit_mle()` call are now provably the same code path rather than
+three that happen to agree.
+
+### Added
+
+- **`fit_mle()` / `fit_map()`** -- maximum likelihood and maximum a posteriori, with a
+  Hessian-based covariance, optional profile-likelihood confidence intervals, and a choice of six
+  optimizers (Nelder-Mead, Brent, BFGS, Powell, Differential Evolution, Multilevel Single Linkage).
+- **`fit_bayesian()`** -- Bayesian MCMC fitting over DEMCz, DEMCzs, ARWMH, or NUTS, returning the
+  raw chains in the `posterior`-package axis order, the thinned posterior draw matrix, the MAP and
+  posterior-mean point estimates, the mean log-likelihood trace, a posterior summary with R-hat and
+  effective sample size, and DIC, WAIC and LOOIC, the last two with their effective parameter
+  counts and LOOIC with its standard error. `credible_level` sets the width of the reported
+  credible interval, and a setting outside
+  the range the sampler accepts is reported with the setting named rather than as a bare
+  "configuration is not valid".
+- **`fit_gmm()`** -- generalized method of moments for Bulletin 17C models, with the sandwich
+  covariance and the J-statistic overidentification test. Method of moments computes no likelihood,
+  so the fit reports `NA` (`None` in Python) for the log-likelihood, AIC, and BIC.
+- **`fit_diagnostics()`** -- Cook's distance, leverage, and observation influence off a MAP or GMM
+  fit; leverage, PSIS-LOO Pareto-k, and prior influence off a Bayesian fit.
+- **`quantile_variance()`** -- the Cohn-style delta-method variance of a fitted quantile at a given
+  annual exceedance probability, off a `fit_gmm()` fit.
+- `confint()`, `coef()`, `vcov()`, `logLik()`, `AIC()`, `BIC()`, `print()`, and `summary()` methods
+  on the new `corehydro_fit` object in both packages.
+- A worked example pair on fitting a Log-Pearson Type III record by all four methods and comparing
+  the resulting quantile estimates.
+
+### Internal
+
+None of these three reached a released user-facing function. The first two were in the unexported
+fixture glue this release rerouted through the shared runner; the third was caught inside this
+release, before any of it shipped. They are recorded because the new fit surface inherits the
+corrected behaviour.
+
+- A model with fewer than two parameters reports `NaN` covariance, standard errors, and
+  correlation. `GetCovarianceMatrix` throws below two parameters in C#, and R does not zero-fill a
+  freshly allocated numeric vector, so the old fixture glue returned whatever was already sitting
+  in that memory. The fixture path still writes explicit zeros there, deliberately, because that
+  is the contract its pinned oracles were recorded against.
+- A failed fit names the estimator and the optimizer in its error, rather than the internal message
+  "failed for a fixture case" the fixture glue raised.
+- `confint()`'s default level is 0.95 in both languages, matching base R's `confint()` convention.
+  The Python half briefly defaulted to 0.9 during development of this release.
+
+### Documentation
+
+- A reference page and worked example for each of the five new functions.
+
 ## [0.3.0] - 2026-08-11
 
 The data and model layer. Censored observations, nonstationary trends, and custom parameter
@@ -167,6 +223,8 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cameronbracken/corehydro/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/cameronbracken/corehydro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cameronbracken/corehydro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cameronbracken/corehydro/releases/tag/v0.1.0

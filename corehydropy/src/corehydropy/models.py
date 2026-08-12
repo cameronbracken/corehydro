@@ -326,7 +326,16 @@ def _build(
 
 
 def _check_model(model) -> Model:
+    # A Fit (fit_mle()/fit_map()/...) carries its fitted model on `.model`, so every model_*()
+    # verb (model_validate(), model_simulate(), model_log_likelihood(), model_parameters()) also
+    # accepts a fit directly -- model_simulate(fit_mle(m), ...) -- without the caller unwrapping
+    # it, matching corehydror's check_model(). This is a duck-type check rather than an
+    # `isinstance(model, Fit)`: corehydropy.fit imports this module, so importing Fit here at
+    # module scope would be a circular import.
     if not isinstance(model, Model):
+        inner = getattr(model, "model", None)
+        if isinstance(inner, Model):
+            return inner
         raise TypeError("model must be a Model from one of the model_*() constructors")
     return model
 

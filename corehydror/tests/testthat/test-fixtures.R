@@ -694,6 +694,39 @@ dispatch_estimation <- function(result, method, args, ctx) {
     # (see test_fixtures.cpp's dispatch_model_validate for the rationale).
     is_valid = as.numeric(ctx$validate_fn()$is_valid[[1]]),
     validation_message_contains = as.numeric(any(grepl(args[[1]], ctx$validate_fn()$messages, fixed = TRUE))),
+    # --- Task 9: the wider fit surface -------------------------------------------------------
+    # These read ctx$fit_fn(), a lazily-built + memoized ch_fit_run_ over the case's FULL
+    # construct (the fixture construct with `settings` hoisted to the top level -- see
+    # run_estimation_case below). The narrow ch_estimation_run_/ch_estimation_bayes_run_ result
+    # above is deliberately untouched: it backs the pinned oracles and does not carry these
+    # fields. Both calls run the same deterministic fit, so this is the bic/df_fn lazy-rebuild
+    # precedent, not a second, different fit.
+    profile_lower      = ctx$fit_fn()$profile_lower[[i1(args[[1]])]],
+    profile_upper      = ctx$fit_fn()$profile_upper[[i1(args[[1]])]],
+    # profile_value [param, bin, col]: profile_grid is n_params x bins x 2, row-major, col 0 =
+    # the parameter value at the bin midpoint, col 1 = the profile log-likelihood there.
+    profile_value = {
+      f <- ctx$fit_fn()
+      idx <- (args[[1]] * f$profile_bins + args[[2]]) * 2L + args[[3]] + 1L
+      f$profile_grid[[idx]]
+    },
+    function_evaluations = ctx$fit_fn()$function_evaluations[[1]],
+    # status_is [name]: 1 when the optimizer status matches, else 0 (the
+    # validation_message_contains boolean-as-double precedent).
+    status_is          = as.numeric(identical(ctx$fit_fn()$status[[1]], args[[1]])),
+    nobs               = ctx$fit_fn()$nobs[[1]],
+    prior_log_likelihood = ctx$fit_fn()$prior_log_likelihood[[1]],
+    rhat               = ctx$fit_fn()$rhat[[i1(args[[1]])]],
+    ess                = ctx$fit_fn()$ess[[i1(args[[1]])]],
+    acceptance_rate    = ctx$fit_fn()$acceptance_rates[[i1(args[[1]])]],
+    posterior_median   = ctx$fit_fn()$summary_median[[i1(args[[1]])]],
+    posterior_sd       = ctx$fit_fn()$summary_sd[[i1(args[[1]])]],
+    posterior_lower    = ctx$fit_fn()$summary_lower[[i1(args[[1]])]],
+    posterior_upper    = ctx$fit_fn()$summary_upper[[i1(args[[1]])]],
+    # The PSIS-LOO Pareto-k surface lives on FitDiagnostics (the InfluenceDiagnostics wrapper),
+    # not on the fit result, so it takes the second lazily-memoized runner call.
+    pareto_k           = ctx$diag_fn()$pareto_k[[i1(args[[1]])]],
+    max_pareto_k       = ctx$diag_fn()$max_pareto_k[[1]],
     stop(sprintf("unknown model_estimation fixture method: %s", method))
   )
 }
@@ -762,6 +795,35 @@ run_estimation_case <- function(target, construct, assertions, datasets) {
   }
   ctx$df_fn <- df_fn
   ctx$validate_fn <- validate_fn
+
+  # Task 9: the FULL construct the shared fit runner reads -- the fixture's own construct with
+  # the `settings` sub-object hoisted to the top level (where apply_bayesian_settings looks for
+  # the Bayesian knobs); every other key passes through untouched and run_fit ignores the ones
+  # its target does not use. C++ and Python assemble it identically, so all three hand the runner
+  # byte-identical constructs. Both accessors are lazy: a case asserting nothing new never runs.
+  full <- construct
+  if (!is.null(full$settings)) {
+    for (nm in names(full$settings)) full[[nm]] <- full$settings[[nm]]
+    full$settings <- NULL
+  }
+  # fit_runner.hpp's run_fit/run_fit_diagnostics default `optimizer` to DifferentialEvolution for
+  # every target, including GMM -- but the narrow GMM path above defaults it to BFGS (matching the
+  # C# GMM ctor default). Without this, a GMM case that omits `optimizer` and asserts one of the
+  # wider fit-surface methods would read that method off a DifferentialEvolution fit while
+  # parameter/j_stat came from a BFGS fit. Write the same BFGS default here so both paths agree.
+  if (target == "GeneralizedMethodOfMoments" && is.null(full$optimizer)) full$optimizer <- "BFGS"
+  full_json <- as.character(jsonlite::toJSON(full, auto_unbox = TRUE, digits = I(17)))
+  fit_target <- if (target == "GeneralizedMethodOfMoments") "GMM" else target
+  fit_env <- new.env(parent = emptyenv())
+  ctx$fit_fn <- function() {
+    if (is.null(fit_env$f)) fit_env$f <- ns$ch_fit_run_(fit_target, full_json, data)
+    fit_env$f
+  }
+  diag_env <- new.env(parent = emptyenv())
+  ctx$diag_fn <- function() {
+    if (is.null(diag_env$d)) diag_env$d <- ns$ch_fit_diagnostics_(fit_target, full_json, data)
+    diag_env$d
+  }
 
   for (a in assertions) {
     args <- if (is.null(a$args)) list() else a$args

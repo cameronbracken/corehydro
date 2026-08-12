@@ -256,6 +256,18 @@ ch_estimation_gmm_qvar_ <- function(model_json, dataset, strategy, optimizer, ma
   .Call(`_corehydror_ch_estimation_gmm_qvar_`, model_json, dataset, strategy, optimizer, max_gmm_iterations, aep)
 }
 
+ch_fit_run_ <- function(target, construct_json, dataset) {
+  .Call(`_corehydror_ch_fit_run_`, target, construct_json, dataset)
+}
+
+ch_fit_diagnostics_ <- function(target, construct_json, dataset) {
+  .Call(`_corehydror_ch_fit_diagnostics_`, target, construct_json, dataset)
+}
+
+ch_fit_quantile_variance_ <- function(construct_json, dataset, aep) {
+  .Call(`_corehydror_ch_fit_quantile_variance_`, construct_json, dataset, aep)
+}
+
 ch_gev_pdf_ <- function(x, location, scale, shape) {
   .Call(`_corehydror_ch_gev_pdf_`, x, location, scale, shape)
 }

@@ -1,0 +1,406 @@
+// ctest coverage of the shared fit runner. Oracle VALUES live in fixtures/*.json and are
+// asserted by test_fixtures.cpp; this file asserts SHAPE, GUARDS and ERROR PATHS, which are
+// corehydro additions with no C# counterpart and therefore have no oracle.
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "corehydro/estimation/maximum_likelihood.hpp"
+#include "corehydro/estimation/optimization_method.hpp"
+#include "corehydro/estimation/support/fit_runner.hpp"
+#include "corehydro/models/json_lite.hpp"
+#include "corehydro/models/support/model_base.hpp"
+#include "corehydro/models/support/model_parameter.hpp"
+#include "corehydro/numerics/distributions/uniform.hpp"
+#include "check.hpp"
+
+namespace support = corehydro::estimation::support;
+namespace spec = corehydro::models::spec;
+
+static const std::vector<double> kPeaks = {12500, 15300, 9870, 21000, 18400,
+                                           11200, 26800, 14100, 19500, 11600};
+
+namespace {
+
+// A minimal one-parameter ModelBase test double (the StubNormalModel precedent from
+// test_model_base.cpp), needed only for the n < 2 covariance guard below. run_fit builds
+// models exclusively through the univariate_distribution factory, and every factory family
+// that implements IMaximumLikelihoodEstimation -- the interface UnivariateDistributionModel's
+// mandatory default-parameter step requires -- has two or more parameters in this catalog;
+// there is no single-parameter family reachable through the JSON model spec (Exponential is a
+// 2-parameter location/scale form in this port, and single-parameter distributions such as
+// Rayleigh don't implement IMaximumLikelihoodEstimation, so the vector-dataset construction
+// path throws before this guard is ever reached). fill_common is the exact function run_fit
+// calls internally, so driving it directly against a genuine 1-parameter model still proves
+// the real guard.
+class OneParamExponentialModel : public corehydro::models::ModelBase {
+   public:
+    explicit OneParamExponentialModel(std::vector<double> data) : data_(std::move(data)) {
+        parameters().push_back(corehydro::models::ModelParameter(
+            "OneParamExponentialModel", "rate", 1.0 / mean(data_), 1e-8, 10.0,
+            std::make_unique<corehydro::numerics::distributions::Uniform>(1e-8, 10.0)));
+    }
+
+    void set_default_parameters() override {}
+    corehydro::models::ValidationResult validate() const override { return {}; }
+
+    double data_log_likelihood(std::vector<double>& p) const override {
+        double rate = p[0];
+        if (rate <= 0.0) return -std::numeric_limits<double>::infinity();
+        double sum = 0.0;
+        for (double x : data_) sum += x;
+        return static_cast<double>(data_.size()) * std::log(rate) - rate * sum;
+    }
+
+    std::vector<double> pointwise_data_log_likelihood(const std::vector<double>& p) const override {
+        double rate = p[0];
+        std::vector<double> out;
+        out.reserve(data_.size());
+        for (double x : data_) out.push_back(std::log(rate) - rate * x);
+        return out;
+    }
+
+    std::vector<corehydro::models::DataComponent> pointwise_data_log_likelihood_components(
+        const std::vector<double>& p) const override {
+        std::vector<double> pw = pointwise_data_log_likelihood(p);
+        std::vector<corehydro::models::DataComponent> out;
+        out.reserve(pw.size());
+        for (std::size_t i = 0; i < pw.size(); ++i)
+            out.emplace_back(static_cast<int>(i), pw[i], data_[i]);
+        return out;
+    }
+
+   private:
+    static double mean(const std::vector<double>& v) {
+        double s = 0.0;
+        for (double x : v) s += x;
+        return s / static_cast<double>(v.size());
+    }
+    std::vector<double> data_;
+};
+
+}  // namespace
+
+static void test_mle_shape() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead"})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+
+    CHECK_TRUE(r.method == "MaximumLikelihood");
+    CHECK_TRUE(r.parameters.size() == 2);
+    CHECK_TRUE(r.parameter_names.size() == 2);
+    CHECK_TRUE(!r.parameter_names[0].empty());
+    CHECK_TRUE(r.converged);
+    CHECK_TRUE(r.status == "Success");
+    CHECK_TRUE(r.function_evaluations > 0);
+    CHECK_TRUE(r.nobs == 10);
+    CHECK_TRUE(std::isfinite(r.log_likelihood));
+    CHECK_TRUE(std::isfinite(r.aic));
+    CHECK_TRUE(std::isfinite(r.bic));
+    // Hessian stack present and square for a 2-parameter model.
+    CHECK_TRUE(r.covariance.size() == 4);
+    CHECK_TRUE(r.standard_errors.size() == 2);
+    CHECK_TRUE(r.correlation.size() == 4);
+    // The fitted spec round-trips: it carries the fitted values.
+    CHECK_TRUE(r.model_spec.find("parameter_values") != std::string::npos);
+}
+
+static void test_hessian_can_be_disabled() {
+    std::string construct = R"({"model":{"family":"Normal","dataset":"peaks"},)"
+                            R"("optimizer":"NelderMead","hessian":false})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+    CHECK_TRUE(r.covariance.empty());
+    CHECK_TRUE(r.standard_errors.empty());
+    CHECK_TRUE(r.correlation.empty());
+    CHECK_TRUE(std::isfinite(r.log_likelihood));  // the fit itself still happened
+}
+
+static void test_single_parameter_covariance_is_nan_not_zero() {
+    // fill_common's n < 2 guard: C# GetCovarianceMatrix throws below two parameters, so the
+    // honest report is NaN, NOT the silent zeros the fixture glue used to return. See
+    // OneParamExponentialModel's header note for why this drives fill_common directly instead
+    // of going through run_fit's JSON model spec.
+    OneParamExponentialModel model(kPeaks);
+    corehydro::estimation::MaximumLikelihood e(model,
+                                               corehydro::estimation::OptimizationMethod::Brent);
+    e.set_compute_hessian(true);
+    CHECK_TRUE(e.estimate());
+
+    support::FitResult r;
+    r.method = "MaximumLikelihood";
+    support::fill_common(r, e, model, /*want_hessian=*/true);
+    CHECK_TRUE(r.parameters.size() == 1);
+    CHECK_TRUE(r.covariance.size() == 1);
+    CHECK_TRUE(std::isnan(r.covariance[0]));
+    CHECK_TRUE(std::isnan(r.standard_errors[0]));
+    CHECK_TRUE(std::isnan(r.correlation[0]));
+}
+
+static void test_map_reports_status() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead"})";
+    support::FitResult r = support::run_fit("MaximumAPosteriori", construct, kPeaks);
+    CHECK_TRUE(r.method == "MaximumAPosteriori");
+    CHECK_TRUE(r.status == "Success");
+    CHECK_TRUE(std::isfinite(r.prior_log_likelihood));
+}
+
+static void test_unknown_target_throws() {
+    bool threw = false;
+    try {
+        support::run_fit("NotAnEstimator", R"({"model":{"family":"Normal"}})", kPeaks);
+    } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("NotAnEstimator") != std::string::npos;
+    }
+    CHECK_TRUE(threw);
+}
+
+static void test_unknown_optimizer_throws_naming_it() {
+    bool threw = false;
+    try {
+        support::run_fit("MaximumLikelihood",
+                         R"({"model":{"family":"Normal","dataset":"peaks"},)"
+                         R"("optimizer":"Simplexx"})",
+                         kPeaks);
+    } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("Simplexx") != std::string::npos;
+    }
+    CHECK_TRUE(threw);
+}
+
+// fitted_spec must not duplicate `parameter_values` when the caller's construct already
+// carries one (e.g. as a starting/fixed value): the fitted values must win, and there must be
+// exactly one such key so a caller re-parsing model_spec reads the FITTED values back, not the
+// stale pre-fit input. See the review finding this covers: JsonValue::at() returns the first
+// match by insertion order, so a duplicated key would silently resurrect the input values.
+static void test_fitted_spec_does_not_duplicate_parameter_values() {
+    std::string construct = R"({"model":{"family":"Normal","dataset":"peaks",)"
+                            R"("parameter_values":[10000,1000]},"optimizer":"NelderMead"})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+
+    // Exactly one parameter_values key in the returned spec.
+    std::size_t first = r.model_spec.find("\"parameter_values\"");
+    CHECK_TRUE(first != std::string::npos);
+    std::size_t second = r.model_spec.find("\"parameter_values\"", first + 1);
+    CHECK_TRUE(second == std::string::npos);
+
+    // It reads back as the FITTED values, not the input [10, 2].
+    spec::JsonValue parsed = spec::parse_json(r.model_spec);
+    std::vector<double> readback = parsed.at("parameter_values").as_double_vector();
+    CHECK_TRUE(readback.size() == r.parameters.size());
+    for (std::size_t i = 0; i < readback.size(); ++i) CHECK_NEAR(readback[i], r.parameters[i], 1e-12);
+    // Sanity: the input values were a poor starting guess far from the fit, so a bug that
+    // resurrects them would fail the readback-equals-fitted check above.
+    CHECK_TRUE(std::abs(readback[0] - 10000.0) > 1.0 || std::abs(readback[1] - 1000.0) > 1.0);
+}
+
+// json_lite.hpp's to_json_string is new surface added by this task; prove a double round-trips
+// bit-exactly through parse_json(to_json_string(v)) at %.17g precision.
+static void test_json_round_trip() {
+    std::string original = R"({"family":"Normal","parameter_values":[12345.6789012345,-0.1]})";
+    spec::JsonValue v = spec::parse_json(original);
+    std::string reserialized = spec::to_json_string(v);
+    spec::JsonValue v2 = spec::parse_json(reserialized);
+    CHECK_TRUE(v2.at("parameter_values").items()[0].as_double() ==
+              v.at("parameter_values").items()[0].as_double());
+    CHECK_TRUE(v2.at("parameter_values").items()[1].as_double() ==
+              v.at("parameter_values").items()[1].as_double());
+    CHECK_TRUE(v2.at("family").as_string() == "Normal");
+}
+
+static void test_profile_off_by_default() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead"})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+    CHECK_TRUE(r.profile_grid.empty());
+    CHECK_TRUE(r.profile_lower.empty());
+    CHECK_TRUE(r.profile_bins == 0);
+}
+
+static void test_profile_on_request() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead","profile":true,)"
+        R"("profile_bins":20,"alpha":0.1})";
+    support::FitResult r = support::run_fit("MaximumLikelihood", construct, kPeaks);
+    CHECK_TRUE(r.profile_bins == 20);
+    // n_params x bins x 2 (parameter value, profile log-likelihood), row-major.
+    CHECK_TRUE(r.profile_grid.size() == 2u * 20u * 2u);
+    CHECK_TRUE(r.profile_lower.size() == 2);
+    CHECK_TRUE(r.profile_upper.size() == 2);
+    // The interval brackets the point estimate.
+    for (std::size_t i = 0; i < r.parameters.size(); ++i) {
+        CHECK_TRUE(r.profile_lower[i] <= r.parameters[i]);
+        CHECK_TRUE(r.profile_upper[i] >= r.parameters[i]);
+    }
+}
+
+static void test_bayesian_block() {
+    // warmup_iterations is explicit (not in the brief's literal construct) because
+    // BayesianAnalysis's ctor computes a default warmup_iterations_ from the DEFAULT
+    // iterations_ (~3500 for credible_interval_width 0.9) before the cascade below overrides
+    // iterations to 200; an unset warmup_iterations leaves that stale ~1750 in place, which
+    // legitimately trips the sampler's own "warmup > iterations/2" guard
+    // (mcmc_sampler.hpp:402) -- a real port-faithful invariant, not a defect in the cascade.
+    // Every shipped Bayesian fixture (e.g. fixtures/estimation/bayes_normal.json) likewise
+    // always pairs iterations with an explicit warmup_iterations.
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"DEMCz","seed":12345,"iterations":200,)"
+        R"("warmup_iterations":50,"number_of_chains":4,"thinning_interval":1,"output_length":500,)"
+        R"("credible_interval_width":0.9})";
+    support::FitResult r = support::run_fit("BayesianAnalysis", construct, kPeaks);
+
+    CHECK_TRUE(r.method == "BayesianAnalysis");
+    CHECK_TRUE(r.chain_dims.size() == 3);
+    CHECK_TRUE(r.chain_dims[0] == 4);            // chains
+    CHECK_TRUE(r.chain_dims[2] == 2);            // parameters
+    CHECK_TRUE(r.draws.size() == static_cast<std::size_t>(r.chain_dims[0]) *
+                                   static_cast<std::size_t>(r.chain_dims[1]) *
+                                   static_cast<std::size_t>(r.chain_dims[2]));
+    CHECK_TRUE(r.posterior.size() == r.posterior_rows * 2u);
+    CHECK_TRUE(r.acceptance_rates.size() == 4);
+    CHECK_TRUE(r.posterior_mean.size() == 2);
+    CHECK_TRUE(r.map.size() == 2);
+    CHECK_TRUE(r.rhat.size() == 2);
+    CHECK_TRUE(r.ess.size() == 2);
+    CHECK_TRUE(r.summary_median.size() == 2);
+    CHECK_TRUE(std::isfinite(r.dic));
+    CHECK_TRUE(std::isfinite(r.waic));
+    CHECK_TRUE(std::isfinite(r.looic));
+    CHECK_TRUE(!r.pareto_k.empty());
+    CHECK_TRUE(r.converged);   // a completed chain reports converged
+}
+
+static void test_bayesian_rejects_a_sampler_it_cannot_construct() {
+    bool threw = false;
+    try {
+        support::run_fit("BayesianAnalysis",
+                         R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"HMC"})", kPeaks);
+    } catch (const std::exception& e) {
+        std::string m = e.what();
+        threw = m.find("HMC") != std::string::npos && m.find("mcmc_sample") != std::string::npos;
+    }
+    CHECK_TRUE(threw);
+}
+
+static void test_gmm_block() {
+    std::string construct =
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
+        R"("strategy":"Iterative","optimizer":"BFGS","max_gmm_iterations":50})";
+    support::FitResult r = support::run_fit("GMM", construct, kPeaks);
+    CHECK_TRUE(r.method == "GMM");
+    CHECK_TRUE(r.parameters.size() == 3);
+    CHECK_TRUE(r.standard_errors.size() == 3);
+    CHECK_TRUE(r.gmm_iterations > 0);
+    // B17C GMM is always just-identified, so the J-statistic p-value is structurally NaN.
+    // See docs/upstream-csharp-issues.md.
+    CHECK_TRUE(std::isnan(r.j_stat_pval));
+}
+
+static void test_gmm_rejects_a_non_b17c_model() {
+    bool threw = false;
+    try {
+        support::run_fit("GMM", R"({"model":{"family":"Normal","dataset":"peaks"}})", kPeaks);
+    } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("bulletin17c") != std::string::npos;
+    }
+    CHECK_TRUE(threw);
+}
+
+static void test_quantile_variance_is_finite_and_positive() {
+    std::string construct =
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
+        R"("strategy":"Iterative","optimizer":"BFGS"})";
+    double v = support::run_fit_quantile_variance(construct, kPeaks, 0.01);
+    CHECK_TRUE(std::isfinite(v) && v > 0.0);
+}
+
+static void test_diagnostics_shape() {
+    // NOTE: the task-4 brief's literal construct omits "dataset":"peaks" from the model object;
+    // every other case in this file supplies it, and build_model_from_json throws "model spec
+    // requires either 'dataset' or 'data_frame'" without it (confirmed against model_spec.hpp).
+    // Added here to match the established convention.
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"optimizer":"NelderMead"})";
+    support::FitDiagnostics d =
+        support::run_fit_diagnostics("MaximumAPosteriori", construct, kPeaks);
+    CHECK_TRUE(d.cooks_distance.size() == 10);
+    CHECK_TRUE(d.leverage.size() == 10);
+}
+
+// BayesianAnalysis arm of run_fit_diagnostics: covers the leverage/Pareto-k/prior-influence
+// fields ba.compute_leverage_diagnostics()/compute_influence_diagnostics()/
+// compute_prior_influence_diagnostics() actually populate, and that cooks_distance/
+// observation_influence -- fields only the MAP and GMM arms fill -- stay empty rather than
+// picking up garbage from an uninitialized FitDiagnostics.
+//
+// warmup_iterations is explicit here for the same reason test_bayesian_block's is: per the
+// settings-transparency contract documented on apply_bayesian_settings (fit_runner.hpp), an
+// absent warmup_iterations leaves BayesianAnalysis's 1500 class default in place, which exceeds
+// this test's small iterations and trips the sampler's own "warmup > iterations/2" guard. The
+// contract says the runner will not derive one, so the test must supply it.
+static void test_bayesian_diagnostics_shape() {
+    std::string construct =
+        R"({"model":{"family":"Normal","dataset":"peaks"},"sampler":"DEMCz","seed":12345,)"
+        R"("iterations":200,"warmup_iterations":50,"number_of_chains":4,"thinning_interval":1,)"
+        R"("output_length":500,"credible_interval_width":0.9})";
+    support::FitDiagnostics d =
+        support::run_fit_diagnostics("BayesianAnalysis", construct, kPeaks);
+
+    // Sizes tied to the input, not to a hardcoded literal.
+    CHECK_TRUE(d.leverage.size() == kPeaks.size());
+    CHECK_TRUE(d.pareto_k.size() == kPeaks.size());
+    CHECK_TRUE(std::isfinite(d.max_pareto_k));
+    // Normal has 2 parameters; prior_influence and its names are per-parameter.
+    CHECK_TRUE(d.prior_influence.size() == 2);
+    CHECK_TRUE(d.prior_influence_names.size() == 2);
+    for (const auto& name : d.prior_influence_names) CHECK_TRUE(!name.empty());
+
+    // Fields this arm does not populate stay empty rather than carrying stale/garbage data.
+    CHECK_TRUE(d.cooks_distance.empty());
+    CHECK_TRUE(d.observation_influence.empty());
+}
+
+// GMM arm of run_fit_diagnostics: covers the get_cooks_distance/get_observation_influence/
+// get_leverage_diagnostics quartet, sized to the input dataset and parameter count rather than
+// hardcoded literals. Pareto-k and prior influence are BayesianAnalysis-only, so they must stay
+// empty here.
+static void test_gmm_diagnostics_shape() {
+    std::string construct =
+        R"({"model":{"type":"bulletin17c","family":"LogPearsonTypeIII","dataset":"peaks"},)"
+        R"("strategy":"Iterative","optimizer":"BFGS","max_gmm_iterations":50})";
+    support::FitDiagnostics d = support::run_fit_diagnostics("GMM", construct, kPeaks);
+
+    CHECK_TRUE(d.cooks_distance.size() == kPeaks.size());
+    CHECK_TRUE(d.leverage.size() == kPeaks.size());
+    // observation_influence is row-major n_obs x n_params; LogPearsonTypeIII has 3 parameters.
+    CHECK_TRUE(d.observation_influence.size() == kPeaks.size() * 3u);
+
+    // Fields this arm does not populate stay empty rather than carrying stale/garbage data.
+    CHECK_TRUE(d.pareto_k.empty());
+    CHECK_TRUE(!std::isfinite(d.max_pareto_k));
+    CHECK_TRUE(d.prior_influence.empty());
+}
+
+int main() {
+    test_mle_shape();
+    test_hessian_can_be_disabled();
+    test_single_parameter_covariance_is_nan_not_zero();
+    test_map_reports_status();
+    test_fitted_spec_does_not_duplicate_parameter_values();
+    test_unknown_target_throws();
+    test_unknown_optimizer_throws_naming_it();
+    test_json_round_trip();
+    test_profile_off_by_default();
+    test_profile_on_request();
+    test_bayesian_block();
+    test_bayesian_rejects_a_sampler_it_cannot_construct();
+    test_gmm_block();
+    test_gmm_rejects_a_non_b17c_model();
+    test_quantile_variance_is_finite_and_positive();
+    test_diagnostics_shape();
+    test_bayesian_diagnostics_shape();
+    test_gmm_diagnostics_shape();
+    return chtest::summary("fit_runner");
+}

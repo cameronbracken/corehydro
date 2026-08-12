@@ -29,7 +29,7 @@ exists for.}
 \item{confidence_level}{confidence level for the intervals (e.g. \code{0.90}).}
 
 \item{exceedance_probabilities}{optional numeric vector of exceedance probabilities; when
-\code{NULL}, the 25 standard default ordinates are used.}
+\code{NULL}, the 25 standard default ordinates are used. Must be in \strong{ascending} order.}
 }
 \value{
 A named list: \code{exceedance_probabilities}, \code{point_estimates} (log10 space), \code{lower_ci},

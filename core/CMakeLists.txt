@@ -40,6 +40,7 @@ set(BF_TESTS
   test_mixture_model
   test_competing_risks_model
   test_point_process_model
+  test_fit_runner
   test_maximum_likelihood
   test_maximum_a_posteriori
   test_bayesian_analysis

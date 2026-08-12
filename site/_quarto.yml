@@ -109,6 +109,20 @@ quartodoc:
         - model_simulate
         - model_log_likelihood
         - model_parameters
+    - title: Point-estimate fits
+      desc: >-
+        Maximum likelihood and maximum a posteriori point fits, with Hessian-based covariance
+        and profile-likelihood confidence intervals.
+      contents:
+        - Fit
+        - fit_mle
+        - fit_map
+    - title: Bayesian and GMM fits
+      contents:
+        - fit_bayesian
+        - fit_gmm
+        - fit_diagnostics
+        - quantile_variance
     - title: Frequency analysis
       desc: The main flood-frequency analysis entry points.
       contents:

@@ -19,7 +19,6 @@
 #include <memory>
 #include <set>
 #include <string>
-#include <variant>
 #include <vector>
 
 #include "corehydro/analyses/distribution_fitting/fitting_analysis.hpp"
@@ -38,6 +37,7 @@
 #include "corehydro/estimation/maximum_a_posteriori.hpp"
 #include "corehydro/estimation/maximum_likelihood.hpp"
 #include "corehydro/estimation/optimization_method.hpp"
+#include "corehydro/estimation/support/fit_runner.hpp"
 #include "corehydro/models/data_frame/data_collections/exact_series.hpp"
 #include "corehydro/models/data_frame/data_frame.hpp"
 #include "corehydro/models/model_spec.hpp"
@@ -1948,43 +1948,26 @@ static void run_bootstrap(const json& spec) {
 // PointProcessModel; there is no separate closed-name registry like mcmc/model_registry.hpp
 // needs, since the spec's factory calls plus each model's default-parameter machinery are
 // already enough), construct the estimator named by the file-level `target`, call
-// `estimate()` ONCE, then dispatch every assertion in the case against the cached
-// (model, estimator) pair. The `Simulation` target (M13) builds the model, skips the
-// estimator, and caches ONE seeded ISimulatable::generate_random_values draw instead; the
-// `simulated_value [i]` method asserts individual draws (the chain_value digest precedent).
+// `estimate()` ONCE, then dispatch every assertion in the case against the cached result.
+// The fit itself is not built here: the construct is serialized and handed to the SHARED
+// runner (corehydro/estimation/support/fit_runner.hpp's `run_fit`), the same one the cpp11 and
+// pybind11 glue and the dotnet oracle emitter drive, which returns the whole surface flat in a
+// `FitResult`. The `Simulation` target (M13) builds the model, skips the fit, and caches ONE
+// seeded ISimulatable::generate_random_values draw instead; the `simulated_value [i]` method
+// asserts individual draws (the chain_value digest precedent).
 // See fixtures/README.md's model_estimation section for the schema.
 //
 // WIRED (T11 + T12): MaximumLikelihood / MaximumAPosteriori share `parameter [p]`,
 // `max_log_likelihood []`, `aic []`, `bic [n]`, `covariance [i,j]`, `standard_error [p]`,
-// `correlation [i,j]` (same method names/signatures on both classes; dispatched via one
-// std::visit branch). BayesianAnalysis (T12) adds `dic []`, `waic []`, `looic []`,
-// `posterior_mean [p]`, and the seeded `chain_value [chain,iter,param]` digest -- a disjoint
-// surface handled by a separate std::visit branch (it shares no methods with ML/MAP).
+// `correlation [i,j]` (the same FitResult fields back both). BayesianAnalysis (T12) adds
+// `dic []`, `waic []`, `looic []`, `posterior_mean [p]`, and the seeded
+// `chain_value [chain,iter,param]` digest -- a disjoint surface off the FitResult's Bayesian
+// block (it shares no methods with ML/MAP).
 namespace estimation = corehydro::estimation;
 
-// Shared optimizer-method parser for ML/MAP (`optimizer` knob) AND the GMM `optimizer` knob.
-// B11 extends it with the B7-un-gated BFGS/Powell/MultilevelSingleLinkage methods (with the
-// "MLSL" alias), so fixtures can pin them for ML/MAP and select them for a GMM fit.
-static estimation::OptimizationMethod parse_optimization_method(const std::string& s) {
-    if (s == "Brent") return estimation::OptimizationMethod::Brent;
-    if (s == "NelderMead") return estimation::OptimizationMethod::NelderMead;
-    if (s == "DifferentialEvolution") return estimation::OptimizationMethod::DifferentialEvolution;
-    if (s == "BFGS") return estimation::OptimizationMethod::BFGS;
-    if (s == "Powell") return estimation::OptimizationMethod::Powell;
-    if (s == "MultilevelSingleLinkage" || s == "MLSL")
-        return estimation::OptimizationMethod::MultilevelSingleLinkage;
-    throw std::runtime_error("unknown model_estimation optimizer: " + s);
-}
-
-// The GMM estimation-strategy knob (default Iterative, matching the C# GMM default).
-static estimation::GeneralizedMethodOfMoments::GMMEstimationStrategy parse_gmm_strategy(
-    const std::string& s) {
-    using Strat = estimation::GeneralizedMethodOfMoments::GMMEstimationStrategy;
-    if (s == "OneStep") return Strat::OneStep;
-    if (s == "TwoStep") return Strat::TwoStep;
-    if (s == "Iterative") return Strat::Iterative;
-    throw std::runtime_error("unknown GMM estimation strategy: " + s);
-}
+// The optimizer-method and GMM-strategy parsers this file used to carry now live on the shared
+// fit runner (corehydro/estimation/support/fit_runner.hpp's `parse_optimizer` /
+// `parse_gmm_strategy`), reached through `run_fit`'s construct instead of being applied here.
 
 static estimation::SamplerType parse_sampler_type(const std::string& s) {
     if (s == "DEMCz") return estimation::SamplerType::DEMCz;
@@ -1994,27 +1977,73 @@ static estimation::SamplerType parse_sampler_type(const std::string& s) {
     throw std::runtime_error("unknown model_estimation sampler: " + s);
 }
 
-// Holds the model (kept alive -- every estimator stores a reference, not a copy) plus whichever
-// estimator `target` selected, already `estimate()`d once. BayesianAnalysis joins the variant
-// (its method surface is disjoint from ML/MAP; `dispatch_estimation` branches on the held type).
-// M13: the model is now the ModelBase every estimator accepts (all four Phase 5 model types --
-// UnivariateDistributionModel, MixtureModel, CompetingRisksModel (NOT an IUnivariateModel; the
-// C# omits it), PointProcessModel -- derive from it), built through the SHARED spec builder
-// (models/model_spec.hpp) from the serialized `construct.model` object. The `Simulation`
-// target holds no estimator (std::monostate) -- just the cached seeded ISimulatable draw.
+// Holds one built-and-run case. The estimator variant this used to carry is gone: every fit now
+// goes through the shared runner (corehydro/estimation/support/fit_runner.hpp's `run_fit`), which
+// returns the whole surface flat in a `FitResult`, so `dispatch_estimation` reads fields instead
+// of calling estimator methods. `has_fit` is false for the estimator-less Simulation/Validate
+// targets (the old std::monostate arm).
+//
+// `model` is the ModelBase the estimator-less targets need, and the one the M14 DataFrame / Task-16
+// Validate surface reads under ANY target. Those two surfaces are pure functions of the CONSTRUCT
+// (low outliers and thresholds are set at construction; plotting positions are of the collections,
+// never of the fit), so this is a fresh build rather than the post-fit model the old code happened
+// to hold -- exactly what the R (`ch_model_data_frame_`/`ch_model_validate_`) and Python
+// (`model_data_frame`/`model_validate`) harnesses have always done for the same assertions. The
+// GMM target leaves it null, as before: a Bulletin17CDistribution is not a ModelBase.
+//
+// `construct_json` + `data` are kept for the ONE arm that must refit live: `quantile_variance`'s
+// AEP is only known at assertion-dispatch time (the `bic [n]` precedent).
 struct EstimationCase {
     std::unique_ptr<corehydro::models::ModelBase> model;
-    std::variant<std::monostate, std::unique_ptr<estimation::MaximumLikelihood>,
-                 std::unique_ptr<estimation::MaximumAPosteriori>,
-                 std::unique_ptr<estimation::BayesianAnalysis>,
-                 std::unique_ptr<estimation::GeneralizedMethodOfMoments>>
-        estimator;
-    std::vector<double> simulated;  // Simulation target, and the GMM seeded-draw digest
-    // GMM target only: the concrete B17C model the estimator references (NOT a ModelBase, so it
-    // cannot live in `model`). Kept alive here so the estimator's IGMMModel& stays valid and the
-    // quantile_variance arm can reach the model.
-    std::unique_ptr<corehydro::models::Bulletin17CDistribution> b17c;
+    std::string target;
+    bool has_fit = false;
+    corehydro::estimation::support::FitResult fit;
+    std::vector<double> simulated;  // Simulation target, and the ML/MAP/GMM seeded-draw digest
+    std::string construct_json;
+    std::vector<double> data;
+
+    // Task 9. The case's FULL construct -- the fixture's own `construct` object with the
+    // `settings` sub-object hoisted to the top level, which is exactly the shape
+    // fit_runner.hpp's `run_fit`/`run_fit_diagnostics` read (see apply_bayesian_settings). The
+    // narrow `construct_json` above is deliberately left alone: it backs the pinned
+    // parameter/max_log_likelihood/covariance oracles, and widening it would move them.
+    //
+    // The two memoized results below are LAZY, and only the Task-9 arms touch them: a case that
+    // asserts nothing new never pays for the extra run. Both runs are deterministic functions of
+    // the same construct (seeded MCMC / RNG-free optimizers), so the profile grid and the
+    // diagnostics are the same fit's, not a different one's -- the `bic [n]` lazy-rebuild
+    // precedent this file already uses.
+    std::string full_construct_json;
+    bool full_fit_done = false;
+    corehydro::estimation::support::FitResult full_fit;
+    bool full_diagnostics_done = false;
+    corehydro::estimation::support::FitDiagnostics full_diagnostics;
 };
+
+// Fixture target name -> the name `run_fit`/`run_fit_diagnostics` dispatch on. The only one that
+// differs is GMM, whose fixture-level target spells out the C# class name.
+static std::string fit_runner_target(const std::string& target) {
+    return target == "GeneralizedMethodOfMoments" ? "GMM" : target;
+}
+
+static const corehydro::estimation::support::FitResult& full_fit_of(EstimationCase& ec) {
+    if (!ec.full_fit_done) {
+        ec.full_fit = corehydro::estimation::support::run_fit(fit_runner_target(ec.target),
+                                                              ec.full_construct_json, ec.data);
+        ec.full_fit_done = true;
+    }
+    return ec.full_fit;
+}
+
+static const corehydro::estimation::support::FitDiagnostics& full_diagnostics_of(
+    EstimationCase& ec) {
+    if (!ec.full_diagnostics_done) {
+        ec.full_diagnostics = corehydro::estimation::support::run_fit_diagnostics(
+            fit_runner_target(ec.target), ec.full_construct_json, ec.data);
+        ec.full_diagnostics_done = true;
+    }
+    return ec.full_diagnostics;
+}
 
 // Seeded ISimulatable draw, flattened to a 1-D vector so the `simulated_value [i]` digest works
 // uniformly across model types. Most Phase 4-7 models are ISimulatable<std::vector<double>> and
@@ -2045,105 +2074,120 @@ static EstimationCase build_and_run_estimation(const std::string& target, const 
     if (model_spec.contains("dataset"))
         for (const auto& v : datasets[model_spec["dataset"].get<std::string>()]) data.push_back(parse_num(v));
 
-    // GMM builds the CONCRETE Bulletin17CDistribution (not a ModelBase -- see model_spec.hpp's
-    // build_bulletin17c_model wiring note) and fits it, optionally caching a seeded draw from the
-    // fitted model for the `simulated_value` digest (the DRY choice: `simulated_value` is already
-    // dispatched from ec.simulated for every target, so riding the GMM case needs no new arm).
-    if (target == "GeneralizedMethodOfMoments") {
-        auto b17c = corehydro::models::spec::build_bulletin17c_from_json(model_spec.dump(), data);
-        auto method = construct.contains("optimizer")
-                          ? parse_optimization_method(construct["optimizer"].get<std::string>())
-                          : estimation::OptimizationMethod::BFGS;
-        auto gmm = std::make_unique<estimation::GeneralizedMethodOfMoments>(*b17c, method);
-        if (construct.contains("strategy"))
-            gmm->set_estimation_strategy(parse_gmm_strategy(construct["strategy"].get<std::string>()));
-        if (construct.contains("max_gmm_iterations"))
-            gmm->set_max_gmm_iterations(construct["max_gmm_iterations"].get<int>());
-        if (!gmm->estimate())
-            throw std::runtime_error("GeneralizedMethodOfMoments::estimate() failed for a fixture case");
-        // post_process(sandwich, jstat) caches Sigma + the J-statistic so the accessors return
-        // deterministic cached values.
-        gmm->post_process(/*use_sandwich=*/true, /*compute_jstat=*/true);
-        std::vector<double> draws;
-        if (construct.contains("sample_size")) {
-            // Draw from the FITTED model: pin the estimator's best parameters into the B17C
-            // parent, then take a seeded ISimulatable stream (deterministic across harnesses).
-            b17c->set_parameter_values(gmm->best_parameter_set().values);
-            draws = b17c->generate_random_values(construct["sample_size"].get<int>(),
-                                                 construct.value("seed", -1));
+    EstimationCase ec;
+    ec.target = target;
+    ec.data = data;
+
+    // Task 9: the FULL construct the fit runner reads (see EstimationCase's note). `settings` is
+    // hoisted to the top level -- where apply_bayesian_settings looks for the Bayesian knobs --
+    // and every other key (model, optimizer, profile, profile_bins, alpha, sampler, strategy,
+    // ...) is passed through untouched; run_fit ignores the ones its target does not use. The
+    // three harnesses build this the same way, so they hand the runner byte-identical constructs.
+    {
+        json full = construct;
+        if (full.contains("settings")) {
+            for (auto it = full["settings"].begin(); it != full["settings"].end(); ++it)
+                full[it.key()] = it.value();
+            full.erase("settings");
         }
-        return EstimationCase{nullptr, std::move(gmm), std::move(draws), std::move(b17c)};
+        // fit_runner.hpp's run_fit/run_fit_diagnostics default `optimizer` to
+        // DifferentialEvolution for every target, including GMM -- but the narrow GMM path just
+        // above defaults it to BFGS (matching the C# GMM ctor default). Without this, a GMM case
+        // that omits `optimizer` and asserts one of the sixteen wider fit-surface methods would
+        // read that method off a DifferentialEvolution fit while `parameter`/`j_stat` came from a
+        // BFGS fit -- two different fits, silently. Write the same BFGS default here so both
+        // paths agree, mirroring the narrow path's own explicit default a few lines below.
+        if (target == "GeneralizedMethodOfMoments" && !full.contains("optimizer"))
+            full["optimizer"] = "BFGS";
+        ec.full_construct_json = full.dump();
+    }
+
+    // GMM fits the CONCRETE Bulletin17CDistribution (not a ModelBase -- see model_spec.hpp's
+    // build_bulletin17c_model wiring note), optionally caching a seeded draw from the fitted model
+    // for the `simulated_value` digest (the DRY choice: `simulated_value` is already dispatched
+    // from ec.simulated for every target, so riding the GMM case needs no new arm).
+    //
+    // The construct handed to `run_fit` reproduces this arm's old knob application exactly:
+    // `optimizer` still defaults to BFGS here (the runner's own default is DifferentialEvolution,
+    // so it is always written explicitly), an absent `strategy` leaves the class default (which is
+    // Iterative -- the value the runner would write anyway), and `max_gmm_iterations` is forwarded
+    // when present (`build_and_fit_gmm` applies it only when positive; every fixture value is).
+    if (target == "GeneralizedMethodOfMoments") {
+        json c = json::object();
+        c["model"] = model_spec;
+        c["optimizer"] = construct.value("optimizer", std::string("BFGS"));
+        if (construct.contains("strategy")) c["strategy"] = construct["strategy"];
+        if (construct.contains("max_gmm_iterations"))
+            c["max_gmm_iterations"] = construct["max_gmm_iterations"];
+        ec.construct_json = c.dump();
+        ec.fit = corehydro::estimation::support::run_fit("GMM", ec.construct_json, data);
+        ec.has_fit = true;
+        if (construct.contains("sample_size")) {
+            // Draw from the FITTED model, rebuilt from the runner's `model_spec` (the construct's
+            // model object re-emitted with the fitted `parameter_values`, which the spec builder
+            // applies through the same set_parameter_values the old in-place pin called).
+            auto fitted =
+                corehydro::models::spec::build_bulletin17c_from_json(ec.fit.model_spec, data);
+            ec.simulated = fitted->generate_random_values(construct["sample_size"].get<int>(),
+                                                          construct.value("seed", -1));
+        }
+        return ec;
     }
 
     // One shared construction path for all three harnesses: serialize the spec back to JSON
-    // and hand it to models/model_spec.hpp (see that header for the schema).
-    auto model = corehydro::models::spec::build_model_from_json(model_spec.dump(), data);
+    // and hand it to models/model_spec.hpp (see that header for the schema). This model backs the
+    // estimator-less targets and the M14 DataFrame / Task-16 Validate surface (see EstimationCase).
+    ec.model = corehydro::models::spec::build_model_from_json(model_spec.dump(), data);
 
     if (target == "Simulation") {
-        std::vector<double> draws = simulate_flat(model.get(), construct["sample_size"].get<int>(),
-                                                  construct.value("seed", -1));
-        return EstimationCase{std::move(model), std::monostate{}, std::move(draws)};
+        ec.simulated = simulate_flat(ec.model.get(), construct["sample_size"].get<int>(),
+                                     construct.value("seed", -1));
+        return ec;
     }
     // Validate (Task 16): builds the model and stops -- no estimator, no seeded draw. Lets a
     // case assert `is_valid`/`validation_message_contains` (below) against ModelBase::validate()
     // without needing to fit or simulate, e.g. the TimeSeries transform-lambda-failure cases.
     if (target == "Validate") {
-        return EstimationCase{std::move(model), std::monostate{}, {}};
+        return ec;
     }
     if (target == "MaximumLikelihood" || target == "MaximumAPosteriori") {
-        auto method = construct.contains("optimizer")
-                          ? parse_optimization_method(construct["optimizer"].get<std::string>())
-                          : estimation::OptimizationMethod::DifferentialEvolution;
+        json c = json::object();
+        c["model"] = model_spec;
+        // Same default as before, and the same one `run_fit` would apply; written explicitly so
+        // the construct is self-describing.
+        c["optimizer"] = construct.value("optimizer", std::string("DifferentialEvolution"));
+        ec.construct_json = c.dump();
+        ec.fit = corehydro::estimation::support::run_fit(target, ec.construct_json, data);
+        ec.has_fit = true;
         // Optional seeded-draw digest off the FITTED model (P3): when `sample_size` is present,
-        // pin the estimator's best parameters back into the model and cache one seeded draw --
-        // the same shared `simulated_value` arm the Simulation/GMM targets use, letting one MLE
-        // smoke file cover parameter + max_log_likelihood + a seeded draw for the new families.
-        auto cache_draw = [&](corehydro::models::ModelBase& fitted, const std::vector<double>& best) {
-            std::vector<double> draws;
-            if (construct.contains("sample_size")) {
-                fitted.set_parameter_values(best);
-                draws = simulate_flat(&fitted, construct["sample_size"].get<int>(),
-                                      construct.value("seed", -1));
-            }
-            return draws;
-        };
-        if (target == "MaximumLikelihood") {
-            auto est = std::make_unique<estimation::MaximumLikelihood>(*model, method);
-            if (!est->estimate())
-                throw std::runtime_error("MaximumLikelihood::estimate() failed for a fixture case");
-            auto draws = cache_draw(*model, est->best_parameter_set().values);
-            return EstimationCase{std::move(model), std::move(est), std::move(draws)};
+        // rebuild from the runner's `model_spec` (fitted `parameter_values` applied by the spec
+        // builder) and cache one seeded draw -- the same shared `simulated_value` arm the
+        // Simulation/GMM targets use.
+        if (construct.contains("sample_size")) {
+            auto fitted =
+                corehydro::models::spec::build_model_from_json(ec.fit.model_spec, data);
+            ec.simulated = simulate_flat(fitted.get(), construct["sample_size"].get<int>(),
+                                         construct.value("seed", -1));
         }
-        auto est = std::make_unique<estimation::MaximumAPosteriori>(*model, method);
-        if (!est->estimate())
-            throw std::runtime_error("MaximumAPosteriori::estimate() failed for a fixture case");
-        auto draws = cache_draw(*model, est->best_parameter_set().values);
-        return EstimationCase{std::move(model), std::move(est), std::move(draws)};
+        return ec;
     }
     if (target == "BayesianAnalysis") {
-        // Mirrors the oracle emitter's BuildEstimation: construct with the fixture's sampler type
-        // (defaulting to DEMCzs), turn OFF the two "use defaults" flags so the explicit knobs
-        // below aren't clobbered, apply the settings, then estimate() once. The seeded chain
-        // digest reproduces bit-identically against the real C# (see bayes_normal.json).
-        auto sampler_type = construct.contains("sampler")
-                                ? parse_sampler_type(construct["sampler"].get<std::string>())
-                                : estimation::SamplerType::DEMCzs;
-        auto ba = std::make_unique<estimation::BayesianAnalysis>(*model, sampler_type);
-        ba->set_use_simulation_defaults(false);
-        ba->set_use_advanced_simulation_defaults(false);
-        if (construct.contains("settings")) {
-            const auto& s = construct["settings"];
-            if (s.contains("seed")) ba->set_prng_seed(s["seed"].get<int>());
-            if (s.contains("iterations")) ba->set_iterations(s["iterations"].get<int>());
-            if (s.contains("warmup_iterations")) ba->set_warmup_iterations(s["warmup_iterations"].get<int>());
-            if (s.contains("number_of_chains")) ba->set_number_of_chains(s["number_of_chains"].get<int>());
-            if (s.contains("thinning_interval")) ba->set_thinning_interval(s["thinning_interval"].get<int>());
-            if (s.contains("initial_iterations")) ba->set_initial_iterations(s["initial_iterations"].get<int>());
-            if (s.contains("output_length")) ba->set_output_length(s["output_length"].get<int>());
-        }
-        if (!ba->estimate())
-            throw std::runtime_error("BayesianAnalysis::estimate() failed for a fixture case");
-        return EstimationCase{std::move(model), std::move(ba)};
+        // Mirrors the oracle emitter's BuildEstimation: the fixture's sampler type (defaulting to
+        // DEMCzs) plus whichever settings it supplies. `run_fit` turns OFF the two "use defaults"
+        // flags and applies each knob only when its key is present, which is exactly what the
+        // `settings.contains(...)` cascade here used to do; the settings sub-object is simply
+        // hoisted to the construct's top level, where apply_bayesian_settings reads it. The seeded
+        // chain digest reproduces bit-identically against the real C# (see bayes_normal.json).
+        json c = json::object();
+        c["model"] = model_spec;
+        c["sampler"] = construct.value("sampler", std::string("DEMCzs"));
+        if (construct.contains("settings"))
+            for (auto it = construct["settings"].begin(); it != construct["settings"].end(); ++it)
+                c[it.key()] = it.value();
+        ec.construct_json = c.dump();
+        ec.fit = corehydro::estimation::support::run_fit("BayesianAnalysis", ec.construct_json, data);
+        ec.has_fit = true;
+        return ec;
     }
     throw std::runtime_error("unknown model_estimation target: " + target);
 }
@@ -2195,79 +2239,135 @@ static double dispatch_model_validate(corehydro::models::ModelBase& model, const
     throw std::runtime_error("unknown validate fixture method: " + m);
 }
 
-// GMM shares an accessor family with ML/MAP but its accessors are non-const (they cache Sigma
-// on demand), so dispatch takes a non-const EstimationCase& (the caller's `ec` is a non-const
-// local). quantile_variance lives on the B17C MODEL, not the estimator, so its arm recovers the
-// concrete model from ec and feeds it the fitted parameters + the estimator's covariance.
+// Every arm below reads a field off the `FitResult` the shared runner already produced, so the
+// per-estimator std::visit this used to be collapses into one flat lookup: GMM and ML/MAP share
+// the parameter/standard_error/covariance/correlation names because they are the same fields.
+// Two arms still evaluate live, because their argument is only known here: `bic [n]` (the C#
+// GetBIC takes an actual sample size) and `quantile_variance [aep]`.
 static double dispatch_estimation(EstimationCase& ec, const std::string& m, const json& a) {
     auto idx = [&](int i) { return static_cast<std::size_t>(a[static_cast<std::size_t>(i)].get<int>()); };
     // The seeded-simulation digest (M13): reads the vector cached at build time, so it works
-    // for the Simulation target (no estimator) without touching the variant.
+    // for the Simulation target (no fit) too.
     if (m == "simulated_value") return ec.simulated.at(idx(0));
-    // The M14 DataFrame surface works under any target (it reads the model, not the estimator).
+    // The M14 DataFrame surface works under any target (it reads the model, not the fit).
     if (m == "plotting_position" || m == "number_of_low_outliers" || m == "low_outlier_threshold")
         return dispatch_model_data_frame(*ec.model, m, a);
     if (m == "is_valid" || m == "validation_message_contains")
         return dispatch_model_validate(*ec.model, m, a);
-    return std::visit(
-        [&](auto& est) -> double {
-            using Held = std::decay_t<decltype(est)>;
-            if constexpr (std::is_same_v<Held, std::monostate>) {
-                throw std::runtime_error("unknown Simulation/Validate fixture method: " + m);
-            } else {
-                using Estimator = std::decay_t<decltype(*est)>;
-                if constexpr (std::is_same_v<Estimator,
-                                             estimation::GeneralizedMethodOfMoments>) {
-                    // GMM (B11): shares parameter/standard_error/covariance/correlation names
-                    // with ML/MAP; adds j_stat/j_stat_pval and the B17C quantile_variance.
-                    if (m == "parameter") return est->best_parameter_set().values[idx(0)];
-                    if (m == "standard_error") return est->get_standard_errors()[idx(0)];
-                    if (m == "covariance")
-                        return est->get_covariance_matrix()(static_cast<int>(idx(0)), static_cast<int>(idx(1)));
-                    if (m == "correlation")
-                        return est->get_correlation_matrix()(static_cast<int>(idx(0)), static_cast<int>(idx(1)));
-                    if (m == "j_stat") return est->jstat();
-                    if (m == "j_stat_pval") return est->jstat_pval();
-                    // T13: GMMIterations/ConvergedWithinTolerance (off-by-one fix) and
-                    // OptimizerFallbackCount (sticky BFGS->NelderMead fallback).
-                    if (m == "gmm_iterations") return est->gmm_iterations();
-                    if (m == "converged_within_tolerance")
-                        return est->converged_within_tolerance() ? 1.0 : 0.0;
-                    if (m == "optimizer_fallback_count") return est->optimizer_fallback_count();
-                    if (m == "quantile_variance") {
-                        // args[0] is the annual EXCEEDANCE probability (AEP); the C#
-                        // QuantileVariance takes a NON-exceedance probability, so pass 1 - AEP.
-                        if (ec.b17c == nullptr)
-                            throw std::runtime_error(
-                                "quantile_variance requires a Bulletin17CDistribution model");
-                        double aep = a[0].get<double>();
-                        return ec.b17c->quantile_variance(1.0 - aep, est->best_parameter_set().values,
-                                                          est->get_covariance_matrix().to_array());
-                    }
-                    throw std::runtime_error("unknown GMM fixture method: " + m);
-                } else if constexpr (std::is_same_v<Estimator, estimation::BayesianAnalysis>) {
-                    if (m == "dic") return est->dic();
-                    if (m == "waic") return est->waic();
-                    if (m == "looic") return est->looic();
-                    if (m == "posterior_mean") return est->results()->posterior_mean.values[idx(0)];
-                    if (m == "chain_value")
-                        return est->sampler()->markov_chains()[idx(0)][idx(1)].values[idx(2)];
-                    throw std::runtime_error("unknown BayesianAnalysis fixture method: " + m);
-                } else {
-                    if (m == "parameter") return est->best_parameter_set().values[idx(0)];
-                    if (m == "max_log_likelihood") return est->maximum_log_likelihood();
-                    if (m == "aic") return est->get_aic();
-                    if (m == "bic") return est->get_bic(a[static_cast<std::size_t>(0)].get<int>());
-                    if (m == "standard_error") return est->get_standard_errors()[idx(0)];
-                    if (m == "covariance")
-                        return est->get_covariance_matrix()(static_cast<int>(idx(0)), static_cast<int>(idx(1)));
-                    if (m == "correlation")
-                        return est->get_correlation_matrix()(static_cast<int>(idx(0)), static_cast<int>(idx(1)));
-                    throw std::runtime_error("unknown model_estimation fixture method: " + m);
-                }
-            }
-        },
-        ec.estimator);
+
+    // --- Task 9: the wider fit surface -----------------------------------------------------
+    //
+    // Everything below reads the LAZY full-construct fit (or its diagnostics), not the narrow
+    // `ec.fit` the older arms read -- see EstimationCase's note for why the two constructs are
+    // kept separate. These arms come first because they are target-agnostic: the profile block
+    // is ML/MAP-only and the posterior block BayesianAnalysis-only, but which one a fixture may
+    // ask for is decided by the FitResult field being empty, not by a target branch.
+    if (m == "profile_lower" || m == "profile_upper" || m == "profile_value" ||
+        m == "function_evaluations" || m == "status_is" || m == "nobs" ||
+        m == "prior_log_likelihood" || m == "rhat" || m == "ess" || m == "acceptance_rate" ||
+        m == "posterior_median" || m == "posterior_sd" || m == "posterior_lower" ||
+        m == "posterior_upper") {
+        const auto& f = full_fit_of(ec);
+        if (m == "profile_lower") return f.profile_lower.at(idx(0));
+        if (m == "profile_upper") return f.profile_upper.at(idx(0));
+        // profile_value [param, bin, col]: profile_grid is n_params x bins x 2, row-major, with
+        // col 0 = the parameter value at that bin's midpoint and col 1 = the profile
+        // log-likelihood there (fit_runner.hpp's fill_profile).
+        if (m == "profile_value") {
+            std::size_t bins = static_cast<std::size_t>(f.profile_bins);
+            return f.profile_grid.at((idx(0) * bins + idx(1)) * 2u + idx(2));
+        }
+        if (m == "function_evaluations") return f.function_evaluations;
+        // status_is [name]: 1.0 when the optimizer status matches the given name, else 0.0 (the
+        // `validation_message_contains` boolean-as-double precedent -- the fixture schema carries
+        // no string comparison).
+        if (m == "status_is") return f.status == a[0].get<std::string>() ? 1.0 : 0.0;
+        if (m == "nobs") return f.nobs;
+        if (m == "prior_log_likelihood") return f.prior_log_likelihood;
+        if (m == "rhat") return f.rhat.at(idx(0));
+        if (m == "ess") return f.ess.at(idx(0));
+        if (m == "acceptance_rate") return f.acceptance_rates.at(idx(0));
+        if (m == "posterior_median") return f.summary_median.at(idx(0));
+        if (m == "posterior_sd") return f.summary_sd.at(idx(0));
+        if (m == "posterior_lower") return f.summary_lower.at(idx(0));
+        return f.summary_upper.at(idx(0));  // posterior_upper
+    }
+    // The PSIS-LOO Pareto-k surface lives on FitDiagnostics (the InfluenceDiagnostics wrapper),
+    // not on FitResult, so it takes the second lazy runner call.
+    if (m == "pareto_k" || m == "max_pareto_k") {
+        const auto& d = full_diagnostics_of(ec);
+        if (m == "pareto_k") return d.pareto_k.at(idx(0));
+        return d.max_pareto_k;
+    }
+
+    if (!ec.has_fit)
+        throw std::runtime_error("unknown Simulation/Validate fixture method: " + m);
+
+    const auto& f = ec.fit;
+    int n = static_cast<int>(f.parameters.size());
+    // Shared by ML/MAP and GMM (B11). Also reachable when ec.target == "BayesianAnalysis" (the
+    // target-specific dispatch below falls through to here for any method it doesn't itself
+    // recognize), where FitResult leaves standard_errors/covariance/correlation EMPTY -- so these
+    // use .at() rather than operator[] to turn an out-of-range fixture typo into a clear
+    // std::out_of_range instead of indexing UB. No fixture reaches that combination today.
+    //
+    // Divergence note for whoever adds one: for a 1-parameter ML/MAP fit the three harnesses
+    // disagree on these fields' VALUES too -- this C++ runner returns the fit_runner's NaN, the R
+    // glue writes explicit zeros (corehydror/src/estimation.cpp), and the Python glue omits the
+    // keys entirely (corehydropy/src/bindings/estimation.cpp) -- so a new assertion here needs a
+    // harness-specific expectation, not one shared literal.
+    if (m == "parameter") return f.parameters.at(idx(0));
+    if (m == "standard_error") return f.standard_errors.at(idx(0));
+    if (m == "covariance")
+        return f.covariance.at(idx(0) * static_cast<std::size_t>(n) + idx(1));
+    if (m == "correlation")
+        return f.correlation.at(idx(0) * static_cast<std::size_t>(n) + idx(1));
+
+    if (ec.target == "GeneralizedMethodOfMoments") {
+        if (m == "j_stat") return f.j_stat;
+        if (m == "j_stat_pval") return f.j_stat_pval;
+        // T13: GMMIterations/ConvergedWithinTolerance (off-by-one fix) and
+        // OptimizerFallbackCount (sticky BFGS->NelderMead fallback).
+        if (m == "gmm_iterations") return f.gmm_iterations;
+        if (m == "converged_within_tolerance") return f.converged_within_tolerance ? 1.0 : 0.0;
+        if (m == "optimizer_fallback_count") return f.optimizer_fallback_count;
+        if (m == "quantile_variance") {
+            // args[0] is the annual EXCEEDANCE probability (AEP); the C# QuantileVariance takes a
+            // NON-exceedance probability. run_fit_quantile_variance IS the old body of this arm
+            // (rebuild the deterministic GMM fit, evaluate the B17C delta-method Var(Q_p)),
+            // lifted onto the shared runner; it is the same live-rebuild the R/Python harnesses
+            // have always taken for this assertion.
+            return corehydro::estimation::support::run_fit_quantile_variance(ec.construct_json,
+                                                                             ec.data,
+                                                                             a[0].get<double>());
+        }
+        throw std::runtime_error("unknown GMM fixture method: " + m);
+    }
+    if (ec.target == "BayesianAnalysis") {
+        if (m == "dic") return f.dic;
+        if (m == "waic") return f.waic;
+        if (m == "looic") return f.looic;
+        if (m == "posterior_mean") return f.posterior_mean[idx(0)];
+        // `draws` is the chain-major flatten of MCMCResults::markov_chains, itself a copy of
+        // sampler()->markov_chains() (mcmc_results.hpp:35-37), so this is the same
+        // chains[chain][iter].values[param] lookup as before.
+        if (m == "chain_value") {
+            std::size_t iters = static_cast<std::size_t>(f.chain_dims[1]);
+            std::size_t params = static_cast<std::size_t>(f.chain_dims[2]);
+            return f.draws[(idx(0) * iters + idx(1)) * params + idx(2)];
+        }
+        throw std::runtime_error("unknown BayesianAnalysis fixture method: " + m);
+    }
+    if (m == "max_log_likelihood") return f.log_likelihood;
+    if (m == "aic") return f.aic;
+    if (m == "bic") {
+        // `n` is a SAMPLE SIZE supplied by the assertion, not an index, so this stays live.
+        // MaximumLikelihood::get_bic(n) (maximum_likelihood.hpp:448-453) IS this call --
+        // GoodnessOfFit::bic(n, number_of_parameters(), maximum_log_likelihood()) -- evaluated
+        // off the runner's FitResult rather than re-derived.
+        return corehydro::numerics::data::GoodnessOfFit::bic(a[0].get<int>(), n, f.log_likelihood);
+    }
+    throw std::runtime_error("unknown model_estimation fixture method: " + m);
 }
 
 static void run_model_estimation(const json& spec) {

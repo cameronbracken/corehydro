@@ -41,6 +41,8 @@
 #include "corehydro/estimation/maximum_a_posteriori.hpp"
 #include "corehydro/estimation/maximum_likelihood.hpp"
 #include "corehydro/estimation/optimization_method.hpp"
+#include "corehydro/estimation/support/fit_runner.hpp"
+#include "corehydro/numerics/data/goodness_of_fit.hpp"
 #include "corehydro/models/model_spec.hpp"
 #include "corehydro/models/support/model_base.hpp"
 #include "corehydro/models/support/simulatable.hpp"
@@ -76,56 +78,34 @@ static std::vector<double> simulate_flat(models::ModelBase* model, int sample_si
     stop("model_estimation Simulation target: model is not ISimulatable<vector> or ISimulatable<Matrix2D>");
 }
 
-// Shared optimizer-method parser for ML/MAP AND the GMM `optimizer` knob. B11 extends it with
-// the B7-un-gated BFGS/Powell/MultilevelSingleLinkage methods (with the "MLSL" alias).
-static est::OptimizationMethod parse_optimization_method(const std::string& s) {
-    if (s == "Brent") return est::OptimizationMethod::Brent;
-    if (s == "NelderMead") return est::OptimizationMethod::NelderMead;
-    if (s == "DifferentialEvolution") return est::OptimizationMethod::DifferentialEvolution;
-    if (s == "BFGS") return est::OptimizationMethod::BFGS;
-    if (s == "Powell") return est::OptimizationMethod::Powell;
-    if (s == "MultilevelSingleLinkage" || s == "MLSL")
-        return est::OptimizationMethod::MultilevelSingleLinkage;
-    stop("unknown model_estimation optimizer '%s'", s.c_str());
+// --- construct assembly for the shared fit runner ------------------------------------------
+//
+// Every fit in this file now goes through corehydro/estimation/support/fit_runner.hpp's
+// `run_fit`, which takes ONE serialized construct object rather than a flat argument list. The
+// parsers, the GMM build-and-fit cascade and the BayesianAnalysis settings cascade that used to
+// live here are that header's `parse_optimizer`/`parse_gmm_strategy`/`parse_sampler`/
+// `build_and_fit_gmm`/`apply_bayesian_settings`; they were lifted out of this file verbatim, so
+// the fits are unchanged.
+//
+// SETTINGS TRANSPARENCY. `run_fit` applies a knob only when the construct carries its key, and
+// an absent key leaves the ported class's own default. That is exactly the semantics the flat
+// `> 0` guards below used to have, so the guards move from the setter call to the construct
+// assembly: a non-positive argument OMITS the key instead of writing a zero. Writing a zero
+// would not be equivalent -- it would push a 0 into the setter where the old code skipped it --
+// and for the Bayesian knobs that would move seeded chains and therefore pinned oracles.
+namespace {
+
+// The construct values here (optimizer / strategy / sampler names) are bare identifiers from a
+// fixture's construct, so they need no JSON escaping.
+std::string json_string(const std::string& s) { return "\"" + s + "\""; }
+
+// Appends `,"key":value` only when `value > 0` -- the flat-argument spelling of the runner's
+// "an absent key means the class default" contract (see the note above).
+void append_if_positive(std::string& out, const char* key, int value) {
+    if (value > 0) out += std::string(",\"") + key + "\":" + std::to_string(value);
 }
 
-// The GMM estimation-strategy knob (default Iterative, matching the C# GMM default).
-static est::GeneralizedMethodOfMoments::GMMEstimationStrategy parse_gmm_strategy(
-    const std::string& s) {
-    using Strat = est::GeneralizedMethodOfMoments::GMMEstimationStrategy;
-    if (s == "OneStep") return Strat::OneStep;
-    if (s == "TwoStep") return Strat::TwoStep;
-    if (s == "Iterative") return Strat::Iterative;
-    stop("unknown GMM estimation strategy '%s'", s.c_str());
-}
-
-// Builds a concrete B17C model (NOT a ModelBase; see model_spec.hpp's build_bulletin17c_model
-// note -- the GMM ctor takes it as IGMMModel&), fits it by GMM, and post_processes for the
-// covariance stack + J-statistic. Shared by ch_estimation_gmm_run_ and ch_estimation_gmm_qvar_
-// so both take the same deterministic path (BFGS + numerical Jacobian have no RNG, so a rebuild
-// reproduces the same fit -- the lazy-rebuild contract `ch_estimation_bic_` relies on).
-static std::unique_ptr<est::GeneralizedMethodOfMoments> build_and_fit_gmm(
-    std::unique_ptr<models::Bulletin17CDistribution>& model, const std::string& model_json,
-    const doubles& dataset, const std::string& strategy, const std::string& optimizer,
-    int max_gmm_iterations) {
-    std::vector<double> data(dataset.begin(), dataset.end());
-    model = models::spec::build_bulletin17c_from_json(model_json, data);
-    auto gmm = std::make_unique<est::GeneralizedMethodOfMoments>(
-        *model, parse_optimization_method(optimizer));
-    gmm->set_estimation_strategy(parse_gmm_strategy(strategy));
-    if (max_gmm_iterations > 0) gmm->set_max_gmm_iterations(max_gmm_iterations);
-    if (!gmm->estimate()) stop("GeneralizedMethodOfMoments::estimate() failed for a fixture case");
-    gmm->post_process(/*use_sandwich=*/true, /*compute_jstat=*/true);
-    return gmm;
-}
-
-static est::SamplerType parse_sampler_type(const std::string& s) {
-    if (s == "DEMCz") return est::SamplerType::DEMCz;
-    if (s == "DEMCzs") return est::SamplerType::DEMCzs;
-    if (s == "ARWMH") return est::SamplerType::ARWMH;
-    if (s == "NUTS") return est::SamplerType::NUTS;
-    stop("unknown model_estimation sampler '%s'", s.c_str());
-}
+}  // namespace
 
 // Builds the model named by the serialized `construct.model` spec (`model_json`, via the
 // shared spec builder -- see the file header), constructs `target`'s estimator (`optimizer`,
@@ -147,68 +127,71 @@ static est::SamplerType parse_sampler_type(const std::string& s) {
 [[cpp11::register]]
 list ch_estimation_run_(std::string target, std::string model_json, doubles dataset,
                         std::string optimizer, int sample_size, int seed) {
-    std::unique_ptr<models::ModelBase> model_ptr = build_spec_model(model_json, dataset);
-    models::ModelBase& model = *model_ptr;
-    auto method = parse_optimization_method(optimizer);
-    int n_params = model.number_of_parameters();
+    // Guard the target BEFORE delegating: `run_fit` also serves BayesianAnalysis, but this
+    // entry point never has (that construct shape rides ch_estimation_bayes_run_), so the
+    // rejection has to happen here rather than being silently accepted by the runner.
+    if (target != "MaximumLikelihood" && target != "MaximumAPosteriori")
+        stop("unknown model_estimation target '%s' (BayesianAnalysis uses ch_estimation_bayes_run_)",
+             target.c_str());
 
+    std::vector<double> data(dataset.begin(), dataset.end());
+    std::string construct =
+        "{\"model\":" + model_json + ",\"optimizer\":" + json_string(optimizer) + "}";
+    est::support::FitResult r = est::support::run_fit(target, construct, data);
+
+    int n_params = static_cast<int>(r.parameters.size());
     writable::doubles parameters(n_params);
-    double max_log_likelihood = 0.0, aic = 0.0;
+    for (int i = 0; i < n_params; ++i) parameters[i] = r.parameters[static_cast<std::size_t>(i)];
+
     writable::doubles_matrix<by_column> covariance(n_params, n_params);
     writable::doubles standard_errors(n_params);
     writable::doubles_matrix<by_column> correlation(n_params, n_params);
-    std::vector<double> best_values;
-
-    auto fill_from = [&](const auto& e) {
-        const auto& best = e.best_parameter_set().values;
-        best_values.assign(best.begin(), best.end());
-        for (int i = 0; i < n_params; ++i) parameters[i] = best[static_cast<std::size_t>(i)];
-        max_log_likelihood = e.maximum_log_likelihood();
-        aic = e.get_aic();
-        // The covariance stack needs >= 2 parameters (the C# GetCovarianceMatrix throws below
-        // that); the single-parameter bivariate copula fit skips it -- covariance/SE/correlation
-        // are left at their default zeros (no fixture asserts them for a 1-param model). The C++
-        // runner sidesteps this by computing the covariance lazily, only when asserted.
-        if (n_params >= 2) {
-            auto cov = e.get_covariance_matrix();
-            for (int i = 0; i < n_params; ++i)
-                for (int j = 0; j < n_params; ++j) covariance(i, j) = cov(i, j);
-            auto se = e.get_standard_errors();
-            for (int i = 0; i < n_params; ++i) standard_errors[i] = se[static_cast<std::size_t>(i)];
-            auto corr = e.get_correlation_matrix();
-            for (int i = 0; i < n_params; ++i)
-                for (int j = 0; j < n_params; ++j) correlation(i, j) = corr(i, j);
+    // DELIBERATE fixture-path divergence from the runner (the one this delegation carries; see
+    // fit_runner.hpp's header note 1). The covariance stack needs >= 2 parameters -- the C#
+    // GetCovarianceMatrix throws below that -- so `run_fit` reports NaN for a 1-parameter model,
+    // the honest answer for the user-facing surface. This glue backs the PINNED FIXTURE oracles,
+    // whose pre-existing contract there is a silent zero (the single-parameter bivariate copula
+    // fit; no fixture asserts covariance/SE/correlation for a 1-param model). cpp11's
+    // writable::doubles / doubles_matrix allocate through Rf_allocVector(REALSXP, ...), which R
+    // does NOT zero-fill for numeric vectors -- so below, when n_params < 2, we WRITE 0.0 into
+    // every cell explicitly; the glue produces zeros here, it does not inherit them for free.
+    if (n_params >= 2) {
+        for (int i = 0; i < n_params; ++i) {
+            standard_errors[i] = r.standard_errors[static_cast<std::size_t>(i)];
+            for (int j = 0; j < n_params; ++j) {
+                covariance(i, j) = r.covariance[static_cast<std::size_t>(i * n_params + j)];
+                correlation(i, j) = r.correlation[static_cast<std::size_t>(i * n_params + j)];
+            }
         }
-    };
-
-    if (target == "MaximumLikelihood") {
-        est::MaximumLikelihood e(model, method);
-        if (!e.estimate()) stop("MaximumLikelihood::estimate() failed for a fixture case");
-        fill_from(e);
-    } else if (target == "MaximumAPosteriori") {
-        est::MaximumAPosteriori e(model, method);
-        if (!e.estimate()) stop("MaximumAPosteriori::estimate() failed for a fixture case");
-        fill_from(e);
     } else {
-        stop("unknown model_estimation target '%s' (BayesianAnalysis uses ch_estimation_bayes_run_)",
-             target.c_str());
+        for (int i = 0; i < n_params; ++i) {
+            standard_errors[i] = 0.0;
+            for (int j = 0; j < n_params; ++j) {
+                covariance(i, j) = 0.0;
+                correlation(i, j) = 0.0;
+            }
+        }
     }
 
-    // Optional seeded-draw digest off the FITTED model (P3): pin the best parameters and cache
-    // one seeded draw so one MLE smoke file covers parameter + max_log_likelihood + a seeded
-    // draw, mirroring the C++/GMM arms. `simulate_flat` handles the bivariate Matrix2D flatten.
+    // Optional seeded-draw digest off the FITTED model (P3): rebuild from the runner's
+    // `model_spec` (the construct's model object re-emitted with the fitted `parameter_values`,
+    // which the spec builder applies through the same set_parameter_values the old in-place
+    // `model.set_parameter_values(best_values)` called) and cache one seeded draw, so one MLE
+    // smoke file covers parameter + max_log_likelihood + a seeded draw. `simulate_flat` handles
+    // the bivariate Matrix2D flatten.
     writable::doubles simulated(static_cast<R_xlen_t>(0));
     if (sample_size > 0) {
-        model.set_parameter_values(best_values);
-        std::vector<double> draws = simulate_flat(&model, sample_size, seed);
+        std::unique_ptr<models::ModelBase> fitted =
+            models::spec::build_model_from_json(r.model_spec, data);
+        std::vector<double> draws = simulate_flat(fitted.get(), sample_size, seed);
         simulated = writable::doubles(static_cast<R_xlen_t>(draws.size()));
         for (std::size_t i = 0; i < draws.size(); ++i) simulated[static_cast<R_xlen_t>(i)] = draws[i];
     }
 
     return writable::list({
         "parameters"_nm = parameters,
-        "max_log_likelihood"_nm = writable::doubles({max_log_likelihood}),
-        "aic"_nm = writable::doubles({aic}),
+        "max_log_likelihood"_nm = writable::doubles({r.log_likelihood}),
+        "aic"_nm = writable::doubles({r.aic}),
         "covariance"_nm = covariance,
         "standard_errors"_nm = standard_errors,
         "correlation"_nm = correlation,
@@ -225,21 +208,21 @@ list ch_estimation_run_(std::string target, std::string model_json, doubles data
 // time (a fixture case's `bic` assertion supplies it via `args[0]`), not at construction time.
 [[cpp11::register]]
 double ch_estimation_bic_(std::string target, std::string model_json, doubles dataset, std::string optimizer, int n) {
-    std::unique_ptr<models::ModelBase> model_ptr = build_spec_model(model_json, dataset);
-    models::ModelBase& model = *model_ptr;
-    auto method = parse_optimization_method(optimizer);
+    if (target != "MaximumLikelihood" && target != "MaximumAPosteriori")
+        stop("unknown model_estimation target '%s' (BayesianAnalysis has no bic method)",
+             target.c_str());
+    if (n < 1) stop("Sample size must be at least 1.");
 
-    if (target == "MaximumLikelihood") {
-        est::MaximumLikelihood e(model, method);
-        if (!e.estimate()) stop("MaximumLikelihood::estimate() failed for a fixture case");
-        return e.get_bic(n);
-    }
-    if (target == "MaximumAPosteriori") {
-        est::MaximumAPosteriori e(model, method);
-        if (!e.estimate()) stop("MaximumAPosteriori::estimate() failed for a fixture case");
-        return e.get_bic(n);
-    }
-    stop("unknown model_estimation target '%s' (BayesianAnalysis has no bic method)", target.c_str());
+    std::vector<double> data(dataset.begin(), dataset.end());
+    std::string construct =
+        "{\"model\":" + model_json + ",\"optimizer\":" + json_string(optimizer) + "}";
+    est::support::FitResult r = est::support::run_fit(target, construct, data);
+    // The live rebuild stays: `n` is only known at assertion-dispatch time. `MaximumLikelihood::
+    // get_bic(n)` (maximum_likelihood.hpp:448-453) IS this call -- GoodnessOfFit::bic(n,
+    // number_of_parameters(), maximum_log_likelihood()) -- so evaluating it off the runner's
+    // FitResult is the same function on the same arguments, not a re-derivation.
+    return corehydro::numerics::data::GoodnessOfFit::bic(n, static_cast<int>(r.parameters.size()),
+                                                         r.log_likelihood);
 }
 
 // --- BayesianAnalysis (Task T12) -----------------------------------------------------------
@@ -266,46 +249,44 @@ list ch_estimation_bayes_run_(std::string model_json, doubles dataset, std::stri
                                int seed, int iterations, int warmup_iterations,
                                int number_of_chains, int thinning_interval,
                                int initial_iterations, int output_length) {
-    std::unique_ptr<models::ModelBase> model_ptr = build_spec_model(model_json, dataset);
-    models::ModelBase& model = *model_ptr;
-    auto sampler_type = parse_sampler_type(sampler);
+    std::vector<double> data(dataset.begin(), dataset.end());
+    // The `> 0` guards that used to sit on each setter now sit on the construct assembly: a
+    // non-positive argument OMITS the key, and `run_fit`'s apply_bayesian_settings then leaves
+    // the ported BayesianAnalysis class default untouched -- exactly what skipping the setter
+    // did. Passing a literal 0 instead would NOT be equivalent and would move seeded chains.
+    // `seed` keeps its own `>= 0` spelling (0 is a legitimate seed); the runner applies it under
+    // the identical `seed >= 0` test.
+    std::string construct = "{\"model\":" + model_json + ",\"sampler\":" + json_string(sampler);
+    if (seed >= 0) construct += ",\"seed\":" + std::to_string(seed);
+    append_if_positive(construct, "iterations", iterations);
+    append_if_positive(construct, "warmup_iterations", warmup_iterations);
+    append_if_positive(construct, "number_of_chains", number_of_chains);
+    append_if_positive(construct, "thinning_interval", thinning_interval);
+    append_if_positive(construct, "initial_iterations", initial_iterations);
+    append_if_positive(construct, "output_length", output_length);
+    construct += "}";
 
-    est::BayesianAnalysis ba(model, sampler_type);
-    ba.set_use_simulation_defaults(false);
-    ba.set_use_advanced_simulation_defaults(false);
-    if (seed >= 0) ba.set_prng_seed(seed);
-    if (iterations > 0) ba.set_iterations(iterations);
-    if (warmup_iterations > 0) ba.set_warmup_iterations(warmup_iterations);
-    if (number_of_chains > 0) ba.set_number_of_chains(number_of_chains);
-    if (thinning_interval > 0) ba.set_thinning_interval(thinning_interval);
-    if (initial_iterations > 0) ba.set_initial_iterations(initial_iterations);
-    if (output_length > 0) ba.set_output_length(output_length);
+    est::support::FitResult r = est::support::run_fit("BayesianAnalysis", construct, data);
 
-    if (!ba.estimate()) stop("BayesianAnalysis::estimate() failed for a fixture case");
-
-    int n_params = model.number_of_parameters();
+    // chain_dims is {n_chains, n_iterations, n_params}; `draws` is already the chain-major flatten
+    // this function has always returned (see the FitResult::draws note in fit_runner.hpp), and
+    // MCMCResults::markov_chains is a copy of sampler()->markov_chains() (mcmc_results.hpp:35-37).
+    int n_params = r.chain_dims[2];
     writable::doubles posterior_mean(n_params);
-    const auto& pm = ba.results()->posterior_mean.values;
-    for (int i = 0; i < n_params; ++i) posterior_mean[i] = pm[static_cast<std::size_t>(i)];
+    for (int i = 0; i < n_params; ++i)
+        posterior_mean[i] = r.posterior_mean[static_cast<std::size_t>(i)];
 
-    const auto& chains = ba.sampler()->markov_chains();
-    int n_chains = static_cast<int>(chains.size());
-    int n_iterations = n_chains > 0 ? static_cast<int>(chains[0].size()) : 0;
-    writable::doubles chain_values(static_cast<R_xlen_t>(n_chains) * n_iterations * n_params);
-    R_xlen_t k = 0;
-    for (int c = 0; c < n_chains; ++c)
-        for (int it = 0; it < n_iterations; ++it)
-            for (int p = 0; p < n_params; ++p)
-                chain_values[k++] = chains[static_cast<std::size_t>(c)][static_cast<std::size_t>(it)]
-                                        .values[static_cast<std::size_t>(p)];
+    writable::doubles chain_values(static_cast<R_xlen_t>(r.draws.size()));
+    for (std::size_t i = 0; i < r.draws.size(); ++i)
+        chain_values[static_cast<R_xlen_t>(i)] = r.draws[i];
 
     return writable::list({
-        "dic"_nm = writable::doubles({ba.dic()}),
-        "waic"_nm = writable::doubles({ba.waic()}),
-        "looic"_nm = writable::doubles({ba.looic()}),
+        "dic"_nm = writable::doubles({r.dic}),
+        "waic"_nm = writable::doubles({r.waic}),
+        "looic"_nm = writable::doubles({r.looic}),
         "posterior_mean"_nm = posterior_mean,
         "chain_values"_nm = chain_values,
-        "chain_dims"_nm = writable::integers({n_chains, n_iterations, n_params}),
+        "chain_dims"_nm = writable::integers({r.chain_dims[0], r.chain_dims[1], r.chain_dims[2]}),
     });
 }
 
@@ -405,30 +386,38 @@ doubles ch_model_simulate_(std::string model_json, doubles dataset, int sample_s
 list ch_estimation_gmm_run_(std::string model_json, doubles dataset, std::string strategy,
                             std::string optimizer, int max_gmm_iterations, int sample_size,
                             int seed) {
-    std::unique_ptr<models::Bulletin17CDistribution> model;
-    auto gmm = build_and_fit_gmm(model, model_json, dataset, strategy, optimizer, max_gmm_iterations);
-    int p = model->number_of_parameters();
+    std::vector<double> data(dataset.begin(), dataset.end());
+    // Same construct-assembly guard as ch_estimation_bayes_run_: `max_gmm_iterations` is applied
+    // only when positive, which used to be the `if (max_gmm_iterations > 0)` around the setter.
+    std::string construct = "{\"model\":" + model_json + ",\"optimizer\":" + json_string(optimizer) +
+                            ",\"strategy\":" + json_string(strategy);
+    append_if_positive(construct, "max_gmm_iterations", max_gmm_iterations);
+    construct += "}";
+
+    est::support::FitResult r = est::support::run_fit("GMM", construct, data);
+    int p = static_cast<int>(r.parameters.size());
 
     writable::doubles parameters(p);
-    const auto& best = gmm->best_parameter_set().values;
-    for (int i = 0; i < p; ++i) parameters[i] = best[static_cast<std::size_t>(i)];
     writable::doubles standard_errors(p);
-    auto se = gmm->get_standard_errors();
-    for (int i = 0; i < p; ++i) standard_errors[i] = se[static_cast<std::size_t>(i)];
     writable::doubles_matrix<by_column> covariance(p, p);
     writable::doubles_matrix<by_column> correlation(p, p);
-    auto cov = gmm->get_covariance_matrix();
-    auto corr = gmm->get_correlation_matrix();
-    for (int i = 0; i < p; ++i)
+    for (int i = 0; i < p; ++i) {
+        parameters[i] = r.parameters[static_cast<std::size_t>(i)];
+        standard_errors[i] = r.standard_errors[static_cast<std::size_t>(i)];
         for (int j = 0; j < p; ++j) {
-            covariance(i, j) = cov(i, j);
-            correlation(i, j) = corr(i, j);
+            covariance(i, j) = r.covariance[static_cast<std::size_t>(i * p + j)];
+            correlation(i, j) = r.correlation[static_cast<std::size_t>(i * p + j)];
         }
+    }
 
+    // Seeded draw off the FITTED B17C model, rebuilt from the runner's `model_spec` (the fitted
+    // `parameter_values` are applied by the spec builder through the same set_parameter_values
+    // the old in-place pin called).
     writable::doubles simulated(static_cast<R_xlen_t>(0));
     if (sample_size > 0) {
-        model->set_parameter_values(gmm->best_parameter_set().values);
-        std::vector<double> draws = model->generate_random_values(sample_size, seed);
+        std::unique_ptr<models::Bulletin17CDistribution> fitted =
+            models::spec::build_bulletin17c_from_json(r.model_spec, data);
+        std::vector<double> draws = fitted->generate_random_values(sample_size, seed);
         simulated = writable::doubles(static_cast<R_xlen_t>(draws.size()));
         for (std::size_t i = 0; i < draws.size(); ++i) simulated[static_cast<R_xlen_t>(i)] = draws[i];
     }
@@ -438,14 +427,14 @@ list ch_estimation_gmm_run_(std::string model_json, doubles dataset, std::string
         "standard_errors"_nm = standard_errors,
         "covariance"_nm = covariance,
         "correlation"_nm = correlation,
-        "j_stat"_nm = writable::doubles({gmm->jstat()}),
-        "j_stat_pval"_nm = writable::doubles({gmm->jstat_pval()}),
+        "j_stat"_nm = writable::doubles({r.j_stat}),
+        "j_stat_pval"_nm = writable::doubles({r.j_stat_pval}),
         // T13: GMMIterations/ConvergedWithinTolerance (off-by-one fix) and
         // OptimizerFallbackCount (sticky BFGS->NelderMead fallback).
-        "gmm_iterations"_nm = writable::integers({gmm->gmm_iterations()}),
+        "gmm_iterations"_nm = writable::integers({r.gmm_iterations}),
         "converged_within_tolerance"_nm =
-            writable::logicals({cpp11::r_bool(gmm->converged_within_tolerance())}),
-        "optimizer_fallback_count"_nm = writable::integers({gmm->optimizer_fallback_count()}),
+            writable::logicals({cpp11::r_bool(r.converged_within_tolerance)}),
+        "optimizer_fallback_count"_nm = writable::integers({r.optimizer_fallback_count}),
         "simulated"_nm = simulated,
     });
 }
@@ -457,8 +446,190 @@ list ch_estimation_gmm_run_(std::string model_json, doubles dataset, std::string
 [[cpp11::register]]
 double ch_estimation_gmm_qvar_(std::string model_json, doubles dataset, std::string strategy,
                                std::string optimizer, int max_gmm_iterations, double aep) {
-    std::unique_ptr<models::Bulletin17CDistribution> model;
-    auto gmm = build_and_fit_gmm(model, model_json, dataset, strategy, optimizer, max_gmm_iterations);
-    return model->quantile_variance(1.0 - aep, gmm->best_parameter_set().values,
-                                    gmm->get_covariance_matrix().to_array());
+    std::vector<double> data(dataset.begin(), dataset.end());
+    std::string construct = "{\"model\":" + model_json + ",\"optimizer\":" + json_string(optimizer) +
+                            ",\"strategy\":" + json_string(strategy);
+    append_if_positive(construct, "max_gmm_iterations", max_gmm_iterations);
+    construct += "}";
+    // The live rebuild stays (the AEP is only known at assertion-dispatch time);
+    // run_fit_quantile_variance IS this function's old body, lifted into fit_runner.hpp.
+    return est::support::run_fit_quantile_variance(construct, data, aep);
+}
+
+// --- The user-facing fit surface (Task 6) ---------------------------------------------------
+//
+// Reshapes an n*n row-major flat vector (FitResult's covariance/correlation convention) into an
+// n x n matrix, OR -- when the vector is empty (hessian = FALSE, or a target that never
+// populates it) -- a zero-length numeric. R's new_fit()/fit_optimized() (corehydror/R/fit.R)
+// turn that empty numeric into NULL; see fit_runner.hpp's FitResult doc for the row-major
+// convention this mirrors (and ch_estimation_run_ above, which reshapes the identical way for
+// the fixture path).
+static sexp square_or_empty(const std::vector<double>& v, int n) {
+    if (v.empty()) return as_sexp(writable::doubles(static_cast<R_xlen_t>(0)));
+    writable::doubles_matrix<by_column> m(n, n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j) m(i, j) = v[static_cast<std::size_t>(i * n + j)];
+    return as_sexp(m);
+}
+
+// Same idea as square_or_empty but rectangular, for FitDiagnostics::observation_influence
+// (n_obs x n_params, row-major -- see fit_runner.hpp's flatten_influence).
+static sexp matrix_or_empty(const std::vector<double>& v, int nrow, int ncol) {
+    if (v.empty()) return as_sexp(writable::doubles(static_cast<R_xlen_t>(0)));
+    writable::doubles_matrix<by_column> m(nrow, ncol);
+    for (int i = 0; i < nrow; ++i)
+        for (int j = 0; j < ncol; ++j) m(i, j) = v[static_cast<std::size_t>(i * ncol + j)];
+    return as_sexp(m);
+}
+
+// Flattens a double vector into an R numeric of the same length. Shared by ch_fit_run_'s new
+// Bayesian/GMM fields below and ch_fit_diagnostics_.
+static writable::doubles doubles_of(const std::vector<double>& v) {
+    writable::doubles out(static_cast<R_xlen_t>(v.size()));
+    for (std::size_t i = 0; i < v.size(); ++i) out[static_cast<R_xlen_t>(i)] = v[i];
+    return out;
+}
+
+// The user-facing fit entry point. ONE function for all four estimators (MaximumLikelihood,
+// MaximumAPosteriori here; BayesianAnalysis and GMM added in a later task): the R verbs in
+// R/fit.R assemble `construct_json` (via fit_input()) and read this named list back, picking
+// the fields their target populates. Every FitResult field `run_fit` can fill is packed here so
+// a later task extends the R side only, not this entry point's shape.
+[[cpp11::register]]
+list ch_fit_run_(std::string target, std::string construct_json, doubles dataset) {
+    std::vector<double> data(dataset.begin(), dataset.end());
+    est::support::FitResult r = est::support::run_fit(target, construct_json, data);
+    int n = static_cast<int>(r.parameters.size());
+
+    writable::doubles parameters(n);
+    writable::strings parameter_names(n);
+    for (int i = 0; i < n; ++i) {
+        parameters[i] = r.parameters[static_cast<std::size_t>(i)];
+        parameter_names[i] = r.parameter_names[static_cast<std::size_t>(i)];
+    }
+
+    writable::doubles standard_errors(static_cast<R_xlen_t>(r.standard_errors.size()));
+    for (std::size_t i = 0; i < r.standard_errors.size(); ++i)
+        standard_errors[static_cast<R_xlen_t>(i)] = r.standard_errors[i];
+
+    writable::doubles profile_grid(static_cast<R_xlen_t>(r.profile_grid.size()));
+    for (std::size_t i = 0; i < r.profile_grid.size(); ++i)
+        profile_grid[static_cast<R_xlen_t>(i)] = r.profile_grid[i];
+    writable::doubles profile_lower(static_cast<R_xlen_t>(r.profile_lower.size()));
+    for (std::size_t i = 0; i < r.profile_lower.size(); ++i)
+        profile_lower[static_cast<R_xlen_t>(i)] = r.profile_lower[i];
+    writable::doubles profile_upper(static_cast<R_xlen_t>(r.profile_upper.size()));
+    for (std::size_t i = 0; i < r.profile_upper.size(); ++i)
+        profile_upper[static_cast<R_xlen_t>(i)] = r.profile_upper[i];
+
+    // Draws stay flat CHAIN-major (see FitResult::draws's doc) alongside chain_dims; empty for
+    // MaximumLikelihood/MaximumAPosteriori targets. A later task's fit_bayesian() reshapes them.
+    writable::doubles draws(static_cast<R_xlen_t>(r.draws.size()));
+    for (std::size_t i = 0; i < r.draws.size(); ++i) draws[static_cast<R_xlen_t>(i)] = r.draws[i];
+    writable::integers chain_dims(static_cast<R_xlen_t>(r.chain_dims.size()));
+    for (std::size_t i = 0; i < r.chain_dims.size(); ++i)
+        chain_dims[static_cast<R_xlen_t>(i)] = r.chain_dims[i];
+
+    return writable::list({
+        "method"_nm = writable::strings({r.method}),
+        "parameter_names"_nm = parameter_names,
+        "parameters"_nm = parameters,
+        "log_likelihood"_nm = writable::doubles({r.log_likelihood}),
+        "prior_log_likelihood"_nm = writable::doubles({r.prior_log_likelihood}),
+        "aic"_nm = writable::doubles({r.aic}),
+        "bic"_nm = writable::doubles({r.bic}),
+        "nobs"_nm = writable::integers({r.nobs}),
+        "covariance"_nm = square_or_empty(r.covariance, n),
+        "standard_errors"_nm = standard_errors,
+        "correlation"_nm = square_or_empty(r.correlation, n),
+        "converged"_nm = writable::logicals({cpp11::r_bool(r.converged)}),
+        "status"_nm = writable::strings({r.status}),
+        "function_evaluations"_nm = writable::integers({r.function_evaluations}),
+        "model_spec"_nm = writable::strings({r.model_spec}),
+        "profile_grid"_nm = profile_grid,
+        "profile_lower"_nm = profile_lower,
+        "profile_upper"_nm = profile_upper,
+        "profile_bins"_nm = writable::integers({r.profile_bins}),
+        "draws"_nm = draws,
+        "chain_dims"_nm = chain_dims,
+        // --- Bayesian-only fields (Task 7); empty for MaximumLikelihood/MaximumAPosteriori ---
+        // `posterior` is the THINNED draw matrix the analyses consume (posterior_rows x n_params,
+        // row-major in FitResult), reshaped here into a real R matrix the way `covariance` is; the
+        // raw chains stay in `draws` above. `posterior_rows` rides along so the R side can check
+        // the shape without dividing the flat length.
+        "posterior"_nm = matrix_or_empty(r.posterior, static_cast<int>(r.posterior_rows), n),
+        "posterior_rows"_nm = writable::integers({static_cast<int>(r.posterior_rows)}),
+        "map"_nm = doubles_of(r.map),
+        "posterior_mean"_nm = doubles_of(r.posterior_mean),
+        "mean_log_likelihood"_nm = doubles_of(r.mean_log_likelihood),
+        "acceptance_rates"_nm = doubles_of(r.acceptance_rates),
+        "dic"_nm = writable::doubles({r.dic}),
+        "waic"_nm = writable::doubles({r.waic}),
+        "waic_pd"_nm = writable::doubles({r.waic_pd}),
+        "looic"_nm = writable::doubles({r.looic}),
+        "looic_se"_nm = writable::doubles({r.looic_se}),
+        "loo_pd"_nm = writable::doubles({r.loo_pd}),
+        "rhat"_nm = doubles_of(r.rhat),
+        "ess"_nm = doubles_of(r.ess),
+        "summary_mean"_nm = doubles_of(r.summary_mean),
+        "summary_median"_nm = doubles_of(r.summary_median),
+        "summary_sd"_nm = doubles_of(r.summary_sd),
+        "summary_lower"_nm = doubles_of(r.summary_lower),
+        "summary_upper"_nm = doubles_of(r.summary_upper),
+        // --- GMM-only fields (Task 7); NaN/0/false for the other three targets -----------------
+        "j_stat"_nm = writable::doubles({r.j_stat}),
+        "j_stat_pval"_nm = writable::doubles({r.j_stat_pval}),
+        "gmm_iterations"_nm = writable::integers({r.gmm_iterations}),
+        "converged_within_tolerance"_nm =
+            writable::logicals({cpp11::r_bool(r.converged_within_tolerance)}),
+        "optimizer_fallback_count"_nm = writable::integers({r.optimizer_fallback_count}),
+    });
+}
+
+// --- Estimation diagnostics off a fit (Task 7) ----------------------------------------------
+//
+// R's fit_diagnostics() reruns the fit's own construct (the JSON fit_input() built, carried on
+// the corehydro_fit as $construct_json) through run_fit_diagnostics -- see that function's
+// header for why an explicit warmup_iterations on the ORIGINAL construct is what makes this
+// agree with the fit it is diagnosing. `target` is one of MaximumAPosteriori/BayesianAnalysis/
+// GMM (matching FitDiagnostics's three populated arms); MaximumLikelihood is rejected R-side
+// (see fit_diagnostics() in R/fit.R) before this is ever called.
+[[cpp11::register]]
+list ch_fit_diagnostics_(std::string target, std::string construct_json, doubles dataset) {
+    std::vector<double> data(dataset.begin(), dataset.end());
+    est::support::FitDiagnostics d =
+        est::support::run_fit_diagnostics(target, construct_json, data);
+
+    // observation_influence is n_obs x n_params, row-major (fit_runner.hpp's flatten_influence);
+    // n_obs is cooks_distance's length (populated together, MAP/GMM only -- see FitDiagnostics's
+    // header), so n_params divides out of the flat length rather than needing a separate field.
+    int n_obs = static_cast<int>(d.cooks_distance.size());
+    int n_params = (n_obs > 0 && !d.observation_influence.empty())
+                       ? static_cast<int>(d.observation_influence.size() /
+                                          static_cast<std::size_t>(n_obs))
+                       : 0;
+
+    writable::strings prior_influence_names(static_cast<R_xlen_t>(d.prior_influence_names.size()));
+    for (std::size_t i = 0; i < d.prior_influence_names.size(); ++i)
+        prior_influence_names[static_cast<R_xlen_t>(i)] = d.prior_influence_names[i];
+
+    return writable::list({
+        "cooks_distance"_nm = doubles_of(d.cooks_distance),
+        "leverage"_nm = doubles_of(d.leverage),
+        "observation_influence"_nm = matrix_or_empty(d.observation_influence, n_obs, n_params),
+        "pareto_k"_nm = doubles_of(d.pareto_k),
+        "max_pareto_k"_nm = writable::doubles({d.max_pareto_k}),
+        "prior_influence"_nm = doubles_of(d.prior_influence),
+        "prior_influence_names"_nm = prior_influence_names,
+    });
+}
+
+// `quantile_variance(fit, aep)`: like ch_estimation_gmm_qvar_ (the fixture-path twin), rebuilds
+// the same deterministic GMM fit from the fit's own construct and evaluates the B17C
+// delta-method Var(Q_p) live -- `aep` is only known at call time, so this cannot be precomputed
+// into ch_fit_run_'s result the way every other GMM field is.
+[[cpp11::register]]
+double ch_fit_quantile_variance_(std::string construct_json, doubles dataset, double aep) {
+    std::vector<double> data(dataset.begin(), dataset.end());
+    return est::support::run_fit_quantile_variance(construct_json, data, aep);
 }

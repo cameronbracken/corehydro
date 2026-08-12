@@ -1,0 +1,52 @@
+{
+  "target": "BayesianAnalysis",
+  "kind": "model_estimation",
+  "source": "RMC-BestFit/src/RMC.BestFit/Estimation/BayesianAnalysis.cs @ c2e6192 (ParetoK line 482, ComputeInfluenceDiagnostics line 1876) + Numerics/Sampling/MCMC/Support/{MCMCResults,ParameterResults,ParameterStatistics}.cs (Rhat/ESS/AcceptanceRates/Median/StandardDeviation/LowerCI/UpperCI) -- exact oracle values dumped from the REAL C# BayesianAnalysis (DEMCzs, serial chains via RunAsync(null, false, parallel: false)) via tools/oracle_emitter (Task 9) and reproduced by tools/verify_oracles.py. The construct is bayes_normal.json's verbatim, so the underlying chain is the one that file already pins bit-for-bit; this file pins the DERIVED posterior summary and convergence diagnostics the R/Python fit_bayesian() surface exposes, plus the PSIS-LOO Pareto-k read through ComputeInfluenceDiagnostics (the same wrapper fit_runner.hpp's run_fit_diagnostics reads, so MaxParetoK's NaN guard is shared). TOLERANCES: rhat/ess/posterior_median/posterior_sd/posterior_lower/posterior_upper/pareto_k/max_pareto_k/prior_log_likelihood at the bayes_normal.json Output-derived tier (rel 1e-9); measured agreement is 1e-14..1e-12, four orders inside it. output_length 400 is what keeps them there -- it holds every Output-derived quantity inside the population-sampler pre-amplification window (see the DEMCz/DEMCzs divergence finding in fixtures/README.md). acceptance_rate is an accepted-count/iterations ratio off a bit-identical chain, so it is exact and asserted at rel 1e-12; nobs is an integer (mode 'equal'). The Pareto-k indices asserted are the three of the ten that are NOT at a clip bound (the PSIS smoother clamps to -0.5 and 1.5), so they carry real information; max_pareto_k is at the 1.5 clip and pins the InfluenceDiagnostics reduction itself.",
+  "datasets": {
+    "annual_peaks": [12500, 15300, 9870, 21000, 18400, 11200, 26800, 14100, 19500, 11600]
+  },
+  "cases": [
+    {
+      "name": "normal_demczs_diagnostics",
+      "construct": {
+        "model": {
+          "family": "Normal",
+          "dataset": "annual_peaks"
+        },
+        "sampler": "DEMCzs",
+        "settings": {
+          "seed": 12345,
+          "number_of_chains": 4,
+          "iterations": 100,
+          "warmup_iterations": 50,
+          "thinning_interval": 1,
+          "output_length": 400
+        }
+      },
+      "assertions": [
+        { "method": "rhat", "args": [0], "expected": 2.818431333647126, "mode": "rel", "tol": 1e-09 },
+        { "method": "rhat", "args": [1], "expected": 1.4565129026449781, "mode": "rel", "tol": 1e-09 },
+        { "method": "ess", "args": [0], "expected": 25.817134287832996, "mode": "rel", "tol": 1e-09 },
+        { "method": "ess", "args": [1], "expected": 17.951089666052102, "mode": "rel", "tol": 1e-09 },
+        { "method": "acceptance_rate", "args": [0], "expected": 0.06, "mode": "rel", "tol": 1e-12 },
+        { "method": "acceptance_rate", "args": [1], "expected": 0.085, "mode": "rel", "tol": 1e-12 },
+        { "method": "acceptance_rate", "args": [2], "expected": 0.075, "mode": "rel", "tol": 1e-12 },
+        { "method": "acceptance_rate", "args": [3], "expected": 0.095, "mode": "rel", "tol": 1e-12 },
+        { "method": "posterior_median", "args": [0], "expected": 16435.518538547483, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_median", "args": [1], "expected": 5343.411561505327, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_sd", "args": [0], "expected": 2526.683308764571, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_sd", "args": [1], "expected": 3464.8695502219516, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_lower", "args": [0], "expected": 13194.61049856353, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_lower", "args": [1], "expected": 3644.0513816224875, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_upper", "args": [0], "expected": 21252.459055411797, "mode": "rel", "tol": 1e-09 },
+        { "method": "posterior_upper", "args": [1], "expected": 15632.880436747007, "mode": "rel", "tol": 1e-09 },
+        { "method": "pareto_k", "args": [2], "expected": -0.4583061355048003, "mode": "rel", "tol": 1e-09 },
+        { "method": "pareto_k", "args": [3], "expected": 0.9141527055398919, "mode": "rel", "tol": 1e-09 },
+        { "method": "pareto_k", "args": [9], "expected": -0.26217197188329333, "mode": "rel", "tol": 1e-09 },
+        { "method": "max_pareto_k", "args": [], "expected": 1.5, "mode": "rel", "tol": 1e-09, "note": "1.5 is the PSIS clip bound in bayesian_analysis.hpp (k = max(-0.5, min(k, 1.5))), not a computed statistic -- this assertion holds whenever ANY observation saturates the clip and is blind to drift in every other k. The pareto_k [2]/[3]/[9] pins above are the non-clipped values and carry the real information." },
+        { "method": "nobs", "args": [], "expected": 10, "mode": "equal" },
+        { "method": "prior_log_likelihood", "args": [], "expected": -34.7696459781836, "mode": "rel", "tol": 1e-09 }
+      ]
+    }
+  ]
+}
