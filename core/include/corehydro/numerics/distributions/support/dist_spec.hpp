@@ -75,11 +75,6 @@ inline std::vector<double> spec_parameters(const JsonValue& s) {
     return {};
 }
 
-inline bool is_composite_family(const std::string& family) {
-    return family == "TruncatedDistribution" || family == "Empirical" ||
-           family == "KernelDensity" || family == "Mixture" || family == "CompetingRisks";
-}
-
 std::unique_ptr<UnivariateDistributionBase> build_univariate(const JsonValue& spec);
 
 namespace detail {

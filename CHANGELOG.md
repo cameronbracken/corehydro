@@ -11,9 +11,10 @@ the `corehydropy` Python package) are documented here. The format follows
 
 The distribution layer is complete. Five composite univariate distributions, all seven bivariate
 copulas, and five multivariate distributions are reachable from R and Python for the first time,
-each through one shared grammar and one runner (`dist_spec.hpp`/`dist_runner.hpp`) that the R
-glue, the Python glue, the C++ fixture runner, and the dotnet oracle emitter all drive, so a
-fixture case and a user's `dist_pdf()` call are the same code path.
+each through one shared grammar and one runner (`dist_spec.hpp`/`dist_runner.hpp`) called by the R
+glue, the Python glue, and the C++ fixture runner, so a fixture case and a user's `dist_pdf()`
+call are the same code path. The dotnet oracle emitter reads the same grammar but keeps its own
+dispatch against the real C# objects, so the oracle stays independent of the code it checks.
 
 ### Added
 
@@ -34,7 +35,12 @@ fixture case and a user's `dist_pdf()` call are the same code path.
   reproducible instead of clock-seeded.
 - Two worked example pairs: copulas and joint frequency analysis, and composite distributions.
 
-### Fixed
+### Development notes
+
+Four defects in the new surface, each introduced and repaired inside this release. No earlier
+version exposed any of these functions, so nothing here changes behaviour a user could have
+depended on. They are recorded because they are the mistakes this kind of work invites, and the
+next person adding a surface should know what to look for.
 
 - **`copula_fit(method = "mpl")`, the default, returned a meaningless theta.** The
   pseudo-likelihood objective expects plotting positions and does not rank internally; the fit

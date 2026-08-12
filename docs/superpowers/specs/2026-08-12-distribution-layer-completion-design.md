@@ -126,6 +126,11 @@ it feeds straight back into the other verbs. `method = "tau"` is available for C
 AliMikhailHaq, and errors elsewhere with that reason. `method = "mle"` requires both marginals to
 implement `IMaximumLikelihoodEstimation`, as upstream does.
 
+Deviation, as built: `copula_exceedance()` defaults `type` to `"and"`, not to the `"or"` this
+listing puts first. Both languages default the same way, so nothing diverges between them, and
+the joint exceedance `P(U > u and V > v)` is the quantity a joint frequency analysis asks for.
+The signature is `copula_exceedance(cop, u, v, type = c("and", "or"))`.
+
 Multivariate distributions, in a new `corehydror/R/mvdist.R`:
 
 ```r

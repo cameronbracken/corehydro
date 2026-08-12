@@ -1,11 +1,18 @@
 // corehydro ADDITION -- no upstream C# counterpart (sibling of estimation/support/fit_runner.hpp).
 //
-// The single place a distribution method is dispatched in this repo. Four callers drive it and
+// The single place a distribution method is dispatched in this repo. Three callers drive it and
 // none owns any evaluation logic: the cpp11 glue (corehydror/src/dist_spec.cpp), the pybind11
-// glue (corehydropy/src/bindings/dist_spec.cpp), the C++ fixture runner (core/tests/
-// test_fixtures.cpp) and the dotnet oracle emitter. Each serializes its native construct to the
-// dist_spec.hpp grammar and calls run_dist/run_copula/run_mvdist, so a fixture case and a user's
-// dist_pdf() call are the same code path.
+// glue (corehydropy/src/bindings/dist_spec.cpp), and the C++ fixture runner (core/tests/
+// test_fixtures.cpp). Each serializes its native construct to the dist_spec.hpp grammar and calls
+// run_dist/run_copula/run_mvdist, so a fixture case and a user's dist_pdf() call are the same
+// code path.
+//
+// The dotnet oracle emitter (tools/oracle_emitter/Program.cs) reads the same GRAMMAR but is C#
+// and cannot call these functions: it has its own dispatch against the real Numerics objects.
+// Where a transform is needed on the way in, it is re-transcribed there rather than shared --
+// CopulaPlottingPositions (Program.cs:1329) is its own transcription of the transform this runner
+// gets from support::plotting_positions (dist_spec.hpp:248). That duplication is deliberate: an
+// oracle that ran the code under test would prove nothing.
 //
 // Stateless by construction: one call builds the object, evaluates once, and drops it. A seeded
 // draw therefore returns the WHOLE vector in one call (method "random", args [n, seed]) so a
