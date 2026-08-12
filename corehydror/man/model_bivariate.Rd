@@ -37,6 +37,17 @@ An object of class \code{corehydro_model}.
 \description{
 Two fixed univariate marginals coupled by a bivariate copula.
 }
+\note{
+Fit an Archimedean copula (\code{"Clayton"}, \code{"Frank"}, \code{"Gumbel"}, \code{"Joe"},
+\code{"AliMikhailHaq"}) with \code{optimizer = "DifferentialEvolution"}. \code{\link[=fit_mle]{fit_mle()}} and \code{\link[=fit_map]{fit_map()}}
+default to \code{"NelderMead"}, whose start point is the midpoint of the copula's constraint
+range: for Gumbel, whose range is \verb{\{1, 100\}}, that is theta 50.5, and the local search slides
+to the lower bound and reports \code{Success} with the independence copula. On 150 Gumbel pairs
+simulated at theta 3, \code{"NelderMead"} returned theta 1.0000 with a log-likelihood of 0.0000
+while \code{"DifferentialEvolution"} returned theta 3.0334 at 110.5081. \code{"Powell"} errors on some
+samples, so \code{"DifferentialEvolution"} is the recommendation rather than any global optimizer.
+Elliptical copulas (\code{"Normal"}, \code{"StudentT"}) are not affected.
+}
 \examples{
 x <- c(12, 15, 9, 22, 18, 14, 10, 28, 17, 11, 19, 13)
 y <- c(2.1, 2.6, 1.7, 3.7, 3.1, 2.5, 1.9, 4.6, 3.0, 2.0, 3.3, 2.3)

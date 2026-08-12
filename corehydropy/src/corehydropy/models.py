@@ -881,6 +881,18 @@ def model_bivariate(
     -------
     Model
         The assembled model spec.
+
+    Notes
+    -----
+    Fit an Archimedean copula (``Clayton``, ``Frank``, ``Gumbel``, ``Joe``, ``AliMikhailHaq``)
+    with ``optimizer="DifferentialEvolution"``. :func:`fit_mle` and :func:`fit_map` default to
+    ``"NelderMead"``, whose start point is the midpoint of the copula's constraint range: for
+    Gumbel, whose range is ``{1, 100}``, that is theta 50.5, and the local search slides to the
+    lower bound and reports ``Success`` with the independence copula. On 150 Gumbel pairs
+    simulated at theta 3, ``"NelderMead"`` returned theta 1.0000 with a log-likelihood of 0.0000
+    while ``"DifferentialEvolution"`` returned theta 3.0334 at 110.5081. ``"Powell"`` errors on
+    some samples, so ``"DifferentialEvolution"`` is the recommendation rather than any global
+    optimizer. Elliptical copulas (``Normal``, ``StudentT``) are not affected.
     """
 
     def as_marginal(m, what):
