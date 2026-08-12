@@ -7,6 +7,50 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-11
+
+The estimation layer. A model built with `model_univariate()`, `model_bulletin17c()`, or any of
+the other `model_*()` constructors can now be fit directly: maximum likelihood, maximum a
+posteriori, Bayesian MCMC, and generalized method of moments are each one function call, returning
+a fit object with `coef()`, `confint()`, `AIC()`, `logLik()`, and `summary()` methods rather than a
+bag of raw numbers. Every fit runs through one shared C++ entry point, so a fixture case, the
+dotnet oracle gate, and a user's `fit_mle()` call are now provably the same code path rather than
+three that happen to agree.
+
+### Added
+
+- **`fit_mle()` / `fit_map()`** -- maximum likelihood and maximum a posteriori, with a
+  Hessian-based covariance, optional profile-likelihood confidence intervals, and a choice of six
+  optimizers (Nelder-Mead, Brent, BFGS, Powell, Differential Evolution, Multilevel Single Linkage).
+- **`fit_bayesian()`** -- Bayesian MCMC fitting over DEMCz, DEMCzs, ARWMH, or NUTS, returning the
+  raw chains in the `posterior`-package axis order, a posterior summary with R-hat and effective
+  sample size, and DIC/WAIC/LOOIC.
+- **`fit_gmm()`** -- generalized method of moments for Bulletin 17C models, with the sandwich
+  covariance and the J-statistic overidentification test.
+- **`fit_diagnostics()`** -- Cook's distance, leverage, and observation influence off a MAP or GMM
+  fit; leverage, PSIS-LOO Pareto-k, and prior influence off a Bayesian fit.
+- **`quantile_variance()`** -- the Cohn-style delta-method variance of a fitted quantile at a given
+  annual exceedance probability, off a `fit_gmm()` fit.
+- `confint()`, `coef()`, `vcov()`, `logLik()`, `AIC()`, `BIC()`, `print()`, and `summary()` methods
+  on the new `corehydro_fit` object in both packages.
+- A worked example pair on fitting a Log-Pearson Type III record by all four methods and comparing
+  the resulting quantile estimates.
+
+### Fixed
+
+- **A model with fewer than two parameters no longer returns garbage covariance, standard errors,
+  or correlation from R.** `GetCovarianceMatrix` throws below two parameters in C#, and R does not
+  zero-fill a freshly allocated numeric vector, so the old fixture glue was handing back whatever
+  was already sitting in that memory rather than the zeros it appeared to return.
+- **A failed fit now names the estimator and the optimizer in its error**, rather than the internal
+  message "failed for a fixture case" that leaked through from the pre-phase glue.
+- **`confint()`'s default level agreed between R and Python before this shipped, not after**: both
+  now default to 0.95, matching base R's `confint()` convention.
+
+### Documentation
+
+- A reference page and worked example for each of the five new functions.
+
 ## [0.3.0] - 2026-08-11
 
 The data and model layer. Censored observations, nonstationary trends, and custom parameter
@@ -167,6 +211,8 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cameronbracken/corehydro/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/cameronbracken/corehydro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cameronbracken/corehydro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cameronbracken/corehydro/releases/tag/v0.1.0

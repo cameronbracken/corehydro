@@ -541,3 +541,24 @@ remain the only permanent presentation-only skips. Carried port-side notes: seed
 runs with `thinning_interval > 1` are still not oracle-guaranteed (every shipped fixture uses
 thin=1), and the B17C interval-censored bootstrap carries a measured, reproducible GMM
 stopping-rule divergence documented in the issues log.
+
+The estimation layer (branch `surface-estimation-layer`, August 2026) put a model built with any
+`model_*()` constructor within one function call of a fit. The four already-ported C++ estimators
+-- `MaximumLikelihood`, `MaximumAPosteriori`, `BayesianAnalysis`, `GeneralizedMethodOfMoments` --
+now run behind a single shared entry point, `core/include/corehydro/estimation/support/
+fit_runner.hpp`: the cpp11 glue, the pybind11 glue, the C++ fixture runner, and the dotnet oracle
+emitter all serialize to the same JSON construct and call it, so a fixture case, the oracle gate,
+and a user's `fit_mle()` call are the same code path. The four verbs are `fit_mle()`, `fit_map()`,
+`fit_bayesian()`, and `fit_gmm()`, each returning a `corehydro_fit` / `Fit` object with
+`coef`/`parameters`, `confint()`, `AIC()`, `logLik()`, `print()`/`summary()`, plus
+`fit_diagnostics()` (leverage, PSIS-LOO influence, and prior influence off a MAP, Bayesian, or GMM
+fit) and `quantile_variance()` (the delta-method variance of a fitted quantile off a GMM fit).
+Three fixes landed alongside the new surface: the R glue no longer returns uninitialized memory in
+place of zeros for a sub-two-parameter covariance, a failed fit's error names the estimator and
+optimizer instead of the internal fixture-glue message that used to leak through, and `confint()`'s
+default level now agrees at 0.95 between R and Python. Everything is fixture-validated in
+C++/R/Python and reproduced against the real Numerics/RMC.BestFit libraries by the dotnet oracle
+gate; the version bump to **0.4.0** records it. Final numbers: **ctest 80/80; oracle gate 4623
+reproduced, 0 failed, 11 skipped; testthat 4624/0; pytest 928**; `R CMD check --as-cran` holds at
+three NOTEs (the CRAN-incoming non-FOSS-license note, the long-path note listing vendored core
+headers, and a local HTML-tidy-version note) with no WARNING.
