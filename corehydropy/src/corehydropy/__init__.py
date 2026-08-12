@@ -9,7 +9,25 @@ from __future__ import annotations
 import numpy as np
 
 from ._core import GeneralizedExtremeValue, gev_fit as _gev_fit
-from .distributions import Distribution, distribution_names
+from .distributions import (
+    Distribution,
+    dist_competing_risks,
+    dist_empirical,
+    dist_kde,
+    dist_mixture,
+    dist_truncated,
+    distribution_names,
+)
+from .copula import Copula, copula_fit, copula_names
+from .mvdist import (
+    MultivariateDistribution,
+    mvdist_bivariate_empirical,
+    mvdist_dirichlet,
+    mvdist_multinomial,
+    mvdist_names,
+    mvdist_normal,
+    mvdist_student_t,
+)
 from .data import (
     AnalysisData,
     analysis_data,
@@ -86,6 +104,21 @@ __all__ = [
     "GeneralizedExtremeValue",
     "Distribution",
     "distribution_names",
+    "dist_truncated",
+    "dist_mixture",
+    "dist_competing_risks",
+    "dist_empirical",
+    "dist_kde",
+    "Copula",
+    "copula_fit",
+    "copula_names",
+    "MultivariateDistribution",
+    "mvdist_normal",
+    "mvdist_student_t",
+    "mvdist_dirichlet",
+    "mvdist_multinomial",
+    "mvdist_bivariate_empirical",
+    "mvdist_names",
     "dgev",
     "pgev",
     "qgev",

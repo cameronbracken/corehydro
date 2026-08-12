@@ -89,4 +89,7 @@ PYBIND11_MODULE(_core, m) {
 
     // The data layer (DataFrame summaries, model log-likelihood, threshold diagnostics).
     register_data(m);
+
+    // The shared distribution-spec runner (composite distributions, copulas, multivariate).
+    register_dist_spec(m);
 }
