@@ -583,7 +583,10 @@ def dist_kde(data, kernel: str = "Gaussian", bandwidth: float | None = None, bou
     bandwidth : float, optional
         The kernel bandwidth; ``None`` (the default) uses Silverman's rule of thumb.
     bounded_by_data : bool, default True
-        Whether density outside the observed data range is truncated to zero.
+        Whether the reported minimum and maximum are the smallest and largest observation
+        (``True``, the default) or extend three bandwidths past each. Those bounds gate
+        ``Distribution.cdf()`` and ``Distribution.quantile()``. The density is summed
+        wherever you ask it, either way.
 
     Returns
     -------

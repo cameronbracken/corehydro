@@ -15,8 +15,10 @@ dist_kde(data, kernel = "Gaussian", bandwidth = NULL, bounded_by_data = TRUE)
 \item{bandwidth}{the kernel bandwidth; \code{NULL} (the default) uses Silverman's rule of
 thumb.}
 
-\item{bounded_by_data}{whether density outside the observed data range is truncated to
-zero (\code{TRUE}, the default).}
+\item{bounded_by_data}{whether the reported minimum and maximum are the smallest and
+largest observation (\code{TRUE}, the default) or extend three bandwidths past each. Those
+bounds gate \code{\link[=dist_cdf]{dist_cdf()}} and \code{\link[=dist_quantile]{dist_quantile()}}. The density is summed wherever you ask
+it, either way.}
 }
 \value{
 a \code{corehydro_dist} of family \code{"KernelDensity"}, accepted by every \verb{dist_*()}

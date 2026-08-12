@@ -431,8 +431,10 @@ dist_empirical <- function(x, p, p_transform = "NormalZ", p_descending = FALSE) 
 #'   `"Triangular"`, or `"Uniform"`.
 #' @param bandwidth the kernel bandwidth; `NULL` (the default) uses Silverman's rule of
 #'   thumb.
-#' @param bounded_by_data whether density outside the observed data range is truncated to
-#'   zero (`TRUE`, the default).
+#' @param bounded_by_data whether the reported minimum and maximum are the smallest and
+#'   largest observation (`TRUE`, the default) or extend three bandwidths past each. Those
+#'   bounds gate [dist_cdf()] and [dist_quantile()]. The density is summed wherever you ask
+#'   it, either way.
 #' @return a `corehydro_dist` of family `"KernelDensity"`, accepted by every `dist_*()`
 #'   verb.
 #' @export
