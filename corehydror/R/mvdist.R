@@ -173,6 +173,20 @@ mvdist_multinomial <- function(trials, probabilities) {
 #' @export
 mvdist_bivariate_empirical <- function(x1, x2, p, x1_transform = "None", x2_transform = "None",
                                        p_transform = "None") {
+  # The accepted strings are exactly `parse_bivariate_transform`'s in
+  # core/include/corehydro/numerics/distributions/support/dist_spec.hpp. Checked here, as
+  # dist_empirical(p_transform =) and dist_kde(kernel =) check theirs, so a typo names the
+  # argument at construction instead of erroring on the first verb.
+  tf_choices <- c("None", "Logarithmic", "NormalZ")
+  check_transform <- function(value, what) {
+    if (!is.character(value) || length(value) != 1L || !value %in% tf_choices) {
+      stop(sprintf("`%s` must be one of %s", what, paste(tf_choices, collapse = ", ")),
+           call. = FALSE)
+    }
+  }
+  check_transform(x1_transform, "x1_transform")
+  check_transform(x2_transform, "x2_transform")
+  check_transform(p_transform, "p_transform")
   p <- as.matrix(p)
   if (nrow(p) != length(x1) || ncol(p) != length(x2)) {
     stop("`p` must be a length(x1) x length(x2) matrix", call. = FALSE)

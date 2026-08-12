@@ -13,7 +13,7 @@ import json
 import numpy as np
 
 from . import _core
-from .distributions import Distribution
+from .distributions import Distribution, _single_number
 
 __all__ = ["Copula", "copula_fit", "copula_names"]
 
@@ -100,8 +100,7 @@ class Copula:
     def __init__(self, family: str, theta: float, df: float | None = None, margin_x=None, margin_y=None):
         if family not in _COPULA_FAMILIES:
             raise ValueError(f"family must be one of {', '.join(_COPULA_FAMILIES)}")
-        if not np.isfinite(theta):
-            raise ValueError("theta must be a single finite number")
+        theta = _single_number(theta, "`theta` must be a single finite number")
         if family == "StudentT" and df is None:
             raise ValueError("df is required for the StudentT copula")
         margin_x = _check_margin(margin_x, "margin_x")

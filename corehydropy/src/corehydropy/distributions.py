@@ -366,6 +366,24 @@ def _as_list(data) -> list[float]:
     return [float(v) for v in np.asarray(data, dtype=float).ravel()]
 
 
+def _single_number(value, message: str, finite: bool = True) -> float:
+    """Internal: R's `!is.numeric(x) || length(x) != 1L || !is.finite(x)` guard, spelled for
+    Python and shared with copula.py and mvdist.py so both languages reject the same arguments
+    with the same wording. Without it a list, an array, or a string reaches numpy or float()
+    first, and the user gets "The truth value of an array with more than one element is
+    ambiguous" or "float() argument must be a string or a real number" instead of a message
+    naming the argument."""
+    if isinstance(value, (str, bytes)) or np.ndim(value) != 0:
+        raise ValueError(message)
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(message) from None
+    if finite and not np.isfinite(out):
+        raise ValueError(message)
+    return out
+
+
 def _as_spec(d: Distribution) -> dict:
     """Internal: a Distribution's own spec grammar, parsed back to a dict so it can be embedded
     as a nested component/base/marginal of another spec (dist_truncated(), dist_mixture(), ...,
@@ -413,8 +431,9 @@ def dist_truncated(d: Distribution, min: float, max: float) -> Distribution:
     """
     if not isinstance(d, Distribution):
         raise TypeError("`d` must be a Distribution")
-    min = float(min)
-    max = float(max)
+    message = "`min` and `max` must each be a single number"
+    min = _single_number(min, message, finite=False)
+    max = _single_number(max, message, finite=False)
     if min >= max:
         raise ValueError("`min` must be less than `max`")
     spec = {"family": "TruncatedDistribution", "base": _as_spec(d), "bounds": [min, max]}

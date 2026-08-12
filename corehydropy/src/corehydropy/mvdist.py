@@ -29,6 +29,12 @@ _MVDIST_FAMILIES = (
     "MultivariateNormal", "MultivariateStudentT", "Dirichlet", "Multinomial", "BivariateEmpirical",
 )
 
+# Exactly `parse_bivariate_transform`'s accepted strings in
+# core/include/corehydro/numerics/distributions/support/dist_spec.hpp. Checked at construction, as
+# dist_empirical(p_transform=) and dist_kde(kernel=) check theirs, so a typo names the argument
+# instead of erroring on the first verb.
+_BIVARIATE_TRANSFORM_CHOICES = ("None", "Logarithmic", "NormalZ")
+
 
 def mvdist_names() -> list[str]:
     """List the supported multivariate distribution families.
@@ -543,6 +549,12 @@ def mvdist_bivariate_empirical(
     >>> mv.cdf([1.5, 1.5]) >= 0
     True
     """
+    for value, what in ((x1_transform, "x1_transform"), (x2_transform, "x2_transform"),
+                        (p_transform, "p_transform")):
+        if value not in _BIVARIATE_TRANSFORM_CHOICES:
+            raise ValueError(
+                f"`{what}` must be one of {', '.join(_BIVARIATE_TRANSFORM_CHOICES)}"
+            )
     x1_v = [float(v) for v in np.asarray(x1, dtype=float).ravel()]
     x2_v = [float(v) for v in np.asarray(x2, dtype=float).ravel()]
     p_arr = np.asarray(p, dtype=float)
