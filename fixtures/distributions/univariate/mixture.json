@@ -84,7 +84,7 @@
     },
     {
       "name": "moments_log_pdf_log_likelihood_and_seeded_draws",
-      "note": "The verbs the R/Python distribution surface exposes that no other Mixture case reaches: Median, Mode, LogPDF, the summed LogLikelihood over a sample, and the seeded draw stream from Mixture's own GenerateRandomValues override (component selection, not the base InverseCDF-of-a-uniform path). Same three components and weights as three_normal_pdf_cdf above. Skewness and Kurtosis are deliberately NOT asserted: the port's Mixture::compute_moments integrates with adaptive Gauss-Kronrod where C# ComputeMoments calls the 1000-step CentralMoments(int) overload, so the two land ~2.5e-7 / ~8.7e-6 apart. NO oracle_skip and NO loosened tolerance -- see docs/upstream-csharp-issues.md.",
+      "note": "The verbs the R/Python distribution surface exposes that no other Mixture case reaches: Median, Mode, LogPDF, the summed LogLikelihood over a sample, and the seeded draw stream from Mixture's own GenerateRandomValues override (component selection, not the base InverseCDF-of-a-uniform path). Same three components and weights as three_normal_pdf_cdf above, plus all four central moments. The moments were unassertable until compute_moments() was switched from adaptive Gauss-Kronrod to central_moments(1000), the overload C# ComputeMoments actually calls; measured agreement is now 9.7e-16 (mean), 4.7e-15 (sd), 6.1e-13 (skewness) and 1.8e-14 (kurtosis) relative, against the 1e-10 pins here. The old quadrature missed by 2.6e-8 to 2.5e-5 relative, so these pins catch a regression to it with room to spare.",
       "construct": {
         "components": [
           {"target": "Normal", "params": [10, 2]},
@@ -95,12 +95,16 @@
       },
       "assertions": [
         { "method": "median",         "args": [], "expected": 21.27465332194634, "mode": "abs", "tol": 1e-8,  "source": "curated via oracle_emitter --dump" },
-        { "method": "mode",           "args": [], "expected": 29.99999990517664, "mode": "abs", "tol": 1e-6,  "source": "curated via oracle_emitter --dump" },
+        { "method": "mode",           "args": [], "expected": 29.99999990517664, "mode": "abs", "tol": 1e-9,  "source": "curated via oracle_emitter --dump" },
         { "method": "log_pdf",        "args": [20], "expected": -2.4628973326762438, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
         { "method": "log_likelihood", "args": [8, 12, 19, 21, 28, 33], "expected": -19.168253138297175, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
         { "method": "random_value",   "args": [5, 42, 0], "expected": 20.82933648395096, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
         { "method": "random_value",   "args": [5, 42, 1], "expected": 25.48823684287538, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
-        { "method": "random_value",   "args": [5, 42, 4], "expected": 9.72760591980181, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" }
+        { "method": "random_value",   "args": [5, 42, 4], "expected": 9.72760591980181, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "mean",           "args": [], "expected": 21.999999995011922, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
+        { "method": "sd",             "args": [], "expected": 9.481575923790889, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
+        { "method": "skewness",       "args": [], "expected": -0.00985460360386465, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
+        { "method": "kurtosis",       "args": [], "expected": 1.8641595464622873, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" }
       ]
     }
   ]

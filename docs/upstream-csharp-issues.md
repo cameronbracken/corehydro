@@ -167,14 +167,17 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
 
 ## CONSISTENCY — CentralMoments(1000) resolves to the int-steps (trapezoidal) overload
 
-- **Where:** e.g. `TruncatedDistribution.cs`, `Mixture.cs` calling `CentralMoments(1000)`; overloads
-  in `UnivariateDistributionBase.cs` (`CentralMoments(int steps=300)` vs `CentralMoments(double
-  tolerance=1e-8)`).
+- **Where:** `TruncatedDistribution.cs` (four moment getters), `Mixture.cs` and `CompetingRisks.cs`
+  calling `CentralMoments(1000)`; overloads in `UnivariateDistributionBase.cs`
+  (`CentralMoments(int steps=300)` vs `CentralMoments(double tolerance=1e-8)`).
 - **What:** passing the integer literal `1000` binds to the **fixed-step trapezoidal** overload, not
   the adaptive-tolerance one. This may be intentional, but the two overloads with very different
   argument meanings (step count vs tolerance) are an easy foot-gun.
-- **Port handling:** the C++ uses the adaptive AdaptiveGaussKronrod integrator; reproduces the C#
-  values to fixture tolerance.
+- **Port handling:** the C++ used to call the adaptive AdaptiveGaussKronrod integrator here and
+  reproduced the C# only to the loose fixture tolerances then in force. It now calls
+  `central_moments(1000)`, the same overload C# binds to. See the FIXED entry near the end of this
+  file ("three classes computed their central moments with adaptive Gauss-Kronrod") for the
+  measured before/after and the tightened pins. The foot-gun argument below is unaffected.
 - **Suggested action:** verify the intent; consider renaming one overload (e.g.
   `CentralMomentsBySteps` / `CentralMomentsByTolerance`) to remove the ambiguity.
 
@@ -1688,74 +1691,97 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   any port change, since it is the same last-ULP reassociation sensitivity the analysis-curve
   findings above describe.
 
-## BUG (C++ port only, no C# counterpart) — `Mixture` computes its central moments with adaptive Gauss-Kronrod where C# uses the 1000-step trapezoidal overload
+## BUG (C++ port only, no C# counterpart) — three classes computed their central moments with adaptive Gauss-Kronrod where C# uses the 1000-step trapezoidal overload (FIXED, ported)
 
-- **Where:** `Numerics/Distributions/Univariate/Mixture.cs` @ 2a0357a, `ComputeMoments()` line 312,
-  against `core/include/corehydro/numerics/distributions/mixture.hpp`'s `compute_moments()`.
-  Surfaced writing `fixtures/distributions/univariate/mixture.json`'s
+- **Where:** `CentralMoments(1000)` is called at `Numerics/Distributions/Univariate/Mixture.cs` @
+  2a0357a line 312, `CompetingRisks.cs` line 217, and `TruncatedDistribution.cs` lines 140, 171,
+  185 and 199 (its four moment getters each fill `u` from the same call). The counterparts are
+  `compute_moments()` in `core/include/corehydro/numerics/distributions/mixture.hpp`,
+  `competing_risks.hpp` and `truncated_distribution.hpp`. Surfaced writing
+  `fixtures/distributions/univariate/mixture.json`'s
   `moments_log_pdf_log_likelihood_and_seeded_draws` case, the first fixture to pin Mixture skewness
-  or kurtosis at a tight tolerance.
-- **What:** C# `ComputeMoments()` calls `CentralMoments(1000)` — the `int steps` overload on
-  `UnivariateDistributionBase`, a 1000-bin `Stratify` midpoint/trapezoid sum over
-  `[InverseCDF(1e-8), InverseCDF(1-1e-8)]`. The port instead calls adaptive Gauss-Kronrod at
-  relative tolerance 1e-8, mirroring the *other* base overload, `CentralMoments(double tolerance)`.
-  Its own comment says so: "Mirrors C# CentralMoments(double tolerance = 1e-8) from the base class."
-  Both are legitimate quadratures of the same integrals and they agree to about six digits, so
-  nothing downstream is visibly wrong, but they are not the same number.
+  or kurtosis at a tight tolerance; the review that followed found the other two call sites.
+- **What:** C# passes the integer literal `1000`, which binds to the `int steps` overload on
+  `UnivariateDistributionBase` — a 1000-bin `Stratify` midpoint/trapezoid sum over
+  `[InverseCDF(1e-8), InverseCDF(1-1e-8)]`. All three C++ sites instead called adaptive
+  Gauss-Kronrod at relative tolerance 1e-8, mirroring the *other* base overload,
+  `CentralMoments(double tolerance)`. Mixture's own comment said so ("Mirrors C#
+  CentralMoments(double tolerance = 1e-8) from the base class"), and TruncatedDistribution
+  compounded it by integrating over `[min, max]` rather than the two 1e-8 quantiles. Both are
+  legitimate quadratures of the same integrals and they agree to about six digits, so nothing
+  downstream looked wrong — but they are not the same number.
 - **Measured**, on the three-component Normal mixture `three_normal_pdf_cdf` uses
-  (`0.3*N(10,2) + 0.2*N(20,1) + 0.5*N(30,5)`), C# first and the port second:
-  - mean `21.999999995011922` vs `21.999999428497716`
-  - sd `9.481575923790889` vs `9.4815600742053032`
-  - skewness `-0.00985460360386465` vs `-0.0098548559431184124` (2.5e-7 absolute)
-  - kurtosis `1.8641595464622873` vs `1.8641508578822412` (8.7e-6 absolute)
-
-  Calling the port's own `central_moments(1000)` directly on the same object returns
-  `21.999999995011901 / 9.4815759237909329 / -0.009854603603858628 / 1.8641595464622547` — the C#
-  values to within 1e-14 relative. So the divergence is entirely the choice of overload, not a
-  defect in either quadrature.
+  (`0.3*N(10,2) + 0.2*N(20,1) + 0.5*N(30,5)`), C# first and the old Gauss-Kronrod port second:
+  - mean `21.999999995011922` vs `21.999999428497716` (2.6e-8 relative)
+  - sd `9.481575923790889` vs `9.4815600742053032` (1.7e-6 relative)
+  - skewness `-0.00985460360386465` vs `-0.0098548559431184124` (2.5e-5 relative)
+  - kurtosis `1.8641595464622873` vs `1.8641508578822412` (4.7e-6 relative)
 - **Why no earlier fixture caught it:** the only Mixture moment oracles were `mean` (`22`, abs
   1e-4) and `sd` (`9.481561`, abs 1e-3) — both far too loose to separate the two quadratures. The
-  skewness/kurtosis verbs had no oracle at all until this task.
-- **Port handling:** the new case pins `median`, `mode`, `log_pdf`, `log_likelihood` and the seeded
-  draws, and simply **does not assert** `skewness` or `kurtosis`. There is **NO `oracle_skip` and
-  NO loosened tolerance**, following the Task 9 `TotalFunctionEvaluations` precedent above.
-- **Suggested action:** a one-line fix in `mixture.hpp` — replace the four `agk::integrate` calls in
-  `compute_moments()` with `central_moments(1000)` — would make all four moments reproduce and let
-  the two dropped assertions be pinned exactly. It is deliberately NOT taken here: this task's remit
-  was fixtures and runner arms, and changing a shipped user-facing verb's numerics belongs in its
-  own reviewed change. Both existing loose `mean`/`sd` pins would still pass after it.
+  skewness/kurtosis verbs had no oracle at all. CompetingRisks pinned all four moments at the exact
+  C# 1000-step values but at `abs 1e-2`, and TruncatedDistribution pinned hand-rounded five-digit
+  literals at `abs 1e-4`.
+- **Status: FIXED and ported.** All three `compute_moments()` bodies now call
+  `central_moments(1000)` — the already-ported trapezoidal overload on the C++ base class — and
+  return the C# values to 1e-16 to 1e-11 relative. The four `agk::integrate` calls are gone from
+  each file (with the now-unused `adaptive_gauss_kronrod.hpp` include). The fixtures were tightened
+  in the same change: Mixture's new case pins all four moments at `rel 1e-10` (measured 9.7e-16 to
+  6.1e-13), the thirteen CompetingRisks moment pins went from `abs 1e-2` to `rel 1e-9` (measured
+  1.3e-16 to 4.1e-11, the loosest being the Weibull/Gamma skewness), and
+  TruncatedDistribution's moments case was re-pinned from the rounded literals to the full-precision
+  C# values at `abs`/`rel 1e-12` (measured 3.3e-16 to 2.0e-14). No `oracle_skip` was added and no
+  tolerance was loosened anywhere.
+- **Note for the pre-existing CentralMoments overload entry above** (the CONSISTENCY entry naming
+  `TruncatedDistribution.cs` and `Mixture.cs`): its "Port handling" line said the C++ used adaptive
+  Gauss-Kronrod and "reproduces the C# values to fixture tolerance." That was true only at the old
+  loose tolerances. It no longer applies — the port now calls the same overload C# does. The
+  upstream-facing half of that entry (the argument that two overloads distinguished only by
+  `int` vs `double` are a foot-gun) still stands.
 
-## FIDELITY (C++ port only) — `Empirical.Mode` and `KernelDensity.Mode` are grid searches where C# maximizes with BrentSearch
+## FIDELITY (C++ port only) — five `Mode` implementations approximated the BrentSearch maximization C# performs (FIXED, ported)
 
-- **Where:** `Numerics/Distributions/Univariate/EmpiricalDistribution.cs` @ 2a0357a `Mode` (line
-  280) and `KernelDensity.cs` `Mode` (line 320), against
-  `core/include/corehydro/numerics/distributions/empirical_distribution.hpp` (line 194) and
-  `kernel_density.hpp` (line 190). Surfaced writing the `palisades_moments_density_and_seeded_draws`
-  and `gaussian_moments_density_and_seeded_draws` cases.
-- **What:** C# builds `new BrentSearch(PDF, InverseCDF(0.001), InverseCDF(0.999))` and calls
-  `Maximize()`. Both ports instead scan a fixed 1000-point uniform grid over the same interval and
-  return the best node — a documented shortcut, stated in the header comments themselves
-  ("Use golden-section search on a fine grid for simplicity; this is not in the fixture").
-- **Measured**, C# first and the port second:
-  - Empirical, the 99-point Palisades at-risk record: `15198.510496728823` vs `8669.7200000000012`.
-  - KernelDensity, Gaussian kernel over the 48-point Tippecanoe record: `13470.180323329003` vs
-    `13478.103364870844`.
+- **Where:** C# builds `new BrentSearch(PDF, InverseCDF(0.001), InverseCDF(0.999))`, calls
+  `Maximize()` and returns `BestParameterSet.Values[0]` in five classes @ 2a0357a:
+  `EmpiricalDistribution.cs` line 280, `KernelDensity.cs` line 320, `Mixture.cs` line 337,
+  `CompetingRisks.cs` line 241 and `TruncatedDistribution.cs` line 154. The counterparts are
+  `mode()` in `empirical_distribution.hpp`, `kernel_density.hpp`, `mixture.hpp`,
+  `competing_risks.hpp` and `truncated_distribution.hpp`. Surfaced writing the
+  `palisades_moments_density_and_seeded_draws` and `gaussian_moments_density_and_seeded_draws`
+  cases.
+- **What:** Empirical and KernelDensity scanned a fixed 1000-point uniform grid over the same
+  interval and returned the best node; Mixture and CompetingRisks ran a 200-iteration ternary
+  search, which is only valid on a unimodal surface; TruncatedDistribution did not search at all,
+  clamping the *base* distribution's mode into `[min, max]`. Each was a documented shortcut —
+  `empirical_distribution.hpp` said so outright ("Use golden-section search on a fine grid for
+  simplicity; this is not in the fixture").
+- **Measured**, C# first, the old approximation second, and the same object driven through the
+  port's own `BrentSearch::maximize()` third:
 
-  The Empirical gap is large because the surface being maximized is itself jagged: `Empirical.PDF`
-  is a finite-difference derivative of a piecewise-linear CDF, so `BrentSearch.Maximize` stops at
-  whichever local optimum its bracket happens to enclose while the grid scan finds the global one.
-  Neither answer is more "correct" than the other; the C# value is optimizer-defined. The
-  KernelDensity gap is small only because that PDF is smooth and near-unimodal, and it is still one
-  grid step wide.
-- **Port handling:** both new cases pin every other moment (`mean`, `median`, `sd`, `skewness`,
-  `kurtosis` all reproduce to 1e-8 relative) plus `log_pdf`, `log_likelihood` and the seeded draws,
-  and simply **do not assert** `mode`. **NO `oracle_skip`, NO loosened tolerance.** `Mixture.Mode`
-  is the same shortcut (a ternary search) but does reproduce on the smooth three-Normal surface, so
-  it IS pinned, at abs 1e-6.
-- **Suggested action:** route all three `mode()` implementations through the port's own
-  `BrentSearch` (`core/include/corehydro/numerics/math/optimization/brent_search.hpp`, which already
-  has `maximize()`), then pin the two dropped assertions. Same reasoning as the Mixture entry above
-  for why it is not done here.
+  | | C# | old port | port via BrentSearch |
+  |---|---|---|---|
+  | Empirical, 99-point Palisades at-risk record | `15198.510496728823` | `8669.7200000000012` | `15198.510496728823` (bit-exact) |
+  | Mixture, three-Normal | `29.99999990517664` | `29.99999990850224` | `29.99999990517664` (bit-exact) |
+  | KernelDensity, Gaussian over 48-point Tippecanoe | `13470.180323329207` | `13478.103364870844` | `13470.18032360422` (2.0e-11 relative) |
+  | CompetingRisks, two Normals, min rule | `97.38075467325922` | `97.380754651639961` | `97.380754673299492` (4.4e-13 relative) |
+
+  The Empirical gap is the large one because the surface is jagged: `Empirical.PDF` is a
+  finite-difference derivative of a piecewise-linear CDF, so Brent stops at whichever local optimum
+  its bracket encloses while a grid scan finds a different one. An earlier reading of this called
+  the C# value "optimizer-defined" and argued neither answer was more correct. That argument is
+  disproved by the third column: running the *port's own* Brent over the *same* objective and the
+  *same* interval reproduces C# bit-for-bit on exactly the case used to make it. The value is
+  defined by the algorithm, and the algorithm was already ported.
+- **Status: FIXED and ported.** All five `mode()` bodies now construct
+  `math::optimization::BrentSearch(pdf, inverse_cdf(0.001), inverse_cdf(0.999))`, call `maximize()`
+  and return `best_parameter()`. `brent_search.hpp` includes only `tools.hpp`, so no include cycle
+  is created. Empirical and KernelDensity keep their pre-existing `lo >= hi` guard: those classes
+  validate lazily, so an invalid parameter set can leave the two quantiles crossed, and both the C#
+  and the C++ `BrentSearch` constructor throw on `upper < lower`. No `*_invalid` fixture case
+  reaches `mode()`. The fixtures gained the two assertions this entry used to justify dropping:
+  Empirical `mode` at `rel 1e-15` (the agreement is bit-exact; the tolerance is nominal insurance
+  against floating-point contraction on another platform) and KernelDensity `mode` at `rel 1e-9`.
+  TruncatedDistribution's existing `mode` pin was re-pinned to the full-precision C# value and
+  agrees to 1 ulp. No `oracle_skip`, no loosened tolerance.
 
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 

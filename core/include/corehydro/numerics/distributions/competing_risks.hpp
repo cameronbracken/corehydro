@@ -13,8 +13,11 @@
 //   CentralDifference + CalculateStepSize(order=1), see numerical_derivative() below).
 // InverseCDF: Brent root-finding on CDF(y) − p = 0; bracket from per-component quantiles.
 //   On solve failure, falls back to bisection on [minimum, maximum].
-// Moments: AGK numerical integration over [InverseCDF(1e-8), InverseCDF(1-1e-8)],
-//   mirroring C# CentralMoments(1000) (trapezoidal int); AGK reproduces to oracle tolerance.
+// Moments: central_moments(1000), the fixed-step trapezoidal overload the C# integer literal
+//   in `CentralMoments(1000)` binds to (CompetingRisks.cs line 217). This file used to call
+//   adaptive Gauss-Kronrod instead, which agreed with the C# only to about six digits.
+// Mode: BrentSearch maximizing the PDF over [InverseCDF(0.001), InverseCDF(0.999)]
+//   (CompetingRisks.cs line 241), replacing an earlier ternary search.
 // IEstimation: MLE via Nelder-Mead on total log-likelihood (mirrors C# MLE()); initial
 //   values from per-component estimate() if available, else sample statistics.
 //   Only MaximumLikelihood is supported; others throw (mirrors C# Estimate()).
@@ -79,7 +82,7 @@
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
 #include "corehydro/numerics/distributions/empirical_distribution.hpp"
 #include "corehydro/numerics/distributions/multivariate/multivariate_normal.hpp"
-#include "corehydro/numerics/math/integration/adaptive_gauss_kronrod.hpp"
+#include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
 #include "corehydro/numerics/math/rootfinding/brent.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
@@ -217,19 +220,14 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
     }
     double median() const override { return inverse_cdf(0.5); }
     double mode() const override {
-        // Mirrors C#: BrentSearch.Maximize(PDF, InverseCDF(0.001), InverseCDF(0.999)).
-        // Use ternary search as an approximation (exact for unimodal distributions).
+        // Mirrors C# Mode (CompetingRisks.cs line 241): BrentSearch maximizing the PDF over
+        // [InverseCDF(0.001), InverseCDF(0.999)], returning BestParameterSet.Values[0].
+        // This used to ternary-search the same interval, which lands ~2e-8 away.
         double a = inverse_cdf(0.001);
         double b = inverse_cdf(0.999);
-        for (int i = 0; i < 200; ++i) {
-            double m1 = a + (b - a) / 3.0;
-            double m2 = b - (b - a) / 3.0;
-            if (pdf(m1) < pdf(m2))
-                a = m1;
-            else
-                b = m2;
-        }
-        return 0.5 * (a + b);
+        math::optimization::BrentSearch brent([this](double x) { return pdf(x); }, a, b);
+        brent.maximize();
+        return brent.best_parameter();
     }
     double standard_deviation() const override {
         if (!moments_computed_) compute_moments();
@@ -714,35 +712,18 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
         return (std::isnan(result) || std::isinf(result)) ? kLogZero : result;
     }
 
-    // AGK numerical moments over [InverseCDF(1e-8), InverseCDF(1-1e-8)].
-    // Mirrors C# CentralMoments(1000) (trapezoidal int); AGK reproduces to oracle tolerance.
+    // Mirrors C# ComputeMoments() (CompetingRisks.cs line 217): CentralMoments(1000). The
+    // integer literal binds to the base class's fixed-step TRAPEZOIDAL overload
+    // (`CentralMoments(int steps)`), not the adaptive-tolerance one -- see
+    // docs/upstream-csharp-issues.md. This file used to call adaptive Gauss-Kronrod here,
+    // which agreed with C# only to about six digits; the 1000-step trapezoid reproduces it
+    // to ~1e-12 relative.
     void compute_moments() const {
-        namespace agk = math::integration;
-        const double eps = 1e-8;
-        double a = inverse_cdf(eps);
-        double b = inverse_cdf(1.0 - eps);
-        if (a >= b) {
-            u_[0] = a;
-            u_[1] = u_[2] = u_[3] = kNaN;
-            moments_computed_ = true;
-            return;
-        }
-        const double tol = 1e-8;
-        u_[0] = agk::integrate([this](double x) { return x * pdf(x); }, a, b, tol, tol);
-        const double mu = u_[0];
-        u_[1] = std::sqrt(agk::integrate(
-            [this, mu](double x) { return (x - mu) * (x - mu) * pdf(x); }, a, b, tol, tol));
-        const double s = u_[1];
-        u_[2] = agk::integrate(
-            [this, mu, s](double x) {
-                double z = (x - mu) / s;
-                return z * z * z * pdf(x);
-            }, a, b, tol, tol);
-        u_[3] = agk::integrate(
-            [this, mu, s](double x) {
-                double z = (x - mu) / s;
-                return z * z * z * z * pdf(x);
-            }, a, b, tol, tol);
+        auto mom = central_moments(1000);
+        u_[0] = mom[0];
+        u_[1] = mom[1];
+        u_[2] = mom[2];
+        u_[3] = mom[3];
         moments_computed_ = true;
     }
 

@@ -35,17 +35,18 @@
     },
     {
       "name": "normal_0p5_0p2_bounds_0_1_moments",
+      "note": "The four central moments and Mode of a Normal(0.5, 0.2) truncated to [0, 1]. Re-pinned from hand-rounded five-digit literals at abs 1e-4 to the full-precision C# values once compute_moments() moved to central_moments(1000) -- the overload the C# moment getters call -- and mode() moved to the BrentSearch maximization of the truncated PDF that C# does (it used to clamp the base distribution's mode into the bounds). Measured agreement: 3.3e-16 absolute (mean), 5.4e-15 relative (sd), 7.1e-15 absolute (skewness, which is zero to rounding), 2.0e-14 relative (kurtosis), and 1 ulp (mode).",
       "construct": {
         "base": { "target": "Normal", "params": [0.5, 0.2] },
         "bounds": [0, 1]
       },
       "assertions": [
-        { "method": "mean",     "args": [], "expected": 0.5,     "mode": "abs", "tol": 1e-4 },
+        { "method": "mean",     "args": [], "expected": 0.5000000000000003,     "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
         { "method": "median",   "args": [], "expected": 0.5,     "mode": "abs", "tol": 1e-4 },
-        { "method": "mode",     "args": [], "expected": 0.5,     "mode": "abs", "tol": 1e-4 },
-        { "method": "sd",       "args": [], "expected": 0.19091, "mode": "abs", "tol": 1e-4 },
-        { "method": "skewness", "args": [], "expected": 0,       "mode": "abs", "tol": 1e-4 },
-        { "method": "kurtosis", "args": [], "expected": 2.62422, "mode": "abs", "tol": 1e-4 },
+        { "method": "mode",     "args": [], "expected": 0.4999999999999999,     "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "sd",       "args": [], "expected": 0.19091944320518664,    "mode": "rel", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "skewness", "args": [], "expected": -6.369037242048847e-15, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "kurtosis", "args": [], "expected": 2.6241978216496076,     "mode": "rel", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
         { "method": "minimum",  "args": [], "expected": 0, "mode": "equal" },
         { "method": "maximum",  "args": [], "expected": 1, "mode": "equal" },
         { "method": "parameters_valid", "args": [], "expected": true, "mode": "bool" }

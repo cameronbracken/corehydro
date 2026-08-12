@@ -229,6 +229,8 @@ Rscript -e 'testthat::test_local("corehydror")'
 # Python (use the pixi env: `pixi run test-py`, or directly:)
 pixi run python -m pip install --force-reinstall --no-deps ./corehydropy
 pixi run python -m pytest corehydropy/tests -q
+# pytest reads the fixtures MATERIALIZED into site-packages by pip, not the repo symlink, so a
+# fixture edit means nothing to a pytest count until the pip install above is re-run.
 # vendoring: the core + fixtures are subtree symlinks; builds dereference them (R CMD build for R,
 # tools/materialize_core.py for Python). No sync/drift guard needed. To get a symlink-free tree:
 python3 tools/materialize_core.py    # (CI/release only; rewrites the working tree)

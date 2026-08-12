@@ -6,6 +6,7 @@
   "cases": [
     {
       "name": "two_normal_min_rule",
+      "note": "The moment pins in this case and in the two_normal_max_rule / weibull_gamma_min_rule cases below were tightened from abs 1e-2 to rel 1e-9 once compute_moments() moved to central_moments(1000), the overload C# ComputeMoments calls; the expected values were already the exact C# 1000-step numbers, so nothing was re-pinned. Measured agreement is 1e-16 to 1e-12 relative for the two Normal cases and 3e-12 to 4e-11 for the Weibull/Gamma one, whose skewness is the loosest of the twelve.",
       "construct": {
         "components": [
           {"target": "Normal", "params": [100.0, 10.0]},
@@ -23,11 +24,11 @@
         { "method": "quantile", "args": [0.05],  "expected": 80.54490302866887,   "mode": "abs", "tol": 1e-4  },
         { "method": "quantile", "args": [0.50],  "expected": 96.96709555244928,   "mode": "abs", "tol": 1e-4  },
         { "method": "quantile", "args": [0.95],  "expected": 112.12362757263723,  "mode": "abs", "tol": 1e-4  },
-        { "method": "mean",     "args": [],       "expected": 96.729020376712626,  "mode": "abs", "tol": 1e-2  },
+        { "method": "mean",     "args": [],       "expected": 96.729020376712626,  "mode": "rel", "tol": 1e-9  },
         { "method": "median",   "args": [],       "expected": 96.96709555244928,   "mode": "abs", "tol": 1e-4  },
-        { "method": "sd",       "args": [],       "expected": 9.6325409108296114,  "mode": "abs", "tol": 1e-2  },
-        { "method": "skewness", "args": [],       "expected": -0.1730096720442989, "mode": "abs", "tol": 1e-2  },
-        { "method": "kurtosis", "args": [],       "expected": 3.1910124193664839,  "mode": "abs", "tol": 1e-2  },
+        { "method": "sd",       "args": [],       "expected": 9.6325409108296114,  "mode": "rel", "tol": 1e-9  },
+        { "method": "skewness", "args": [],       "expected": -0.1730096720442989, "mode": "rel", "tol": 1e-9  },
+        { "method": "kurtosis", "args": [],       "expected": 3.1910124193664839,  "mode": "rel", "tol": 1e-9  },
         { "method": "minimum",  "args": [],       "expected": "-inf",              "mode": "equal"             },
         { "method": "maximum",  "args": [],       "expected": "inf",               "mode": "equal"             },
         { "method": "parameters_valid", "args": [], "expected": true,             "mode": "bool"              }
@@ -52,11 +53,11 @@
         { "method": "quantile", "args": [0.05],  "expected": 95.098496330269498,  "mode": "abs", "tol": 1e-4  },
         { "method": "quantile", "args": [0.50],  "expected": 112.31193856108573,  "mode": "abs", "tol": 1e-4  },
         { "method": "quantile", "args": [0.95],  "expected": 134.70872301827032,  "mode": "abs", "tol": 1e-4  },
-        { "method": "mean",     "args": [],       "expected": 113.27097962339199,  "mode": "abs", "tol": 1e-2  },
+        { "method": "mean",     "args": [],       "expected": 113.27097962339199,  "mode": "rel", "tol": 1e-9  },
         { "method": "median",   "args": [],       "expected": 112.31193856108573,  "mode": "abs", "tol": 1e-4  },
-        { "method": "sd",       "args": [],       "expected": 12.058136941982482,  "mode": "abs", "tol": 1e-2  },
-        { "method": "skewness", "args": [],       "expected": 0.41304059482960964, "mode": "abs", "tol": 1e-2  },
-        { "method": "kurtosis", "args": [],       "expected": 3.2263993337001309,  "mode": "abs", "tol": 1e-2  },
+        { "method": "sd",       "args": [],       "expected": 12.058136941982482,  "mode": "rel", "tol": 1e-9  },
+        { "method": "skewness", "args": [],       "expected": 0.41304059482960964, "mode": "rel", "tol": 1e-9  },
+        { "method": "kurtosis", "args": [],       "expected": 3.2263993337001309,  "mode": "rel", "tol": 1e-9  },
         { "method": "minimum",  "args": [],       "expected": "-inf",              "mode": "equal"             },
         { "method": "maximum",  "args": [],       "expected": "inf",               "mode": "equal"             },
         { "method": "parameters_valid", "args": [], "expected": true,             "mode": "bool"              }
@@ -81,11 +82,11 @@
         { "method": "quantile", "args": [0.05],  "expected": 4.6429018719147548,  "mode": "abs", "tol": 1e-4  },
         { "method": "quantile", "args": [0.50],  "expected": 25.084828365356806,  "mode": "abs", "tol": 1e-4  },
         { "method": "quantile", "args": [0.95],  "expected": 62.792041151645634,  "mode": "abs", "tol": 1e-4  },
-        { "method": "mean",     "args": [],       "expected": 28.257211563274961,  "mode": "abs", "tol": 1e-2  },
+        { "method": "mean",     "args": [],       "expected": 28.257211563274961,  "mode": "rel", "tol": 1e-9  },
         { "method": "median",   "args": [],       "expected": 25.084828365356806,  "mode": "abs", "tol": 1e-4  },
-        { "method": "sd",       "args": [],       "expected": 18.21550557229325,   "mode": "abs", "tol": 1e-2  },
-        { "method": "skewness", "args": [],       "expected": 0.91787339427240899, "mode": "abs", "tol": 1e-2  },
-        { "method": "kurtosis", "args": [],       "expected": 3.8447802981379247,  "mode": "abs", "tol": 1e-2  },
+        { "method": "sd",       "args": [],       "expected": 18.21550557229325,   "mode": "rel", "tol": 1e-9  },
+        { "method": "skewness", "args": [],       "expected": 0.91787339427240899, "mode": "rel", "tol": 1e-9  },
+        { "method": "kurtosis", "args": [],       "expected": 3.8447802981379247,  "mode": "rel", "tol": 1e-9  },
         { "method": "minimum",  "args": [],       "expected": 0.0,                 "mode": "equal"             },
         { "method": "maximum",  "args": [],       "expected": "inf",               "mode": "equal"             },
         { "method": "parameters_valid", "args": [], "expected": true,             "mode": "bool"              }
@@ -165,7 +166,7 @@
         { "method": "cdf",    "args": [130.0], "expected": 0.9991398244870111,  "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump" },
         { "method": "pdf",    "args": [90.0],  "expected": 0.027238286918182343,"mode": "abs", "tol": 1e-6, "source": "curated via oracle_emitter --dump" },
         { "method": "pdf",    "args": [105.0], "expected": 0.03194746161761428, "mode": "abs", "tol": 1e-6, "source": "curated via oracle_emitter --dump" },
-        { "method": "mean",   "args": [],      "expected": 98.28252983865467,   "mode": "abs", "tol": 1e-2, "source": "curated via oracle_emitter --dump" },
+        { "method": "mean",   "args": [],      "expected": 98.28252983865467,   "mode": "rel", "tol": 1e-9, "source": "curated via oracle_emitter --dump" },
         { "method": "median", "args": [],      "expected": 98.42716963272505,   "mode": "abs", "tol": 1e-4, "source": "curated via oracle_emitter --dump" },
         { "method": "parameters_valid", "args": [], "expected": true, "mode": "bool" }
       ]
@@ -244,7 +245,7 @@
         "minimum_of_random_variables": true
       },
       "assertions": [
-        { "method": "mode",           "args": [], "expected": 97.38075467325922, "mode": "abs", "tol": 1e-6, "source": "curated via oracle_emitter --dump" },
+        { "method": "mode",           "args": [], "expected": 97.38075467325922, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump" },
         { "method": "log_likelihood", "args": [85.0, 95.0, 100.0, 105.0, 115.0], "expected": -18.944771162131772, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
         { "method": "random_value",   "args": [5, 42, 0], "expected": 96.80147607403502, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
         { "method": "random_value",   "args": [5, 42, 1], "expected": 96.46471052862614, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
