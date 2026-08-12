@@ -1367,6 +1367,148 @@ oracle value moves: the check count is identical before and after."
 
 ---
 
+## Task 3b: Close the three gaps Task 3 found in the runner
+
+**Files:**
+- Modify: `core/include/corehydro/numerics/distributions/support/dist_spec.hpp`
+- Modify: `core/include/corehydro/numerics/distributions/support/dist_runner.hpp`
+- Modify: `core/tests/test_dist_runner.cpp`
+- Modify: `core/tests/test_fixtures.cpp` (delete the bridge workarounds these fixes retire)
+
+**Why this task exists:** Task 3's delegation surfaced three gaps that the plan assumed away. Two are defects in the user-facing surface, not just fixture inconvenience, and all three would otherwise be rediscovered separately by Tasks 5, 6, and 7.
+
+**Interfaces:**
+- Consumes: everything from Tasks 1 and 2.
+- Produces: no new entry point. `build_copula` gains a pre-fit, `build_multivariate` gains four optional keys, and `run_mvdist` gains seven methods.
+
+### Gap 1: the IFM path silently uses unfitted marginals
+
+`BivariateCopulaEstimation`'s `ifm` (`bivariate_copula_estimation.hpp:77-113`) optimizes theta alone and takes the marginals as already fitted. `build_copula`'s `attach()` builds a marginal from its `parameters` and never fits it, so a spec naming a bare family gets a default-constructed marginal. A user writing `copula_fit("Clayton", x, y, method = "ifm", margin_x = "Normal")` therefore fits theta against a standard `Normal(0, 1)` instead of against their data, and gets a wrong answer with no error. Task 3 worked around it in the fixture bridge (`mle_marginal_parameters`).
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `core/tests/test_dist_runner.cpp`:
+
+```cpp
+    // A bare-family marginal in a fit spec is MLE-fitted to the sample first, as IFM requires.
+    // Without the pre-fit theta is optimized against a default Normal(0,1) and comes out wrong.
+    {
+        const char* fitted = R"({"family":"Clayton","fit":{
+            "x":[135.9,104.1,108.7,99.3,134.7,91.0,77.3,115.4,109.0,79.0],
+            "y":[1.9,1.3,1.4,1.2,1.8,1.1,0.9,1.5,1.4,1.0],
+            "method":"ifm","margin_x":{"family":"Normal"},"margin_y":{"family":"Normal"}}})";
+        supp::DistResult mx = supp::run_copula(fitted, "marginal_x_parameters", "[]");
+        // The x sample has mean ~105.4, sd ~19: a fitted marginal, not the default (0, 1).
+        CHECK_TRUE(mx.values.at(0) > 50.0);
+        CHECK_TRUE(mx.values.at(1) > 5.0);
+    }
+
+    // An explicitly parameterized marginal is used as given and NOT refitted.
+    {
+        const char* given = R"({"family":"Clayton","fit":{
+            "x":[135.9,104.1,108.7,99.3,134.7,91.0,77.3,115.4,109.0,79.0],
+            "y":[1.9,1.3,1.4,1.2,1.8,1.1,0.9,1.5,1.4,1.0],
+            "method":"ifm","margin_x":{"family":"Normal","parameters":[100,20]},
+            "margin_y":{"family":"Normal","parameters":[1.4,0.3]}}})";
+        supp::DistResult mx = supp::run_copula(given, "marginal_x_parameters", "[]");
+        CHECK_NEAR(mx.values.at(0), 100.0, 1e-12);
+        CHECK_NEAR(mx.values.at(1), 20.0, 1e-12);
+    }
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+```bash
+cmake --build core/build -j && ./core/build/test_dist_runner
+```
+
+Expected: FAIL on the first block, because the unfitted marginal returns the default `Normal(0, 1)`.
+
+- [ ] **Step 3: Implement the pre-fit**
+
+In `dist_spec.hpp`'s `build_copula`, in the `fit` branch only, fit any marginal whose spec supplies no parameters, before calling `copulas::estimate`. Read `mle_marginal_parameters` in `core/tests/test_fixtures.cpp` first: it is the behaviour Task 3 proved reproduces the six pinned `ifm` oracles, and this is that code moving to where it belongs.
+
+The rule: a marginal with explicit `parameters` is used as given; a marginal without them is fitted by maximum likelihood to its own sample (x for `margin_x`, y for `margin_y`) before the copula estimate runs. Applies to `ifm` and `mle`; `mpl` ignores marginals entirely and `tau` does not use them.
+
+- [ ] **Step 4: Retire the bridge workaround**
+
+Delete `mle_marginal_parameters` and its call site in `core/tests/test_fixtures.cpp` (around `:1544-1551` and `:1580`). **This is required, not optional:** while the bridge does the pre-fit, the six pinned `ifm` oracles test the bridge rather than the grammar, so the fix would ship unpinned.
+
+- [ ] **Step 5: Verify the ifm oracles still reproduce**
+
+```bash
+cmake --build core/build -j && ./core/build/test_dist_runner
+./core/build/test_fixtures fixtures/distributions/copulas
+```
+
+Expected: `test_dist_runner` passes, and copulas holds at **271 checks, 0 failed**. Those six `ifm` cases now pin `dist_spec.hpp` itself. If theta moves, the pre-fit does not match what the deleted bridge did.
+
+### Gap 2: no MVN integrator settings, so a multivariate CDF is not reproducible
+
+`MultivariateNormal` carries a mutable `mvnuni_` Mersenne Twister that the Genz quasi-Monte-Carlo `mvndst` draws from, plus three accuracy knobs. The grammar has no key for any of them, so a rebuilt MVN clock-seeds. For a dimension of three or more, `mvdist_cdf` would therefore return a different number on every call, and **R and Python would not agree** — which is this repo's central promise.
+
+- [ ] **Step 6: Write the failing test**
+
+```cpp
+    // A seeded MVN CDF is reproducible. Above dimension 2 the CDF is Genz quasi-Monte-Carlo off a
+    // per-instance Mersenne Twister; without a seed key in the grammar it clock-seeds and R and
+    // Python cannot agree.
+    {
+        const char* spec = R"({"family":"MultivariateNormal","mean":[0,0,0],
+            "covariance":[[1,0.3,0.2],[0.3,1,0.4],[0.2,0.4,1]],"seed":12345})";
+        supp::DistResult a = supp::run_mvdist(spec, "cdf", "[1,1,1]");
+        supp::DistResult b = supp::run_mvdist(spec, "cdf", "[1,1,1]");
+        CHECK_NEAR(a.values.at(0), b.values.at(0), 0.0);
+        CHECK_TRUE(a.values.at(0) > 0.0 && a.values.at(0) < 1.0);
+    }
+```
+
+- [ ] **Step 7: Implement the four optional keys**
+
+In `build_multivariate`'s `MultivariateNormal` arm, after construction, apply any of `seed`, `max_evaluations`, `abs_error`, `rel_error` that the spec carries, through `set_mvnuni_seed` (`multivariate_normal.hpp:117`), `set_max_evaluations` (`:123`), `set_absolute_error` (`:127`), and the relative-error setter beside it. Absent keys leave the ported defaults untouched, matching the runner's settings-transparent convention. Document the four keys in the `dist_spec.hpp` header comment.
+
+Then delete the corresponding local application in `core/tests/test_fixtures.cpp` and route the MVN cases that only needed a seed through the runner. Leave the genuinely stateful cases bespoke: `r_mvtnorm_4d_sequential`, `fortran_mvndst_sequential`, and the five `mvndst_*` cases pin a *sequence* of draws off one object, which a stateless runner cannot reproduce by construction. Say in your report how many multivariate assertions moved from bespoke to delegated.
+
+### Gap 3: seven missing multivariate verbs
+
+- [ ] **Step 8: Add them to `run_mvdist`**
+
+`median`, `mode`, `inverse_cdf` (MVN and MVT), `degrees_of_freedom` (MVT), `alpha` and `alpha_sum` (Dirichlet), `number_of_trials` (Multinomial). Each is a plain accessor or an existing member; read the headers for the exact names. `inverse_cdf` takes a probability vector and returns a point of the same length; document in the method table that it is the Cholesky map upstream implements, not a true multivariate quantile.
+
+Do NOT add `mvndst`, `mvndst_inform`, `mvndst_error`, `is_density_valid`, `cdf_xy`, or `log_multivariate_beta`: those are integrator internals and stay bespoke in the fixture runner.
+
+Add a test per verb asserting shape and an analytic identity where one exists (a Dirichlet's `alpha_sum` is the sum of its `alpha`; an MVN's `median` equals its `mean`).
+
+- [ ] **Step 9: Fix the two Task 3 minors**
+
+In `core/tests/test_fixtures.cpp`: delete the dead `random_value` arm in `fixture_pick` (no composite fixture has such an assertion, so it implements an unexercised convention that Tasks 6 and 7 would copy), and restore the `contains("bandwidth")` guard in `build_non_finite_composite` that the deleted builder had.
+
+- [ ] **Step 10: Full verification**
+
+```bash
+cmake --build core/build -j && ./core/build/test_dist_runner
+./core/build/test_fixtures fixtures
+ctest --test-dir core/build
+```
+
+Expected: `test_fixtures` at **4634 checks, 0 failed** and `ctest` **81/81**. The corpus count must not move: this task changes which code path serves an assertion, never the value.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add core/include/corehydro/numerics/distributions/support/ core/tests/
+git commit -m "fix: pre-fit IFM marginals, seed the MVN integrator, add seven multivariate verbs
+
+Three gaps the fixture delegation surfaced. The IFM fit path silently used
+default-constructed marginals when a spec named a bare family, so a copula fit
+against real data returned a wrong theta. The grammar had no key for the MVN
+Genz integrator seed, so a multivariate CDF above dimension two was not
+reproducible and R and Python could not agree. Seven multivariate accessors had
+no runner method, which kept 85 pinned assertions on a bespoke path."
+```
+
+---
+
 ## Task 4: The R glue and the composite constructors
 
 **Files:**
