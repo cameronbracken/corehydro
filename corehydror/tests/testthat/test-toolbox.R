@@ -190,6 +190,20 @@ test_that("linear_regression() with intercept = FALSE drops the intercept column
   expect_false(without_int$intercept)
 })
 
+test_that("linear_regression() preserves the caller's column names when present", {
+  x <- cbind(rainfall = c(1, 2, 3, 4, 5), temperature = c(2, 1, 4, 3, 5))
+  y <- c(3.1, 4.2, 8.1, 9.2, 13.0)
+  fit <- linear_regression(x, y)
+  expect_equal(names(coef(fit)), c("(Intercept)", "rainfall", "temperature"))
+})
+
+test_that("linear_regression() falls back to synthesized names when x has none", {
+  x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
+  y <- c(3.1, 4.2, 8.1, 9.2, 13.0)
+  fit <- linear_regression(x, y)
+  expect_equal(names(coef(fit)), c("(Intercept)", "x1", "x2"))
+})
+
 test_that("linear_regression() rejects a y of the wrong length, naming both lengths", {
   x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
   expect_error(linear_regression(x, c(1, 2, 3)), "5.*3|3.*5")
@@ -210,6 +224,14 @@ test_that("predict.corehydro_lm() reproduces the fitted values at the training p
   y <- 3 + 2 * x1 - x2
   fit <- linear_regression(cbind(x1, x2), y)
   expect_equal(predict(fit, cbind(x1, x2)), y, tolerance = 1e-9)
+})
+
+test_that("predict.corehydro_lm() accepts a bare vector for a single-predictor model", {
+  x <- c(1, 2, 3, 4, 5)
+  y <- c(3.1, 4.2, 8.1, 9.2, 13.0)
+  fit <- linear_regression(x, y)
+  out <- predict(fit, c(1, 2, 3))
+  expect_length(out, 3L)
 })
 
 test_that("predict.corehydro_lm() with interval = TRUE returns a lower/upper/mean matrix", {
@@ -238,4 +260,28 @@ test_that("vcov.corehydro_lm() returns a named square matrix matching the parame
   v <- vcov(fit)
   expect_equal(dim(v), c(3L, 3L))
   expect_equal(rownames(v), names(coef(fit)))
+})
+
+test_that("vcov.corehydro_lm() is the coefficient covariance, consistent with standard_errors", {
+  # This relationship (sqrt(diag(vcov)) == standard_errors) holds by construction -- the object's
+  # own standard_errors are exactly sqrt(diag(vcov)) once vcov is properly scaled by sigma^2 --
+  # so it is not an oracle value, just a self-consistency check.
+  x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
+  y <- c(3.1, 4.2, 8.1, 9.2, 13.0)
+  fit <- linear_regression(x, y)
+  v <- vcov(fit)
+  expect_equal(unname(sqrt(diag(v))), unname(fit$standard_errors), tolerance = 1e-12)
+})
+
+test_that("vcov.corehydro_lm() agrees with stats::lm()'s vcov() on the same data", {
+  set.seed(42)
+  x <- cbind(x1 = rnorm(30), x2 = rnorm(30))
+  y <- 1.5 + 2 * x[, 1] - 0.7 * x[, 2] + rnorm(30, sd = 0.01)
+
+  fit <- linear_regression(x, y)
+  ref <- stats::lm(y ~ x1 + x2, data = as.data.frame(x))
+
+  v <- vcov(fit)
+  ref_v <- stats::vcov(ref)
+  expect_equal(unname(v), unname(as.matrix(ref_v)), tolerance = 1e-8)
 })

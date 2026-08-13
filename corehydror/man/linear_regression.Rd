@@ -16,7 +16,10 @@ a single predictor.}
 }
 \value{
 a \code{corehydro_lm} list with \code{coefficients}, \code{standard_errors}, \code{covariance},
-\code{residuals}, \code{r_squared}, \code{adj_r_squared}, \code{sigma}, \code{df}, and \code{n}.
+\code{residuals}, \code{r_squared}, \code{adj_r_squared}, \code{sigma}, \code{df}, and \code{n}. \code{covariance} is the
+coefficient covariance matrix, i.e. \code{sqrt(diag(covariance))} equals \code{standard_errors}; the
+underlying C# \code{LinearRegression.Covariance} is the unscaled cross-product term
+(\verb{(X'X)^-1}), scaled here by \code{sigma^2} to match \code{standard_errors}.
 }
 \description{
 Mirrors the C# \code{LinearRegression} class of the Numerics library: estimates

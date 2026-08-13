@@ -240,6 +240,17 @@ def test_linear_regression_recovers_an_exact_linear_combination_with_r_squared_1
     assert fit.r_squared == pytest.approx(1.0, abs=1e-12)
 
 
+def test_linear_regression_covariance_is_the_coefficient_covariance():
+    # sqrt(diag(covariance)) == standard_errors holds by construction once covariance is
+    # properly scaled by sigma**2, so this is a self-consistency check, not an oracle value.
+    x = np.column_stack([[1, 2, 3, 4, 5], [2, 1, 4, 3, 5]])
+    y = [3.1, 4.2, 8.1, 9.2, 13.0]
+    fit = linear_regression(x, y)
+    np.testing.assert_allclose(
+        np.sqrt(np.diag(fit.covariance)), fit.standard_errors, atol=1e-12
+    )
+
+
 def test_predict_reproduces_the_fitted_values_at_the_training_predictors():
     x1 = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=float)
     x2 = np.array([2, 1, 4, 3, 6, 5, 8, 7], dtype=float)
@@ -247,6 +258,16 @@ def test_predict_reproduces_the_fitted_values_at_the_training_predictors():
     x = np.column_stack([x1, x2])
     fit = linear_regression(x, y)
     np.testing.assert_allclose(fit.predict(x), y, atol=1e-9)
+
+
+def test_predict_accepts_a_bare_1d_vector_for_a_single_predictor_model():
+    # Matches R's predict.corehydro_lm(): a 1D input on a one-predictor fit is a column of
+    # observations, not a single row.
+    x = np.array([1, 2, 3, 4, 5], dtype=float)
+    y = [3.1, 4.2, 8.1, 9.2, 13.0]
+    fit = linear_regression(x, y)
+    out = fit.predict([1, 2, 3])
+    assert out.shape == (3,)
 
 
 def test_predict_with_interval_returns_a_lower_upper_mean_array():

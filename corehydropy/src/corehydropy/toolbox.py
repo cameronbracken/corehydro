@@ -680,6 +680,11 @@ class LinearRegressionResult:
 
     Carries no C++ state: ``predict`` reruns the fit against the shared toolbox runner each
     call, so an instance serializes with :mod:`pickle`.
+
+    ``covariance`` is the coefficient covariance matrix, i.e. ``numpy.sqrt(numpy.diag(
+    result.covariance))`` equals ``result.standard_errors``. The underlying C#
+    ``LinearRegression.Covariance`` is the unscaled cross-product term (``(X'X)^-1``), scaled
+    here by ``sigma**2`` to match ``standard_errors``.
     """
 
     __slots__ = (
@@ -706,8 +711,11 @@ class LinearRegressionResult:
         ----------
         newdata : array_like
             A 2D array of predictors with the same number of columns the model was fitted
-            with (an intercept column, if any, is added internally), or a 1D array for a
-            single row of a single-predictor model.
+            with (an intercept column, if any, is added internally), or -- for a
+            single-predictor model only -- a 1D array of observations (matching R's
+            ``predict.corehydro_lm()``, where a bare vector is unambiguous when there is one
+            predictor). For more than one predictor a 1D array is rejected rather than guessed
+            at, since it is ambiguous whether it means one row or one column.
         interval : bool
             If ``True``, also return the ``level`` prediction interval (a Student-t interval
             around the mean response, mirroring ``PredictionIntervals``). Default ``False``.
@@ -722,7 +730,16 @@ class LinearRegressionResult:
             ``interval=True``, an ``(n, 3)`` array with columns ``lower``, ``upper``, ``mean``.
         """
         ncol = self._x.shape[1]
-        nd = np.atleast_2d(np.asarray(newdata, dtype=float))
+        raw = np.asarray(newdata, dtype=float)
+        if raw.ndim == 1 and ncol == 1:
+            # Unambiguous only for a single-predictor model: one value == one row, matching
+            # R's predict.corehydro_lm() (see regression.R). For ncol > 1, fall through to
+            # atleast_2d below, which turns [1, 2, 3] into a single row of 3 columns and is
+            # rejected by the shape check that follows -- an ambiguous bare vector must be an
+            # explicit 2D array instead.
+            nd = raw.reshape(-1, 1)
+        else:
+            nd = np.atleast_2d(raw)
         if nd.shape[1] != ncol:
             raise ValueError(
                 f"`newdata` must have {ncol} column(s), matching the fitted predictors; "
@@ -787,8 +804,14 @@ def linear_regression(x, y, intercept: bool = True) -> LinearRegressionResult:
     coefficients = np.array([named[f"beta_{i + 1}"] for i in range(p)])
     standard_errors = np.array([named[f"se_{i + 1}"] for i in range(p)])
 
+    # The runner's "covariance" method returns the raw C# LinearRegression.Covariance quantity,
+    # which is UNSCALED (see linear_regression.hpp) -- the fit multiplies by sigma**2 (standard
+    # error squared) to get standard_errors, so the same scaling is applied here to keep
+    # `result.covariance` consistent with `result.standard_errors`:
+    # sqrt(diag(result.covariance)) == result.standard_errors.
     cov = _toolbox_run("regression", "covariance", data, options)
     covariance = np.asarray(cov["values"], dtype=float).reshape(cov["dims"][0], cov["dims"][1])
+    covariance = covariance * named["sigma"] ** 2
 
     res = _toolbox_run("regression", "residuals", data, options)
 

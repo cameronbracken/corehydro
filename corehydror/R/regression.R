@@ -15,7 +15,10 @@
 #' @param y numeric vector of responses, one per row of `x`.
 #' @param intercept whether to fit an intercept. Default `TRUE`.
 #' @return a `corehydro_lm` list with `coefficients`, `standard_errors`, `covariance`,
-#'   `residuals`, `r_squared`, `adj_r_squared`, `sigma`, `df`, and `n`.
+#'   `residuals`, `r_squared`, `adj_r_squared`, `sigma`, `df`, and `n`. `covariance` is the
+#'   coefficient covariance matrix, i.e. `sqrt(diag(covariance))` equals `standard_errors`; the
+#'   underlying C# `LinearRegression.Covariance` is the unscaled cross-product term
+#'   (`(X'X)^-1`), scaled here by `sigma^2` to match `standard_errors`.
 #' @seealso [predict.corehydro_lm()].
 #' @examples
 #' x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
@@ -41,10 +44,19 @@ linear_regression <- function(x, y, intercept = TRUE) {
   v <- toolbox_run("regression", "fit", list(flat, y), opts)
   named <- stats::setNames(v$values, v$names)
   p <- ncol(x) + as.integer(isTRUE(intercept))
-  param_names <- c(if (isTRUE(intercept)) "(Intercept)", paste0("x", seq_len(ncol(x))))
+  # Preserve the caller's own column names when `x` carries them, falling back to the
+  # synthesized x1, x2, ... names otherwise.
+  x_names <- colnames(x)
+  if (is.null(x_names)) x_names <- paste0("x", seq_len(ncol(x)))
+  param_names <- c(if (isTRUE(intercept)) "(Intercept)", x_names)
 
+  # The runner's "covariance" method returns the raw C# LinearRegression.Covariance quantity,
+  # which is UNSCALED (see linear_regression.hpp) -- FitSVD multiplies by sigma^2 (StandardError
+  # squared) to get parameter_standard_errors, so the same scaling is applied here to keep
+  # vcov(fit) consistent with standard_errors: sqrt(diag(vcov(fit))) == standard_errors.
   cov <- toolbox_run("regression", "covariance", list(flat, y), opts)
-  covariance <- matrix(cov$values, nrow = cov$dims[[1]], ncol = cov$dims[[2]], byrow = TRUE)
+  sigma <- named[["sigma"]]
+  covariance <- matrix(cov$values, nrow = cov$dims[[1]], ncol = cov$dims[[2]], byrow = TRUE) * sigma^2
   dimnames(covariance) <- list(param_names, param_names)
 
   res <- toolbox_run("regression", "residuals", list(flat, y), opts)
