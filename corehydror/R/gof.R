@@ -36,26 +36,25 @@ goodness_of_fit <- function(observed, modeled, metrics = "all", k = 0) {
   if (identical(metrics, "all")) out else out[metrics]
 }
 
-#' Classification metrics for a thresholded series
+#' Classification metrics for two binary label vectors
 #'
-#' Mirrors the classification region of the C# `GoodnessOfFit` class: a value at or above
-#' `threshold` counts as a positive.
+#' Mirrors the C# `GoodnessOfFit` classification statics (`Accuracy`/`Precision`/`Recall`/
+#' `F1Score`/`Specificity`/`BalancedAccuracy`): both `observed` and `modeled` are already-binary
+#' label vectors, compared elementwise -- a value equal to its counterpart counts as a match.
+#' There is no threshold argument, in R or in C#; threshold your own series into 0/1 labels
+#' before calling this.
 #'
-#' @param observed,modeled numeric vectors of equal length.
-#' @param threshold the value separating a positive from a negative.
-#' @return a named numeric vector of accuracy, precision, recall, f1, specificity,
-#'   balanced_accuracy, and the four confusion-matrix counts tp, tn, fp, fn.
+#' @param observed,modeled numeric vectors of equal length holding binary (0/1) labels.
+#' @return a named numeric vector of accuracy, precision, recall, f1, specificity, and
+#'   balanced_accuracy.
 #' @examples
-#' obs <- c(1, 5, 2, 9, 4)
-#' mod <- c(2, 6, 1, 8, 3)
-#' classification_metrics(obs, mod, threshold = 4)
+#' obs <- c(1, 0, 1, 1, 0)
+#' mod <- c(1, 0, 0, 1, 0)
+#' classification_metrics(obs, mod)
 #' @export
-classification_metrics <- function(observed, modeled, threshold) {
+classification_metrics <- function(observed, modeled) {
   check_pair(observed, modeled, "observed", "modeled")
-  if (!is.numeric(threshold) || length(threshold) != 1L) {
-    stop("`threshold` must be a single number", call. = FALSE)
-  }
-  r <- toolbox_run("gof", "classification", list(observed, modeled), list(threshold = threshold))
+  r <- toolbox_run("gof", "classification", list(observed, modeled), list())
   stats::setNames(r$values, r$names)
 }
 

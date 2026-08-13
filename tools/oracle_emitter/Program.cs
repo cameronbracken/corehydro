@@ -3771,24 +3771,14 @@ static double GofDispatch(string method, List<double[]> data, JsonElement option
 
     if (method == "classification")
     {
-        double threshold = GetDouble("threshold");
-        var ob = o.Select(v => v >= threshold ? 1.0 : 0.0).ToArray();
-        var pb = m.Select(v => v >= threshold ? 1.0 : 0.0).ToArray();
-        int tp = 0, tn = 0, fp = 0, fn = 0;
-        for (int i = 0; i < ob.Length; i++)
-        {
-            bool ov = ob[i] > 0.5, pv = pb[i] > 0.5;
-            if (ov && pv) tp++;
-            else if (!ov && !pv) tn++;
-            else if (!ov && pv) fp++;
-            else fn++;
-        }
+        // Two already-binary label vectors, compared elementwise -- no threshold, matching the
+        // real GoodnessOfFit classification statics exactly (ConfusionMatrix stays private).
         var names = new[] { "accuracy", "precision", "recall", "f1", "specificity",
-                            "balanced_accuracy", "tp", "tn", "fp", "fn" };
+                            "balanced_accuracy" };
         var values = new[] {
-            GoodnessOfFit.Accuracy(ob, pb), GoodnessOfFit.Precision(ob, pb), GoodnessOfFit.Recall(ob, pb),
-            GoodnessOfFit.F1Score(ob, pb), GoodnessOfFit.Specificity(ob, pb),
-            GoodnessOfFit.BalancedAccuracy(ob, pb), tp, tn, fp, fn
+            GoodnessOfFit.Accuracy(o, m), GoodnessOfFit.Precision(o, m), GoodnessOfFit.Recall(o, m),
+            GoodnessOfFit.F1Score(o, m), GoodnessOfFit.Specificity(o, m),
+            GoodnessOfFit.BalancedAccuracy(o, m)
         };
         return ToolboxSelectNamed(asrt, names, values);
     }

@@ -68,35 +68,34 @@ def goodness_of_fit(observed, modeled, metrics="all", k: int = 0) -> dict:
     return out if metrics == "all" else {m: out[m] for m in metrics}
 
 
-def classification_metrics(observed, modeled, threshold: float) -> dict:
-    """Classification metrics for a thresholded series.
+def classification_metrics(observed, modeled) -> dict:
+    """Classification metrics for two binary label vectors.
 
-    Mirrors the classification region of the C# ``GoodnessOfFit`` class: a value at or above
-    ``threshold`` counts as a positive.
+    Mirrors the C# ``GoodnessOfFit`` classification statics (``Accuracy``/``Precision``/
+    ``Recall``/``F1Score``/``Specificity``/``BalancedAccuracy``): both ``observed`` and
+    ``modeled`` are already-binary label vectors, compared elementwise -- a value equal to its
+    counterpart counts as a match. There is no threshold argument, in Python or in C#; threshold
+    your own series into 0/1 labels before calling this.
 
     Parameters
     ----------
     observed, modeled : array_like
-        Numeric vectors of equal length.
-    threshold : float
-        The value separating a positive from a negative.
+        Numeric vectors of equal length holding binary (0/1) labels.
 
     Returns
     -------
     dict
         Keys ``accuracy``, ``precision``, ``recall``, ``f1``, ``specificity``,
-        ``balanced_accuracy``, and the four confusion-matrix counts ``tp``, ``tn``, ``fp``, ``fn``.
+        ``balanced_accuracy``.
 
     Examples
     --------
     >>> from corehydropy import classification_metrics
-    >>> classification_metrics([1, 5, 2, 9, 4], [2, 6, 1, 8, 3], threshold=4)["accuracy"]
+    >>> classification_metrics([1, 0, 1, 1, 0], [1, 0, 0, 1, 0])["accuracy"]
     80.0
     """
     obs, mod = _check_pair(observed, modeled, "observed", "modeled")
-    if not isinstance(threshold, (int, float)):
-        raise TypeError("`threshold` must be a single number")
-    r = _toolbox_run("gof", "classification", [obs, mod], {"threshold": float(threshold)})
+    r = _toolbox_run("gof", "classification", [obs, mod], {})
     return dict(zip(r["names"], r["values"]))
 
 

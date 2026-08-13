@@ -2,14 +2,14 @@
  "kind": "toolbox",
  "group": "gof",
  "source": "Numerics/Data/Statistics/GoodnessOfFit.cs",
- "reference": "fixtures/data/goodness_of_fit.json already pins AIC/AICc/BIC/MSE/MAE/NSE/KGE/KGE-mod/PBIAS/RSR/the-three-indices-of-agreement/VE from Test_GoodnessOfFit.cs. This file covers only what that one does not: RMSE (with and without k), MAPE, sMAPE, log-NSE, Pearson, R-squared, the classification set, the three distribution-backed tests (KS/AD/ChiSquared), rmse_dist, aic_weights, and rmse_weights -- routed through the `gof` toolbox group (numerics/support/toolbox_runner.hpp). AICWeights/RMSEWeights values are the literals from Test_AICWeights/Test_RMSEWeights; the classification assertions are exact rationals hand-verified from the threshold rule GoodnessOfFit's classification statics implement (Test_Precision/Test_Recall/Test_F1Score/Test_BalancedAccuracy_Imbalanced cover the same no-threshold formulas on already-binary input); every other value here was curated via `dotnet run -- --dump <fixtures dir>` against the real Numerics.Data.Statistics.GoodnessOfFit (and, for pearson, Numerics.Data.Statistics.Correlation.Pearson, since GoodnessOfFit has no standalone Pearson method), per corehydro CLAUDE.md rule 3 (an expected value must come from an upstream C# test file or the emitter's dump mode, never from this repo's own C++).",
+ "reference": "fixtures/data/goodness_of_fit.json already pins AIC/AICc/BIC/MSE/MAE/NSE/KGE/KGE-mod/PBIAS/RSR/the-three-indices-of-agreement/VE from Test_GoodnessOfFit.cs. This file covers only what that one does not: RMSE (with and without k), MAPE, sMAPE, log-NSE, Pearson, R-squared, the classification set, the three distribution-backed tests (KS/AD/ChiSquared), rmse_dist, aic_weights, and rmse_weights -- routed through the `gof` toolbox group (numerics/support/toolbox_runner.hpp). AICWeights/RMSEWeights values are the literals from Test_AICWeights/Test_RMSEWeights; classification takes two already-binary (0/1) label vectors and compares them elementwise, with no threshold -- exactly `Accuracy`/`Precision`/`Recall`/`F1Score`/`Specificity`/`BalancedAccuracy` in GoodnessOfFit.cs, whose private `GetConfusionMatrixComponents` the port also keeps private (`ConfusionMatrix` in goodness_of_fit.hpp); every value here, classification included, was curated via `dotnet run -- --dump <fixtures dir>` against the real Numerics.Data.Statistics.GoodnessOfFit (and, for pearson, Numerics.Data.Statistics.Correlation.Pearson, since GoodnessOfFit has no standalone Pearson method), per corehydro CLAUDE.md rule 3 (an expected value must come from an upstream C# test file or the emitter's dump mode, never from this repo's own C++).",
  "datasets": {
   "gm_obs": [10, 20, 30, 40, 50, 60, 70, 80],
   "gm_mod": [11, 19, 31, 39, 51, 59, 71, 79],
   "gm_obs_tail": [10, 20, 30, 40, 50, 60, 70, 80],
   "gm_mod_tail": [11, 19, 31, 39, 51, 205, 198, 210],
-  "cls_obs": [1, 5, 2, 9, 4],
-  "cls_mod": [2, 6, 1, 8, 3],
+  "cls_obs": [1, 0, 1, 1, 0, 1, 0, 0, 1, 0],
+  "cls_mod": [1, 1, 1, 0, 0, 1, 0, 1, 1, 0],
   "dist_obs": [82.3, 88.1, 91.4, 93.7, 95.2, 97.8, 99.1, 100.4, 101.9, 103.5, 105.0, 107.6, 110.2, 113.8, 118.5],
   "dist_pp_hazen": [0.033333333333333, 0.1, 0.166666666666667, 0.233333333333333, 0.3,
                     0.366666666666667, 0.433333333333333, 0.5, 0.566666666666667,
@@ -47,20 +47,15 @@
    ]
   },
   {
-   "name": "classification_threshold_4",
+   "name": "classification_binary_labels",
    "data": ["cls_obs", "cls_mod"],
-   "options": {"threshold": 4},
    "assertions": [
-    {"method": "classification", "label": "accuracy", "expected": 80.0, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "precision", "expected": 1.0, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "recall", "expected": 0.6666666666666666, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "f1", "expected": 0.8, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "specificity", "expected": 1.0, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "balanced_accuracy", "expected": 0.8333333333333333, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "tp", "expected": 2, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "tn", "expected": 2, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "fp", "expected": 0, "mode": "abs", "tol": 1e-9},
-    {"method": "classification", "label": "fn", "expected": 1, "mode": "abs", "tol": 1e-9}
+    {"method": "classification", "label": "accuracy", "expected": 70.0, "mode": "abs", "tol": 1e-9},
+    {"method": "classification", "label": "precision", "expected": 0.6666666666666666, "mode": "abs", "tol": 1e-9},
+    {"method": "classification", "label": "recall", "expected": 0.8, "mode": "abs", "tol": 1e-9},
+    {"method": "classification", "label": "f1", "expected": 0.7272727272727273, "mode": "abs", "tol": 1e-9},
+    {"method": "classification", "label": "specificity", "expected": 0.6, "mode": "abs", "tol": 1e-9},
+    {"method": "classification", "label": "balanced_accuracy", "expected": 0.7, "mode": "abs", "tol": 1e-9}
    ]
   },
   {

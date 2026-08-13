@@ -2,25 +2,26 @@
 % Please edit documentation in R/gof.R
 \name{classification_metrics}
 \alias{classification_metrics}
-\title{Classification metrics for a thresholded series}
+\title{Classification metrics for two binary label vectors}
 \usage{
-classification_metrics(observed, modeled, threshold)
+classification_metrics(observed, modeled)
 }
 \arguments{
-\item{observed, modeled}{numeric vectors of equal length.}
-
-\item{threshold}{the value separating a positive from a negative.}
+\item{observed, modeled}{numeric vectors of equal length holding binary (0/1) labels.}
 }
 \value{
-a named numeric vector of accuracy, precision, recall, f1, specificity,
-balanced_accuracy, and the four confusion-matrix counts tp, tn, fp, fn.
+a named numeric vector of accuracy, precision, recall, f1, specificity, and
+balanced_accuracy.
 }
 \description{
-Mirrors the classification region of the C# \code{GoodnessOfFit} class: a value at or above
-\code{threshold} counts as a positive.
+Mirrors the C# \code{GoodnessOfFit} classification statics (\code{Accuracy}/\code{Precision}/\code{Recall}/
+\code{F1Score}/\code{Specificity}/\code{BalancedAccuracy}): both \code{observed} and \code{modeled} are already-binary
+label vectors, compared elementwise -- a value equal to its counterpart counts as a match.
+There is no threshold argument, in R or in C#; threshold your own series into 0/1 labels
+before calling this.
 }
 \examples{
-obs <- c(1, 5, 2, 9, 4)
-mod <- c(2, 6, 1, 8, 3)
-classification_metrics(obs, mod, threshold = 4)
+obs <- c(1, 0, 1, 1, 0)
+mod <- c(1, 0, 0, 1, 0)
+classification_metrics(obs, mod)
 }

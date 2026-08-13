@@ -124,36 +124,17 @@ inline ToolboxResult run_gof(const std::string& method,
         return scalar(GOF::rmse(obs, *m));
     }
 
-    // Classification metrics: two series plus a threshold. GoodnessOfFit's classification
-    // statics (mirroring C#) take already-binary 0/1 input with no threshold argument, so the
-    // threshold-to-binary step is a corehydro addition done here, once, ahead of the ported
-    // formulas -- the confusion-matrix counts and every metric below are the real C# math.
+    // Classification metrics: two already-binary label vectors, compared elementwise. C#'s
+    // classification statics (and this port) take no threshold -- a value equal to its
+    // counterpart counts as a match -- and ConfusionMatrix stays private in the port, so it is
+    // never surfaced here. Callers threshold their own series before calling this.
     if (method == "classification") {
         const std::vector<double>& o = data_at(data, 0, "gof", method);
         const std::vector<double>& p = data_at(data, 1, "gof", method);
-        if (o.size() != p.size())
-            throw std::invalid_argument(
-                "The number of observed values must equal the number of modeled values.");
-        double t = options.at("threshold").as_double();
-        std::vector<double> ob(o.size()), pb(p.size());
-        int tp = 0, tn = 0, fp = 0, fn = 0;
-        for (std::size_t i = 0; i < o.size(); ++i) {
-            bool ov = o[i] >= t, pv = p[i] >= t;
-            ob[i] = ov ? 1.0 : 0.0;
-            pb[i] = pv ? 1.0 : 0.0;
-            if (ov && pv) ++tp;
-            else if (!ov && !pv) ++tn;
-            else if (!ov && pv) ++fp;
-            else ++fn;
-        }
         ToolboxResult r;
-        r.values = {GOF::accuracy(ob, pb),    GOF::precision(ob, pb),
-                    GOF::recall(ob, pb),      GOF::f1_score(ob, pb),
-                    GOF::specificity(ob, pb), GOF::balanced_accuracy(ob, pb),
-                    static_cast<double>(tp),  static_cast<double>(tn),
-                    static_cast<double>(fp),  static_cast<double>(fn)};
-        r.names = {"accuracy", "precision", "recall", "f1", "specificity",
-                   "balanced_accuracy", "tp", "tn", "fp", "fn"};
+        r.values = {GOF::accuracy(o, p),    GOF::precision(o, p),  GOF::recall(o, p),
+                    GOF::f1_score(o, p),    GOF::specificity(o, p), GOF::balanced_accuracy(o, p)};
+        r.names = {"accuracy", "precision", "recall", "f1", "specificity", "balanced_accuracy"};
         return r;
     }
 
