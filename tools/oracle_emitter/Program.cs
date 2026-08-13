@@ -3720,6 +3720,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return HistogramToolboxDispatch(method, data, options, asrt);
         case "interpolation":
             return InterpolationDispatch(method, data, options, asrt);
+        case "regression":
+            return RegressionDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -3832,6 +3834,73 @@ static double InterpolationDispatch(string method, List<double[]> data, JsonElem
         return ToolboxSelectFlat(asrt, values, 1, values.Length);
     }
     throw new Exception($"unknown interpolation method: {method}");
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_regression arm against the real
+// Numerics.Data.LinearRegression: predictors cross as one flattened row-major vector plus
+// `rows`/`columns` options (the binding layer has no matrix type common to R and Python), so the
+// Matrix here is filled element-by-element from that flat array rather than built via a
+// (rows, cols, flat) constructor overload, which LinearAlgebra.Matrix does not have.
+static double RegressionDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    int GetInt(string key, int fallback) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetInt32() : fallback;
+    double[] flat = data[0];
+    double[] y = data[1];
+    int rows = GetInt("rows", y.Length);
+    int cols = GetInt("columns", 1);
+    bool intercept = OptBool(options, "intercept", true);
+    var x = new Matrix(rows, cols);
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < cols; j++)
+            x[i, j] = flat[i * cols + j];
+    var lm = new LinearRegression(x, new Vector(y), intercept);
+
+    if (method == "fit")
+    {
+        var names = new List<string>();
+        var values = new List<double>();
+        for (int i = 0; i < lm.Parameters.Count; i++) { names.Add($"beta_{i + 1}"); values.Add(lm.Parameters[i]); }
+        for (int i = 0; i < lm.ParameterStandardErrors.Count; i++) { names.Add($"se_{i + 1}"); values.Add(lm.ParameterStandardErrors[i]); }
+        names.Add("r_squared"); values.Add(lm.RSquared);
+        names.Add("adj_r_squared"); values.Add(lm.AdjRSquared);
+        names.Add("sigma"); values.Add(lm.StandardError);
+        names.Add("df"); values.Add(lm.DegreesOfFreedom);
+        names.Add("n"); values.Add(lm.SampleSize);
+        return ToolboxSelectNamed(asrt, names.ToArray(), values.ToArray());
+    }
+    if (method == "covariance")
+    {
+        int m = lm.Covariance.NumberOfRows;
+        var flatCov = new double[m * m];
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < m; j++) flatCov[i * m + j] = lm.Covariance[i, j];
+        return ToolboxSelectFlat(asrt, flatCov, m, m);
+    }
+    if (method == "residuals") return ToolboxSelectFlat(asrt, lm.Residuals, 1, lm.Residuals.Length);
+    if (method == "predict" || method == "prediction_intervals")
+    {
+        double[] newFlat = data[2];
+        int predictRows = options.GetProperty("predict_rows").GetInt32();
+        var xp = new Matrix(predictRows, cols);
+        for (int i = 0; i < predictRows; i++)
+            for (int j = 0; j < cols; j++)
+                xp[i, j] = newFlat[i * cols + j];
+        if (method == "predict")
+        {
+            var values = lm.Predict(xp);
+            return ToolboxSelectFlat(asrt, values, 1, values.Length);
+        }
+        double alpha = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("alpha", out var a)
+            ? a.GetDouble() : 0.1;
+        var pi = lm.PredictionIntervals(xp, alpha);
+        int piRows = pi.GetLength(0);
+        var flatPi = new double[piRows * 3];
+        for (int i = 0; i < piRows; i++)
+            for (int j = 0; j < 3; j++) flatPi[i * 3 + j] = pi[i, j];
+        return ToolboxSelectFlat(asrt, flatPi, piRows, 3);
+    }
+    throw new Exception($"unknown regression method: {method}");
 }
 
 // Mirrors numerics/support/toolbox_runner.hpp's run_spectra arm for the two methods

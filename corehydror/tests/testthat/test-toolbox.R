@@ -158,3 +158,84 @@ test_that("interpolate_2d() reproduces a known bilinear value on an identity gri
   out <- interpolate_2d(c(1, 2, 3), c(1, 2, 3), y, 1.5, 1.5)
   expect_equal(out, 0.5, tolerance = 1e-12)
 })
+
+# The "regression" toolbox group (Task 5). linear_regression() mirrors the C# LinearRegression
+# class; stats::lm() is a genuinely independent check (a different implementation entirely), so
+# comparing against it here is allowed by corehydro's fixture-provenance rule even though it is
+# not itself a pinned oracle value.
+
+test_that("linear_regression() coefficients and standard errors match stats::lm()", {
+  set.seed(42)
+  x <- cbind(x1 = rnorm(30), x2 = rnorm(30))
+  y <- 1.5 + 2 * x[, 1] - 0.7 * x[, 2] + rnorm(30, sd = 0.01)
+
+  fit <- linear_regression(x, y)
+  ref <- stats::lm(y ~ x1 + x2, data = as.data.frame(x))
+
+  expect_equal(unname(coef(fit)), unname(coef(ref)), tolerance = 1e-8)
+  expect_equal(unname(fit$standard_errors), unname(coef(summary(ref))[, "Std. Error"]),
+               tolerance = 1e-8)
+  expect_equal(fit$r_squared, summary(ref)$r.squared, tolerance = 1e-8)
+})
+
+test_that("linear_regression() with intercept = FALSE drops the intercept column", {
+  x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
+  y <- c(3.1, 4.2, 8.1, 9.2, 13.0)
+
+  with_int <- linear_regression(x, y)
+  without_int <- linear_regression(x, y, intercept = FALSE)
+
+  expect_length(coef(with_int), 3L)
+  expect_length(coef(without_int), 2L)
+  expect_false(without_int$intercept)
+})
+
+test_that("linear_regression() rejects a y of the wrong length, naming both lengths", {
+  x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
+  expect_error(linear_regression(x, c(1, 2, 3)), "5.*3|3.*5")
+})
+
+test_that("linear_regression() recovers an exact linear combination with R-squared 1", {
+  x1 <- c(1, 2, 3, 4, 5, 6, 7, 8)
+  x2 <- c(2, 1, 4, 3, 6, 5, 8, 7)
+  y <- 3 + 2 * x1 - x2
+  fit <- linear_regression(cbind(x1, x2), y)
+  expect_equal(unname(coef(fit)), c(3, 2, -1), tolerance = 1e-9)
+  expect_equal(fit$r_squared, 1, tolerance = 1e-12)
+})
+
+test_that("predict.corehydro_lm() reproduces the fitted values at the training predictors", {
+  x1 <- c(1, 2, 3, 4, 5, 6, 7, 8)
+  x2 <- c(2, 1, 4, 3, 6, 5, 8, 7)
+  y <- 3 + 2 * x1 - x2
+  fit <- linear_regression(cbind(x1, x2), y)
+  expect_equal(predict(fit, cbind(x1, x2)), y, tolerance = 1e-9)
+})
+
+test_that("predict.corehydro_lm() with interval = TRUE returns a lower/upper/mean matrix", {
+  x1 <- c(1, 2, 3, 4, 5, 6, 7, 8)
+  x2 <- c(2, 1, 4, 3, 6, 5, 8, 7)
+  y <- c(3.1, 6.2, 4.9, 8.3, 6.8, 10.2, 8.9, 12.1)
+  fit <- linear_regression(cbind(x1, x2), y)
+  out <- predict(fit, cbind(x1, x2), interval = TRUE)
+  expect_equal(colnames(out), c("lower", "upper", "mean"))
+  expect_equal(nrow(out), 8L)
+  expect_true(all(out[, "lower"] <= out[, "mean"] & out[, "mean"] <= out[, "upper"]))
+})
+
+test_that("linear_regression() prints and summarizes without erroring", {
+  x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
+  y <- c(3.1, 4.2, 8.1, 9.2, 13.0)
+  fit <- linear_regression(x, y)
+  expect_output(print(fit), "corehydro_lm")
+  expect_output(summary(fit), "standard errors")
+})
+
+test_that("vcov.corehydro_lm() returns a named square matrix matching the parameter count", {
+  x <- cbind(c(1, 2, 3, 4, 5), c(2, 1, 4, 3, 5))
+  y <- c(3.1, 4.2, 8.1, 9.2, 13.0)
+  fit <- linear_regression(x, y)
+  v <- vcov(fit)
+  expect_equal(dim(v), c(3L, 3L))
+  expect_equal(rownames(v), names(coef(fit)))
+})

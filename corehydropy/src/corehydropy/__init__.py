@@ -19,6 +19,7 @@ from .distributions import (
     distribution_names,
 )
 from .toolbox import (
+    LinearRegressionResult,
     RunningCovariance,
     RunningStatistics,
     autocorrelation,
@@ -30,6 +31,7 @@ from .toolbox import (
     interpolate,
     interpolate_2d,
     l_moments,
+    linear_regression,
     percentile,
     product_moments,
     ranks,
@@ -149,6 +151,8 @@ __all__ = [
     "histogram",
     "interpolate",
     "interpolate_2d",
+    "LinearRegressionResult",
+    "linear_regression",
     "goodness_of_fit",
     "classification_metrics",
     "gof_test",

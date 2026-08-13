@@ -29,6 +29,8 @@ __all__ = [
     "histogram",
     "interpolate",
     "interpolate_2d",
+    "LinearRegressionResult",
+    "linear_regression",
 ]
 
 
@@ -664,3 +666,143 @@ def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_trans
     }
     data = [x1a, x2a, ya.ravel(), x1outa, x2outa]
     return np.asarray(_toolbox_run("interpolation", "bilinear", data, options)["values"])
+
+
+# The "regression" toolbox group (Task 5): ordinary least squares by singular value
+# decomposition, mirroring the C# `LinearRegression` class of the Numerics library. Mirrors
+# corehydror's R/regression.R -- its own section rather than folded into the plain-value verbs
+# above, since it is the first toolbox group whose result is a full object (with its own
+# `predict` method) rather than a scalar, array, or dict.
+
+
+class LinearRegressionResult:
+    """Fitted ordinary least squares model, mirroring the C# ``LinearRegression`` class.
+
+    Carries no C++ state: ``predict`` reruns the fit against the shared toolbox runner each
+    call, so an instance serializes with :mod:`pickle`.
+    """
+
+    __slots__ = (
+        "coefficients", "standard_errors", "covariance", "residuals", "r_squared",
+        "adj_r_squared", "sigma", "df", "n", "_x", "_y", "_intercept",
+    )
+
+    def __init__(self, **fields) -> None:
+        for name in self.__slots__:
+            setattr(self, name, fields[name])
+
+    def __repr__(self) -> str:
+        return (
+            f"LinearRegressionResult(n={self.n}, p={len(self.coefficients)}, "
+            f"r_squared={self.r_squared:.6g})"
+        )
+
+    def predict(self, newdata, interval: bool = False, level: float = 0.90) -> np.ndarray:
+        """Predict from the fitted model.
+
+        Mirrors the C# ``LinearRegression.Predict``/``PredictionIntervals`` methods.
+
+        Parameters
+        ----------
+        newdata : array_like
+            A 2D array of predictors with the same number of columns the model was fitted
+            with (an intercept column, if any, is added internally), or a 1D array for a
+            single row of a single-predictor model.
+        interval : bool
+            If ``True``, also return the ``level`` prediction interval (a Student-t interval
+            around the mean response, mirroring ``PredictionIntervals``). Default ``False``.
+        level : float
+            Prediction interval level, between 0 and 1. Default ``0.90``, matching
+            ``PredictionIntervals``'s own ``alpha=0.1`` default.
+
+        Returns
+        -------
+        numpy.ndarray
+            With ``interval=False``, one predicted value per row of ``newdata``. With
+            ``interval=True``, an ``(n, 3)`` array with columns ``lower``, ``upper``, ``mean``.
+        """
+        ncol = self._x.shape[1]
+        nd = np.atleast_2d(np.asarray(newdata, dtype=float))
+        if nd.shape[1] != ncol:
+            raise ValueError(
+                f"`newdata` must have {ncol} column(s), matching the fitted predictors; "
+                f"got {nd.shape[1]}"
+            )
+        options = {
+            "rows": int(self._x.shape[0]), "columns": int(ncol), "intercept": bool(self._intercept),
+            "predict_rows": int(nd.shape[0]),
+        }
+        data = [self._x.ravel(), self._y, nd.ravel()]
+        if not interval:
+            return np.asarray(_toolbox_run("regression", "predict", data, options)["values"])
+        if not (0.0 < level < 1.0):
+            raise ValueError(f"`level` must be between 0 and 1; got {level}")
+        options["alpha"] = 1.0 - level
+        r = _toolbox_run("regression", "prediction_intervals", data, options)
+        return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
+
+
+def linear_regression(x, y, intercept: bool = True) -> LinearRegressionResult:
+    """Ordinary least squares by singular value decomposition.
+
+    Mirrors the C# ``LinearRegression`` class of the Numerics library: estimates
+    ``Y = alpha + beta*X + e``, ``e ~ N(0, sigma)``, via SVD.
+
+    Parameters
+    ----------
+    x : array_like
+        A 2D array of predictors with one row per observation, or a 1D array for a single
+        predictor.
+    y : array_like
+        Responses, one per row of ``x``.
+    intercept : bool
+        Whether to fit an intercept. Default ``True``.
+
+    Returns
+    -------
+    LinearRegressionResult
+
+    Examples
+    --------
+    >>> from corehydropy import linear_regression
+    >>> x = [[1, 2], [2, 1], [3, 4], [4, 3], [5, 5]]
+    >>> y = [3.1, 4.2, 8.1, 9.2, 13.0]
+    >>> fit = linear_regression(x, y)
+    >>> round(float(fit.r_squared), 6)
+    0.997992
+    """
+    xa = np.asarray(x, dtype=float)
+    if xa.ndim == 1:
+        xa = xa.reshape(-1, 1)
+    ya = np.asarray(y, dtype=float).ravel()
+    if ya.size != xa.shape[0]:
+        raise ValueError(
+            f"`y` must have one value per row of `x`; got {ya.size} and {xa.shape[0]}"
+        )
+    options = {"rows": int(xa.shape[0]), "columns": int(xa.shape[1]), "intercept": bool(intercept)}
+    data = [xa.ravel(), ya]
+    v = _toolbox_run("regression", "fit", data, options)
+    named = dict(zip(v["names"], v["values"]))
+    p = xa.shape[1] + (1 if intercept else 0)
+    coefficients = np.array([named[f"beta_{i + 1}"] for i in range(p)])
+    standard_errors = np.array([named[f"se_{i + 1}"] for i in range(p)])
+
+    cov = _toolbox_run("regression", "covariance", data, options)
+    covariance = np.asarray(cov["values"], dtype=float).reshape(cov["dims"][0], cov["dims"][1])
+
+    res = _toolbox_run("regression", "residuals", data, options)
+
+    return LinearRegressionResult(
+        coefficients=coefficients,
+        standard_errors=standard_errors,
+        covariance=covariance,
+        residuals=np.asarray(res["values"], dtype=float),
+        r_squared=named["r_squared"],
+        adj_r_squared=named["adj_r_squared"],
+        sigma=named["sigma"],
+        df=int(named["df"]),
+        n=int(named["n"]),
+        _x=xa,
+        _y=ya,
+        _intercept=bool(intercept),
+    )

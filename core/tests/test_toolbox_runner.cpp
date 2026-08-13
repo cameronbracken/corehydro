@@ -206,5 +206,49 @@ int main() {
     CHECK_NEAR(lin.values[0], 25.0, 1e-12);
     CHECK_NEAR(lin.values[1], 30.0, 1e-12);
 
+    // --- regression group ------------------------------------------------------------------
+    // A two-predictor model whose exact solution is known by construction: y = 3 + 2*x1 - x2
+    // with no noise, so the fitted coefficients must recover [3, 2, -1] exactly and R^2 == 1.
+    const std::vector<double> rx1{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0};
+    const std::vector<double> rx2{2.0, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0};
+    std::vector<double> rflat;
+    std::vector<double> ry;
+    for (std::size_t i = 0; i < rx1.size(); ++i) {
+        rflat.push_back(rx1[i]);
+        rflat.push_back(rx2[i]);
+        ry.push_back(3.0 + 2.0 * rx1[i] - rx2[i]);
+    }
+    std::string ropts = "{\"rows\":8,\"columns\":2,\"intercept\":true}";
+    auto rfit = tb::run_toolbox("regression", "fit", {rflat, ry}, ropts);
+    // values: beta_1, beta_2, beta_3, se_1, se_2, se_3, r_squared, adj_r_squared, sigma, df, n
+    CHECK_EQ(rfit.values.size(), std::size_t{11});
+    CHECK_NEAR(rfit.values[0], 3.0, 1e-9);   // intercept
+    CHECK_NEAR(rfit.values[1], 2.0, 1e-9);   // x1 coefficient
+    CHECK_NEAR(rfit.values[2], -1.0, 1e-9);  // x2 coefficient
+    std::size_t r2_at = 0;
+    for (std::size_t i = 0; i < rfit.names.size(); ++i)
+        if (rfit.names[i] == "r_squared") r2_at = i;
+    CHECK_NEAR(rfit.values[r2_at], 1.0, 1e-12);
+
+    auto rcov = tb::run_toolbox("regression", "covariance", {rflat, ry}, ropts);
+    CHECK_EQ(rcov.dims.size(), std::size_t{2});
+    CHECK_EQ(rcov.dims[0], 3);
+    CHECK_EQ(rcov.dims[1], 3);
+
+    auto rres = tb::run_toolbox("regression", "residuals", {rflat, ry}, ropts);
+    CHECK_EQ(rres.values.size(), std::size_t{8});
+    for (double v : rres.values) CHECK_NEAR(v, 0.0, 1e-9);  // no noise: exact fit
+
+    std::string ropts_pred = "{\"rows\":8,\"columns\":2,\"intercept\":true,\"predict_rows\":1}";
+    auto rpred = tb::run_toolbox("regression", "predict", {rflat, ry, {1.0, 2.0}}, ropts_pred);
+    CHECK_EQ(rpred.values.size(), std::size_t{1});
+    CHECK_NEAR(rpred.values[0], 3.0, 1e-9);  // 3 + 2*1 - 2 = 3
+
+    auto rpi = tb::run_toolbox("regression", "prediction_intervals", {rflat, ry, {1.0, 2.0}}, ropts_pred);
+    CHECK_EQ(rpi.dims.size(), std::size_t{2});
+    CHECK_EQ(rpi.dims[0], 1);
+    CHECK_EQ(rpi.dims[1], 3);
+    CHECK_NEAR(rpi.values[2], 3.0, 1e-9);  // mean column matches predict()
+
     return chtest::summary("toolbox_runner");
 }

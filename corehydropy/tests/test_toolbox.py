@@ -14,6 +14,7 @@ from corehydropy import (
     interpolate,
     interpolate_2d,
     l_moments,
+    linear_regression,
     percentile,
     product_moments,
     ranks,
@@ -193,3 +194,82 @@ def test_interpolate_2d_reproduces_a_known_bilinear_value_on_an_identity_grid():
     y = np.eye(3)
     out = interpolate_2d([1, 2, 3], [1, 2, 3], y, [1.5], [1.5])
     np.testing.assert_allclose(out, [0.5], atol=1e-12)
+
+
+# The "regression" toolbox group (Task 5). linear_regression() mirrors the C# LinearRegression
+# class; numpy.linalg.lstsq is a genuinely independent check (a different implementation
+# entirely), so comparing against it here is allowed by corehydro's fixture-provenance rule even
+# though it is not itself a pinned oracle value.
+
+
+def test_linear_regression_coefficients_match_numpy_lstsq():
+    rng = np.random.default_rng(42)
+    x = rng.normal(size=(30, 2))
+    y = 1.5 + 2 * x[:, 0] - 0.7 * x[:, 1] + rng.normal(scale=0.01, size=30)
+
+    fit = linear_regression(x, y)
+    design = np.column_stack([np.ones(30), x])
+    ref_coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+
+    np.testing.assert_allclose(fit.coefficients, ref_coef, atol=1e-8)
+
+
+def test_linear_regression_with_intercept_false_drops_the_intercept_column():
+    x = np.column_stack([[1, 2, 3, 4, 5], [2, 1, 4, 3, 5]])
+    y = [3.1, 4.2, 8.1, 9.2, 13.0]
+
+    with_int = linear_regression(x, y)
+    without_int = linear_regression(x, y, intercept=False)
+
+    assert len(with_int.coefficients) == 3
+    assert len(without_int.coefficients) == 2
+
+
+def test_linear_regression_rejects_a_y_of_the_wrong_length_naming_both_lengths():
+    x = np.column_stack([[1, 2, 3, 4, 5], [2, 1, 4, 3, 5]])
+    with pytest.raises(ValueError, match=r"5.*3|3.*5"):
+        linear_regression(x, [1, 2, 3])
+
+
+def test_linear_regression_recovers_an_exact_linear_combination_with_r_squared_1():
+    x1 = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=float)
+    x2 = np.array([2, 1, 4, 3, 6, 5, 8, 7], dtype=float)
+    y = 3 + 2 * x1 - x2
+    fit = linear_regression(np.column_stack([x1, x2]), y)
+    np.testing.assert_allclose(fit.coefficients, [3, 2, -1], atol=1e-9)
+    assert fit.r_squared == pytest.approx(1.0, abs=1e-12)
+
+
+def test_predict_reproduces_the_fitted_values_at_the_training_predictors():
+    x1 = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=float)
+    x2 = np.array([2, 1, 4, 3, 6, 5, 8, 7], dtype=float)
+    y = 3 + 2 * x1 - x2
+    x = np.column_stack([x1, x2])
+    fit = linear_regression(x, y)
+    np.testing.assert_allclose(fit.predict(x), y, atol=1e-9)
+
+
+def test_predict_with_interval_returns_a_lower_upper_mean_array():
+    x1 = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=float)
+    x2 = np.array([2, 1, 4, 3, 6, 5, 8, 7], dtype=float)
+    y = np.array([3.1, 6.2, 4.9, 8.3, 6.8, 10.2, 8.9, 12.1])
+    x = np.column_stack([x1, x2])
+    fit = linear_regression(x, y)
+    out = fit.predict(x, interval=True)
+    assert out.shape == (8, 3)
+    assert np.all(out[:, 0] <= out[:, 2]) and np.all(out[:, 2] <= out[:, 1])
+
+
+def test_linear_regression_repr_does_not_error():
+    x = np.column_stack([[1, 2, 3, 4, 5], [2, 1, 4, 3, 5]])
+    y = [3.1, 4.2, 8.1, 9.2, 13.0]
+    fit = linear_regression(x, y)
+    assert "LinearRegressionResult" in repr(fit)
+
+
+def test_predict_rejects_newdata_with_the_wrong_number_of_columns():
+    x = np.column_stack([[1, 2, 3, 4, 5], [2, 1, 4, 3, 5]])
+    y = [3.1, 4.2, 8.1, 9.2, 13.0]
+    fit = linear_regression(x, y)
+    with pytest.raises(ValueError, match="2"):
+        fit.predict([[1, 2, 3]])
