@@ -299,7 +299,10 @@ inline ToolboxResult run_statistics(const std::string& method,
             std::vector<double> flat = flatten_matrix(v);
             r.values.insert(r.values.end(), flat.begin(), flat.end());
         }
-        r.names = {"n"};
+        // No names: a single "n" label for one value out of 1 + size + 5*size^2 would invite a
+        // future label-based lookup to silently read only position 0. The blocked layout is
+        // documented above and addressed positionally (mirroring "spectra.autocorrelation",
+        // the other dims-shaped result), not by name.
         r.dims = {size, size};
         return r;
     }
@@ -322,9 +325,22 @@ inline ToolboxResult run_spectra(const std::string& method,
         else if (type_name == "partial") type = nd::Autocorrelation::Type::Partial;
         else throw std::runtime_error("unknown spectra.autocorrelation type: " + type_name);
 
+        // nd::Autocorrelation::function() returns nullopt for three distinct reasons (see
+        // autocorrelation.hpp), and they are not the same failure: too few observations, an
+        // explicit max_lag that can't produce any lag, and (Correlation only) a constant series
+        // where the lag-0 denominator is zero. Check the first two before the call so the
+        // message names the real cause instead of a generic "too short".
+        int n = static_cast<int>(x.size());
+        if (n < 2)
+            throw std::runtime_error("spectra.autocorrelation: series must have at least two "
+                                     "observations");
+        if (lag_max == 0)
+            throw std::runtime_error("spectra.autocorrelation: max_lag must be at least 1");
+
         auto acf = nd::Autocorrelation::function(x, lag_max, type);
         if (!acf)
-            throw std::runtime_error("spectra.autocorrelation: series too short for the requested lag");
+            throw std::runtime_error("spectra.autocorrelation: series has zero variance; "
+                                     "correlation is undefined for a constant series");
         ToolboxResult r;
         r.dims = {static_cast<int>(acf->size()), 2};
         r.values.reserve(acf->size() * 2);
