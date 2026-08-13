@@ -1856,6 +1856,30 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
 
 ---
 
+## CONSISTENCY (not a port defect) — MultivariateStudentT's CDF at dimension >= 3 is clock-seeded and not reproducible
+
+- **Where:** `Numerics/Distributions/Multivariate/MultivariateStudentT.cs`, `CDF()`;
+  `core/include/corehydro/numerics/distributions/multivariate/multivariate_student_t.hpp:23-38`.
+- **What:** for dimension 1-2, `CDF()` is closed-form (dim 1 delegates to the univariate StudentT
+  CDF; dim <= 2 drives `MultivariateNormal::cdf()` calls that are themselves closed-form) and is
+  fully bit-reproducible. For dimension >= 3, `CDF()` runs a deterministic K=200 stratified-quantile
+  chi-square(v) mixture, but each of the 200 inner `MultivariateNormal.CDF()` calls invokes the
+  seeded Genz-Bretz quasi-Monte-Carlo integrator, and the `MultivariateNormal` instance
+  `MultivariateStudentT` builds internally is never given an explicit seed (`_MVNUNI = new
+  MersenneTwister()` in C#, mirrored by `make_clock_seeded()` in the port). So the MVT CDF at
+  dimension >= 3 is not reproducible run to run in either language, independent of any seed the
+  caller supplies to the outer `MultivariateStudentT`/`MultivariateDistribution` object.
+- **Port handling:** mirrored faithfully; `mvdist_student_t()` in R and Python (`corehydror/R/
+  mvdist.R`, `corehydropy/src/corehydropy/mvdist.py`) has no `seed` parameter, unlike
+  `mvdist_normal()`, which does expose one because `MultivariateNormal`'s own Genz integrator is
+  genuinely seedable. `mvdist_random()` draws from each family's own seeded Mersenne Twister stream
+  and is unaffected by this limitation.
+- **Suggested action:** none — this is an upstream design property (a class-internal
+  `MultivariateNormal` with no seed setter exposed), not something the port introduced or could fix
+  without diverging from C#.
+
+---
+
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 
 Every entry above was re-checked against the shipped source at the new pins. This is the summary;

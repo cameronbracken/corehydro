@@ -4,7 +4,7 @@
 \alias{mvdist_student_t}
 \title{Construct a multivariate Student-t distribution}
 \usage{
-mvdist_student_t(df, location, scale = NULL, seed = NULL)
+mvdist_student_t(df, location, scale = NULL)
 }
 \arguments{
 \item{df}{degrees of freedom.}
@@ -12,15 +12,20 @@ mvdist_student_t(df, location, scale = NULL, seed = NULL)
 \item{location}{numeric vector of location parameters, length \code{d}.}
 
 \item{scale}{optional \verb{d x d} scale matrix; \code{NULL} (the default) uses the identity.}
-
-\item{seed}{optional integer seed for reproducible draws from \code{\link[=mvdist_random]{mvdist_random()}}; \code{NULL} (the
-default) leaves it clock-seeded.}
 }
 \value{
 a \code{corehydro_mvdist} of family \code{"MultivariateStudentT"}.
 }
 \description{
 Mirrors the C# \code{MultivariateStudentT} class of the Numerics library.
+}
+\details{
+\code{MultivariateStudentT} has no \code{seed} argument here (unlike \code{\link[=mvdist_normal]{mvdist_normal()}}). Its CDF
+at dimension three and above draws 200 inner \code{MultivariateNormal::cdf()} evaluations from a
+clock-seeded stream that this class never lets the caller set, faithfully mirroring the
+upstream C# \verb{_MVNUNI = new MersenneTwister()} default; that CDF is therefore not reproducible
+run to run, and R and Python cannot agree on a value there. \code{\link[=mvdist_random]{mvdist_random()}} draws from a
+separate, genuinely seedable stream and is unaffected.
 }
 \examples{
 mvdist_dimension(mvdist_student_t(5, c(0, 0)))

@@ -428,7 +428,7 @@ def mvdist_normal(
     return MultivariateDistribution._from_spec("MultivariateNormal", json.dumps(spec))
 
 
-def mvdist_student_t(df: float, location, scale=None, seed: int | None = None) -> MultivariateDistribution:
+def mvdist_student_t(df: float, location, scale=None) -> MultivariateDistribution:
     """Construct a multivariate Student-t distribution.
 
     Mirrors the C# ``MultivariateStudentT`` class of the Numerics library.
@@ -441,14 +441,21 @@ def mvdist_student_t(df: float, location, scale=None, seed: int | None = None) -
         Location parameters, length ``d``.
     scale : array-like, optional
         ``d x d`` scale matrix; ``None`` (the default) uses the identity.
-    seed : int, optional
-        Seed for reproducible draws from :meth:`MultivariateDistribution.random`; ``None`` (the
-        default) leaves it clock-seeded.
 
     Returns
     -------
     MultivariateDistribution
         Family ``"MultivariateStudentT"``.
+
+    Notes
+    -----
+    ``MultivariateStudentT`` has no `seed` parameter here (unlike :func:`mvdist_normal`). Its CDF
+    at dimension three and above draws 200 inner ``MultivariateNormal.cdf()`` evaluations from a
+    clock-seeded stream that this class never lets the caller set, faithfully mirroring the
+    upstream C# ``_MVNUNI = new MersenneTwister()`` default; that CDF is therefore not
+    reproducible run to run, and R and Python cannot agree on a value there.
+    :meth:`MultivariateDistribution.random` draws from a separate, genuinely seedable stream and
+    is unaffected.
 
     Examples
     --------
@@ -463,8 +470,6 @@ def mvdist_student_t(df: float, location, scale=None, seed: int | None = None) -
         if scale_arr.ndim != 2 or scale_arr.shape[0] != scale_arr.shape[1] or scale_arr.shape[0] != len(location_v):
             raise ValueError("`scale` must be a square matrix matching the length of `location`")
         spec["scale"] = [row.tolist() for row in scale_arr]
-    if seed is not None:
-        spec["seed"] = int(seed)
     return MultivariateDistribution._from_spec("MultivariateStudentT", json.dumps(spec))
 
 

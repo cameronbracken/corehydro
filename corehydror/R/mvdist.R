@@ -98,13 +98,17 @@ mvdist_normal <- function(mean, covariance, seed = NULL, max_evaluations = NULL,
 #' @param df degrees of freedom.
 #' @param location numeric vector of location parameters, length `d`.
 #' @param scale optional `d x d` scale matrix; `NULL` (the default) uses the identity.
-#' @param seed optional integer seed for reproducible draws from [mvdist_random()]; `NULL` (the
-#'   default) leaves it clock-seeded.
 #' @return a `corehydro_mvdist` of family `"MultivariateStudentT"`.
+#' @details `MultivariateStudentT` has no `seed` argument here (unlike [mvdist_normal()]). Its CDF
+#'   at dimension three and above draws 200 inner `MultivariateNormal::cdf()` evaluations from a
+#'   clock-seeded stream that this class never lets the caller set, faithfully mirroring the
+#'   upstream C# `_MVNUNI = new MersenneTwister()` default; that CDF is therefore not reproducible
+#'   run to run, and R and Python cannot agree on a value there. [mvdist_random()] draws from a
+#'   separate, genuinely seedable stream and is unaffected.
 #' @examples
 #' mvdist_dimension(mvdist_student_t(5, c(0, 0)))
 #' @export
-mvdist_student_t <- function(df, location, scale = NULL, seed = NULL) {
+mvdist_student_t <- function(df, location, scale = NULL) {
   if (!is.numeric(df) || length(df) != 1L || !is.finite(df)) {
     stop("`df` must be a single finite number", call. = FALSE)
   }
@@ -120,8 +124,7 @@ mvdist_student_t <- function(df, location, scale = NULL, seed = NULL) {
     family = "MultivariateStudentT",
     df = as.double(df),
     location = spec_array(as.double(location)),
-    scale = scale_rows,
-    seed = if (is.null(seed)) NULL else as.integer(seed)
+    scale = scale_rows
   ))
   new_mvdist("MultivariateStudentT", spec)
 }
