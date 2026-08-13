@@ -920,6 +920,46 @@
           "source": "curated via oracle_emitter --dump"
         }
       ]
+    },
+    {
+      "name": "joint_exceedance_theta5",
+      "note": "The two joint exceedance probabilities off the same theta cdf_theta5 pins: OR = 1 - CDF(u, v) (either variate exceeds), AND = 1 - u - v + CDF(u, v) (both do). See BivariateCopula.cs.",
+      "construct": {"theta": 5},
+      "assertions": [
+        {"method": "or_exceedance",  "args": [0.2, 0.8], "expected": 0.8000032981644277, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "and_exceedance", "args": [0.2, 0.8], "expected": 0.19999670183557225, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "or_exceedance",  "args": [0.9, 0.9], "expected": 0.11399036260727069, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "and_exceedance", "args": [0.9, 0.9], "expected": 0.08600963739272927, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"}
+      ]
+    },
+    {
+      "name": "log_pdf_and_inverse_cdf_theta5",
+      "note": "LogPDF at an interior point, and the conditional InverseCDF pair. C# InverseCDF(u, v) returns [u, v'] -- element 0 is the FIRST argument passed straight back (see ArchimedeanCopula.cs / NormalCopula.cs), so it is element 1, the conditionally inverted second variate, that carries the copula. Element 0 is asserted anyway to pin that pass-through contract, which the GenerateRandomValues sampling path depends on. Same theta as the pdf/cdf cases above.",
+      "construct": {"theta": 5},
+      "assertions": [
+        {"method": "log_pdf",     "args": [0.2, 0.8],    "expected": -6.431696620012688, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
+        {"method": "inverse_cdf", "args": [0.3, 0.7, 0], "expected": 0.3, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
+        {"method": "inverse_cdf", "args": [0.3, 0.7, 1], "expected": 0.36611397954389807, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"}
+      ]
+    },
+    {
+      "name": "theta_bounds",
+      "note": "The ThetaMinimum/ThetaMaximum feasible range this concrete copula declares. Both are constants, independent of the case's own theta; the runners read them through the `bounds` verb, which returns the pair.",
+      "construct": {"theta": 5},
+      "assertions": [
+        {"method": "theta_minimum", "args": [], "expected": 1.0, "mode": "equal"},
+        {"method": "theta_maximum", "args": [], "expected": "inf", "mode": "equal"}
+      ]
+    },
+    {
+      "name": "log_likelihoods_on_raw_data",
+      "note": "The three log-likelihood surfaces BivariateCopulaEstimation optimizes, evaluated at a FIXED theta over the RAW paired sample (args name the two datasets; see fixtures/README.md). The pseudo arm is the one that matters here: PseudoLogLikelihood is defined on values already in (0, 1) and does not rank internally, so the caller converts the sample to its Weibull plotting positions first -- rank / (n + 1) over Statistics.RanksInPlace, exactly as Test_MPL_Fit does. The IFM and full arms push the raw sample through the attached Normal marginals themselves.",
+      "construct": {"theta": 5, "marginals": {"targets": ["Normal", "Normal"], "params": [[100.0, 15.0], [80.0, 25.0]]}},
+      "assertions": [
+        {"method": "log_likelihood_pseudo", "args": ["data1", "data2"], "expected": -35.780718308484616, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
+        {"method": "log_likelihood_ifm",    "args": ["data1", "data2"], "expected": -56.437459698306675, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
+        {"method": "log_likelihood_full",   "args": ["data1", "data2"], "expected": -943.2993386490294, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump"}
+      ]
     }
   ]
 }

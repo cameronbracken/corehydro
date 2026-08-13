@@ -5,10 +5,11 @@
 // InverseCDF: Brent root-finding on CDF(y) - p. Falls back to coarse bisection on
 //   bracket failure (the C# falls back to EmpiricalDistribution; we skip that
 //   dependency and bisect instead — divergence noted here).
-// Moments: AGK numerical integration over [InverseCDF(1e-8), InverseCDF(1-1e-8)],
-//   mirroring C# CentralMoments(double tolerance) (the AGK overload). The C# Mixture
-//   actually calls CentralMoments(1000) (trapezoidal int), but AGK reproduces values
-//   to oracle tolerance (1e-4 to 1e-5) so fixtures pass.
+// Moments: central_moments(1000), the fixed-step trapezoidal overload the C# integer
+//   literal in `CentralMoments(1000)` binds to (Mixture.cs line 312). This file used to
+//   call adaptive Gauss-Kronrod instead, which agreed with the C# only to about six digits.
+// Mode: BrentSearch maximizing the PDF over [InverseCDF(0.001), InverseCDF(0.999)]
+//   (Mixture.cs line 337), replacing an earlier ternary search.
 // IEstimation: MLE via EM algorithm (mirrors C# MLE/Estimate exactly):
 //   E-step: log-sum-exp normalized component responsibilities.
 //   M-step: update weights (Σ resp / N), optimize component params via NelderMead.
@@ -87,7 +88,7 @@
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
 #include "corehydro/numerics/distributions/deterministic.hpp"
 #include "corehydro/numerics/distributions/empirical_distribution.hpp"
-#include "corehydro/numerics/math/integration/adaptive_gauss_kronrod.hpp"
+#include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
 #include "corehydro/numerics/math/rootfinding/brent.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
@@ -365,23 +366,15 @@ class Mixture : public UnivariateDistributionBase,
     }
     double median() const override { return inverse_cdf(0.5); }
     double mode() const override {
-        // Brent maximize PDF over [InverseCDF(0.001), InverseCDF(0.999)] (mirrors C#).
+        // Mirrors C# Mode (Mixture.cs line 337): BrentSearch maximizing the PDF over
+        // [InverseCDF(0.001), InverseCDF(0.999)], returning BestParameterSet.Values[0].
+        // This used to ternary-search the same interval, which agrees only where the mixture
+        // density is unimodal; Brent reproduces C# bit-for-bit.
         double lo = inverse_cdf(0.001);
         double hi = inverse_cdf(0.999);
-        auto pdf_fn = [this](double x) { return pdf(x); };
-        // NelderMead is 1D awkward; use ternary search for unimodal approximation.
-        // For a proper multi-modal mixture this may not find the global max --
-        // the C# uses BrentSearch.Maximize over the same range.
-        double a = lo, b = hi;
-        for (int i = 0; i < 200; ++i) {
-            double m1 = a + (b - a) / 3.0;
-            double m2 = b - (b - a) / 3.0;
-            if (pdf_fn(m1) < pdf_fn(m2))
-                a = m1;
-            else
-                b = m2;
-        }
-        return 0.5 * (a + b);
+        math::optimization::BrentSearch brent([this](double x) { return pdf(x); }, lo, hi);
+        brent.maximize();
+        return brent.best_parameter();
     }
     double standard_deviation() const override {
         if (!moments_computed_) compute_moments();
@@ -698,35 +691,17 @@ class Mixture : public UnivariateDistributionBase,
         return max_val + std::log(sum);
     }
 
-    // AGK numerical moments over [InverseCDF(1e-8), InverseCDF(1-1e-8)].
-    // Mirrors C# CentralMoments(double tolerance = 1e-8) from the base class.
+    // Mirrors C# ComputeMoments() (Mixture.cs line 312): CentralMoments(1000). The integer
+    // literal binds to the base class's fixed-step TRAPEZOIDAL overload (`CentralMoments(int
+    // steps)`), not the adaptive-tolerance one -- see docs/upstream-csharp-issues.md. This
+    // file used to call adaptive Gauss-Kronrod here, which agreed with C# only to about six
+    // digits; the 1000-step trapezoid reproduces it to ~1e-14 relative.
     void compute_moments() const {
-        namespace agk = math::integration;
-        const double eps = 1e-8;
-        double a = inverse_cdf(eps);
-        double b = inverse_cdf(1.0 - eps);
-        if (a >= b) {
-            u_[0] = a;
-            u_[1] = u_[2] = u_[3] = kNaN;
-            moments_computed_ = true;
-            return;
-        }
-        const double tol = 1e-8;
-        u_[0] = agk::integrate([this](double x) { return x * pdf(x); }, a, b, tol, tol);
-        const double mu = u_[0];
-        u_[1] = std::sqrt(agk::integrate(
-            [this, mu](double x) { return (x - mu) * (x - mu) * pdf(x); }, a, b, tol, tol));
-        const double s = u_[1];
-        u_[2] = agk::integrate(
-            [this, mu, s](double x) {
-                double z = (x - mu) / s;
-                return z * z * z * pdf(x);
-            }, a, b, tol, tol);
-        u_[3] = agk::integrate(
-            [this, mu, s](double x) {
-                double z = (x - mu) / s;
-                return z * z * z * z * pdf(x);
-            }, a, b, tol, tol);
+        auto mom = central_moments(1000);
+        u_[0] = mom[0];
+        u_[1] = mom[1];
+        u_[2] = mom[2];
+        u_[3] = mom[3];
         moments_computed_ = true;
     }
 

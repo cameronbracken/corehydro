@@ -147,180 +147,282 @@ check_assertion <- function(actual, a) {
   }
 }
 
+# --- Delegation to the shared distribution runner ----------------------------------------
+#
+# The fixture `construct` schema IS the dist_spec.hpp grammar, so the bridge only has to
+# resolve a dataset NAME into an inline array, spell the handful of keys the two schemas
+# disagree on, and hand the object to ch_dist_spec_run_ / ch_copula_run_ / ch_mvdist_run_.
+# Every value the runner produces is then pinned by exactly the corpus the bespoke glue was
+# pinned by. This mirrors core/tests/test_fixtures.cpp's delegation section case for case, so
+# the C++, R and Python runners all reach the oracle through one shared code path.
+#
+# Two properties of the runner keep a narrow bespoke path alive; both are deliberate:
+#
+#   1. json_lite, the runner's JSON reader, has no NaN or Infinity literal, while the corpus
+#      deliberately pins non-finite-PARAMETER validity cases: Empirical `p`, KernelDensity
+#      `bandwidth`, every copula `theta`/`df`, and BivariateEmpirical `x1`/`x2`/`p`. Every such
+#      case asserts nothing but `parameters_valid`, so each keeps a narrow glue call. The same
+#      limit applies to a non-finite EVALUATION POINT, not just the construct: the
+#      MultivariateNormal / MultivariateStudentT log_pdf-at-infinity cases and
+#      r_mvtnorm_4d_sequential's infinite CDF bounds.
+#
+#   2. The runner is stateless by construction -- one call builds an object, evaluates once and
+#      drops it -- and it exposes the user-facing verb set, not the whole fixture vocabulary.
+#      Two groups therefore stay bespoke: methods with no runner counterpart (`mvndst` and its
+#      two status arms, `log_multivariate_beta`, `cdf_xy(_after_set_parameters)`,
+#      `dependency_change`), and MultivariateNormal's `cdf`/`interval` in a case that consumes
+#      the persistent MVNUNI stream more than once, since those pin a SEQUENCE off one object.
+#      A case that consumes the stream at most once delegates: `seed` is a grammar key, so a
+#      rebuilt object starts the same stream. Only `cdf` has such a case today, so only `cdf`
+#      has a batch entry point below.
+
+has_non_finite <- function(v) {
+  if (is.character(v)) return(any(v %in% c("nan", "inf", "-inf")))
+  if (is.list(v)) return(any(vapply(v, has_non_finite, logical(1))))
+  FALSE
+}
+
+# Both of the runner's string inputs (the spec and the args array). digits = I(17) round-trips
+# a double exactly, matching run_estimation_case's model_json convention.
+to_runner_json <- function(x) {
+  as.character(jsonlite::toJSON(x, auto_unbox = TRUE, digits = I(17)))
+}
+
 # --- Composite distribution path -------------------------------------------------------
-# For TruncatedDistribution (and future Empirical/KernelDensity/Mixture/CompetingRisks),
-# the "construct" field uses a structured schema instead of flat "params".
-# build_composite_data() parses the construct into a list consumed by dispatch_composite().
-# Adding a new composite = one new case in build_composite_data + one in dispatch_composite.
+# TruncatedDistribution / Empirical / KernelDensity / Mixture / CompetingRisks: the fixture
+# "construct" already IS the dist_spec.hpp grammar (which accepts `target`/`params` as aliases
+# of `family`/`parameters`), so a composite case serializes straight through ch_dist_spec_run_.
+# Adding a composite needs no change here at all.
 
 kCompositeTargets <- c("TruncatedDistribution", "Empirical", "KernelDensity", "Mixture",
                        "CompetingRisks")
 
-build_composite_data <- function(target, construct, datasets = list()) {
-  if (target == "TruncatedDistribution") {
-    base_target <- construct$base$target
-    base_params <- vapply(construct$base$params, parse_num, numeric(1))
-    lo <- as.double(construct$bounds[[1]])
-    hi <- as.double(construct$bounds[[2]])
-    return(list(base_target = base_target, base_params = base_params, lo = lo, hi = hi))
-  }
-  if (target == "Empirical") {
-    xv <- as.double(unlist(construct$x))
-    pv <- as.double(unlist(construct$p))
+# "data" is the only dataset-by-name key in the univariate grammar (KernelDensity); "base" and
+# "components" nest and carry no dataset reference.
+composite_spec <- function(target, construct, datasets) {
+  construct$family <- target
+  if (is.character(construct$data)) construct$data <- datasets[[construct$data]]
+  construct
+}
+
+# The fixture method vocabulary predates the runner's; map the differences in one place.
+# `random_value` args are [sample_size, seed, index]: the runner's "random" reads only the
+# first two and returns the whole draw, so the args pass through unchanged and fixture_pick
+# does the indexing.
+fixture_method <- function(m) {
+  switch(m,
+    param = "parameters",
+    random_value = "random",
+    m  # pdf, log_pdf, cdf, quantile, mean, ..., log_likelihood pass straight through
+  )
+}
+
+# `param` and `random_value` index into the vector the runner returns whole.
+fixture_pick <- function(r, method, args) {
+  if (identical(method, "param")) return(r$values[[as.integer(args[[1]]) + 1L]])
+  if (identical(method, "random_value")) return(r$values[[as.integer(args[[3]]) + 1L]])
+  r$values[[1]]
+}
+
+# Limitations 1 and 2 for the composite path, and the only remaining callers of the bespoke
+# composite glue in dist.cpp: Empirical's non-finite `p` and KernelDensity's non-finite
+# `bandwidth` validity cases (which the grammar's JSON reader cannot encode), plus
+# CompetingRisks' `dependency_change` (which has no runner counterpart).
+dispatch_composite_local <- function(target, construct, datasets, method, args) {
+  ns <- asNamespace("corehydror")
+  if (target == "Empirical" && identical(method, "parameters_valid")) {
     pt <- if (!is.null(construct$p_transform)) construct$p_transform else "NormalZ"
     # v2.1.4: p_descending DECLARES the probability order (mirrors C#'s explicit
     # `probabilityOrder` argument -- NOT auto-detected from the data); default FALSE matches
     # the ordinary ascending-CDF case.
     pd <- if (!is.null(construct$p_descending)) as.logical(construct$p_descending) else FALSE
-    return(list(x_vals = xv, p_vals = pv, p_transform = pt, p_descending = pd))
+    return(ns$ch_emp_valid_(as.double(unlist(construct$x)), as.double(unlist(construct$p)),
+                             pt, pd))
   }
-  if (target == "KernelDensity") {
-    data_key  <- construct$data
-    data_vec  <- as.double(unlist(datasets[[data_key]]))
+  if (target == "KernelDensity" && identical(method, "parameters_valid")) {
     kernel    <- if (!is.null(construct$kernel)) construct$kernel else "Gaussian"
+    # A negative bandwidth means Silverman's rule; as.double (not parse_num) parses the
+    # "nan"/"inf" literal these two cases exist to reject.
     bandwidth <- if (!is.null(construct$bandwidth)) as.double(construct$bandwidth) else -1.0
     bounded   <- if (!is.null(construct$bounded_by_data)) as.logical(construct$bounded_by_data) else TRUE
-    return(list(data_vec = data_vec, kernel = kernel, bandwidth = bandwidth, bounded = bounded))
+    return(ns$ch_kde_valid_(as.double(unlist(datasets[[construct$data]])), kernel, bandwidth,
+                             bounded))
   }
-  if (target == "Mixture") {
-    comp_targets <- vapply(construct$components, function(c) c$target, character(1))
-    comp_params  <- lapply(construct$components, function(c) vapply(c$params, parse_num, numeric(1)))
-    wts          <- as.double(unlist(construct$weights))
-    zero_inflated <- if (!is.null(construct$zero_inflated)) as.logical(construct$zero_inflated) else FALSE
-    zero_weight   <- if (!is.null(construct$zero_weight)) parse_num(construct$zero_weight) else 0.0
-    return(list(comp_targets = comp_targets, comp_params = comp_params, weights = wts,
-                zero_inflated = zero_inflated, zero_weight = zero_weight))
+  if (target == "CompetingRisks" && identical(method, "dependency_change")) {
+    # v2.1.4: verifies the Dependency setter fix + PerfectlyNegative no longer zeroing
+    # CorrelationMatrix, in ONE self-contained call -- args = [x, dependency2, i, j, field].
+    ct <- vapply(construct$components, function(c) c$target, character(1))
+    cp <- lapply(construct$components, function(c) vapply(c$params, parse_num, numeric(1)))
+    min_rv <- if (!is.null(construct$minimum_of_random_variables))
+                as.logical(construct$minimum_of_random_variables) else TRUE
+    dep <- if (!is.null(construct$dependency)) construct$dependency else "Independent"
+    corr <- if (!is.null(construct$correlation))
+              lapply(construct$correlation, function(r) as.double(unlist(r))) else list()
+    return(ns$ch_cr_dependency_change_(ct, cp, min_rv, dep, args[[2]], corr,
+                                        as.double(args[[1]]), args[[5]],
+                                        as.integer(args[[3]]), as.integer(args[[4]])))
   }
-  if (target == "CompetingRisks") {
-    comp_targets <- vapply(construct$components, function(c) c$target, character(1))
-    comp_params  <- lapply(construct$components, function(c) vapply(c$params, parse_num, numeric(1)))
-    min_of_rv    <- if (!is.null(construct$minimum_of_random_variables))
-                      as.logical(construct$minimum_of_random_variables) else TRUE
-    dependency   <- if (!is.null(construct$dependency)) construct$dependency else "Independent"
-    correlation  <- if (!is.null(construct$correlation))
-                      lapply(construct$correlation, function(r) as.double(unlist(r))) else list()
-    return(list(comp_targets = comp_targets, comp_params = comp_params,
-                minimum_of_rv = min_of_rv, dependency = dependency, correlation = correlation))
-  }
-  stop(sprintf("unknown composite target: %s", target))
+  stop(sprintf("composite %s/%s has no shared-runner path and no local one either",
+               target, method))
 }
 
-dispatch_composite <- function(target, cd, method, args) {
+run_composite_case <- function(target, construct, assertions, datasets) {
   ns <- asNamespace("corehydror")
-  moment_names <- c("mean", "median", "mode", "sd", "skewness", "kurtosis",
-                    "minimum", "maximum")
-  if (target == "TruncatedDistribution") {
-    if (method %in% moment_names) {
-      return(unname(ns$ch_trunc_moments_(cd$base_target, cd$base_params, cd$lo, cd$hi)[[method]]))
+  # Limitation 1: a construct carrying a "nan"/"inf" literal cannot be serialized into the
+  # grammar, so its (validity-only) assertions run locally.
+  encodable <- !has_non_finite(construct)
+  cspec <- composite_spec(target, construct, datasets)
+  for (a in assertions) {
+    method <- a$method
+    args <- if (is.null(a$args)) list() else a$args
+    # `dependency_change` has no runner counterpart (limitation 2); a non-finite evaluation
+    # point is limitation 1 applied to the args rather than the construct.
+    if (!encodable || identical(method, "dependency_change") || has_non_finite(args)) {
+      check_assertion(dispatch_composite_local(target, construct, datasets, method, args), a)
+      next
     }
-    return(switch(method,
-      pdf      = ns$ch_trunc_pdf_(cd$base_target, cd$base_params, cd$lo, cd$hi,
-                                  as.double(args[[1]])),
-      cdf      = ns$ch_trunc_cdf_(cd$base_target, cd$base_params, cd$lo, cd$hi,
-                                  as.double(args[[1]])),
-      quantile = ns$ch_trunc_quantile_(cd$base_target, cd$base_params, cd$lo, cd$hi,
-                                       as.double(args[[1]])),
-      parameters_valid = ns$ch_trunc_valid_(cd$base_target, cd$base_params, cd$lo, cd$hi),
-      # GetParameters mirrors {base_params..., lo, hi} -- no C++ call needed, `cd` already
-      # holds the flat tuple (used by the sequential_setparameters_recovery-style cases to
-      # confirm a restored parameter set after a SetParameters recovery).
-      param = c(cd$base_params, cd$lo, cd$hi)[[as.integer(args[[1]]) + 1L]],
-      stop(sprintf("unknown fixture method for TruncatedDistribution: %s", method))
-    ))
-  }
-  if (target == "Empirical") {
-    xv <- cd$x_vals; pv <- cd$p_vals; pt <- cd$p_transform; pd <- cd$p_descending
-    if (method %in% moment_names) {
-      return(unname(ns$ch_emp_moments_(xv, pv, pt, pd)[[method]]))
+    if (identical(method, "set_parameters")) {
+      # The runner is stateless, so a SetParameters round trip is carried on the spec: every
+      # later assertion in this case rebuilds with it applied, which is what dist_spec's
+      # "set_parameters" key exists for. A second call replaces the first, exactly as the
+      # in-place mutation did. The 0 mirrors the old dispatcher's dummy return, and the
+      # assertion is still CHECKED rather than skipped.
+      cspec$set_parameters <- args
+      check_assertion(0, a)
+      next
     }
-    return(switch(method,
-      pdf      = ns$ch_emp_pdf_(xv, pv, pt, pd, as.double(args[[1]])),
-      cdf      = ns$ch_emp_cdf_(xv, pv, pt, pd, as.double(args[[1]])),
-      quantile = ns$ch_emp_quantile_(xv, pv, pt, pd, as.double(args[[1]])),
-      parameters_valid = ns$ch_emp_valid_(xv, pv, pt, pd),
-      stop(sprintf("unknown fixture method for Empirical: %s", method))
-    ))
-  }
-  if (target == "KernelDensity") {
-    dv <- cd$data_vec; ker <- cd$kernel; bw <- cd$bandwidth; bd <- cd$bounded
-    if (method %in% moment_names) {
-      return(unname(ns$ch_kde_moments_(dv, ker, bw, bd)[[method]]))
+    spec <- to_runner_json(cspec)
+    if (identical(a$mode, "bool")) {
+      # The old dispatcher ignored the assertion's method in bool mode and read
+      # parameters_valid(); keep that exactly.
+      check_assertion(ns$ch_dist_spec_run_(spec, "parameters_valid", "[]")$values[[1]], a)
+    } else {
+      r <- ns$ch_dist_spec_run_(spec, fixture_method(method), to_runner_json(args))
+      check_assertion(fixture_pick(r, method, args), a)
     }
-    return(switch(method,
-      pdf              = ns$ch_kde_pdf_(dv, ker, bw, bd, as.double(args[[1]])),
-      cdf              = ns$ch_kde_cdf_(dv, ker, bw, bd, as.double(args[[1]])),
-      quantile         = ns$ch_kde_quantile_(dv, ker, bw, bd, as.double(args[[1]])),
-      parameters_valid = ns$ch_kde_valid_(dv, ker, bw, bd),
-      stop(sprintf("unknown fixture method for KernelDensity: %s", method))
-    ))
   }
-  if (target == "Mixture") {
-    ct <- cd$comp_targets; cp <- cd$comp_params; wts <- cd$weights
-    zi <- cd$zero_inflated; zw <- cd$zero_weight
-    if (method %in% moment_names) {
-      return(unname(ns$ch_mix_moments_(ct, cp, wts, zi, zw)[[method]]))
-    }
-    return(switch(method,
-      pdf              = ns$ch_mix_pdf_(ct, cp, wts, zi, zw, as.double(args[[1]])),
-      cdf              = ns$ch_mix_cdf_(ct, cp, wts, zi, zw, as.double(args[[1]])),
-      quantile         = ns$ch_mix_quantile_(ct, cp, wts, zi, zw, as.double(args[[1]])),
-      parameters_valid = ns$ch_mix_valid_(ct, cp, wts, zi, zw),
-      # GetParameters() flat vector [w0..wK-1, component params...] -- needed (not the raw
-      # `wts` in `cd`) because the zero-inflation setters recompute the weights in C++.
-      param            = ns$ch_mix_params_(ct, cp, wts, zi, zw)[[as.integer(args[[1]]) + 1L]],
-      stop(sprintf("unknown fixture method for Mixture: %s", method))
-    ))
-  }
-  if (target == "CompetingRisks") {
-    ct <- cd$comp_targets; cp <- cd$comp_params; min_rv <- cd$minimum_of_rv
-    dep <- cd$dependency; corr <- cd$correlation
-    if (method %in% moment_names) {
-      return(unname(ns$ch_cr_moments_(ct, cp, min_rv, dep, corr)[[method]]))
-    }
-    if (method == "dependency_change") {
-      # v2.1.4: verifies the Dependency setter fix + PerfectlyNegative no longer zeroing
-      # CorrelationMatrix, in ONE self-contained call -- args = [x, dependency2, i, j, field].
-      return(ns$ch_cr_dependency_change_(ct, cp, min_rv, dep, args[[2]], corr,
-                                          as.double(args[[1]]), args[[5]],
-                                          as.integer(args[[3]]), as.integer(args[[4]])))
-    }
-    return(switch(method,
-      pdf              = ns$ch_cr_pdf_(ct, cp, min_rv, dep, corr, as.double(args[[1]])),
-      log_pdf          = ns$ch_cr_log_pdf_(ct, cp, min_rv, dep, corr, as.double(args[[1]])),
-      cdf              = ns$ch_cr_cdf_(ct, cp, min_rv, dep, corr, as.double(args[[1]])),
-      quantile         = ns$ch_cr_quantile_(ct, cp, min_rv, dep, corr, as.double(args[[1]])),
-      parameters_valid = ns$ch_cr_valid_(ct, cp, min_rv, dep, corr),
-      stop(sprintf("unknown fixture method for CompetingRisks: %s", method))
-    ))
-  }
-  stop(sprintf("unknown composite target: %s", target))
-}
-
-# Applies a "set_parameters" fixture step to a composite's parsed construct data, mirroring
-# the C# SetParameters(flat vector) entry point -- lets a case exercise a "construct valid ->
-# SetParameters invalid -> recheck -> SetParameters valid -> recheck" sequence. There is no
-# persistent C++ object to mutate here (every ch_trunc_*_ call is a stateless
-# construct-and-compute), so this instead updates the R-side `cd` list in place; the NEXT
-# dispatch_composite call reconstructs from the updated fields, which is behaviorally
-# equivalent (see test-fixtures.R's fixture-README companion note). Only TruncatedDistribution
-# needs this in the current validation wave.
-apply_set_parameters_composite <- function(target, cd, flat_args) {
-  flat <- vapply(flat_args, parse_num, numeric(1))
-  if (target == "TruncatedDistribution") {
-    n_base <- length(cd$base_params)
-    cd$base_params <- flat[seq_len(n_base)]
-    cd$lo <- flat[n_base + 1L]
-    cd$hi <- flat[n_base + 2L]
-    return(cd)
-  }
-  stop(sprintf("set_parameters not supported for composite target: %s", target))
 }
 
 # --- multivariate_distribution path -----------------------------------------------------
-# Dirichlet/Multinomial/BivariateEmpirical dispatch to the bespoke ch_dirichlet_val_/
-# ch_multinomial_val_/ch_bve_cdf_ glue in mvd.cpp (method + flat numeric args in, double
-# out). Extensible: additional multivariate targets add a branch here plus their own
-# ch_<name>_val_ entry point.
+# The only partly delegated path. ch_mvdist_run_ covers the verbs this phase exposes (see
+# mv_delegated below) and the rest of the pinned surface stays on dispatch_multivariate, which
+# keeps the bespoke ch_dirichlet_val_/ch_bve_*/ch_mvn_*/ch_mvt_val_ glue in mvd.cpp: the MVNDST
+# integrator internals, BivariateEmpirical's cdf_xy pair, Dirichlet's static
+# log_multivariate_beta, the non-finite constructs and evaluation points, and the seeded MVNUNI
+# sequences. Extending the runner's method table shrinks the bespoke half; nothing else moves.
+
+# Translates a fixture multivariate construct into the dist_spec grammar. The only schema
+# difference is Multinomial's parameter spelling (n / p here, trials / probabilities there);
+# the four MultivariateNormal integrator settings (seed / max_evaluations / abs_error /
+# rel_error) are grammar keys and pass straight through.
+mvdist_spec <- function(target, construct) {
+  out <- construct
+  out$family <- target
+  if (target == "Multinomial") {
+    out$n <- NULL
+    out$p <- NULL
+    out$trials <- construct$n
+    out$probabilities <- construct$p
+  }
+  out
+}
+
+# MultivariateNormal's CDF above dimension 2, its Interval, and MVNDST itself all draw from the
+# instance's persistent MVNUNI stream, so each call ADVANCES it. A case that makes more than one
+# such call pins a sequence off one object, which a stateless runner cannot reproduce by
+# construction.
+mvn_consumes_stream <- function(m) {
+  m %in% c("cdf", "interval", "mvndst", "mvndst_inform", "mvndst_error")
+}
+
+kMvDelegatedMethods <- c("dimension", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance",
+                         "sd", "covariance", "median", "mode", "inverse_cdf", "interval",
+                         "degrees_of_freedom", "alpha", "alpha_sum", "number_of_trials",
+                         "random_value", "lhs_value", "marginal_dimension", "marginal_mean",
+                         "marginal_covariance", "marginal_log_pdf", "conditional_dimension",
+                         "conditional_mean", "conditional_covariance")
+
+# Methods ch_mvdist_run_ covers. What is left on dispatch_multivariate is exactly three groups:
+# the MVNDST integrator internals (mvndst and its two status arms), BivariateEmpirical's
+# cdf_xy(_after_set_parameters) and Dirichlet's static log_multivariate_beta, which have no
+# runner verb; and MultivariateNormal's cdf/interval in a case that makes more than one
+# stream-consuming call (`mvn_stream_isolated` FALSE -- r_mvtnorm_4d_sequential's eleven
+# advancing cdf values are the reason). With `seed` in the grammar a SINGLE such call reproduces
+# exactly, so those cases delegate.
+mv_delegated <- function(target, method, mvn_stream_isolated) {
+  if (method %in% c("mvndst", "mvndst_inform", "mvndst_error")) return(FALSE)
+  if (identical(target, "MultivariateNormal") && method %in% c("cdf", "interval") &&
+      !mvn_stream_isolated) {
+    return(FALSE)
+  }
+  method %in% kMvDelegatedMethods
+}
+
+square_dim <- function(n) {
+  d <- as.integer(round(sqrt(n)))
+  if (d * d != n) stop("a covariance result is not a square matrix")
+  d
+}
+
+# ch_mvdist_run_ returns whole vectors, so every fixture method that names one element indexes
+# in here. Conventions preserved verbatim from the deleted dispatcher arms: mean/variance/sd/
+# median/mode/alpha take [i]; covariance takes [i, j] against a row-major dimension^2 block;
+# inverse_cdf takes [probabilities, i] and interval [lower, upper]; random_value/lhs_value take
+# [sample_size, seed, row, col] against a row-major sample_size x dimension block; marginal_*
+# take [indices, ...] and conditional_* take [indices, values, ...], both evaluated against the
+# child distribution the runner hands back as a spec.
+dispatch_multivariate_delegated <- function(spec, method, args) {
+  ns <- asNamespace("corehydror")
+  run <- function(s, m, a) ns$ch_mvdist_run_(s, m, to_runner_json(a))
+  if (method %in% c("dimension", "alpha_sum", "degrees_of_freedom", "number_of_trials")) {
+    return(run(spec, method, list())$values[[1]])
+  }
+  if (method %in% c("pdf", "log_pdf", "cdf", "mahalanobis")) {
+    return(run(spec, method, args[[1]])$values[[1]])
+  }
+  if (identical(method, "inverse_cdf")) {
+    return(run(spec, method, args[[1]])$values[[as.integer(args[[2]]) + 1L]])
+  }
+  if (identical(method, "interval")) {
+    return(run(spec, "interval", c(args[[1]], args[[2]]))$values[[1]])
+  }
+  if (method %in% c("mean", "variance", "sd", "median", "mode", "alpha")) {
+    return(run(spec, method, list())$values[[as.integer(args[[1]]) + 1L]])
+  }
+  if (identical(method, "covariance")) {
+    r <- run(spec, "covariance", list())
+    d <- square_dim(length(r$values))
+    return(r$values[[as.integer(args[[1]]) * d + as.integer(args[[2]]) + 1L]])
+  }
+  if (method %in% c("random_value", "lhs_value")) {
+    n <- as.integer(args[[1]])
+    r <- run(spec, if (identical(method, "lhs_value")) "random_lhs" else "random",
+             list(args[[1]], args[[2]]))
+    d <- length(r$values) / n
+    return(r$values[[as.integer(args[[3]]) * d + as.integer(args[[4]]) + 1L]])
+  }
+  if (startsWith(method, "marginal_") || startsWith(method, "conditional_")) {
+    marginal <- startsWith(method, "marginal_")
+    # `conditional` takes indices then values concatenated into one flat argument array, so the
+    # trailing-argument base shifts by one.
+    child_args <- if (marginal) args[[1]] else c(args[[1]], args[[2]])
+    child <- run(spec, if (marginal) "marginal" else "conditional", child_args)$spec
+    base <- if (marginal) 2L else 3L
+    leaf <- sub("^[^_]*_", "", method)
+    if (identical(leaf, "dimension")) return(run(child, "dimension", list())$values[[1]])
+    if (identical(leaf, "log_pdf")) return(run(child, "log_pdf", args[[base]])$values[[1]])
+    if (identical(leaf, "mean")) {
+      return(run(child, "mean", list())$values[[as.integer(args[[base]]) + 1L]])
+    }
+    if (identical(leaf, "covariance")) {
+      r <- run(child, "covariance", list())
+      d <- square_dim(length(r$values))
+      return(r$values[[as.integer(args[[base]]) * d + as.integer(args[[base + 1L]]) + 1L]])
+    }
+    stop(sprintf("unhandled child method: %s", method))
+  }
+  stop(sprintf("method '%s' is not delegated to ch_mvdist_run_", method))
+}
 
 # Flattens fixture assertion args to a numeric vector. Handles both conventions: a single
 # nested vector argument (e.g. pdf args = [[0.3, 0.4, 0.3]]) and flat scalar args (e.g.
@@ -338,11 +440,6 @@ dispatch_multivariate <- function(target, construct, method, args) {
   if (target == "Dirichlet") {
     alpha <- vapply(construct$alpha, parse_num, numeric(1))
     return(ns$ch_dirichlet_val_(method, alpha, ar))
-  }
-  if (target == "Multinomial") {
-    n <- as.integer(construct$n)
-    p <- vapply(construct$p, parse_num, numeric(1))
-    return(ns$ch_multinomial_val_(method, n, p, ar))
   }
   if (target == "BivariateEmpirical") {
     x1 <- vapply(construct$x1, parse_num, numeric(1))
@@ -371,43 +468,6 @@ dispatch_multivariate <- function(target, construct, method, args) {
   if (target == "MultivariateNormal") {
     mean <- vapply(construct$mean, parse_num, numeric(1))
     cov_flat <- as.double(unlist(lapply(construct$covariance, function(row) vapply(row, parse_num, numeric(1)))))
-    # v2.1.4 Marginal/Conditional: dedicated entry points (not the flattened `ar`) since
-    # these take a variable-length index vector (Conditional: a second same-length values
-    # vector) that flatten_mv_args's "one nested vector, or all-scalar" convention can't
-    # disambiguate from adjacent variable-length vectors.
-    if (method == "marginal_mean") {
-      indices <- as.integer(unlist(args[[1]]))
-      return(ns$ch_mvn_marginal_mean_(mean, cov_flat, indices, as.integer(args[[2]])))
-    }
-    if (method == "marginal_covariance") {
-      indices <- as.integer(unlist(args[[1]]))
-      return(ns$ch_mvn_marginal_covariance_(mean, cov_flat, indices, as.integer(args[[2]]), as.integer(args[[3]])))
-    }
-    if (method == "marginal_log_pdf") {
-      indices <- as.integer(unlist(args[[1]]))
-      point <- vapply(args[[2]], parse_num, numeric(1))
-      return(ns$ch_mvn_marginal_log_pdf_(mean, cov_flat, indices, point))
-    }
-    if (method == "marginal_dimension") {
-      indices <- as.integer(unlist(args[[1]]))
-      return(ns$ch_mvn_marginal_dimension_(mean, cov_flat, indices))
-    }
-    if (method == "conditional_mean") {
-      obs_indices <- as.integer(unlist(args[[1]]))
-      obs_values <- vapply(args[[2]], parse_num, numeric(1))
-      return(ns$ch_mvn_conditional_mean_(mean, cov_flat, obs_indices, obs_values, as.integer(args[[3]])))
-    }
-    if (method == "conditional_covariance") {
-      obs_indices <- as.integer(unlist(args[[1]]))
-      obs_values <- vapply(args[[2]], parse_num, numeric(1))
-      return(ns$ch_mvn_conditional_covariance_(mean, cov_flat, obs_indices, obs_values,
-                                                as.integer(args[[3]]), as.integer(args[[4]])))
-    }
-    if (method == "conditional_dimension") {
-      obs_indices <- as.integer(unlist(args[[1]]))
-      obs_values <- vapply(args[[2]], parse_num, numeric(1))
-      return(ns$ch_mvn_conditional_dimension_(mean, cov_flat, obs_indices, obs_values))
-    }
     return(ns$ch_mvn_val_(method, mean, cov_flat, ar))
   }
   if (target == "MultivariateStudentT") {
@@ -420,15 +480,15 @@ dispatch_multivariate <- function(target, construct, method, args) {
 }
 
 # --- MultivariateNormal seeded batches --------------------------------------------------
-# `cdf` (dim>=3), `interval`, and `mvndst` all draw from the seeded MVNUNI stream, so a
-# RUN of consecutive same-method assertions in a seeded case must be evaluated on ONE
-# persistent instance via the ch_mvn_*_seq_ glue in mvd.cpp, not dispatched one call at a
-# time (which would silently reset the seed between assertions). run_mvn_case() below
-# groups consecutive assertions of these methods and batches them; everything else (and
-# every case without a "seed") falls through to the stateless per-assertion dispatch
-# above, unchanged.
+# `cdf` (dim>=3) and `mvndst` both draw from the seeded MVNUNI stream, so a RUN of consecutive
+# same-method assertions in a seeded case must be evaluated on ONE persistent instance via the
+# ch_mvn_*_seq_ glue in mvd.cpp, not dispatched one call at a time (which would silently reset
+# the seed between assertions). This is limitation 2 above, and it is why the delegated path
+# hands `cdf` back here whenever a case makes more than one stream-consuming call.
+# `interval` is NOT listed: the corpus's only interval case makes exactly one stream-consuming
+# call, so it delegates through the grammar's `seed` key instead.
 
-kMvnSeededMethods <- c("cdf", "mvndst", "interval")
+kMvnSeededMethods <- c("cdf", "mvndst")
 
 flatten_num_list <- function(x) as.double(unlist(lapply(x, parse_num)))
 
@@ -441,11 +501,6 @@ dispatch_mvn_seeded_seq <- function(construct, method, run) {
   if (method == "cdf") {
     xs_flat <- unlist(lapply(run, function(a) flatten_num_list(a$args[[1]])))
     return(ns$ch_mvn_cdf_seq_(mean, cov_flat, seed, xs_flat, length(run)))
-  }
-  if (method == "interval") {
-    lowers_flat <- unlist(lapply(run, function(a) flatten_num_list(a$args[[1]])))
-    uppers_flat <- unlist(lapply(run, function(a) flatten_num_list(a$args[[2]])))
-    return(ns$ch_mvn_interval_seq_(mean, cov_flat, seed, lowers_flat, uppers_flat, length(run)))
   }
   if (method == "mvndst") {
     # args = [n, [lower...], [upper...], [infin...], [correl...], maxpts, abseps, releps]
@@ -463,88 +518,194 @@ dispatch_mvn_seeded_seq <- function(construct, method, run) {
   stop(sprintf("unknown seeded MultivariateNormal method: %s", method))
 }
 
-run_mvn_case <- function(construct, assertions) {
+run_multivariate_case <- function(target, construct, assertions) {
+  ns <- asNamespace("corehydror")
+  # Limitation 1: a construct carrying a "nan"/"inf" literal cannot be serialized into the
+  # grammar, so its (validity-only) assertions run locally.
+  encodable <- !has_non_finite(construct)
+  spec <- if (encodable) to_runner_json(mvdist_spec(target, construct)) else ""
+  # A case whose MVNUNI stream is consumed at most once has no sequence to preserve, so its
+  # cdf/interval delegates; anything more stays whole on the seeded batch path below.
+  stream_calls <- if (identical(target, "MultivariateNormal")) {
+    sum(vapply(assertions, function(a) mvn_consumes_stream(a$method), logical(1)))
+  } else {
+    0L
+  }
+  stream_isolated <- stream_calls <= 1L
   seeded <- !is.null(construct$seed)
   i <- 1
   n <- length(assertions)
   while (i <= n) {
     a <- assertions[[i]]
     method <- a$method
-    if (seeded && method %in% kMvnSeededMethods) {
+    args <- if (is.null(a$args)) list() else a$args
+    is_bool <- identical(a$mode, "bool")
+    # Limitation 1 again, on the evaluation point rather than the construct: MVN's and MVT's
+    # log_pdf-at-infinity cases pass an infinite coordinate, which the grammar cannot carry.
+    if (encodable && !has_non_finite(args)) {
+      if (is_bool) {
+        # The old dispatcher ignored the assertion's method in bool mode and read
+        # parameters_valid(); keep that exactly.
+        check_assertion(ns$ch_mvdist_run_(spec, "parameters_valid", "[]")$values[[1]], a)
+        i <- i + 1
+        next
+      }
+      if (mv_delegated(target, method, stream_isolated)) {
+        check_assertion(dispatch_multivariate_delegated(spec, method, args), a)
+        i <- i + 1
+        next
+      }
+    }
+    if (identical(target, "MultivariateNormal") && seeded && method %in% kMvnSeededMethods) {
       j <- i
       while (j <= n && identical(assertions[[j]]$method, method)) j <- j + 1
       run <- assertions[i:(j - 1)]
       actuals <- dispatch_mvn_seeded_seq(construct, method, run)
       for (idx in seq_along(run)) check_assertion(actuals[idx], run[[idx]])
       i <- j
-    } else {
-      args <- if (is.null(a$args)) list() else a$args
-      actual <- dispatch_multivariate("MultivariateNormal", construct, method, args)
-      check_assertion(actual, a)
-      i <- i + 1
+      next
     }
+    check_assertion(dispatch_multivariate(target, construct, method, args), a)
+    i <- i + 1
   }
 }
 
 # --- bivariate_copula path ---------------------------------------------------------------
-# Every copula shares BivariateCopula's uniform theta/get_copula_parameters/pdf/cdf/... API
-# (unlike multivariate_distribution's Dirichlet/Multinomial/BivariateEmpirical/..., which
-# share no common surface), so this path is fully generic through the factory-driven
-# ch_cop_val_/ch_cop_fit_ glue in copula.cpp -- no per-target branching, mirroring
-# copula_factory.hpp's rationale. construct is either {"theta": x} (optionally {"theta":
-# x, "df": y} for 2-parameter copulas, and/or {"marginals": {"targets", "params"}} to
-# attach marginals directly -- used by the "random_value" sampling oracles) or {"fit": {"x",
-# "y", "method", "marginals"?}}; see fixtures/README.md for the full schema.
+# Fully delegated to ch_copula_run_: every copula shares BivariateCopula's uniform
+# theta/get_copula_parameters/pdf/cdf/... API, so there is no per-target branching left here at
+# all (the "tau" method-of-moments fit, whose SetThetaFromTau is a member of each concrete
+# Archimedean class rather than of IBivariateCopula, is dispatched by copulas::set_theta_from_tau
+# inside dist_spec.hpp). The one local path is limitation 1: the non-finite theta/df validity
+# cases, which the grammar cannot encode and which keep the narrow ch_cop_val_ call.
+#
+# construct is either {"theta": x} (optionally {"theta": x, "df": y} for 2-parameter copulas,
+# and/or {"marginals": {"targets", "params"}} to attach marginals directly -- used by the
+# "random_value" sampling oracles) or {"fit": {"x", "y", "method", "marginals"?}}; see
+# fixtures/README.md for the full schema.
 
-build_copula_params <- function(construct) {
-  p <- parse_num(construct$theta)
-  if (!is.null(construct$df)) p <- c(p, parse_num(construct$df))
-  p
+copula_margin <- function(family, params) {
+  if (is.null(params)) list(family = family) else list(family = family, parameters = params)
 }
 
-dispatch_copula <- function(target, params, method, args, marg_x_target = "", marg_x_params = numeric(0),
-                             marg_y_target = "", marg_y_params = numeric(0)) {
-  ns <- asNamespace("corehydror")
-  ar <- flatten_mv_args(if (length(args) == 0) list() else args)
-  ns$ch_cop_val_(target, params, method, ar, marg_x_target, marg_x_params, marg_y_target, marg_y_params)
+# Translates a fixture copula construct into the dist_spec grammar. The schema differences are
+# the marginal spelling (positional "marginals" here, margin_x / margin_y there) and the fit
+# samples (dataset NAMES here, inline arrays there). The fixture's bare-family marginal
+# convention needs no translation: dist_spec's build_copula MLE-fits a parameterless marginal to
+# its own sample, which is what the fixture means and what IFM requires.
+copula_spec <- function(target, construct, datasets) {
+  out <- construct
+  out$family <- target
+  if (!is.null(construct$marginals)) {
+    marg <- construct$marginals
+    out$marginals <- NULL
+    out$margin_x <- copula_margin(marg$targets[[1]], marg$params[[1]])
+    out$margin_y <- copula_margin(marg$targets[[2]], marg$params[[2]])
+  }
+  if (!is.null(construct$fit)) {
+    f <- construct$fit
+    f$x <- datasets[[f$x]]
+    f$y <- datasets[[f$y]]
+    if (!is.null(f$marginals)) {
+      fx <- f$marginals[[1]]
+      fy <- f$marginals[[2]]
+      f$marginals <- NULL
+      f$margin_x <- copula_margin(fx, NULL)
+      f$margin_y <- copula_margin(fy, NULL)
+    }
+    out$fit <- f
+  }
+  out
+}
+
+fixture_copula_method <- function(m) {
+  switch(m,
+    upper_tail_dependence = "tail_dependence",
+    lower_tail_dependence = "tail_dependence",
+    theta_minimum = "bounds",
+    theta_maximum = "bounds",
+    or_exceedance = "exceedance_or",
+    and_exceedance = "exceedance_and",
+    random_value = "random",
+    # pdf, log_pdf, cdf, inverse_cdf, theta, df and the three log_likelihood_* verbs pass
+    # straight through.
+    m
+  )
+}
+
+# The runner returns a whole vector for the methods the fixture indexes into. `random` comes back
+# as all the x draws followed by all the y draws, so a fixture (row, col) with
+# args = [sample_size, seed, row, col] lands at col * sample_size + row.
+fixture_copula_pick <- function(r, method, args) {
+  switch(method,
+    lower_tail_dependence = r$values[[1]],
+    theta_minimum = r$values[[1]],
+    upper_tail_dependence = r$values[[2]],
+    theta_maximum = r$values[[2]],
+    inverse_cdf = r$values[[as.integer(args[[3]]) + 1L]],
+    marginal_param = r$values[[as.integer(args[[2]]) + 1L]],
+    random_value = r$values[[as.integer(args[[4]]) * as.integer(args[[1]]) +
+                               as.integer(args[[3]]) + 1L]],
+    r$values[[1]]
+  )
+}
+
+# The three copula log-likelihood verbs take a paired SAMPLE, which the runner reads as one
+# flat "all x then all y" args array. Spelling 200 numbers per assertion into the fixture would
+# drown the file, so those assertions name their two datasets instead --
+# args = ["<x dataset>", "<y dataset>"] -- and every runner splices the named arrays here.
+# Documented under `bivariate_copula` in fixtures/README.md.
+is_copula_log_likelihood <- function(m) {
+  m %in% c("log_likelihood_pseudo", "log_likelihood_ifm", "log_likelihood_full")
+}
+
+copula_sample_args <- function(args, datasets) {
+  as.list(unlist(lapply(args, function(name) {
+    if (is.null(datasets[[name]])) {
+      stop(sprintf("copula log-likelihood args name an unknown dataset: %s", name))
+    }
+    as.double(unlist(datasets[[name]]))
+  })))
 }
 
 run_copula_case <- function(target, construct, assertions, datasets) {
   ns <- asNamespace("corehydror")
-  if (!is.null(construct$fit)) {
-    fit <- construct$fit
-    x <- as.double(unlist(datasets[[fit$x]]))
-    y <- as.double(unlist(datasets[[fit$y]]))
-    marg_x <- if (!is.null(fit$marginals)) fit$marginals[[1]] else ""
-    marg_y <- if (!is.null(fit$marginals)) fit$marginals[[2]] else ""
-    result <- ns$ch_cop_fit_(target, x, y, fit$method, marg_x, marg_y)
+  # Limitation 1: a "nan"/"inf" theta or df cannot be serialized into the grammar. Every such
+  # case asserts parameters_valid alone.
+  if (has_non_finite(construct)) {
+    params <- parse_num(construct$theta)
+    if (!is.null(construct$df)) params <- c(params, parse_num(construct$df))
     for (a in assertions) {
-      args <- if (is.null(a$args)) list() else a$args
-      actual <- switch(a$method,
-        theta = result$params[[1]],
-        df = result$params[[2]],
-        marginal_param = {
-          which <- args[[1]]
-          idx <- as.integer(args[[2]]) + 1L
-          if (which == "x") result$marg_x_params[[idx]] else result$marg_y_params[[idx]]
-        },
-        stop(sprintf("unsupported post-fit copula fixture method: %s", a$method))
-      )
-      check_assertion(actual, a)
+      if (!identical(a$mode, "bool")) {
+        stop(sprintf("%s/%s: a non-finite copula construct can only assert parameters_valid",
+                     target, a$method))
+      }
+      check_assertion(ns$ch_cop_val_(target, params, "parameters_valid", numeric(0), "",
+                                      numeric(0), "", numeric(0)), a)
     }
-  } else {
-    params <- build_copula_params(construct)
-    marg <- construct$marginals
-    marg_x_target <- if (!is.null(marg)) marg$targets[[1]] else ""
-    marg_y_target <- if (!is.null(marg)) marg$targets[[2]] else ""
-    marg_x_params <- if (!is.null(marg)) vapply(marg$params[[1]], parse_num, numeric(1)) else numeric(0)
-    marg_y_params <- if (!is.null(marg)) vapply(marg$params[[2]], parse_num, numeric(1)) else numeric(0)
-    for (a in assertions) {
-      args <- if (is.null(a$args)) list() else a$args
-      actual <- dispatch_copula(target, params, a$method, args, marg_x_target, marg_x_params,
-                                 marg_y_target, marg_y_params)
-      check_assertion(actual, a)
+    return(invisible(NULL))
+  }
+
+  spec <- to_runner_json(copula_spec(target, construct, datasets))
+  for (a in assertions) {
+    method <- a$method
+    args <- if (is.null(a$args)) list() else a$args
+    if (identical(a$mode, "bool")) {
+      # The old dispatcher ignored the assertion's method in bool mode and read
+      # parameters_valid(); keep that exactly.
+      check_assertion(ns$ch_copula_run_(spec, "parameters_valid", "[]")$values[[1]], a)
+      next
     }
+    if (identical(method, "marginal_param")) {
+      # args = ("x" | "y", index): the side picks the runner method, the index picks the value
+      # out of that marginal's parameter vector.
+      r <- ns$ch_copula_run_(spec, if (identical(args[[1]], "x")) "marginal_x_parameters"
+                                   else "marginal_y_parameters", "[]")
+      check_assertion(fixture_copula_pick(r, method, args), a)
+      next
+    }
+    if (is_copula_log_likelihood(method)) args <- copula_sample_args(args, datasets)
+    r <- ns$ch_copula_run_(spec, fixture_copula_method(method), to_runner_json(args))
+    check_assertion(fixture_copula_pick(r, method, args), a)
   }
 }
 
@@ -1097,15 +1258,7 @@ test_that("oracle fixtures validate", {
     if (identical(spec$kind, "multivariate_distribution")) {
       target <- spec$target
       for (case in spec$cases) {
-        if (identical(target, "MultivariateNormal")) {
-          run_mvn_case(case$construct, case$assertions)
-        } else {
-          for (a in case$assertions) {
-            args <- if (is.null(a$args)) list() else a$args
-            actual <- dispatch_multivariate(target, case$construct, a$method, args)
-            check_assertion(actual, a)
-          }
-        }
+        run_multivariate_case(target, case$construct, case$assertions)
       }
       next
     }
@@ -1115,17 +1268,7 @@ test_that("oracle fixtures validate", {
     is_composite <- target %in% kCompositeTargets
     for (case in spec$cases) {
       if (is_composite) {
-        cd <- build_composite_data(target, case$construct, datasets)
-        for (a in case$assertions) {
-          args <- if (is.null(a$args)) list() else a$args
-          if (identical(a$method, "set_parameters")) {
-            cd <- apply_set_parameters_composite(target, cd, args)
-            actual <- 0
-          } else {
-            actual <- dispatch_composite(target, cd, a$method, args)
-          }
-          check_assertion(actual, a)
-        }
+        run_composite_case(target, case$construct, case$assertions, datasets)
       } else {
         p <- build_params(target, case$construct, datasets)
         for (a in case$assertions) {

@@ -299,6 +299,9 @@ static double? Dispatch(UnivariateDistributionBase d, string m, JsonElement[] a)
             throw new Exception("distribution has no L-moments");
         // args: [sample_size, seed, index] -- one draw from the seeded MT stream.
         case "random_value": return d.GenerateRandomValues(a[0].GetInt32(), a[1].GetInt32())[a[2].GetInt32()];
+        // args: the whole sample, inline. Sums LogPDF over it (UnivariateDistributionBase.
+        // LogLikelihood(IList<double>)).
+        case "log_likelihood": return d.LogLikelihood(a.Select(ParseNum).ToArray());
         // Static GammaDistribution utility, not tied to `d`'s own parameters -- args:
         // [skewness, probability].
         case "partial_kp": return GammaDistribution.PartialKp(a[0].GetDouble(), a[1].GetDouble());
@@ -1317,8 +1320,33 @@ static void SetThetaFromTauDispatch(BivariateCopula copula, string target, doubl
     throw new Exception($"copula '{target}' has no tau-based method-of-moments fit");
 }
 
-static double DispatchCopula(BivariateCopula c, string m, JsonElement[] a)
+// The Weibull plotting positions of a sample, rank / (n + 1) over Statistics.RanksInPlace --
+// transcribed from Test_ClaytonCopula.cs's Test_MPL_Fit (and repeated verbatim in every other
+// Test_*Copula.cs MPL test and in BivariateCopulaEstimation.MLE). PseudoLogLikelihood is
+// defined on values already on (0, 1) and does NOT rank internally, so its caller does this;
+// mirrors dist_spec.hpp's support::plotting_positions, which the C++/R/Python runners apply
+// inside the "log_likelihood_pseudo" arm.
+static double[] CopulaPlottingPositions(double[] sample)
 {
+    var pp = Statistics.RanksInPlace(sample);
+    for (int i = 0; i < pp.Length; i++) pp[i] = pp[i] / (pp.Length + 1d);
+    return pp;
+}
+
+// `datasets` is consulted only by the three log_likelihood_* verbs, whose args name their two
+// sample arrays rather than spelling 200 numbers per assertion (see fixtures/README.md and
+// the matching copula_sample_args helpers in the C++/R/Python runners).
+static double DispatchCopula(BivariateCopula c, string m, JsonElement[] a,
+                             Dictionary<string, double[]> datasets)
+{
+    double[] Sample(int i)
+    {
+        string name = a[i].GetString()!;
+        if (!datasets.TryGetValue(name, out var s))
+            throw new Exception($"copula log-likelihood args name an unknown dataset: {name}");
+        return s;
+    }
+
     switch (m)
     {
         case "pdf": return c.PDF(a[0].GetDouble(), a[1].GetDouble());
@@ -1331,6 +1359,15 @@ static double DispatchCopula(BivariateCopula c, string m, JsonElement[] a)
         case "df": return c.GetCopulaParameters[1];
         case "or_exceedance": return c.ORJointExceedanceProbability(a[0].GetDouble(), a[1].GetDouble());
         case "and_exceedance": return c.ANDJointExceedanceProbability(a[0].GetDouble(), a[1].GetDouble());
+        case "theta_minimum": return c.ThetaMinimum;
+        case "theta_maximum": return c.ThetaMaximum;
+        // args = ["<x dataset>", "<y dataset>"]: the RAW paired observations for all three.
+        // Only the pseudo arm transforms them (to plotting positions); IFM and the full
+        // likelihood push them through the attached marginals' CDF/LogPDF themselves.
+        case "log_likelihood_pseudo":
+            return c.PseudoLogLikelihood(CopulaPlottingPositions(Sample(0)), CopulaPlottingPositions(Sample(1)));
+        case "log_likelihood_ifm": return c.IFMLogLikelihood(Sample(0), Sample(1));
+        case "log_likelihood_full": return c.LogLikelihood(Sample(0), Sample(1));
         case "marginal_param":
         {
             string which = a[0].GetString()!;
@@ -3976,7 +4013,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 {
                     DumpLine(copTarget, caseName, method, argList,
                              () => mode == "bool" ? (object)copula.ParametersValid
-                                                   : (object)DispatchCopula(copula, method, argList));
+                                                   : (object)DispatchCopula(copula, method, argList, copDatasets));
                     continue;
                 }
 
@@ -3988,7 +4025,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                         if (ok) pass++; else { fail++; failures.Add(where + ": bool mismatch"); }
                         continue;
                     }
-                    double actual = DispatchCopula(copula, method, argList);
+                    double actual = DispatchCopula(copula, method, argList, copDatasets);
                     if (Compare(actual, asrt)) pass++;
                     else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
                 }

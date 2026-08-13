@@ -61,6 +61,7 @@
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/distributions/triangular.hpp"
 #include "corehydro/numerics/distributions/uniform.hpp"
+#include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/tools.hpp"
 
 namespace corehydro::numerics::distributions {
@@ -185,20 +186,16 @@ class KernelDensity : public UnivariateDistributionBase {
     /// Median via InverseCDF(0.5).
     double median() const override { return inverse_cdf(0.5); }
 
-    /// Mode via grid search over [InverseCDF(0.001), InverseCDF(0.999)].
-    /// Mirrors C# BrentSearch pattern (approximated by a 1000-point grid).
+    /// Mode: BrentSearch maximizing the PDF over [InverseCDF(0.001), InverseCDF(0.999)],
+    /// mirroring C# Mode (KernelDensity.cs line 320). This used to scan a 1000-point uniform
+    /// grid, which landed one grid step away from the C# value.
     double mode() const override {
         double lo = inverse_cdf(0.001);
         double hi = inverse_cdf(0.999);
         if (lo >= hi) return 0.5 * (lo + hi);
-        double best_x = lo, best_f = pdf(lo);
-        constexpr int kGrid = 1000;
-        for (int i = 1; i <= kGrid; ++i) {
-            double x = lo + (hi - lo) * static_cast<double>(i) / kGrid;
-            double f = pdf(x);
-            if (f > best_f) { best_f = f; best_x = x; }
-        }
-        return best_x;
+        math::optimization::BrentSearch brent([this](double x) { return pdf(x); }, lo, hi);
+        brent.maximize();
+        return brent.best_parameter();
     }
 
     // --- Silverman bandwidth rule ------------------------------------------------------

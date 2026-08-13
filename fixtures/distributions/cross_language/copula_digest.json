@@ -1,0 +1,19 @@
+{
+  "target": "Clayton",
+  "kind": "bivariate_copula",
+  "source": "Task 9 (cross-language digest fixtures) -- see fixtures/distributions/copulas/clayton_copula.json for the primary Clayton coverage; this file exists only to pin a second, larger seeded pair stream shared verbatim by all four runners.",
+  "reference": "Not a C# unit test transcription -- expected values are curated via `tools/oracle_emitter --dump` against the real Numerics Clayton GenerateRandomValues (with Normal marginals set through the ctor) and reproduced by tools/verify_oracles.py, per fixtures/README.md's curation path.",
+  "note": "theta = 2 with Normal marginals (distinct from clayton_copula.json's own seeded_sampling_with_marginals case, which uses theta = 5), n = 20 pairs seeded at 12345 -- theta, seed and sample size are all new coverage, not a repeat of the existing seed-42/n-5 pin. Asserts the first (row 0) and last (row 19) pair, both columns. The point of this fixture is the CROSS-LANGUAGE guarantee: the same four pinned draws are asserted by the C++, R and Python runners off the identical JSON literal, so R and Python agreeing is proven by both independently reproducing the real C# stream (LatinHypercube-seeded uniform pair, Clayton conditional inversion, then the Normal marginal back-transform) rather than by a separate comparison step.",
+  "cases": [
+    {
+      "name": "theta2_normal_marginals_seeded_digest",
+      "construct": {"theta": 2, "marginals": {"targets": ["Normal", "Normal"], "params": [[50.0, 10.0], [30.0, 5.0]]}},
+      "assertions": [
+        {"method": "random_value", "args": [20, 12345, 0, 0], "expected": 43.717898937687465, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "random_value", "args": [20, 12345, 0, 1], "expected": 25.90227110832645, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "random_value", "args": [20, 12345, 19, 0], "expected": 61.00495867055571, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"},
+        {"method": "random_value", "args": [20, 12345, 19, 1], "expected": 35.401765424478185, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump"}
+      ]
+    }
+  ]
+}

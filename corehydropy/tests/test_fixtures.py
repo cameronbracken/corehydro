@@ -77,167 +77,166 @@ def _dispatch_gev(g, method, args):
     raise KeyError(f"unknown fixture method: {method}")
 
 
+# --- Delegation to the shared distribution runner ----------------------------------------
+#
+# The fixture `construct` schema IS the dist_spec.hpp grammar, so the bridge only has to
+# resolve a dataset NAME into an inline array, spell the handful of keys the two schemas
+# disagree on, and hand the object to _core.dist_spec_run / copula_run / mvdist_run. Every
+# value the runner produces is then pinned by exactly the corpus the bespoke glue was pinned
+# by. This mirrors core/tests/test_fixtures.cpp and corehydror's test-fixtures.R case for case,
+# so the C++, R and Python runners all reach the oracle through one shared code path.
+#
+# Two properties of the runner keep a narrow bespoke path alive; both are deliberate:
+#
+#   1. json_lite, the runner's JSON reader, has no NaN or Infinity literal, while the corpus
+#      deliberately pins non-finite-PARAMETER validity cases: Empirical `p`, KernelDensity
+#      `bandwidth`, every copula `theta`/`df`, and BivariateEmpirical `x1`/`x2`/`p`. Every such
+#      case asserts nothing but `parameters_valid`, so each keeps a narrow glue call. The same
+#      limit applies to a non-finite EVALUATION POINT, not just the construct: the
+#      MultivariateNormal / MultivariateStudentT log_pdf-at-infinity cases and
+#      r_mvtnorm_4d_sequential's infinite CDF bounds.
+#
+#   2. The runner is stateless by construction -- one call builds an object, evaluates once and
+#      drops it -- and it exposes the user-facing verb set, not the whole fixture vocabulary.
+#      Two groups therefore stay bespoke: methods with no runner counterpart (`mvndst` and its
+#      two status arms, `log_multivariate_beta`, `cdf_xy(_after_set_parameters)`,
+#      `dependency_change`), and MultivariateNormal's `cdf`/`interval` in a case that consumes
+#      the persistent MVNUNI stream more than once, since those pin a SEQUENCE off one object.
+#      A case that consumes the stream at most once delegates: `seed` is a grammar key, so a
+#      rebuilt object starts the same stream. Only `cdf` has such a case today, so only `cdf`
+#      has a batch entry point below.
+
+
+def _has_non_finite(v) -> bool:
+    if isinstance(v, str):
+        return v in ("nan", "inf", "-inf")
+    if isinstance(v, list):
+        return any(_has_non_finite(e) for e in v)
+    if isinstance(v, dict):
+        return any(_has_non_finite(e) for e in v.values())
+    return False
+
+
+def _json(x) -> str:
+    """Both of the runner's string inputs (the spec and the args array)."""
+    return json.dumps(x)
+
+
 # --- Composite distribution path -------------------------------------------------------
-# For TruncatedDistribution (and future Empirical/KernelDensity/Mixture/CompetingRisks),
-# the fixture "construct" uses a structured schema rather than flat "params".
-# Adding a new composite = one new case in _build_composite + one in _dispatch_composite.
+# TruncatedDistribution / Empirical / KernelDensity / Mixture / CompetingRisks: the fixture
+# "construct" already IS the dist_spec.hpp grammar (which accepts `target`/`params` as aliases
+# of `family`/`parameters`), so a composite case serializes straight through dist_spec_run.
+# Adding a composite needs no change here at all.
 
 _COMPOSITE_TARGETS = {"TruncatedDistribution", "Empirical", "KernelDensity", "Mixture",
                       "CompetingRisks"}
 
 
-def _build_composite(target: str, construct: dict, datasets: dict | None = None) -> dict:
-    """Parse a composite construct into a dict that _dispatch_composite can use."""
-    if target == "TruncatedDistribution":
-        base_target = construct["base"]["target"]
-        base_params = [_num(v) for v in construct["base"]["params"]]
-        lo, hi = float(construct["bounds"][0]), float(construct["bounds"][1])
-        return {"base_target": base_target, "base_params": base_params, "lo": lo, "hi": hi}
-    if target == "Empirical":
-        xv = [float(v) for v in construct["x"]]
-        pv = [float(v) for v in construct["p"]]
+def _composite_spec(target: str, construct: dict, datasets: dict | None = None) -> dict:
+    """The fixture construct as a dist_spec.hpp spec.
+
+    "data" is the only dataset-by-name key in the univariate grammar (KernelDensity); "base"
+    and "components" nest and carry no dataset reference.
+    """
+    spec = dict(construct)
+    spec["family"] = target
+    if isinstance(spec.get("data"), str):
+        spec["data"] = list((datasets or {})[spec["data"]])
+    return spec
+
+
+def _fixture_method(method: str) -> str:
+    """The fixture method vocabulary predates the runner's; map the differences here.
+
+    `random_value` args are [sample_size, seed, index]: the runner's "random" reads only the
+    first two and returns the whole draw, so the args pass through unchanged and _fixture_pick
+    does the indexing.
+    """
+    if method == "param":
+        return "parameters"
+    if method == "random_value":
+        return "random"
+    return method
+
+
+def _fixture_pick(result: dict, method: str, args: list):
+    """`param` and `random_value` index into the vector the runner returns whole."""
+    if method == "param":
+        return result["values"][int(args[0])]
+    if method == "random_value":
+        return result["values"][int(args[2])]
+    return result["values"][0]
+
+
+def _dispatch_composite_local(target: str, construct: dict, datasets: dict, method: str,
+                              args: list):
+    """Limitations 1 and 2 for the composite path, and the only remaining callers of the
+    bespoke composite glue in dist.cpp: Empirical's non-finite `p` and KernelDensity's
+    non-finite `bandwidth` validity cases (which the grammar's JSON reader cannot encode),
+    plus CompetingRisks' `dependency_change` (which has no runner counterpart).
+    """
+    if target == "Empirical" and method == "parameters_valid":
+        xv = [_num(v) for v in construct["x"]]
+        pv = [_num(v) for v in construct["p"]]
         pt = construct.get("p_transform", "NormalZ")
         # v2.1.4: p_descending DECLARES the probability order (mirrors C#'s explicit
         # `probabilityOrder` argument -- NOT auto-detected from the data); default False
         # matches the ordinary ascending-CDF case.
         pd = bool(construct.get("p_descending", False))
-        return {"x_vals": xv, "p_vals": pv, "p_transform": pt, "p_descending": pd}
-    if target == "KernelDensity":
-        ds = datasets or {}
-        data_key = construct["data"]
-        data_vec = [float(v) for v in ds[data_key]]
+        return _core.emp_valid(xv, pv, pt, pd)
+    if target == "KernelDensity" and method == "parameters_valid":
+        data_vec = [float(v) for v in (datasets or {})[construct["data"]]]
         kernel = construct.get("kernel", "Gaussian")
-        bandwidth = float(construct["bandwidth"]) if "bandwidth" in construct else -1.0
+        # A negative bandwidth means Silverman's rule; _num parses the "nan"/"inf" literal
+        # these two cases exist to reject.
+        bandwidth = _num(construct["bandwidth"]) if "bandwidth" in construct else -1.0
         bounded = bool(construct.get("bounded_by_data", True))
-        return {"data_vec": data_vec, "kernel": kernel, "bandwidth": bandwidth, "bounded": bounded}
-    if target == "Mixture":
-        comp_targets = [c["target"] for c in construct["components"]]
-        comp_params = [[float(v) for v in c["params"]] for c in construct["components"]]
-        wts = [float(w) for w in construct["weights"]]
-        zero_inflated = bool(construct.get("zero_inflated", False))
-        zero_weight = _num(construct.get("zero_weight", 0.0))
-        return {"comp_targets": comp_targets, "comp_params": comp_params, "weights": wts,
-                "zero_inflated": zero_inflated, "zero_weight": zero_weight}
-    if target == "CompetingRisks":
-        comp_targets = [c["target"] for c in construct["components"]]
-        comp_params = [[float(v) for v in c["params"]] for c in construct["components"]]
-        min_of_rv = bool(construct.get("minimum_of_random_variables", True))
-        dependency = construct.get("dependency", "Independent")
-        correlation = [[float(v) for v in row] for row in construct.get("correlation", [])]
-        return {"comp_targets": comp_targets, "comp_params": comp_params,
-                "minimum_of_rv": min_of_rv, "dependency": dependency,
-                "correlation": correlation}
-    raise KeyError(f"unknown composite target: {target}")
+        return _core.kde_valid(data_vec, kernel, bandwidth, bounded)
+    if target == "CompetingRisks" and method == "dependency_change":
+        # v2.1.4: verifies the Dependency setter fix + PerfectlyNegative no longer zeroing
+        # CorrelationMatrix, in ONE self-contained call -- args = [x, dependency2, i, j, field].
+        ct = [c["target"] for c in construct["components"]]
+        cp = [[_num(v) for v in c["params"]] for c in construct["components"]]
+        min_rv = bool(construct.get("minimum_of_random_variables", True))
+        dep = construct.get("dependency", "Independent")
+        corr = [[float(v) for v in row] for row in construct.get("correlation", [])]
+        x, dep2, i, j, field = args
+        return _core.cr_dependency_change(ct, cp, min_rv, dep, dep2, corr, float(x), field,
+                                          int(i), int(j))
+    raise KeyError(
+        f"composite {target}/{method} has no shared-runner path and no local one either")
 
 
-def _dispatch_composite(target: str, cd: dict, method: str, args: list):
-    if target == "TruncatedDistribution":
-        bt, bp, lo, hi = cd["base_target"], cd["base_params"], cd["lo"], cd["hi"]
-        if method in _MOMENTS:
-            return _core.trunc_moments(bt, bp, lo, hi)[method]
-        if method == "pdf":
-            return _core.trunc_pdf(bt, bp, lo, hi, args[0])
-        if method == "cdf":
-            return _core.trunc_cdf(bt, bp, lo, hi, args[0])
-        if method == "quantile":
-            return _core.trunc_quantile(bt, bp, lo, hi, args[0])
-        if method == "parameters_valid":
-            return _core.trunc_valid(bt, bp, lo, hi)
-        if method == "param":
-            # GetParameters mirrors {base_params..., lo, hi} -- no C++ call needed, `cd`
-            # already holds the flat tuple (used by the sequential_setparameters_recovery-
-            # style cases to confirm a restored parameter set after a SetParameters recovery).
-            return (bp + [lo, hi])[int(args[0])]
-        raise KeyError(f"unknown fixture method for TruncatedDistribution: {method}")
-    if target == "Empirical":
-        xv, pv, pt, pd = cd["x_vals"], cd["p_vals"], cd["p_transform"], cd["p_descending"]
-        if method in _MOMENTS:
-            return _core.emp_moments(xv, pv, pt, pd)[method]
-        if method == "pdf":
-            return _core.emp_pdf(xv, pv, pt, pd, args[0])
-        if method == "cdf":
-            return _core.emp_cdf(xv, pv, pt, pd, args[0])
-        if method == "quantile":
-            return _core.emp_quantile(xv, pv, pt, pd, args[0])
-        if method == "parameters_valid":
-            return _core.emp_valid(xv, pv, pt, pd)
-        raise KeyError(f"unknown fixture method for Empirical: {method}")
-    if target == "KernelDensity":
-        dv, ker, bw, bd = cd["data_vec"], cd["kernel"], cd["bandwidth"], cd["bounded"]
-        if method in _MOMENTS:
-            return _core.kde_moments(dv, ker, bw, bd)[method]
-        if method == "pdf":
-            return _core.kde_pdf(dv, ker, bw, bd, args[0])
-        if method == "cdf":
-            return _core.kde_cdf(dv, ker, bw, bd, args[0])
-        if method == "quantile":
-            return _core.kde_quantile(dv, ker, bw, bd, args[0])
-        if method == "parameters_valid":
-            return _core.kde_valid(dv, ker, bw, bd)
-        raise KeyError(f"unknown fixture method for KernelDensity: {method}")
-    if target == "Mixture":
-        ct, cp, wts = cd["comp_targets"], cd["comp_params"], cd["weights"]
-        zi, zw = cd["zero_inflated"], cd["zero_weight"]
-        if method in _MOMENTS:
-            return _core.mix_moments(ct, cp, wts, zi, zw)[method]
-        if method == "pdf":
-            return _core.mix_pdf(ct, cp, wts, zi, zw, args[0])
-        if method == "cdf":
-            return _core.mix_cdf(ct, cp, wts, zi, zw, args[0])
-        if method == "quantile":
-            return _core.mix_quantile(ct, cp, wts, zi, zw, args[0])
-        if method == "parameters_valid":
-            return _core.mix_valid(ct, cp, wts, zi, zw)
-        if method == "param":
-            # GetParameters() flat vector [w0..wK-1, component params...] -- needed (not the
-            # raw `wts` in `cd`) because the zero-inflation setters recompute the weights.
-            return _core.mix_params(ct, cp, wts, zi, zw)[int(args[0])]
-        raise KeyError(f"unknown fixture method for Mixture: {method}")
-    if target == "CompetingRisks":
-        ct, cp, min_rv = cd["comp_targets"], cd["comp_params"], cd["minimum_of_rv"]
-        dep, corr = cd["dependency"], cd["correlation"]
-        if method in _MOMENTS:
-            return _core.cr_moments(ct, cp, min_rv, dep, corr)[method]
-        if method == "pdf":
-            return _core.cr_pdf(ct, cp, min_rv, dep, corr, args[0])
-        if method == "log_pdf":
-            return _core.cr_log_pdf(ct, cp, min_rv, dep, corr, args[0])
-        if method == "cdf":
-            return _core.cr_cdf(ct, cp, min_rv, dep, corr, args[0])
-        if method == "quantile":
-            return _core.cr_quantile(ct, cp, min_rv, dep, corr, args[0])
-        if method == "parameters_valid":
-            return _core.cr_valid(ct, cp, min_rv, dep, corr)
-        if method == "dependency_change":
-            # v2.1.4: verifies the Dependency setter fix + PerfectlyNegative no longer
-            # zeroing CorrelationMatrix, in ONE self-contained call -- args = [x,
-            # dependency2, i, j, field].
-            x, dep2, i, j, field = args
-            return _core.cr_dependency_change(ct, cp, min_rv, dep, dep2, corr, float(x),
-                                               field, int(i), int(j))
-        raise KeyError(f"unknown fixture method for CompetingRisks: {method}")
-    raise KeyError(f"unknown composite target: {target}")
-
-
-def _apply_set_parameters_composite(target: str, cd: dict, args: list) -> dict:
-    """Applies a "set_parameters" fixture step to a composite's parsed construct data,
-    mirroring the C# SetParameters(flat vector) entry point -- lets a case exercise a
-    "construct valid -> SetParameters invalid -> recheck -> SetParameters valid -> recheck"
-    sequence. There is no persistent C++ object to mutate here (every _core.trunc_*
-    call is a stateless construct-and-compute), so this instead updates the local `cd` dict;
-    the NEXT dispatch call reconstructs from the updated fields, which is behaviorally
-    equivalent. Only TruncatedDistribution needs this in the current validation wave.
-    """
-    flat = [_num(v) for v in args]
-    if target == "TruncatedDistribution":
-        n_base = len(cd["base_params"])
-        return {
-            **cd,
-            "base_params": flat[:n_base],
-            "lo": flat[n_base],
-            "hi": flat[n_base + 1],
-        }
-    raise KeyError(f"set_parameters not supported for composite target: {target}")
+def _run_composite_case(target: str, construct: dict, assertions: list, datasets: dict):
+    # Limitation 1: a construct carrying a "nan"/"inf" literal cannot be serialized into the
+    # grammar, so its (validity-only) assertions run locally.
+    encodable = not _has_non_finite(construct)
+    spec = _composite_spec(target, construct, datasets)
+    for a in assertions:
+        method = a["method"]
+        args = a.get("args", [])
+        # `dependency_change` has no runner counterpart (limitation 2); a non-finite evaluation
+        # point is limitation 1 applied to the args rather than the construct.
+        if not encodable or method == "dependency_change" or _has_non_finite(args):
+            _check(_dispatch_composite_local(target, construct, datasets, method, args), a)
+            continue
+        if method == "set_parameters":
+            # The runner is stateless, so a SetParameters round trip is carried on the spec:
+            # every later assertion in this case rebuilds with it applied, which is what
+            # dist_spec's "set_parameters" key exists for. A second call replaces the first,
+            # exactly as the in-place mutation did. The 0 mirrors the old dispatcher's dummy
+            # return, and the assertion is still CHECKED rather than skipped.
+            spec["set_parameters"] = args
+            _check(0, a)
+            continue
+        spec_json = _json(spec)
+        if a["mode"] == "bool":
+            # The old dispatcher ignored the assertion's method in bool mode and read
+            # parameters_valid(); keep that exactly.
+            _check(_core.dist_spec_run(spec_json, "parameters_valid", "[]")["values"][0], a)
+        else:
+            r = _core.dist_spec_run(spec_json, _fixture_method(method), _json(args))
+            _check(_fixture_pick(r, method, args), a)
 
 
 # --- Generic polymorphic path ----------------------------------------------------------
@@ -275,10 +274,129 @@ def _dispatch_generic(target, params, method, args):
 
 
 # --- multivariate_distribution path -----------------------------------------------------
-# Dirichlet/Multinomial/BivariateEmpirical dispatch to the bespoke _core.dirichlet_val/
-# _core.multinomial_val/_core.bve_cdf functions (method + flat numeric args in, double
-# out). Extensible: additional multivariate targets add a branch here plus their own
-# _core.<name>_val entry point.
+# The only partly delegated path. _core.mvdist_run covers the verbs this phase exposes (see
+# _mv_delegated below) and the rest of the pinned surface stays on _dispatch_multivariate,
+# which keeps the bespoke _core.dirichlet_val / bve_* / mvn_* / mvt_val bindings in mvd.cpp:
+# the MVNDST integrator internals, BivariateEmpirical's cdf_xy pair, Dirichlet's static
+# log_multivariate_beta, the non-finite constructs and evaluation points, and the seeded MVNUNI
+# sequences. Extending the runner's method table shrinks the bespoke half; nothing else moves.
+
+
+def _mvdist_spec(target: str, construct: dict) -> dict:
+    """The fixture construct as a dist_spec.hpp spec.
+
+    The only schema difference is Multinomial's parameter spelling (n / p here, trials /
+    probabilities there); the four MultivariateNormal integrator settings (seed /
+    max_evaluations / abs_error / rel_error) are grammar keys and pass straight through.
+    """
+    spec = dict(construct)
+    spec["family"] = target
+    if target == "Multinomial":
+        spec.pop("n", None)
+        spec.pop("p", None)
+        spec["trials"] = construct["n"]
+        spec["probabilities"] = construct["p"]
+    return spec
+
+
+def _mvn_consumes_stream(method: str) -> bool:
+    """MultivariateNormal's CDF above dimension 2, its Interval, and MVNDST itself all draw
+    from the instance's persistent MVNUNI stream, so each call ADVANCES it. A case that makes
+    more than one such call pins a sequence off one object, which a stateless runner cannot
+    reproduce by construction.
+    """
+    return method in ("cdf", "interval", "mvndst", "mvndst_inform", "mvndst_error")
+
+
+_MV_DELEGATED_METHODS = frozenset({
+    "dimension", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance", "sd",
+    "covariance", "median", "mode", "inverse_cdf", "interval", "degrees_of_freedom", "alpha",
+    "alpha_sum", "number_of_trials", "random_value", "lhs_value", "marginal_dimension",
+    "marginal_mean", "marginal_covariance", "marginal_log_pdf", "conditional_dimension",
+    "conditional_mean", "conditional_covariance",
+})
+
+
+def _mv_delegated(target: str, method: str, mvn_stream_isolated: bool) -> bool:
+    """Methods _core.mvdist_run covers.
+
+    What is left on _dispatch_multivariate is exactly three groups: the MVNDST integrator
+    internals (mvndst and its two status arms), BivariateEmpirical's
+    cdf_xy(_after_set_parameters) and Dirichlet's static log_multivariate_beta, which have no
+    runner verb; and MultivariateNormal's cdf/interval in a case that makes more than one
+    stream-consuming call (`mvn_stream_isolated` False -- r_mvtnorm_4d_sequential's eleven
+    advancing cdf values are the reason). With `seed` in the grammar a SINGLE such call
+    reproduces exactly, so those cases delegate.
+    """
+    if method in ("mvndst", "mvndst_inform", "mvndst_error"):
+        return False
+    if target == "MultivariateNormal" and method in ("cdf", "interval") \
+            and not mvn_stream_isolated:
+        return False
+    return method in _MV_DELEGATED_METHODS
+
+
+def _square_dim(n: int) -> int:
+    d = round(n ** 0.5)
+    if d * d != n:
+        raise ValueError("a covariance result is not a square matrix")
+    return d
+
+
+def _dispatch_multivariate_delegated(spec_json: str, method: str, args: list):
+    """_core.mvdist_run returns whole vectors, so every fixture method that names one element
+    indexes in here. Conventions preserved verbatim from the deleted dispatcher arms:
+    mean/variance/sd/median/mode/alpha take [i]; covariance takes [i, j] against a row-major
+    dimension^2 block; inverse_cdf takes [probabilities, i] and interval [lower, upper];
+    random_value/lhs_value take [sample_size, seed, row, col] against a row-major
+    sample_size x dimension block; marginal_* take [indices, ...] and conditional_* take
+    [indices, values, ...], both evaluated against the child distribution the runner hands
+    back as a spec.
+    """
+    def run(spec, m, a):
+        return _core.mvdist_run(spec, m, _json(a))
+
+    if method in ("dimension", "alpha_sum", "degrees_of_freedom", "number_of_trials"):
+        return run(spec_json, method, [])["values"][0]
+    if method in ("pdf", "log_pdf", "cdf", "mahalanobis"):
+        return run(spec_json, method, args[0])["values"][0]
+    if method == "inverse_cdf":
+        return run(spec_json, method, args[0])["values"][int(args[1])]
+    if method == "interval":
+        return run(spec_json, "interval", list(args[0]) + list(args[1]))["values"][0]
+    if method in ("mean", "variance", "sd", "median", "mode", "alpha"):
+        return run(spec_json, method, [])["values"][int(args[0])]
+    if method == "covariance":
+        values = run(spec_json, "covariance", [])["values"]
+        dim = _square_dim(len(values))
+        return values[int(args[0]) * dim + int(args[1])]
+    if method in ("random_value", "lhs_value"):
+        n = int(args[0])
+        values = run(spec_json, "random_lhs" if method == "lhs_value" else "random",
+                     [args[0], args[1]])["values"]
+        dim = len(values) // n
+        return values[int(args[2]) * dim + int(args[3])]
+    if method.startswith("marginal_") or method.startswith("conditional_"):
+        marginal = method.startswith("marginal_")
+        # `conditional` takes indices then values concatenated into one flat argument array,
+        # so the trailing-argument base shifts by one.
+        child_args = list(args[0]) if marginal else list(args[0]) + list(args[1])
+        child = run(spec_json, "marginal" if marginal else "conditional", child_args)["spec"]
+        base = 1 if marginal else 2
+        leaf = method.split("_", 1)[1]
+        if leaf == "dimension":
+            return run(child, "dimension", [])["values"][0]
+        if leaf == "log_pdf":
+            return run(child, "log_pdf", args[base])["values"][0]
+        if leaf == "mean":
+            return run(child, "mean", [])["values"][int(args[base])]
+        if leaf == "covariance":
+            values = run(child, "covariance", [])["values"]
+            dim = _square_dim(len(values))
+            return values[int(args[base]) * dim + int(args[base + 1])]
+        raise KeyError(f"unhandled child method: {method}")
+    raise KeyError(f"method '{method}' is not delegated to mvdist_run")
+
 
 def _flatten_mv_args(args: list) -> list[float]:
     """Flattens fixture assertion args to a flat float list.
@@ -298,10 +416,9 @@ def _flatten_mv_args(args: list) -> list[float]:
 
 
 def _dispatch_multivariate(target: str, construct: dict, method: str, args: list):
-    # Methods with a doubly-nested arg (e.g. cdf_xy_after_set_parameters's replacement
-    # probability grid, or MultivariateNormal's marginal_*/conditional_*) can't flatten
-    # through _flatten_mv_args's "one nested vector, or all-scalar" convention -- those
-    # branches below never reference `ar`, so a flatten failure here is harmless.
+    # Methods with a doubly-nested arg (cdf_xy_after_set_parameters's replacement probability
+    # grid) can't flatten through _flatten_mv_args's "one nested vector, or all-scalar"
+    # convention -- that branch below never references `ar`, so a flatten failure is harmless.
     try:
         ar = _flatten_mv_args(args)
     except (TypeError, ValueError):
@@ -309,14 +426,10 @@ def _dispatch_multivariate(target: str, construct: dict, method: str, args: list
     if target == "Dirichlet":
         alpha = [float(v) for v in construct["alpha"]]
         return _core.dirichlet_val(method, alpha, ar)
-    if target == "Multinomial":
-        n = int(construct["n"])
-        p = [float(v) for v in construct["p"]]
-        return _core.multinomial_val(method, n, p, ar)
     if target == "BivariateEmpirical":
-        x1 = [float(v) for v in construct["x1"]]
-        x2 = [float(v) for v in construct["x2"]]
-        p = [[float(v) for v in row] for row in construct["p"]]
+        x1 = [_num(v) for v in construct["x1"]]
+        x2 = [_num(v) for v in construct["x2"]]
+        p = [[_num(v) for v in row] for row in construct["p"]]
         transforms = [
             construct.get("x1_transform", "None"),
             construct.get("x2_transform", "None"),
@@ -334,36 +447,6 @@ def _dispatch_multivariate(target: str, construct: dict, method: str, args: list
     if target == "MultivariateNormal":
         mean = [float(v) for v in construct["mean"]]
         cov = [[float(v) for v in row] for row in construct["covariance"]]
-        # v2.1.4 Marginal/Conditional: dedicated entry points (not the flattened `ar`)
-        # since these take a variable-length index vector (Conditional: a second
-        # same-length values vector) that _flatten_mv_args's "one nested vector, or
-        # all-scalar" convention can't disambiguate from adjacent variable-length vectors.
-        if method == "marginal_mean":
-            indices = [int(v) for v in args[0]]
-            return _core.mvn_marginal_mean(mean, cov, indices, int(args[1]))
-        if method == "marginal_covariance":
-            indices = [int(v) for v in args[0]]
-            return _core.mvn_marginal_covariance(mean, cov, indices, int(args[1]), int(args[2]))
-        if method == "marginal_log_pdf":
-            indices = [int(v) for v in args[0]]
-            point = [float(v) for v in args[1]]
-            return _core.mvn_marginal_log_pdf(mean, cov, indices, point)
-        if method == "marginal_dimension":
-            indices = [int(v) for v in args[0]]
-            return _core.mvn_marginal_dimension(mean, cov, indices)
-        if method == "conditional_mean":
-            obs_indices = [int(v) for v in args[0]]
-            obs_values = [float(v) for v in args[1]]
-            return _core.mvn_conditional_mean(mean, cov, obs_indices, obs_values, int(args[2]))
-        if method == "conditional_covariance":
-            obs_indices = [int(v) for v in args[0]]
-            obs_values = [float(v) for v in args[1]]
-            return _core.mvn_conditional_covariance(mean, cov, obs_indices, obs_values,
-                                                     int(args[2]), int(args[3]))
-        if method == "conditional_dimension":
-            obs_indices = [int(v) for v in args[0]]
-            obs_values = [float(v) for v in args[1]]
-            return _core.mvn_conditional_dimension(mean, cov, obs_indices, obs_values)
         return _core.mvn_val(method, mean, cov, ar)
     if target == "MultivariateStudentT":
         df = float(construct["df"])
@@ -374,15 +457,15 @@ def _dispatch_multivariate(target: str, construct: dict, method: str, args: list
 
 
 # --- MultivariateNormal seeded batches --------------------------------------------------
-# `cdf` (dim>=3), `interval`, and `mvndst` all draw from the seeded MVNUNI stream, so a
-# RUN of consecutive same-method assertions in a seeded case must be evaluated on ONE
-# persistent instance via the mvn_*_seq bindings in mvd.cpp, not dispatched one call at a
-# time (which would silently reset the seed between assertions). _run_mvn_case() below
-# groups consecutive assertions of these methods and batches them; everything else (and
-# every case without a "seed") falls through to the stateless per-assertion dispatch
-# above, unchanged.
+# `cdf` (dim>=3) and `mvndst` both draw from the seeded MVNUNI stream, so a RUN of consecutive
+# same-method assertions in a seeded case must be evaluated on ONE persistent instance via the
+# mvn_*_seq bindings in mvd.cpp, not dispatched one call at a time (which would silently reset
+# the seed between assertions). This is limitation 2 above, and it is why the delegated path
+# hands `cdf` back here whenever a case makes more than one stream-consuming call.
+# `interval` is NOT listed: the corpus's only interval case makes exactly one stream-consuming
+# call, so it delegates through the grammar's `seed` key instead.
 
-_MVN_SEEDED_METHODS = ("cdf", "mvndst", "interval")
+_MVN_SEEDED_METHODS = ("cdf", "mvndst")
 
 
 def _dispatch_mvn_seeded_seq(construct: dict, method: str, run: list):
@@ -393,10 +476,6 @@ def _dispatch_mvn_seeded_seq(construct: dict, method: str, run: list):
     if method == "cdf":
         xs = [[_num(v) for v in a["args"][0]] for a in run]
         return _core.mvn_cdf_seq(mean, cov, seed, xs)
-    if method == "interval":
-        lowers = [[_num(v) for v in a["args"][0]] for a in run]
-        uppers = [[_num(v) for v in a["args"][1]] for a in run]
-        return _core.mvn_interval_seq(mean, cov, seed, lowers, uppers)
     if method == "mvndst":
         # args = [n, [lower...], [upper...], [infin...], [correl...], maxpts, abseps, releps]
         n_dim = int(run[0]["args"][0])
@@ -412,14 +491,38 @@ def _dispatch_mvn_seeded_seq(construct: dict, method: str, run: list):
     raise KeyError(f"unknown seeded MultivariateNormal method: {method}")
 
 
-def _run_mvn_case(construct: dict, assertions: list):
+def _run_multivariate_case(target: str, construct: dict, assertions: list):
+    # Limitation 1: a construct carrying a "nan"/"inf" literal cannot be serialized into the
+    # grammar, so its (validity-only) assertions run locally.
+    encodable = not _has_non_finite(construct)
+    spec_json = _json(_mvdist_spec(target, construct)) if encodable else ""
+    # A case whose MVNUNI stream is consumed at most once has no sequence to preserve, so its
+    # cdf/interval delegates; anything more stays whole on the seeded batch path below.
+    stream_calls = (sum(_mvn_consumes_stream(a["method"]) for a in assertions)
+                    if target == "MultivariateNormal" else 0)
+    stream_isolated = stream_calls <= 1
     seeded = "seed" in construct
     i = 0
     n = len(assertions)
     while i < n:
         a = assertions[i]
         method = a["method"]
-        if seeded and method in _MVN_SEEDED_METHODS:
+        args = a.get("args", [])
+        # Limitation 1 again, on the evaluation point rather than the construct: MVN's and
+        # MVT's log_pdf-at-infinity cases pass an infinite coordinate, which the grammar
+        # cannot carry either.
+        if encodable and not _has_non_finite(args):
+            if a["mode"] == "bool":
+                # The old dispatcher ignored the assertion's method in bool mode and read
+                # parameters_valid(); keep that exactly.
+                _check(_core.mvdist_run(spec_json, "parameters_valid", "[]")["values"][0], a)
+                i += 1
+                continue
+            if _mv_delegated(target, method, stream_isolated):
+                _check(_dispatch_multivariate_delegated(spec_json, method, args), a)
+                i += 1
+                continue
+        if target == "MultivariateNormal" and seeded and method in _MVN_SEEDED_METHODS:
             j = i
             while j < n and assertions[j]["method"] == method:
                 j += 1
@@ -428,11 +531,9 @@ def _run_mvn_case(construct: dict, assertions: list):
             for actual, assertion in zip(actuals, run):
                 _check(actual, assertion)
             i = j
-        else:
-            args = a.get("args", [])
-            actual = _dispatch_multivariate("MultivariateNormal", construct, method, args)
-            _check(actual, a)
-            i += 1
+            continue
+        _check(_dispatch_multivariate(target, construct, method, args), a)
+        i += 1
 
 
 # --- mcmc_sampler path -------------------------------------------------------------------
@@ -1068,73 +1169,141 @@ def _check(actual, a):
 
 
 # --- bivariate_copula path ---------------------------------------------------------------
-# Every copula shares BivariateCopula's uniform theta/get_copula_parameters/pdf/cdf/... API
-# (unlike multivariate_distribution's Dirichlet/Multinomial/BivariateEmpirical/..., which
-# share no common surface), so this path is fully generic through the factory-driven
-# _core.cop_val/_core.cop_fit bindings in copula.cpp -- no per-target branching, mirroring
-# copula_factory.hpp's rationale. construct is either {"theta": x} (optionally {"theta": x,
-# "df": y} for 2-parameter copulas, and/or {"marginals": {"targets", "params"}} to attach
-# marginals directly -- used by the "random_value" sampling oracles) or {"fit": {"x", "y",
-# "method", "marginals"?}}; see fixtures/README.md for the full schema.
+# Fully delegated to _core.copula_run: every copula shares BivariateCopula's uniform
+# theta/get_copula_parameters/pdf/cdf/... API, so there is no per-target branching left here at
+# all (the "tau" method-of-moments fit, whose SetThetaFromTau is a member of each concrete
+# Archimedean class rather than of IBivariateCopula, is dispatched by
+# copulas::set_theta_from_tau inside dist_spec.hpp). The one local path is limitation 1: the
+# non-finite theta/df validity cases, which the grammar cannot encode and which keep the narrow
+# _core.cop_val call.
+#
+# construct is either {"theta": x} (optionally {"theta": x, "df": y} for 2-parameter copulas,
+# and/or {"marginals": {"targets", "params"}} to attach marginals directly -- used by the
+# "random_value" sampling oracles) or {"fit": {"x", "y", "method", "marginals"?}}; see
+# fixtures/README.md for the full schema.
 
 
-def _build_copula_params(construct: dict) -> list[float]:
-    p = [_num(construct["theta"])]
-    if "df" in construct:
-        p.append(_num(construct["df"]))
-    return p
+def _copula_margin(family: str, params) -> dict:
+    return {"family": family} if params is None else {"family": family, "parameters": params}
 
 
-def _dispatch_copula(
-    target: str,
-    params: list[float],
-    method: str,
-    args: list,
-    marg_x_target: str = "",
-    marg_x_params: list[float] | None = None,
-    marg_y_target: str = "",
-    marg_y_params: list[float] | None = None,
-):
-    ar = _flatten_mv_args(args)
-    return _core.cop_val(
-        target, params, method, ar, marg_x_target, marg_x_params or [], marg_y_target, marg_y_params or []
-    )
+def _copula_spec(target: str, construct: dict, datasets: dict) -> dict:
+    """The fixture copula construct as a dist_spec.hpp spec.
+
+    The schema differences are the marginal spelling (positional "marginals" here, margin_x /
+    margin_y there) and the fit samples (dataset NAMES here, inline arrays there). The
+    fixture's bare-family marginal convention needs no translation: dist_spec's build_copula
+    MLE-fits a parameterless marginal to its own sample, which is what the fixture means and
+    what IFM requires.
+    """
+    spec = dict(construct)
+    spec["family"] = target
+    marg = construct.get("marginals")
+    if marg is not None:
+        spec.pop("marginals", None)
+        spec["margin_x"] = _copula_margin(marg["targets"][0], marg["params"][0])
+        spec["margin_y"] = _copula_margin(marg["targets"][1], marg["params"][1])
+    fit = construct.get("fit")
+    if fit is not None:
+        f = dict(fit)
+        f["x"] = list(datasets[fit["x"]])
+        f["y"] = list(datasets[fit["y"]])
+        marginals = fit.get("marginals")
+        if marginals is not None:
+            f.pop("marginals", None)
+            f["margin_x"] = _copula_margin(marginals[0], None)
+            f["margin_y"] = _copula_margin(marginals[1], None)
+        spec["fit"] = f
+    return spec
+
+
+_COPULA_METHOD_ALIASES = {
+    "upper_tail_dependence": "tail_dependence",
+    "lower_tail_dependence": "tail_dependence",
+    "theta_minimum": "bounds",
+    "theta_maximum": "bounds",
+    "or_exceedance": "exceedance_or",
+    "and_exceedance": "exceedance_and",
+    "random_value": "random",
+}
+
+_COPULA_LOG_LIKELIHOODS = ("log_likelihood_pseudo", "log_likelihood_ifm", "log_likelihood_full")
+
+
+def _fixture_copula_method(method: str) -> str:
+    # pdf, log_pdf, cdf, inverse_cdf, theta, df and the three log_likelihood_* verbs pass
+    # straight through.
+    return _COPULA_METHOD_ALIASES.get(method, method)
+
+
+def _copula_sample_args(args: list, datasets: dict) -> list:
+    """The three copula log-likelihood verbs take a paired SAMPLE, which the runner reads as
+    one flat "all x then all y" args array. Spelling 200 numbers per assertion into the
+    fixture would drown the file, so those assertions name their two datasets instead --
+    args = ["<x dataset>", "<y dataset>"] -- and every runner splices the named arrays here.
+    Documented under `bivariate_copula` in fixtures/README.md.
+    """
+    out: list = []
+    for name in args:
+        if name not in (datasets or {}):
+            raise KeyError(f"copula log-likelihood args name an unknown dataset: {name}")
+        out.extend(float(v) for v in datasets[name])
+    return out
+
+
+def _fixture_copula_pick(result: dict, method: str, args: list):
+    """The runner returns a whole vector for the methods the fixture indexes into.
+
+    `random` comes back as all the x draws followed by all the y draws, so a fixture
+    (row, col) with args = [sample_size, seed, row, col] lands at col * sample_size + row.
+    """
+    values = result["values"]
+    if method in ("lower_tail_dependence", "theta_minimum"):
+        return values[0]
+    if method in ("upper_tail_dependence", "theta_maximum"):
+        return values[1]
+    if method == "inverse_cdf":
+        return values[int(args[2])]
+    if method == "marginal_param":
+        return values[int(args[1])]
+    if method == "random_value":
+        return values[int(args[3]) * int(args[0]) + int(args[2])]
+    return values[0]
 
 
 def _run_copula_case(target: str, construct: dict, assertions: list, datasets: dict):
-    if "fit" in construct:
-        fit = construct["fit"]
-        x = [float(v) for v in datasets[fit["x"]]]
-        y = [float(v) for v in datasets[fit["y"]]]
-        marginals = fit.get("marginals")
-        marg_x = marginals[0] if marginals else ""
-        marg_y = marginals[1] if marginals else ""
-        result = _core.cop_fit(target, x, y, fit["method"], marg_x, marg_y)
+    # Limitation 1: a "nan"/"inf" theta or df cannot be serialized into the grammar. Every
+    # such case asserts parameters_valid alone.
+    if _has_non_finite(construct):
+        params = [_num(construct["theta"])]
+        if "df" in construct:
+            params.append(_num(construct["df"]))
         for a in assertions:
-            args = a.get("args", [])
-            if a["method"] == "theta":
-                actual = result["params"][0]
-            elif a["method"] == "df":
-                actual = result["params"][1]
-            elif a["method"] == "marginal_param":
-                which, idx = args[0], int(args[1])
-                actual = result["marg_x_params"][idx] if which == "x" else result["marg_y_params"][idx]
-            else:
-                raise KeyError(f"unsupported post-fit copula fixture method: {a['method']}")
-            _check(actual, a)
-    else:
-        params = _build_copula_params(construct)
-        marg = construct.get("marginals")
-        marg_x_target = marg["targets"][0] if marg else ""
-        marg_y_target = marg["targets"][1] if marg else ""
-        marg_x_params = [_num(v) for v in marg["params"][0]] if marg else []
-        marg_y_params = [_num(v) for v in marg["params"][1]] if marg else []
-        for a in assertions:
-            args = a.get("args", [])
-            actual = _dispatch_copula(
-                target, params, a["method"], args, marg_x_target, marg_x_params, marg_y_target, marg_y_params
-            )
-            _check(actual, a)
+            if a["mode"] != "bool":
+                raise KeyError(f"{target}/{a['method']}: a non-finite copula construct can "
+                               "only assert parameters_valid")
+            _check(_core.cop_val(target, params, "parameters_valid", [], "", [], "", []), a)
+        return
+
+    spec_json = _json(_copula_spec(target, construct, datasets))
+    for a in assertions:
+        method = a["method"]
+        args = a.get("args", [])
+        if a["mode"] == "bool":
+            # The old dispatcher ignored the assertion's method in bool mode and read
+            # parameters_valid(); keep that exactly.
+            _check(_core.copula_run(spec_json, "parameters_valid", "[]")["values"][0], a)
+            continue
+        if method == "marginal_param":
+            # args = ("x" | "y", index): the side picks the runner method, the index picks the
+            # value out of that marginal's parameter vector.
+            side = "marginal_x_parameters" if args[0] == "x" else "marginal_y_parameters"
+            _check(_fixture_copula_pick(_core.copula_run(spec_json, side, "[]"), method, args), a)
+            continue
+        if method in _COPULA_LOG_LIKELIHOODS:
+            args = _copula_sample_args(args, datasets)
+        r = _core.copula_run(spec_json, _fixture_copula_method(method), _json(args))
+        _check(_fixture_copula_pick(r, method, args), a)
 
 
 # data_utility [function, args, data]: MGBT count, Box-Cox / Yeo-Johnson lambda +
@@ -1258,32 +1427,22 @@ def test_fixture_case(kind, target, datasets, case):
         return
 
     if kind == "multivariate_distribution":
-        if target == "MultivariateNormal":
-            _run_mvn_case(case["construct"], case["assertions"])
-        else:
-            for a in case["assertions"]:
-                args = a.get("args", [])
-                actual = _dispatch_multivariate(target, case["construct"], a["method"], args)
-                _check(actual, a)
+        _run_multivariate_case(target, case["construct"], case["assertions"])
+        return
+
+    if target in _COMPOSITE_TARGETS:
+        _run_composite_case(target, case["construct"], case["assertions"], datasets)
         return
 
     is_gev = target == "GeneralizedExtremeValue"
-    is_composite = target in _COMPOSITE_TARGETS
     if is_gev:
         g = _build_gev(case["construct"], datasets)
-    elif is_composite:
-        cd = _build_composite(target, case["construct"], datasets)
     else:
         params = _build_params(target, case["construct"], datasets)
     for a in case["assertions"]:
         args = a.get("args", [])
-        if is_composite and a["method"] == "set_parameters":
-            cd = _apply_set_parameters_composite(target, cd, args)
-            actual = 0
-        elif is_gev:
+        if is_gev:
             actual = _dispatch_gev(g, a["method"], args)
-        elif is_composite:
-            actual = _dispatch_composite(target, cd, a["method"], args)
         else:
             actual = _dispatch_generic(target, params, a["method"], args)
         _check(actual, a)

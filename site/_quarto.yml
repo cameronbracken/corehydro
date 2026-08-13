@@ -62,6 +62,37 @@ quartodoc:
       contents:
         - Distribution
         - distribution_names
+    - title: Composite distributions
+      desc: >-
+        Five distributions built from other distributions rather than a flat parameter vector --
+        truncation, mixtures, competing risks, empirical, and kernel density. Each returns a
+        `Distribution` accepted by every method on that class.
+      contents:
+        - dist_truncated
+        - dist_mixture
+        - dist_competing_risks
+        - dist_empirical
+        - dist_kde
+    - title: Copulas
+      desc: >-
+        The seven bivariate copula families (`copula_names()`), constructed directly or fitted
+        to paired data.
+      contents:
+        - Copula
+        - copula_fit
+        - copula_names
+    - title: Multivariate distributions
+      desc: >-
+        The five multivariate distribution families (`mvdist_names()`): multivariate normal and
+        Student-t, Dirichlet, multinomial, and bivariate empirical.
+      contents:
+        - MultivariateDistribution
+        - mvdist_normal
+        - mvdist_student_t
+        - mvdist_dirichlet
+        - mvdist_multinomial
+        - mvdist_bivariate_empirical
+        - mvdist_names
     - title: GEV convenience functions
       desc: >-
         Direct density, distribution, quantile, moments, and fitting

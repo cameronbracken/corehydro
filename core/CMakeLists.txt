@@ -23,6 +23,7 @@ set(BF_TESTS
   test_gev_estimation
   test_goodness_of_fit
   test_mcmc_extra
+  test_dist_runner
   test_mixture
   test_mixture_em_seeding
   test_empirical_distribution

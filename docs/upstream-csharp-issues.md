@@ -167,14 +167,17 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
 
 ## CONSISTENCY — CentralMoments(1000) resolves to the int-steps (trapezoidal) overload
 
-- **Where:** e.g. `TruncatedDistribution.cs`, `Mixture.cs` calling `CentralMoments(1000)`; overloads
-  in `UnivariateDistributionBase.cs` (`CentralMoments(int steps=300)` vs `CentralMoments(double
-  tolerance=1e-8)`).
+- **Where:** `TruncatedDistribution.cs` (four moment getters), `Mixture.cs` and `CompetingRisks.cs`
+  calling `CentralMoments(1000)`; overloads in `UnivariateDistributionBase.cs`
+  (`CentralMoments(int steps=300)` vs `CentralMoments(double tolerance=1e-8)`).
 - **What:** passing the integer literal `1000` binds to the **fixed-step trapezoidal** overload, not
   the adaptive-tolerance one. This may be intentional, but the two overloads with very different
   argument meanings (step count vs tolerance) are an easy foot-gun.
-- **Port handling:** the C++ uses the adaptive AdaptiveGaussKronrod integrator; reproduces the C#
-  values to fixture tolerance.
+- **Port handling:** the C++ used to call the adaptive AdaptiveGaussKronrod integrator here and
+  reproduced the C# only to the loose fixture tolerances then in force. It now calls
+  `central_moments(1000)`, the same overload C# binds to. See the FIXED entry near the end of this
+  file ("three classes computed their central moments with adaptive Gauss-Kronrod") for the
+  measured before/after and the tightened pins. The foot-gun argument below is unaffected.
 - **Suggested action:** verify the intent; consider renaming one overload (e.g.
   `CentralMomentsBySteps` / `CentralMomentsByTolerance`) to remove the ambiguity.
 
@@ -1687,6 +1690,195 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   `BrentSearch`/`NelderMead` so no adapter re-evaluation is needed — while cause 2 is not fixable by
   any port change, since it is the same last-ULP reassociation sensitivity the analysis-curve
   findings above describe.
+
+## BUG (C++ port only, no C# counterpart) — three classes computed their central moments with adaptive Gauss-Kronrod where C# uses the 1000-step trapezoidal overload (FIXED, ported)
+
+- **Where:** `CentralMoments(1000)` is called at `Numerics/Distributions/Univariate/Mixture.cs` @
+  2a0357a line 312, `CompetingRisks.cs` line 217, and `TruncatedDistribution.cs` lines 140, 171,
+  185 and 199 (its four moment getters each fill `u` from the same call). The counterparts are
+  `compute_moments()` in `core/include/corehydro/numerics/distributions/mixture.hpp`,
+  `competing_risks.hpp` and `truncated_distribution.hpp`. Surfaced writing
+  `fixtures/distributions/univariate/mixture.json`'s
+  `moments_log_pdf_log_likelihood_and_seeded_draws` case, the first fixture to pin Mixture skewness
+  or kurtosis at a tight tolerance; the review that followed found the other two call sites.
+- **What:** C# passes the integer literal `1000`, which binds to the `int steps` overload on
+  `UnivariateDistributionBase` — a 1000-bin `Stratify` midpoint/trapezoid sum over
+  `[InverseCDF(1e-8), InverseCDF(1-1e-8)]`. All three C++ sites instead called adaptive
+  Gauss-Kronrod at relative tolerance 1e-8, mirroring the *other* base overload,
+  `CentralMoments(double tolerance)`. Mixture's own comment said so ("Mirrors C#
+  CentralMoments(double tolerance = 1e-8) from the base class"), and TruncatedDistribution
+  compounded it by integrating over `[min, max]` rather than the two 1e-8 quantiles. Both are
+  legitimate quadratures of the same integrals and they agree to about six digits, so nothing
+  downstream looked wrong — but they are not the same number.
+- **Measured**, on the three-component Normal mixture `three_normal_pdf_cdf` uses
+  (`0.3*N(10,2) + 0.2*N(20,1) + 0.5*N(30,5)`), C# first and the old Gauss-Kronrod port second:
+  - mean `21.999999995011922` vs `21.999999428497716` (2.6e-8 relative)
+  - sd `9.481575923790889` vs `9.4815600742053032` (1.7e-6 relative)
+  - skewness `-0.00985460360386465` vs `-0.0098548559431184124` (2.5e-5 relative)
+  - kurtosis `1.8641595464622873` vs `1.8641508578822412` (4.7e-6 relative)
+- **Why no earlier fixture caught it:** the only Mixture moment oracles were `mean` (`22`, abs
+  1e-4) and `sd` (`9.481561`, abs 1e-3) — both far too loose to separate the two quadratures. The
+  skewness/kurtosis verbs had no oracle at all. CompetingRisks pinned all four moments at the exact
+  C# 1000-step values but at `abs 1e-2`, and TruncatedDistribution pinned hand-rounded five-digit
+  literals at `abs 1e-4`.
+- **Status: FIXED and ported.** All three `compute_moments()` bodies now call
+  `central_moments(1000)` — the already-ported trapezoidal overload on the C++ base class — and
+  return the C# values to 1e-16 to 1e-11 relative. The four `agk::integrate` calls are gone from
+  each file (with the now-unused `adaptive_gauss_kronrod.hpp` include). The fixtures were tightened
+  in the same change: Mixture's new case pins all four moments at `rel 1e-10` (measured 9.7e-16 to
+  6.1e-13), the thirteen CompetingRisks moment pins went from `abs 1e-2` to `rel 1e-9` (measured
+  1.3e-16 to 4.1e-11, the loosest being the Weibull/Gamma skewness), and
+  TruncatedDistribution's moments case was re-pinned from the rounded literals to the full-precision
+  C# values at `abs`/`rel 1e-12` (measured 3.3e-16 to 2.0e-14). No `oracle_skip` was added and no
+  tolerance was loosened anywhere.
+- **Note for the pre-existing CentralMoments overload entry above** (the CONSISTENCY entry naming
+  `TruncatedDistribution.cs` and `Mixture.cs`): its "Port handling" line said the C++ used adaptive
+  Gauss-Kronrod and "reproduces the C# values to fixture tolerance." That was true only at the old
+  loose tolerances. It no longer applies — the port now calls the same overload C# does. The
+  upstream-facing half of that entry (the argument that two overloads distinguished only by
+  `int` vs `double` are a foot-gun) still stands.
+
+## FIDELITY (C++ port only) — five `Mode` implementations approximated the BrentSearch maximization C# performs (FIXED, ported)
+
+- **Where:** C# builds `new BrentSearch(PDF, InverseCDF(0.001), InverseCDF(0.999))`, calls
+  `Maximize()` and returns `BestParameterSet.Values[0]` in five classes @ 2a0357a:
+  `EmpiricalDistribution.cs` line 280, `KernelDensity.cs` line 320, `Mixture.cs` line 337,
+  `CompetingRisks.cs` line 241 and `TruncatedDistribution.cs` line 154. The counterparts are
+  `mode()` in `empirical_distribution.hpp`, `kernel_density.hpp`, `mixture.hpp`,
+  `competing_risks.hpp` and `truncated_distribution.hpp`. Surfaced writing the
+  `palisades_moments_density_and_seeded_draws` and `gaussian_moments_density_and_seeded_draws`
+  cases.
+- **What:** Empirical and KernelDensity scanned a fixed 1000-point uniform grid over the same
+  interval and returned the best node; Mixture and CompetingRisks ran a 200-iteration ternary
+  search, which is only valid on a unimodal surface; TruncatedDistribution did not search at all,
+  clamping the *base* distribution's mode into `[min, max]`. Each was a documented shortcut —
+  `empirical_distribution.hpp` said so outright ("Use golden-section search on a fine grid for
+  simplicity; this is not in the fixture").
+- **Measured**, C# first, the old approximation second, and the same object driven through the
+  port's own `BrentSearch::maximize()` third:
+
+  | | C# | old port | port via BrentSearch |
+  |---|---|---|---|
+  | Empirical, 99-point Palisades at-risk record | `15198.510496728823` | `8669.7200000000012` | `15198.510496728823` (bit-exact) |
+  | Mixture, three-Normal | `29.99999990517664` | `29.99999990850224` | `29.99999990517664` (bit-exact) |
+  | KernelDensity, Gaussian over 48-point Tippecanoe | `13470.180323329207` | `13478.103364870844` | `13470.18032360422` (2.0e-11 relative) |
+  | CompetingRisks, two Normals, min rule | `97.38075467325922` | `97.380754651639961` | `97.380754673299492` (4.4e-13 relative) |
+
+  The Empirical gap is the large one because the surface is jagged: `Empirical.PDF` is a
+  finite-difference derivative of a piecewise-linear CDF, so Brent stops at whichever local optimum
+  its bracket encloses while a grid scan finds a different one. An earlier reading of this called
+  the C# value "optimizer-defined" and argued neither answer was more correct. That argument is
+  disproved by the third column: running the *port's own* Brent over the *same* objective and the
+  *same* interval reproduces C# bit-for-bit on exactly the case used to make it. The value is
+  defined by the algorithm, and the algorithm was already ported.
+- **Status: FIXED and ported.** All five `mode()` bodies now construct
+  `math::optimization::BrentSearch(pdf, inverse_cdf(0.001), inverse_cdf(0.999))`, call `maximize()`
+  and return `best_parameter()`. `brent_search.hpp` includes only `tools.hpp`, so no include cycle
+  is created. Empirical and KernelDensity keep their pre-existing `lo >= hi` guard: those classes
+  validate lazily, so an invalid parameter set can leave the two quantiles crossed, and both the C#
+  and the C++ `BrentSearch` constructor throw on `upper < lower`. No `*_invalid` fixture case
+  reaches `mode()`. The fixtures gained the two assertions this entry used to justify dropping:
+  Empirical `mode` at `rel 1e-15` (the agreement is bit-exact; the tolerance is nominal insurance
+  against floating-point contraction on another platform) and KernelDensity `mode` at `rel 1e-9`.
+  TruncatedDistribution's existing `mode` pin was re-pinned to the full-precision C# value and
+  agrees to 1 ulp. No `oracle_skip`, no loosened tolerance.
+
+---
+
+## BUG (port surface, open) — `fit_mle()` / `fit_map()` on a `model_bivariate()` Archimedean copula returns a wrong answer under the default optimizer
+
+- **Where:** `corehydror/R/fit.R` and `corehydropy/src/corehydropy/fit.py` (the `optimizer`
+  default, NelderMead), over
+  `core/include/corehydro/models/bivariate_distribution/bivariate_distribution.hpp:581-585`
+  (`initial_value_for`) and each Archimedean copula's `parameter_constraints`
+  (`gumbel_copula.hpp:117` `{1, 100}`, `clayton_copula.hpp:116` `{-1, 100}`). Found writing
+  `site/examples/26-copulas-and-joint-frequency/`.
+- **What:** the fit reports `Success` and a parameter that is not the maximum. Measured on that
+  page's 48-pair peak/volume record with both marginals fixed at their IFM values:
+
+  ```
+  Gumbel   NelderMead              theta=1.000000   logLik=0.000000   status Success
+  Clayton  NelderMead              theta=54.450000  logLik=-Inf       status Success
+  Gumbel   DifferentialEvolution   theta=2.712260   logLik=29.900498
+  Gumbel   Powell                  theta=2.712294   logLik=29.900498
+  Clayton  DifferentialEvolution   theta=1.344345   logLik=17.332637
+  ```
+
+  Python agrees with R: `fit_mle(..., optimizer="NelderMead")` returns `theta=1.0`,
+  `log_likelihood=-2.2e-15`; DifferentialEvolution returns `theta=2.7122604712670535`,
+  `log_likelihood=29.900498219016548`. `fit_map()` behaves the same way, returning `theta=1`.
+- **Cause: optimizer initialization, not missing sample data.** An earlier report blamed a
+  missing `set_sample_data()` call. That is wrong: the call does happen, through
+  `set_copula_type()` to `set_copula()` to `set_default_parameters()` to `set_sample_data()`. The
+  real cause is where the local search starts. `initial_value_for` sets `ModelParameter.value()`
+  to the midpoint of the copula's constraint range, so `model_parameters()` reports `50.5` for
+  Gumbel and `49.5` for Clayton. Measured data log-likelihoods at those starts: Gumbel `-1022.56`
+  at 50.5 against `29.90` at the optimum; Clayton `-Inf` at 49.5, 50.5 and 54.45 alike. NelderMead
+  is a local search, so from a start that far out on a steep ridge (Gumbel) or on a flat `-Inf`
+  plateau (Clayton) it collapses onto a bound or stalls one simplex step from where it began, and
+  still reports convergence.
+- **Scope:** `bivariate_analysis()` is unaffected, because `BayesianAnalysis` initializes
+  through a global DE/MAP search rather than from `ModelParameter.value()`. No pinned fixture
+  value is affected either: the bivariate estimation fixtures use NelderMead only with the Normal
+  and StudentT copulas, whose midpoint starts (correlation 0, degrees of freedom 5) are benign.
+- **Where a fix belongs:** NOT in the core. `initial_value_for` is a faithful port of the C#
+  `InitialValueFor` and reproduces it exactly. The tractable fixes are at the R and Python
+  surface: pick a global optimizer by default for this model family, or seed the start from a
+  Kendall's tau inversion, or refuse to report `Success` on a non-finite objective. Each of those
+  is a behaviour change that needs its own fixtures.
+- **Status: open, deliberate.** Recorded here as a known issue for a follow-up branch, not fixed
+  on the branch that found it.
+
+---
+
+## BUG (port surface, open) — Python `Fit.parameters` silently drops values when parameter names repeat
+
+- **Where:** `corehydropy/src/corehydropy/fit.py:468`
+  (`parameters = dict(zip(names, result["parameters"]))`), and the same pattern at `:499`
+  (`standard_errors`), `:512-513` (`profile_lower` / `profile_upper`), `:567-568` (`map` /
+  `posterior_mean`), and `:434-435` (the credible-interval dicts).
+- **What:** the fit's parameter vector is exposed as a dict keyed by parameter name, and names are
+  not unique. A two-component mixture's names are
+  `['Weight (w1)', 'Weight (w2)', 'D1', 'D1', 'D2', 'D2']`, so six fitted values collapse to four
+  dict entries and the two component location parameters are lost with no warning. The `repr` and
+  the summary text are built from the same dict, so they under-report as well.
+- **Scope:** every Python consumer of `Fit.parameters`, `.standard_errors`, `.map`,
+  `.posterior_mean`, the profile intervals and the credible intervals, for any model whose
+  parameter names repeat. The ordered vector is still reachable from
+  `fit.model.spec["parameter_values"]`, which is what
+  `site/examples/27-composite-distributions/python.ipynb` reads, with a comment saying why. R's
+  `coef()` is unaffected: a named numeric vector tolerates duplicate names.
+- **Where a fix belongs:** the Python surface only. Either disambiguate the repeated names when
+  building the dicts, or return an ordered structure and keep the name lookup as a secondary
+  accessor. Either choice is a public-API change and needs its own fixtures plus an R/Python
+  cross-check.
+- **Status: open, deliberate.** Recorded here as a known issue for a follow-up branch.
+
+---
+
+## CONSISTENCY (not a port defect) — MultivariateStudentT's CDF at dimension >= 3 is clock-seeded and not reproducible
+
+- **Where:** `Numerics/Distributions/Multivariate/MultivariateStudentT.cs`, `CDF()`;
+  `core/include/corehydro/numerics/distributions/multivariate/multivariate_student_t.hpp:23-38`.
+- **What:** for dimension 1-2, `CDF()` is closed-form (dim 1 delegates to the univariate StudentT
+  CDF; dim <= 2 drives `MultivariateNormal::cdf()` calls that are themselves closed-form) and is
+  fully bit-reproducible. For dimension >= 3, `CDF()` runs a deterministic K=200 stratified-quantile
+  chi-square(v) mixture, but each of the 200 inner `MultivariateNormal.CDF()` calls invokes the
+  seeded Genz-Bretz quasi-Monte-Carlo integrator, and the `MultivariateNormal` instance
+  `MultivariateStudentT` builds internally is never given an explicit seed (`_MVNUNI = new
+  MersenneTwister()` in C#, mirrored by `make_clock_seeded()` in the port). So the MVT CDF at
+  dimension >= 3 is not reproducible run to run in either language, independent of any seed the
+  caller supplies to the outer `MultivariateStudentT`/`MultivariateDistribution` object.
+- **Port handling:** mirrored faithfully; `mvdist_student_t()` in R and Python (`corehydror/R/
+  mvdist.R`, `corehydropy/src/corehydropy/mvdist.py`) has no `seed` parameter, unlike
+  `mvdist_normal()`, which does expose one because `MultivariateNormal`'s own Genz integrator is
+  genuinely seedable. `mvdist_random()` draws from each family's own seeded Mersenne Twister stream
+  and is unaffected by this limitation.
+- **Suggested action:** none — this is an upstream design property (a class-internal
+  `MultivariateNormal` with no seed setter exposed), not something the port introduced or could fix
+  without diverging from C#.
+
+---
 
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 

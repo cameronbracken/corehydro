@@ -78,6 +78,32 @@ inline int summary(const char* suite) {
         }                                                                                  \
     } while (0)
 
+// Like CHECK_THROWS, but also asserts the message names the thing that went wrong. Used where
+// the message IS the feature (the phase-3 distribution runner reports which upstream limitation
+// it hit, and a message that stops naming it is a regression users would feel).
+#define CHECK_THROWS_MSG(expr, needle)                                                     \
+    do {                                                                                   \
+        bool _threw = false;                                                               \
+        std::string _what;                                                                 \
+        try {                                                                              \
+            (void)(expr);                                                                  \
+        } catch (const std::exception& _e) {                                               \
+            _threw = true;                                                                 \
+            _what = _e.what();                                                             \
+        } catch (...) {                                                                    \
+            _threw = true;                                                                 \
+        }                                                                                  \
+        if (_threw && _what.find(needle) != std::string::npos) {                           \
+            ::chtest::report_pass();                                                       \
+        } else if (!_threw) {                                                              \
+            ::chtest::report_fail(__FILE__, __LINE__, std::string(#expr) + " did not throw"); \
+        } else {                                                                           \
+            ::chtest::report_fail(__FILE__, __LINE__,                                      \
+                                  std::string(#expr) + " threw \"" + _what +               \
+                                      "\", which does not contain \"" + (needle) + "\"");  \
+        }                                                                                  \
+    } while (0)
+
 // Absolute-tolerance floating comparison.
 #define CHECK_NEAR(actual, expected, tol)                                                \
     do {                                                                                 \

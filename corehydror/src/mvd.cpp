@@ -1,8 +1,13 @@
-// cpp11 glue exposing the multivariate-distribution surface (Dirichlet, Multinomial,
-// BivariateEmpirical, MultivariateNormal, MultivariateStudentT) of the shared C++ core to
-// R. Mirrors the ch_trunc_*/ch_emp_* style in dist.cpp: bespoke per-target entry points,
-// generic-by-method-string rather than one function per method, so each new multivariate
-// target only adds one more ch_<name>_val_ function here.
+// cpp11 glue for the multivariate-distribution fixture surface the shared distribution runner
+// cannot serve. Every user-facing multivariate verb now goes through ch_mvdist_run_ in
+// dist_spec.cpp, which drives the same dist_runner.hpp entry point the C++ fixture runner, the
+// Python glue and the dotnet oracle emitter drive. Three groups stay here (see
+// test-fixtures.R's delegation comment): the MVNDST integrator internals and Dirichlet's static
+// LogMultivariateBeta, which have no runner verb; the non-finite constructs and evaluation
+// points, which the runner's JSON grammar has no literal for; and MultivariateNormal's seeded
+// MVNUNI sequences, which pin a run of values off ONE object and so cannot come from a
+// stateless runner. Entry points are generic-by-method-string rather than one function per
+// method, so each retains the arms it had before even where only one is reached today.
 // Core headers are vendored under src/corehydro_core/include (a symlink into core/; regenerate real files with tools/materialize_core.py).
 #include <cpp11.hpp>
 
@@ -13,7 +18,6 @@
 #include "corehydro/numerics/data/interpolation/transform.hpp"
 #include "corehydro/numerics/distributions/multivariate/bivariate_empirical.hpp"
 #include "corehydro/numerics/distributions/multivariate/dirichlet.hpp"
-#include "corehydro/numerics/distributions/multivariate/multinomial.hpp"
 #include "corehydro/numerics/distributions/multivariate/multivariate_normal.hpp"
 #include "corehydro/numerics/distributions/multivariate/multivariate_student_t.hpp"
 
@@ -54,35 +58,6 @@ double ch_dirichlet_val_(std::string method, doubles alpha, doubles args) {
         return sample[static_cast<std::size_t>(ar[2])][static_cast<std::size_t>(ar[3])];
     }
     stop("unknown Dirichlet fixture method '%s'", method.c_str());
-}
-
-// --- Multinomial -----------------------------------------------------------------------
-// Methods: dimension, parameters_valid, number_of_trials, mean, variance, covariance,
-// pdf, log_pdf, random_value (args = [sample_size, seed, row, col]; no LHS -- Multinomial
-// has no LatinHypercubeRandomValues in the C# source).
-
-[[cpp11::register]]
-double ch_multinomial_val_(std::string method, int n, doubles p, doubles args) {
-    std::vector<double> pv(p.begin(), p.end());
-    std::vector<double> ar(args.begin(), args.end());
-    mvd::Multinomial m(n, pv);
-
-    if (method == "dimension") return m.dimension();
-    if (method == "parameters_valid") return m.parameters_valid() ? 1.0 : 0.0;
-    if (method == "number_of_trials") return m.number_of_trials();
-    if (method == "mean") return m.mean()[static_cast<std::size_t>(ar[0])];
-    if (method == "variance") return m.variance()[static_cast<std::size_t>(ar[0])];
-    if (method == "covariance")
-        return m.covariance(static_cast<int>(ar[0]), static_cast<int>(ar[1]));
-    if (method == "pdf") return m.pdf(ar);
-    if (method == "log_pdf") return m.log_pdf(ar);
-    if (method == "random_value") {
-        // args = [sample_size, seed, row, col]; stateless (generate_random_values seeds
-        // its own MersenneTwister from `seed`).
-        auto sample = m.generate_random_values(static_cast<int>(ar[0]), static_cast<int>(ar[1]));
-        return sample[static_cast<std::size_t>(ar[2])][static_cast<std::size_t>(ar[3])];
-    }
-    stop("unknown Multinomial fixture method '%s'", method.c_str());
 }
 
 // --- BivariateEmpirical ------------------------------------------------------------
@@ -242,111 +217,15 @@ double ch_mvn_val_(std::string method, doubles mean, doubles cov_flat, doubles a
     stop("unknown MultivariateNormal fixture method '%s'", method.c_str());
 }
 
-// --- MultivariateNormal Marginal/Conditional (v2.1.4) ----------------------------------
-// Dedicated entry points (rather than folding into ch_mvn_val_'s flat `args`) because
-// these take a variable-length INDEX vector (and, for Conditional, a second
-// variable-length VALUES vector of the same length) -- flatten_mv_args's "one nested
-// vector, or all-scalar" convention can't disambiguate two adjacent variable-length
-// vectors packed into one flat args list. Stateless per-call, matching ch_mvn_val_.
-
-[[cpp11::register]]
-double ch_mvn_marginal_mean_(doubles mean, doubles cov_flat, integers indices, int idx) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t i = 0; i < dim; ++i)
-        for (std::size_t j = 0; j < dim; ++j) cov[i][j] = cov_flat[static_cast<int>(i * dim + j)];
-    mvd::MultivariateNormal n(mu, cov);
-    std::vector<int> idxv(indices.begin(), indices.end());
-    return n.marginal(idxv).mean()[static_cast<std::size_t>(idx)];
-}
-
-[[cpp11::register]]
-double ch_mvn_marginal_covariance_(doubles mean, doubles cov_flat, integers indices, int i, int j) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t r = 0; r < dim; ++r)
-        for (std::size_t c = 0; c < dim; ++c) cov[r][c] = cov_flat[static_cast<int>(r * dim + c)];
-    mvd::MultivariateNormal n(mu, cov);
-    std::vector<int> idxv(indices.begin(), indices.end());
-    return n.marginal(idxv).covariance(i, j);
-}
-
-[[cpp11::register]]
-double ch_mvn_marginal_log_pdf_(doubles mean, doubles cov_flat, integers indices, doubles point) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t i = 0; i < dim; ++i)
-        for (std::size_t j = 0; j < dim; ++j) cov[i][j] = cov_flat[static_cast<int>(i * dim + j)];
-    mvd::MultivariateNormal n(mu, cov);
-    std::vector<int> idxv(indices.begin(), indices.end());
-    std::vector<double> x(point.begin(), point.end());
-    return n.marginal(idxv).log_pdf(x);
-}
-
-[[cpp11::register]]
-double ch_mvn_marginal_dimension_(doubles mean, doubles cov_flat, integers indices) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t i = 0; i < dim; ++i)
-        for (std::size_t j = 0; j < dim; ++j) cov[i][j] = cov_flat[static_cast<int>(i * dim + j)];
-    mvd::MultivariateNormal n(mu, cov);
-    std::vector<int> idxv(indices.begin(), indices.end());
-    return n.marginal(idxv).dimension();
-}
-
-[[cpp11::register]]
-double ch_mvn_conditional_mean_(doubles mean, doubles cov_flat, integers obs_indices,
-                                 doubles obs_values, int idx) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t i = 0; i < dim; ++i)
-        for (std::size_t j = 0; j < dim; ++j) cov[i][j] = cov_flat[static_cast<int>(i * dim + j)];
-    mvd::MultivariateNormal n(mu, cov);
-    std::vector<int> idxv(obs_indices.begin(), obs_indices.end());
-    std::vector<double> valv(obs_values.begin(), obs_values.end());
-    return n.conditional(idxv, valv).mean()[static_cast<std::size_t>(idx)];
-}
-
-[[cpp11::register]]
-double ch_mvn_conditional_covariance_(doubles mean, doubles cov_flat, integers obs_indices,
-                                       doubles obs_values, int i, int j) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t r = 0; r < dim; ++r)
-        for (std::size_t c = 0; c < dim; ++c) cov[r][c] = cov_flat[static_cast<int>(r * dim + c)];
-    mvd::MultivariateNormal n(mu, cov);
-    std::vector<int> idxv(obs_indices.begin(), obs_indices.end());
-    std::vector<double> valv(obs_values.begin(), obs_values.end());
-    return n.conditional(idxv, valv).covariance(i, j);
-}
-
-[[cpp11::register]]
-double ch_mvn_conditional_dimension_(doubles mean, doubles cov_flat, integers obs_indices,
-                                      doubles obs_values) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t i = 0; i < dim; ++i)
-        for (std::size_t j = 0; j < dim; ++j) cov[i][j] = cov_flat[static_cast<int>(i * dim + j)];
-    mvd::MultivariateNormal n(mu, cov);
-    std::vector<int> idxv(obs_indices.begin(), obs_indices.end());
-    std::vector<double> valv(obs_values.begin(), obs_values.end());
-    return n.conditional(idxv, valv).dimension();
-}
-
 // --- MultivariateNormal (seeded batch methods) -----------------------------------------
-// `cdf` for dim>=3 and `interval` both draw from the seeded MVNUNI stream (via MVNDST);
-// `mvndst` is the Fortran-oracle entry point itself. Each needs a SINGLE persistent
-// instance across a whole run of k sequential calls -- rebuilding per call the way
-// ch_mvn_val_ does would silently reset the seeded RNG between assertions. The R fixture
-// runner groups consecutive same-method seeded assertions within a case and calls these
-// once per run, comparing results element-wise (see test-fixtures.R).
+// `cdf` for dim>=3 draws from the seeded MVNUNI stream (via MVNDST); `mvndst` is the
+// Fortran-oracle entry point itself. Each needs a SINGLE persistent instance across a whole
+// run of k sequential calls -- rebuilding per call the way ch_mvn_val_ does would silently
+// reset the seeded RNG between assertions. The R fixture runner groups consecutive same-method
+// seeded assertions within a case and calls these once per run, comparing results
+// element-wise (see test-fixtures.R). `Interval` also consumes the stream, but the corpus's
+// only Interval case makes exactly one such call, so it delegates through the grammar's
+// `seed` key and needs no batch entry point here.
 
 [[cpp11::register]]
 doubles ch_mvn_cdf_seq_(doubles mean, doubles cov_flat, int seed, doubles xs_flat, int k) {
@@ -364,29 +243,6 @@ doubles ch_mvn_cdf_seq_(doubles mean, doubles cov_flat, int seed, doubles xs_fla
         for (std::size_t d = 0; d < dim; ++d)
             x[d] = xs_flat[static_cast<int>(static_cast<std::size_t>(c) * dim + d)];
         out[c] = n.cdf(x);
-    }
-    return out;
-}
-
-[[cpp11::register]]
-doubles ch_mvn_interval_seq_(doubles mean, doubles cov_flat, int seed, doubles lowers_flat,
-                              doubles uppers_flat, int k) {
-    std::vector<double> mu(mean.begin(), mean.end());
-    std::size_t dim = mu.size();
-    std::vector<std::vector<double>> cov(dim, std::vector<double>(dim));
-    for (std::size_t i = 0; i < dim; ++i)
-        for (std::size_t j = 0; j < dim; ++j) cov[i][j] = cov_flat[static_cast<int>(i * dim + j)];
-    mvd::MultivariateNormal n(mu, cov);
-    n.set_mvnuni_seed(seed);
-
-    writable::doubles out(k);
-    for (int c = 0; c < k; ++c) {
-        std::vector<double> lo(dim), hi(dim);
-        for (std::size_t d = 0; d < dim; ++d) {
-            lo[d] = lowers_flat[static_cast<int>(static_cast<std::size_t>(c) * dim + d)];
-            hi[d] = uppers_flat[static_cast<int>(static_cast<std::size_t>(c) * dim + d)];
-        }
-        out[c] = n.interval(lo, hi);
     }
     return out;
 }

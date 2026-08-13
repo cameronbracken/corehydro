@@ -2,14 +2,14 @@
 //
 // A general truncated probability distribution. Wraps any UnivariateDistributionBase
 // and restricts it to [min, max]: PDF is renormalized by F(max)-F(min); CDF and InverseCDF
-// are shifted accordingly. Moments use AGK numerical integration over [min, max]; C# uses
-// CentralMoments(1000) (the int overload: trapezoidal, 1000 steps over InverseCDF(1e-8)
-// endpoints). AGK is more accurate and reproduces the C# values to oracle tolerance.
-// Mode clamps the base mode to [min, max]: exact for unimodal bases (the truncated-PDF
-// maximum is the base mode if in-bounds, else the nearest boundary), matching C# BrentSearch
-// for all standard cases. NOTE: this would be wrong for a MULTIMODAL base (e.g. a Mixture)
-// where truncation shifts the global PDF maximum to a different peak — replace with a
-// BrentSearch-over-truncated-PDF port if such a base is ever truncated.
+// are shifted accordingly. Moments use central_moments(1000), the fixed-step trapezoidal
+// overload the C# integer literal in `CentralMoments(1000)` binds to (the four moment getters
+// at TruncatedDistribution.cs lines 140, 171, 185, 199); it integrates over
+// [InverseCDF(1e-8), InverseCDF(1-1e-8)] of the truncated distribution. This file used to
+// integrate with adaptive Gauss-Kronrod over [min, max] instead.
+// Mode is BrentSearch maximizing the truncated PDF over [InverseCDF(0.001), InverseCDF(0.999)]
+// (TruncatedDistribution.cs line 154); it used to clamp the base distribution's mode into
+// [min, max], which is wrong for a multimodal base and only approximate otherwise.
 // type() delegates to the base distribution (mirrors C# `_baseDist.Type`).
 // No IEstimation / ILinearMomentEstimation (TruncatedDistribution does not implement them in C#).
 //
@@ -46,7 +46,7 @@
 #include <vector>
 
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
-#include "corehydro/numerics/math/integration/adaptive_gauss_kronrod.hpp"
+#include "corehydro/numerics/math/optimization/brent_search.hpp"
 
 namespace corehydro::numerics::distributions {
 
@@ -113,9 +113,15 @@ class TruncatedDistribution : public UnivariateDistributionBase {
     }
     double median() const override { return inverse_cdf(0.5); }
     double mode() const override {
-        // Clamp base mode to [min_, max_]: exact for unimodal bases, matches C# BrentSearch
-        // over [InverseCDF(0.001), InverseCDF(0.999)] for all standard fixture cases.
-        return std::clamp(base_dist_->mode(), min_, max_);
+        // Mirrors C# Mode (TruncatedDistribution.cs line 154): BrentSearch maximizing the
+        // TRUNCATED PDF over [InverseCDF(0.001), InverseCDF(0.999)], returning
+        // BestParameterSet.Values[0]. This used to clamp the base distribution's mode into
+        // [min_, max_], which is wrong for a multimodal base and only approximate otherwise.
+        double lo = inverse_cdf(0.001);
+        double hi = inverse_cdf(0.999);
+        math::optimization::BrentSearch brent([this](double x) { return pdf(x); }, lo, hi);
+        brent.maximize();
+        return brent.best_parameter();
     }
     double standard_deviation() const override {
         if (!moments_computed_) compute_moments();
@@ -238,37 +244,18 @@ class TruncatedDistribution : public UnivariateDistributionBase {
         return true;
     }
 
-    // Numerical moments via AGK integration, mirroring C# CentralMoments(double tolerance=1e-8).
-    // Integration bounds are [min_, max_] (the truncated support).
+    // Mirrors the four C# moment getters (TruncatedDistribution.cs lines 140, 171, 185, 199),
+    // each of which fills `u` from CentralMoments(1000). The integer literal binds to the base
+    // class's fixed-step TRAPEZOIDAL overload (`CentralMoments(int steps)`), which integrates
+    // over [InverseCDF(1e-8), InverseCDF(1-1e-8)] of the TRUNCATED distribution, not the
+    // adaptive-tolerance one -- see docs/upstream-csharp-issues.md. This file used to call
+    // adaptive Gauss-Kronrod over [min_, max_] instead.
     void compute_moments() const {
-        namespace agk = corehydro::numerics::math::integration;
-        const double tol = 1e-8;
-        const double a = min_, b = max_;
-        if (a >= b) {
-            u_[0] = a;
-            u_[1] = u_[2] = u_[3] = kNaN;
-            moments_computed_ = true;
-            return;
-        }
-        // Mean: E[X] = integral x * f(x) dx
-        u_[0] = agk::integrate([this](double x) { return x * pdf(x); }, a, b, tol, tol);
-        const double mu = u_[0];
-        // Standard deviation: sqrt(E[(X-mu)^2])
-        u_[1] = std::sqrt(agk::integrate(
-            [this, mu](double x) { return (x - mu) * (x - mu) * pdf(x); }, a, b, tol, tol));
-        const double s = u_[1];
-        // Skewness: E[((X-mu)/s)^3]
-        u_[2] = agk::integrate(
-            [this, mu, s](double x) {
-                double z = (x - mu) / s;
-                return z * z * z * pdf(x);
-            }, a, b, tol, tol);
-        // Kurtosis: E[((X-mu)/s)^4]
-        u_[3] = agk::integrate(
-            [this, mu, s](double x) {
-                double z = (x - mu) / s;
-                return z * z * z * z * pdf(x);
-            }, a, b, tol, tol);
+        auto mom = central_moments(1000);
+        u_[0] = mom[0];
+        u_[1] = mom[1];
+        u_[2] = mom[2];
+        u_[3] = mom[3];
         moments_computed_ = true;
     }
 };

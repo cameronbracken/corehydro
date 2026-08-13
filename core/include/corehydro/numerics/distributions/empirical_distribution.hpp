@@ -67,6 +67,7 @@
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
+#include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/tools.hpp"
 
 namespace corehydro::numerics::distributions {
@@ -192,21 +193,19 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
     }
     double median() const override { return inverse_cdf(0.5); }
     double mode() const override {
-        // Mirrors C# Mode: BrentSearch maximizing PDF over [InverseCDF(0.001), InverseCDF(0.999)].
-        // Use golden-section search on a fine grid for simplicity; this is not in the fixture.
+        // Mirrors C# Mode (EmpiricalDistribution.cs line 280): BrentSearch maximizing PDF over
+        // [InverseCDF(0.001), InverseCDF(0.999)], returning BestParameterSet.Values[0]. This
+        // used to scan a 1000-point uniform grid, which found a different local optimum of the
+        // jagged finite-difference PDF than Brent does; Brent reproduces C# bit-for-bit.
+        // The degenerate-interval guard is kept: this class validates lazily, so an invalid
+        // parameter set can leave the two quantiles crossed, and the C# BrentSearch
+        // constructor throws on upper < lower.
         double lo = inverse_cdf(0.001);
         double hi = inverse_cdf(0.999);
         if (lo >= hi) return 0.5 * (lo + hi);
-        // Grid search over 1000 points to find approximate mode.
-        double best_x = lo;
-        double best_f = pdf(lo);
-        int grid = 1000;
-        for (int i = 1; i <= grid; ++i) {
-            double x = lo + (hi - lo) * i / grid;
-            double f = pdf(x);
-            if (f > best_f) { best_f = f; best_x = x; }
-        }
-        return best_x;
+        math::optimization::BrentSearch brent([this](double x) { return pdf(x); }, lo, hi);
+        brent.maximize();
+        return brent.best_parameter();
     }
     double standard_deviation() const override {
         if (!moments_computed_) compute_moments();

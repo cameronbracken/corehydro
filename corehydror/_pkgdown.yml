@@ -38,6 +38,53 @@ reference:
       - dist_properties
       - dist_fit
       - distribution_names
+  - title: Composite distributions
+    desc: >
+      Five distributions built from other distributions rather than a flat parameter vector --
+      truncation, mixtures, competing risks, empirical, and kernel density. Each returns a
+      `corehydro_dist` accepted by every `dist_*()` verb.
+    contents:
+      - dist_truncated
+      - dist_mixture
+      - dist_competing_risks
+      - dist_empirical
+      - dist_kde
+  - title: Copulas
+    desc: >
+      The seven bivariate copula families (`copula_names()`), constructed directly or fitted to
+      paired data.
+    contents:
+      - copula
+      - copula_fit
+      - copula_functions
+      - copula_inverse_cdf
+      - copula_tail_dependence
+      - copula_exceedance
+      - copula_bounds
+      - copula_params
+      - copula_random
+      - copula_log_likelihood
+      - copula_names
+  - title: Multivariate distributions
+    desc: >
+      The five multivariate distribution families (`mvdist_names()`): multivariate normal and
+      Student-t, Dirichlet, multinomial, and bivariate empirical.
+    contents:
+      - mvdist_normal
+      - mvdist_student_t
+      - mvdist_dirichlet
+      - mvdist_multinomial
+      - mvdist_bivariate_empirical
+      - mvdist_functions
+      - mvdist_moments
+      - mvdist_mahalanobis
+      - mvdist_inverse_cdf
+      - mvdist_interval
+      - mvdist_marginal
+      - mvdist_conditional
+      - mvdist_random
+      - mvdist_params
+      - mvdist_names
   - title: GEV convenience functions
     contents:
       - gev

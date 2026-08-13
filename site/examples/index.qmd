@@ -33,6 +33,8 @@ here.
 | 23 | Censored flood frequency | [Python](23-censored-flood-frequency/python.ipynb) | [R](23-censored-flood-frequency/r.qmd) |
 | 24 | Nonstationary frequency analysis | [Python](24-nonstationary-trends/python.ipynb) | [R](24-nonstationary-trends/r.qmd) |
 | 25 | Estimation methods | [Python](25-estimation-methods/python.ipynb) | [R](25-estimation-methods/r.qmd) |
+| 26 | Copulas and joint frequency | [Python](26-copulas-and-joint-frequency/python.ipynb) | [R](26-copulas-and-joint-frequency/r.qmd) |
+| 27 | Composite distributions | [Python](27-composite-distributions/python.ipynb) | [R](27-composite-distributions/r.qmd) |
 
 Numbers 00-09 mirror the upstream notebooks; 20-22 are the upstream's three
 standalone scripts. Numbers 23 onward have no upstream counterpart: they cover

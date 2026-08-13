@@ -74,6 +74,7 @@
 #include "corehydro/numerics/distributions/multivariate/multivariate_normal.hpp"
 #include "corehydro/numerics/distributions/multivariate/multivariate_student_t.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
+#include "corehydro/numerics/distributions/support/dist_runner.hpp"
 #include "corehydro/numerics/distributions/truncated_distribution.hpp"
 #include "corehydro/numerics/data/running_covariance_matrix.hpp"
 #include "corehydro/numerics/data/running_statistics.hpp"
@@ -112,6 +113,7 @@
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 namespace dist = corehydro::numerics::distributions;
+namespace supp = corehydro::numerics::distributions::support;
 namespace prob = corehydro::numerics::data::probability;
 using dist::EstimationMethod;
 using dist::GeneralizedExtremeValue;
@@ -972,42 +974,85 @@ static prob::DependencyType parse_dependency(const std::string& d) {
     throw std::runtime_error("unknown dependency type: " + d);
 }
 
-// --- Composite distribution path (TruncatedDistribution, and future Empirical/Kernel/Mixture/CR) ---
+// --- Delegation to the shared distribution runner ----------------------------------------
+//
+// The fixture `construct` schema IS the dist_spec.hpp grammar, so the bridge only has to
+// resolve a dataset NAME into an inline array, spell the handful of keys the two schemas
+// disagree on, and hand the object to run_dist / run_copula / run_mvdist. Every value the
+// runner produces is then pinned by exactly the corpus the bespoke glue was pinned by.
+//
+// Two properties of the runner keep a narrow bespoke path alive; both are deliberate, and
+// both are recorded in the phase-3 task report:
+//
+//   1. `json_lite`, the runner's JSON reader, has no NaN or Infinity literal (see its file
+//      header), while the corpus deliberately pins non-finite-PARAMETER validity cases:
+//      Empirical `p`, KernelDensity `bandwidth`, every copula `theta`/`df`, and
+//      BivariateEmpirical `x1`/`x2`/`p`. Every such case asserts nothing but
+//      `parameters_valid`, so each is built locally and read directly.
+//
+//   2. The runner is stateless by construction -- one call builds an object, evaluates once
+//      and drops it -- and it exposes the user-facing verb set, not the whole fixture
+//      vocabulary. Two groups therefore stay on the bespoke dispatcher: methods with no
+//      runner counterpart (`mvndst` and its two status arms, `log_multivariate_beta`,
+//      `cdf_xy(_after_set_parameters)`, `dependency_change`), and MultivariateNormal's
+//      `cdf`/`interval` in a case that consumes the persistent MVNUNI stream more than once,
+//      since those pin a SEQUENCE off one object (r_mvtnorm_4d_sequential asserts eleven
+//      advancing cdf values). A case that consumes the stream at most once delegates: `seed`
+//      is a grammar key, so a rebuilt object starts the same stream.
 
-// build_component: create a sub-distribution from {"target": "...", "params": [...]} (or "fit").
-// Recursive -- components can nest (Mixture inside CompetingRisks, etc.).
-static std::unique_ptr<dist::UnivariateDistributionBase> build_component(const json& desc,
-                                                                          const json& datasets) {
-    std::string target = desc["target"].get<std::string>();
-    auto d = dist::create_distribution(target);
-    if (desc.contains("params")) {
-        std::vector<double> p;
-        for (const auto& v : desc["params"]) p.push_back(parse_num(v));
-        d->set_parameters(p);
-    } else if (desc.contains("fit")) {
-        const auto& fit = desc["fit"];
-        std::vector<double> data;
-        for (const auto& v : datasets[fit["dataset"].get<std::string>()]) data.push_back(v.get<double>());
-        auto* est = dynamic_cast<dist::IEstimation*>(d.get());
-        if (est == nullptr) throw std::runtime_error(target + " does not support estimation");
-        est->estimate(data, parse_pe_method(fit["method"].get<std::string>()));
+static bool json_has_non_finite(const json& v) {
+    if (v.is_string()) {
+        const std::string s = v.get<std::string>();
+        return s == "nan" || s == "inf" || s == "-inf";
     }
-    return d;
+    if (v.is_array() || v.is_object())
+        for (const auto& e : v)
+            if (json_has_non_finite(e)) return true;
+    return false;
 }
 
-// build_composite: switch on composite targets; returns a UnivariateDistributionBase* so
-// dispatch_generic can be reused without modification for pdf/cdf/moments/etc.
-// Future composites (KernelDensity, Mixture, CompetingRisks) add a case here.
-static std::unique_ptr<dist::UnivariateDistributionBase> build_composite(const std::string& target,
-                                                                          const json& construct,
-                                                                          const json& datasets) {
-    if (target == "TruncatedDistribution") {
-        auto base = build_component(construct["base"], datasets);
-        const auto& bounds = construct["bounds"];
-        double lo = parse_num(bounds[0]);
-        double hi = parse_num(bounds[1]);
-        return std::make_unique<dist::TruncatedDistribution>(std::move(base), lo, hi);
-    }
+// "data" is the only dataset-by-name key in the univariate grammar (KernelDensity); "base"
+// and "components" nest.
+static json inline_datasets(const json& construct, const json& datasets) {
+    json out = construct;
+    if (out.contains("data") && out["data"].is_string())
+        out["data"] = datasets[out["data"].get<std::string>()];
+    if (out.contains("base")) out["base"] = inline_datasets(out["base"], datasets);
+    if (out.contains("components"))
+        for (auto& c : out["components"]) c = inline_datasets(c, datasets);
+    return out;
+}
+
+static json args_array(const json& as) {
+    return as.contains("args") && as["args"].is_array() ? as["args"] : json::array();
+}
+
+static supp::JsonValue to_spec(const json& j) {
+    return corehydro::models::spec::parse_json(j.dump());
+}
+
+// The fixture method vocabulary predates the runner's; map the differences in one place.
+// `random_value` args are [sample_size, seed, index]: the runner's "random" reads only the
+// first two and returns the whole draw, so the args pass through unchanged and fixture_pick
+// does the indexing.
+static std::string fixture_method(const std::string& m) {
+    if (m == "param") return "parameters";
+    if (m == "random_value") return "random";
+    return m;  // pdf, log_pdf, cdf, quantile, mean, ..., log_likelihood pass straight through
+}
+
+// `param` and `random_value` index into the vector the runner returns whole.
+static double fixture_pick(const supp::DistResult& r, const std::string& m, const json& a) {
+    if (m == "param") return r.values.at(static_cast<std::size_t>(a[0].get<int>()));
+    if (m == "random_value") return r.values.at(static_cast<std::size_t>(a[2].get<int>()));
+    return r.values.at(0);
+}
+
+// Limitation 1 above: the two composite families whose fixture cases carry a non-finite
+// literal the runner's JSON reader cannot encode. Built here so those validity cases still
+// assert; every other composite is built by the shared spec builder.
+static std::unique_ptr<dist::UnivariateDistributionBase> build_non_finite_composite(
+    const std::string& target, const json& construct) {
     if (target == "Empirical") {
         std::vector<double> xv, pv;
         for (const auto& v : construct["x"]) xv.push_back(parse_num(v));
@@ -1019,19 +1064,16 @@ static std::unique_ptr<dist::UnivariateDistributionBase> build_composite(const s
             else if (t == "NormalZ") pt = dist::EmpiricalTransform::NormalZ;
             else throw std::runtime_error("unknown p_transform: " + t);
         }
-        // v2.1.4: p_descending DECLARES the probability order (mirrors C#'s explicit
-        // `probabilityOrder` argument -- NOT auto-detected from the data); default false
-        // matches the ordinary ascending-CDF case.
+        // p_descending DECLARES the probability order (mirrors C#'s explicit `probabilityOrder`
+        // argument -- NOT auto-detected); false is the ordinary ascending-CDF case.
         bool p_descending = construct.value("p_descending", false);
         return std::make_unique<dist::EmpiricalDistribution>(std::move(xv), std::move(pv), pt,
                                                               p_descending);
     }
     if (target == "KernelDensity") {
-        const auto& ds_name = construct["data"].get<std::string>();
         std::vector<double> data;
-        for (const auto& v : datasets[ds_name]) data.push_back(v.get<double>());
-        std::string kernel_str = "Gaussian";
-        if (construct.contains("kernel")) kernel_str = construct["kernel"].get<std::string>();
+        for (const auto& v : construct["data"]) data.push_back(parse_num(v));
+        std::string kernel_str = construct.value("kernel", std::string("Gaussian"));
         dist::KernelType kt = dist::KernelType::Gaussian;
         if      (kernel_str == "Epanechnikov") kt = dist::KernelType::Epanechnikov;
         else if (kernel_str == "Gaussian")     kt = dist::KernelType::Gaussian;
@@ -1051,46 +1093,9 @@ static std::unique_ptr<dist::UnivariateDistributionBase> build_composite(const s
             kde->set_bounded_by_data(construct["bounded_by_data"].get<bool>());
         return kde;
     }
-    if (target == "Mixture") {
-        const auto& wts_json = construct["weights"];
-        const auto& comps_json = construct["components"];
-        std::vector<double> wts;
-        std::vector<std::unique_ptr<dist::UnivariateDistributionBase>> comps;
-        for (const auto& w : wts_json) wts.push_back(w.get<double>());
-        for (const auto& c : comps_json) comps.push_back(build_component(c, datasets));
-        auto mix = std::make_unique<dist::Mixture>(std::move(wts), std::move(comps));
-        // Optional zero-inflation (v2.1.4): "zero_inflated" (default false) and "zero_weight"
-        // (default 0.0). Mirrors the C# Clone()/CompositeAnalysis call-site order --
-        // IsZeroInflated before ZeroWeight, since the setters renormalize component weights.
-        bool zero_inflated = construct.contains("zero_inflated")
-            ? construct["zero_inflated"].get<bool>() : false;
-        double zero_weight = construct.contains("zero_weight")
-            ? parse_num(construct["zero_weight"]) : 0.0;
-        mix->set_is_zero_inflated(zero_inflated);
-        mix->set_zero_weight(zero_weight);
-        return mix;
-    }
-    if (target == "CompetingRisks") {
-        const auto& comps_json = construct["components"];
-        std::vector<std::unique_ptr<dist::UnivariateDistributionBase>> comps;
-        for (const auto& c : comps_json) comps.push_back(build_component(c, datasets));
-        auto cr = std::make_unique<dist::CompetingRisks>(std::move(comps));
-        if (construct.contains("minimum_of_random_variables"))
-            cr->minimum_of_random_variables = construct["minimum_of_random_variables"].get<bool>();
-        if (construct.contains("dependency"))
-            cr->set_dependency(parse_dependency(construct["dependency"].get<std::string>()));
-        if (construct.contains("correlation")) {
-            prob::Matrix2D corr;
-            for (const auto& row : construct["correlation"]) {
-                std::vector<double> r;
-                for (const auto& v : row) r.push_back(parse_num(v));
-                corr.push_back(std::move(r));
-            }
-            cr->set_correlation_matrix(std::move(corr));
-        }
-        return cr;
-    }
-    throw std::runtime_error("unknown composite target: " + target);
+    throw std::runtime_error("composite target '" + target +
+                             "' has a non-finite construct the shared spec grammar cannot "
+                             "encode and no local builder here");
 }
 
 static bool is_composite_target(const std::string& target) {
@@ -1170,17 +1175,70 @@ static double dispatch_generic(dist::UnivariateDistributionBase& d, const std::s
     throw std::runtime_error("unknown fixture method: " + m);
 }
 
+// Composite targets go through the shared spec grammar + run_dist; the 38 flat families keep
+// build_generic/dispatch_generic (their `fit` construct is a fixture-only convention the
+// grammar does not carry).
 static void run_generic(const json& spec) {
     std::string target = spec["target"].get<std::string>();
     bool composite = is_composite_target(target);
     json datasets = spec.value("datasets", json::object());
     for (const auto& c : spec["cases"]) {
-        // Composite targets use build_composite; flat-param targets use build_generic.
-        // dispatch_generic works for both since TruncatedDistribution is a UnivariateDistributionBase.
-        std::unique_ptr<dist::UnivariateDistributionBase> d =
-            composite ? build_composite(target, c["construct"], datasets)
-                      : build_generic(target, c["construct"], datasets);
         std::string name = c["name"].get<std::string>();
+        if (composite) {
+            json cspec = inline_datasets(c["construct"], datasets);
+            cspec["family"] = target;
+            // See limitation 1 above: a construct carrying a "nan"/"inf" literal cannot be
+            // serialized into the grammar, so its (validity-only) assertions run locally.
+            const bool encodable = !json_has_non_finite(c["construct"]);
+            // Built lazily and held for the whole case, so the bespoke arms see one object in
+            // assertion order exactly as they did before.
+            std::unique_ptr<dist::UnivariateDistributionBase> local;
+            auto local_object = [&]() -> dist::UnivariateDistributionBase& {
+                if (!local)
+                    local = encodable ? supp::build_univariate(to_spec(cspec))
+                                      : build_non_finite_composite(target, cspec);
+                return *local;
+            };
+            for (const auto& as : c["assertions"]) {
+                std::string method = as["method"].get<std::string>();
+                json args = args_array(as);
+                std::string where = target + "/" + name + "/" + method;
+                const bool is_bool = as["mode"].get<std::string>() == "bool";
+                // `dependency_change` has no runner counterpart (limitation 2); a non-finite
+                // evaluation point is limitation 1 applied to the args rather than the
+                // construct (no composite case does this today, unlike the multivariate
+                // log_pdf-at-infinity cases, but the routing is the same).
+                if (!encodable || method == "dependency_change" || json_has_non_finite(args)) {
+                    if (is_bool)
+                        check_bool(local_object().parameters_valid(), as, where);
+                    else
+                        check_value(dispatch_generic(local_object(), method, args), as, where);
+                    continue;
+                }
+                if (method == "set_parameters") {
+                    // The runner is stateless, so a SetParameters round trip is carried on the
+                    // spec: every later assertion in this case rebuilds with it applied, which
+                    // is what dist_spec's "set_parameters" key exists for. A second
+                    // set_parameters simply replaces the first, exactly as the in-place
+                    // mutation did. The 0.0 mirrors dispatch_generic's dummy return.
+                    cspec["set_parameters"] = as["args"];
+                    check_value(0.0, as, where);
+                    continue;
+                }
+                if (is_bool) {
+                    // The old dispatcher ignored the assertion's method for bool mode and read
+                    // parameters_valid(); keep that exactly.
+                    auto r = supp::run_dist(cspec.dump(), "parameters_valid", "[]");
+                    check_bool(r.values.at(0) != 0.0, as, where);
+                } else {
+                    auto r = supp::run_dist(cspec.dump(), fixture_method(method), args.dump());
+                    check_value(fixture_pick(r, method, args), as, where);
+                }
+            }
+            continue;
+        }
+        std::unique_ptr<dist::UnivariateDistributionBase> d =
+            build_generic(target, c["construct"], datasets);
         for (const auto& as : c["assertions"]) {
             std::string method = as["method"].get<std::string>();
             json args = as.contains("args") ? as["args"] : json::array();
@@ -1330,12 +1388,12 @@ static void run_data_utility(const json& spec) {
 
 // --- multivariate_distribution path -----------------------------------------------------
 //
-// Mirrors the univariate build_generic/dispatch_generic split, but multivariate targets
-// have no shared arithmetic surface beyond dimension/pdf/log_pdf/cdf/parameters_valid (no
-// factory, no common Mean/Variance/Covariance signature across Dirichlet/Multinomial/
-// BivariateEmpirical), so dispatch_multivariate dynamic_casts to the concrete type for
-// everything else. Extensible: additional multivariate targets add a case to each of
-// build_multivariate/dispatch_multivariate.
+// The only partly delegated path. run_mvdist covers the verbs this phase exposes -- see
+// mv_delegated below -- and the rest of the pinned surface stays on dispatch_multivariate,
+// which dynamic_casts to the concrete type because multivariate targets share no arithmetic
+// surface beyond dimension/pdf/log_pdf/cdf/parameters_valid (no factory, no common
+// Mean/Variance/Covariance signature across Dirichlet/Multinomial/BivariateEmpirical).
+// Extending the runner's method table shrinks the bespoke half; nothing else has to move.
 
 static std::vector<double> parse_num_vec(const json& arr) {
     std::vector<double> v;
@@ -1349,16 +1407,29 @@ static std::vector<int> parse_int_vec(const json& arr) {
     return v;
 }
 
-static std::unique_ptr<dist::MultivariateDistribution> build_multivariate(const std::string& target,
-                                                                           const json& construct) {
-    if (target == "Dirichlet") {
-        return std::make_unique<dist::Dirichlet>(parse_num_vec(construct["alpha"]));
-    }
+// Translates a fixture multivariate construct into the dist_spec grammar. The only schema
+// difference is Multinomial's parameter spelling (n / p here, trials / probabilities there);
+// the four MultivariateNormal integrator settings (seed / max_evaluations / abs_error /
+// rel_error) are grammar keys now and pass straight through.
+static json mvdist_spec(const std::string& target, const json& construct) {
+    json out = construct;
+    out["family"] = target;
     if (target == "Multinomial") {
-        int n = construct["n"].get<int>();
-        return std::make_unique<dist::Multinomial>(n, parse_num_vec(construct["p"]));
+        out.erase("n");
+        out.erase("p");
+        out["trials"] = construct["n"];
+        out["probabilities"] = construct["p"];
     }
-    if (target == "BivariateEmpirical") {
+    return out;
+}
+
+// The object the bespoke arms use: built through the shared spec builder wherever the grammar
+// reaches, which now includes the four MultivariateNormal integrator settings (`seed`,
+// `max_evaluations`, `abs_error`, `rel_error`). BivariateEmpirical's non-finite validity cases
+// are limitation 1 and are built directly.
+static std::unique_ptr<dist::MultivariateDistribution> build_multivariate_local(
+    const std::string& target, const json& construct) {
+    if (target == "BivariateEmpirical" && json_has_non_finite(construct)) {
         std::vector<double> x1 = parse_num_vec(construct["x1"]);
         std::vector<double> x2 = parse_num_vec(construct["x2"]);
         std::vector<std::vector<double>> p;
@@ -1366,36 +1437,18 @@ static std::unique_ptr<dist::MultivariateDistribution> build_multivariate(const 
         auto parse_transform = [&](const char* key) {
             bfdata::Transform t = bfdata::Transform::None;
             if (!construct.contains(key)) return t;
-            std::string s = construct[key].get<std::string>();
-            if (s == "None") t = bfdata::Transform::None;
-            else if (s == "Logarithmic") t = bfdata::Transform::Logarithmic;
-            else if (s == "NormalZ") t = bfdata::Transform::NormalZ;
-            else throw std::runtime_error("unknown transform: " + s);
+            std::string str = construct[key].get<std::string>();
+            if (str == "None") t = bfdata::Transform::None;
+            else if (str == "Logarithmic") t = bfdata::Transform::Logarithmic;
+            else if (str == "NormalZ") t = bfdata::Transform::NormalZ;
+            else throw std::runtime_error("unknown transform: " + str);
             return t;
         };
         return std::make_unique<dist::BivariateEmpirical>(
             std::move(x1), std::move(x2), std::move(p), parse_transform("x1_transform"),
             parse_transform("x2_transform"), parse_transform("p_transform"));
     }
-    if (target == "MultivariateNormal") {
-        std::vector<double> mean = parse_num_vec(construct["mean"]);
-        std::vector<std::vector<double>> cov;
-        for (const auto& row : construct["covariance"]) cov.push_back(parse_num_vec(row));
-        auto mvn = std::make_unique<dist::MultivariateNormal>(std::move(mean), std::move(cov));
-        if (construct.contains("seed")) mvn->set_mvnuni_seed(construct["seed"].get<int>());
-        if (construct.contains("max_evaluations")) mvn->set_max_evaluations(construct["max_evaluations"].get<int>());
-        if (construct.contains("abs_error")) mvn->set_absolute_error(construct["abs_error"].get<double>());
-        if (construct.contains("rel_error")) mvn->set_relative_error(construct["rel_error"].get<double>());
-        return mvn;
-    }
-    if (target == "MultivariateStudentT") {
-        double df = construct["df"].get<double>();
-        std::vector<double> location = parse_num_vec(construct["location"]);
-        std::vector<std::vector<double>> scale;
-        for (const auto& row : construct["scale"]) scale.push_back(parse_num_vec(row));
-        return std::make_unique<dist::MultivariateStudentT>(df, std::move(location), std::move(scale));
-    }
-    throw std::runtime_error("unknown multivariate target: " + target);
+    return supp::build_multivariate(to_spec(mvdist_spec(target, construct)));
 }
 
 // Shared lookup for the "random_value"/"lhs_value" seeded-sampling oracle methods, common
@@ -1553,165 +1606,312 @@ static double dispatch_multivariate(dist::MultivariateDistribution& d, const std
     throw std::runtime_error("unknown multivariate fixture method: " + target + "/" + m);
 }
 
+// MultivariateNormal's CDF above dimension 2, its Interval, and MVNDST itself all draw from the
+// instance's persistent MVNUNI stream, so each call ADVANCES it. A case that makes more than one
+// such call pins a sequence off one object, which a stateless runner cannot reproduce by
+// construction.
+static bool mvn_consumes_stream(const std::string& m) {
+    return m == "cdf" || m == "interval" || m == "mvndst" || m == "mvndst_inform" ||
+           m == "mvndst_error";
+}
+
+// Methods run_mvdist covers. What is left on dispatch_multivariate is exactly three groups:
+// the MVNDST integrator internals (mvndst and its two status arms), BivariateEmpirical's
+// cdf_xy(_after_set_parameters) and Dirichlet's static log_multivariate_beta, which have no
+// runner verb; and MultivariateNormal's cdf/interval in a case that makes more than one
+// stream-consuming call (`mvn_stream_isolated` false -- r_mvtnorm_4d_sequential's eleven
+// advancing cdf values are the reason). With `seed` in the grammar a SINGLE such call
+// reproduces exactly, so those cases delegate.
+static bool mv_delegated(const std::string& target, const std::string& m,
+                         bool mvn_stream_isolated) {
+    if (m == "mvndst" || m == "mvndst_inform" || m == "mvndst_error") return false;
+    if (target == "MultivariateNormal" && (m == "cdf" || m == "interval") && !mvn_stream_isolated)
+        return false;
+    return m == "dimension" || m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis" ||
+           m == "mean" || m == "variance" || m == "sd" || m == "covariance" ||
+           m == "median" || m == "mode" || m == "inverse_cdf" || m == "interval" ||
+           m == "degrees_of_freedom" || m == "alpha" || m == "alpha_sum" ||
+           m == "number_of_trials" ||
+           m == "random_value" || m == "lhs_value" || m == "marginal_dimension" ||
+           m == "marginal_mean" || m == "marginal_covariance" || m == "marginal_log_pdf" ||
+           m == "conditional_dimension" || m == "conditional_mean" ||
+           m == "conditional_covariance";
+}
+
+static std::size_t square_dim(std::size_t n) {
+    auto d = static_cast<std::size_t>(std::llround(std::sqrt(static_cast<double>(n))));
+    if (d * d != n) throw std::runtime_error("a covariance result is not a square matrix");
+    return d;
+}
+
+// run_mvdist returns whole vectors, so every fixture method that names one element indexes in
+// here. Conventions preserved verbatim from the deleted dispatch_multivariate arms:
+// mean/variance/sd/median/mode/alpha take [i]; covariance takes [i, j] against a row-major
+// dimension^2 block; inverse_cdf takes [probabilities, i] and interval [lower, upper];
+// random_value/lhs_value take [sample_size, seed, row, col] against a row-major
+// sample_size x dimension block; marginal_* take [indices, ...] and conditional_* take
+// [indices, values, ...], both evaluated against the child distribution the runner hands back
+// as a spec.
+static double dispatch_multivariate_delegated(const std::string& spec, const std::string& m,
+                                              const json& a) {
+    auto run = [&](const std::string& s, const std::string& method, const json& args) {
+        return supp::run_mvdist(s, method, args.dump());
+    };
+    if (m == "dimension" || m == "alpha_sum" || m == "degrees_of_freedom" ||
+        m == "number_of_trials")
+        return run(spec, m, json::array()).values.at(0);
+    if (m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis")
+        return run(spec, m, a[0]).values.at(0);
+    if (m == "inverse_cdf")
+        return run(spec, m, a[0]).values.at(static_cast<std::size_t>(a[1].get<int>()));
+    if (m == "interval") {
+        json bounds = a[0];
+        for (const auto& v : a[1]) bounds.push_back(v);
+        return run(spec, "interval", bounds).values.at(0);
+    }
+    if (m == "mean" || m == "variance" || m == "sd" || m == "median" || m == "mode" ||
+        m == "alpha")
+        return run(spec, m, json::array()).values.at(static_cast<std::size_t>(a[0].get<int>()));
+    if (m == "covariance") {
+        auto r = run(spec, "covariance", json::array());
+        std::size_t dim = square_dim(r.values.size());
+        return r.values.at(static_cast<std::size_t>(a[0].get<int>()) * dim +
+                           static_cast<std::size_t>(a[1].get<int>()));
+    }
+    if (m == "random_value" || m == "lhs_value") {
+        json args = {a[0], a[1]};
+        auto r = run(spec, m == "lhs_value" ? "random_lhs" : "random", args);
+        std::size_t n = static_cast<std::size_t>(a[0].get<int>());
+        std::size_t dim = r.values.size() / n;
+        return r.values.at(static_cast<std::size_t>(a[2].get<int>()) * dim +
+                           static_cast<std::size_t>(a[3].get<int>()));
+    }
+    if (m.rfind("marginal_", 0) == 0 || m.rfind("conditional_", 0) == 0) {
+        const bool marginal = m.rfind("marginal_", 0) == 0;
+        json child_args = a[0];
+        if (!marginal)
+            for (const auto& v : a[1]) child_args.push_back(v);
+        const std::string child = run(spec, marginal ? "marginal" : "conditional", child_args).spec;
+        // The trailing arguments shift by one for conditional_* (it consumes the values array).
+        const std::size_t base = marginal ? 1 : 2;
+        const std::string leaf = m.substr(m.find('_') + 1);
+        if (leaf == "dimension") return run(child, "dimension", json::array()).values.at(0);
+        if (leaf == "log_pdf") return run(child, "log_pdf", a[base]).values.at(0);
+        if (leaf == "mean")
+            return run(child, "mean", json::array())
+                .values.at(static_cast<std::size_t>(a[base].get<int>()));
+        if (leaf == "covariance") {
+            auto r = run(child, "covariance", json::array());
+            std::size_t dim = square_dim(r.values.size());
+            return r.values.at(static_cast<std::size_t>(a[base].get<int>()) * dim +
+                               static_cast<std::size_t>(a[base + 1].get<int>()));
+        }
+        throw std::runtime_error("unhandled child method: " + m);
+    }
+    throw std::runtime_error("method '" + m + "' is not delegated to run_mvdist");
+}
+
 static void run_multivariate(const json& spec) {
     std::string target = spec["target"].get<std::string>();
     for (const auto& c : spec["cases"]) {
-        auto d = build_multivariate(target, c["construct"]);
         std::string name = c["name"].get<std::string>();
+        // Limitation 1: a construct carrying a "nan"/"inf" literal cannot be serialized into
+        // the grammar, so its (validity-only) assertions run locally.
+        const bool encodable = !json_has_non_finite(c["construct"]);
+        const std::string cspec =
+            encodable ? mvdist_spec(target, c["construct"]).dump() : std::string();
+        // A case whose MVNUNI stream is consumed at most once has no sequence to preserve, so
+        // its cdf/interval delegates; anything more stays whole on the local object below.
+        int stream_calls = 0;
+        if (target == "MultivariateNormal")
+            for (const auto& as : c["assertions"])
+                if (mvn_consumes_stream(as["method"].get<std::string>())) ++stream_calls;
+        const bool stream_isolated = stream_calls <= 1;
+        // Built lazily and held for the whole case, so the bespoke arms see one object in
+        // assertion order exactly as they did before -- MultivariateNormal's MVNUNI stream
+        // advances across a case's cdf/mvndst assertions and the oracles pin that sequence.
+        std::unique_ptr<dist::MultivariateDistribution> local;
+        auto local_object = [&]() -> dist::MultivariateDistribution& {
+            if (!local) local = build_multivariate_local(target, c["construct"]);
+            return *local;
+        };
         for (const auto& as : c["assertions"]) {
             std::string method = as["method"].get<std::string>();
-            json args = as.contains("args") ? as["args"] : json::array();
+            json args = args_array(as);
             std::string where = target + "/" + name + "/" + method;
-            if (as["mode"].get<std::string>() == "bool")
-                check_bool(d->parameters_valid(), as, where);
+            const bool is_bool = as["mode"].get<std::string>() == "bool";
+            // Limitation 1 again, on the evaluation point rather than the construct: MVN's and
+            // MVT's log_pdf-at-infinity cases pass an infinite coordinate, which the grammar's
+            // reader cannot carry either.
+            if (!encodable || json_has_non_finite(args)) {
+                // The old dispatcher ignored the assertion's method for bool mode.
+                if (is_bool)
+                    check_bool(local_object().parameters_valid(), as, where);
+                else
+                    check_value(dispatch_multivariate(local_object(), target, method, args), as,
+                                where);
+                continue;
+            }
+            if (is_bool) {
+                auto r = supp::run_mvdist(cspec, "parameters_valid", "[]");
+                check_bool(r.values.at(0) != 0.0, as, where);
+                continue;
+            }
+            if (mv_delegated(target, method, stream_isolated))
+                check_value(dispatch_multivariate_delegated(cspec, method, args), as, where);
             else
-                check_value(dispatch_multivariate(*d, target, method, args), as, where);
+                check_value(dispatch_multivariate(local_object(), target, method, args), as, where);
         }
     }
 }
 
 // --- bivariate_copula path --------------------------------------------------------------
 //
-// Every copula shares BivariateCopula's uniform theta/get_copula_parameters/pdf/cdf/...
-// API (unlike multivariate_distribution, which has no such common surface across
-// Dirichlet/Multinomial/BivariateEmpirical/...), so build_copula/dispatch_copula are FULLY
-// generic through the factory -- no per-target branching, matching copula_factory.hpp's
-// header comment. The one exception is the "tau" method-of-moments fit: SetThetaFromTau is
-// a member of each concrete Archimedean class in the C# source (not part of
-// IBivariateCopula/IArchimedeanCopula), so it is not callable through the BivariateCopula
-// base pointer; set_theta_from_tau_dispatch dynamic_casts by target name for that one
-// method, mirroring dispatch_multivariate's per-target branches above. Each new
-// tau-capable copula (Task 8: AMH, Gumbel, Joe) adds one branch there.
+// Fully delegated to run_copula: every copula shares BivariateCopula's uniform
+// theta/get_copula_parameters/pdf/cdf/... API, so there is no per-target branching left here
+// at all (the "tau" method-of-moments fit, whose SetThetaFromTau is a member of each concrete
+// Archimedean class rather than of IBivariateCopula, is dispatched by
+// copulas::set_theta_from_tau in dist_spec.hpp). The one local path is limitation 1: the
+// non-finite theta/df validity cases, which the grammar cannot encode.
 
 namespace cop = corehydro::numerics::distributions::copulas;
 
-static void set_theta_from_tau_dispatch(cop::BivariateCopula& copula, const std::string& target,
-                                        const std::vector<double>& x, const std::vector<double>& y) {
-    if (target == "Clayton") {
-        dynamic_cast<cop::ClaytonCopula&>(copula).set_theta_from_tau(x, y);
-        return;
+// Translates a fixture copula construct into the dist_spec grammar. The schema differences are
+// the marginal spelling (positional "marginals" here, margin_x / margin_y there) and the fit
+// samples (dataset NAMES here, inline arrays there). The fixture's bare-family marginal
+// convention needs no translation: dist_spec's build_copula MLE-fits a parameterless marginal
+// to its own sample, which is what the fixture means and what IFM requires.
+static json copula_spec(const std::string& target, const json& construct, const json& datasets) {
+    auto margin = [](const std::string& family, const json& params) {
+        json m;
+        m["family"] = family;
+        if (!params.is_null()) m["parameters"] = params;
+        return m;
+    };
+    json out = construct;
+    out["family"] = target;
+
+    if (construct.contains("marginals")) {
+        const auto& marg = construct["marginals"];
+        out.erase("marginals");
+        out["margin_x"] = margin(marg["targets"][0].get<std::string>(), marg["params"][0]);
+        out["margin_y"] = margin(marg["targets"][1].get<std::string>(), marg["params"][1]);
     }
-    if (target == "AliMikhailHaq") {
-        dynamic_cast<cop::AMHCopula&>(copula).set_theta_from_tau(x, y);
-        return;
+
+    if (construct.contains("fit")) {
+        const auto& fit = construct["fit"];
+        json f = fit;
+        std::vector<double> x, y;
+        for (const auto& v : datasets[fit["x"].get<std::string>()]) x.push_back(parse_num(v));
+        for (const auto& v : datasets[fit["y"].get<std::string>()]) y.push_back(parse_num(v));
+        f["x"] = x;
+        f["y"] = y;
+        if (fit.contains("marginals")) {
+            const std::string fx = fit["marginals"][0].get<std::string>();
+            const std::string fy = fit["marginals"][1].get<std::string>();
+            f.erase("marginals");
+            f["margin_x"] = margin(fx, json());
+            f["margin_y"] = margin(fy, json());
+        }
+        out["fit"] = f;
     }
-    if (target == "Gumbel") {
-        dynamic_cast<cop::GumbelCopula&>(copula).set_theta_from_tau(x, y);
-        return;
-    }
-    // NOTE: JoeCopula has no SetThetaFromTau in the C# source (see joe_copula.hpp's file
-    // header) despite the Phase 2 plan/README listing it as tau-capable -- intentionally
-    // not branched here.
-    throw std::runtime_error("copula '" + target + "' has no tau-based method-of-moments fit");
+    return out;
 }
 
-// Per fixtures/README.md: construct is {"theta": x} (optionally {"theta": x, "df": y} for
-// 2-parameter copulas, and/or {"marginals": {"targets": [..], "params": [[..], [..]]}} to
-// attach marginals directly via the C# `Copula(theta, marginX, marginY)` ctor -- used by the
-// seeded "random_value" sampling oracles, which back-transform through the marginals when
-// set) or {"fit": {"x": "<dataset>", "y": "<dataset>", "method": "tau"|"mpl"|"ifm"|"mle",
-// "marginals": ["Normal", "Normal"]?}}. "x"/"y" are the sample data for tau/ifm/mle, or the
-// precomputed plotting-position datasets for mpl (the runner stays thin: it never computes
-// plotting positions itself). "ifm" pre-fits the marginals by MLE before estimating the
-// copula (mirroring the C# Test_IFM_Fit flow); "mle" leaves the marginals unfitted and lets
-// BivariateCopulaEstimation.MLE (bivariate_copula_estimation.hpp) fit everything jointly.
-static std::unique_ptr<cop::BivariateCopula> build_copula(const std::string& target,
-                                                            const json& construct,
-                                                            const json& datasets) {
-    auto c = cop::create_copula(target);
-    if (construct.contains("theta")) {
-        std::vector<double> params = {parse_num(construct["theta"])};
-        if (construct.contains("df")) params.push_back(parse_num(construct["df"]));
-        c->set_copula_parameters(params);
-        if (construct.contains("marginals")) {
-            const auto& marg = construct["marginals"];
-            auto mx = dist::create_distribution(marg["targets"][0].get<std::string>());
-            auto my = dist::create_distribution(marg["targets"][1].get<std::string>());
-            mx->set_parameters(parse_num_vec(marg["params"][0]));
-            my->set_parameters(parse_num_vec(marg["params"][1]));
-            c->marginal_distribution_x = std::shared_ptr<dist::UnivariateDistributionBase>(std::move(mx));
-            c->marginal_distribution_y = std::shared_ptr<dist::UnivariateDistributionBase>(std::move(my));
-        }
-        return c;
-    }
-
-    const auto& fit = construct["fit"];
-    std::vector<double> x, y;
-    for (const auto& v : datasets[fit["x"].get<std::string>()]) x.push_back(parse_num(v));
-    for (const auto& v : datasets[fit["y"].get<std::string>()]) y.push_back(parse_num(v));
-    std::string method = fit["method"].get<std::string>();
-
-    if (fit.contains("marginals")) {
-        auto mx = dist::create_distribution(fit["marginals"][0].get<std::string>());
-        auto my = dist::create_distribution(fit["marginals"][1].get<std::string>());
-        if (method == "ifm") {
-            auto* ex = dynamic_cast<dist::IEstimation*>(mx.get());
-            auto* ey = dynamic_cast<dist::IEstimation*>(my.get());
-            if (ex == nullptr || ey == nullptr)
-                throw std::runtime_error("marginal does not support estimation");
-            ex->estimate(x, dist::ParameterEstimationMethod::MaximumLikelihood);
-            ey->estimate(y, dist::ParameterEstimationMethod::MaximumLikelihood);
-        }
-        c->marginal_distribution_x = std::shared_ptr<dist::UnivariateDistributionBase>(std::move(mx));
-        c->marginal_distribution_y = std::shared_ptr<dist::UnivariateDistributionBase>(std::move(my));
-    }
-
-    if (method == "tau") {
-        set_theta_from_tau_dispatch(*c, target, x, y);
-    } else if (method == "mpl") {
-        cop::estimate(*c, x, y, cop::CopulaEstimationMethod::PseudoLikelihood);
-    } else if (method == "ifm") {
-        cop::estimate(*c, x, y, cop::CopulaEstimationMethod::InferenceFromMargins);
-    } else if (method == "mle") {
-        cop::estimate(*c, x, y, cop::CopulaEstimationMethod::FullLikelihood);
-    } else {
-        throw std::runtime_error("unknown copula fit method: " + method);
-    }
-    return c;
+static std::string fixture_copula_method(const std::string& m) {
+    if (m == "upper_tail_dependence" || m == "lower_tail_dependence") return "tail_dependence";
+    if (m == "theta_minimum" || m == "theta_maximum") return "bounds";
+    if (m == "or_exceedance") return "exceedance_or";
+    if (m == "and_exceedance") return "exceedance_and";
+    if (m == "random_value") return "random";
+    // pdf, log_pdf, cdf, inverse_cdf, theta, df and the three log_likelihood_* verbs pass
+    // straight through.
+    return m;
 }
 
-static double dispatch_copula(const cop::BivariateCopula& c, const std::string& m, const json& a) {
-    if (m == "pdf") return c.pdf(a[0].get<double>(), a[1].get<double>());
-    if (m == "log_pdf") return c.log_pdf(a[0].get<double>(), a[1].get<double>());
-    if (m == "cdf") return c.cdf(a[0].get<double>(), a[1].get<double>());
-    if (m == "inverse_cdf")
-        return c.inverse_cdf(a[0].get<double>(), a[1].get<double>())[static_cast<std::size_t>(a[2].get<int>())];
-    if (m == "upper_tail_dependence") return c.upper_tail_dependence();
-    if (m == "lower_tail_dependence") return c.lower_tail_dependence();
-    if (m == "theta") return c.theta();
-    if (m == "df") return c.get_copula_parameters()[1];
-    if (m == "or_exceedance") return c.or_joint_exceedance_probability(a[0].get<double>(), a[1].get<double>());
-    if (m == "and_exceedance") return c.and_joint_exceedance_probability(a[0].get<double>(), a[1].get<double>());
-    if (m == "marginal_param") {
-        std::string which = a[0].get<std::string>();
-        std::size_t idx = static_cast<std::size_t>(a[1].get<int>());
-        const auto& marg = which == "x" ? c.marginal_distribution_x : c.marginal_distribution_y;
-        return marg->get_parameters()[idx];
-    }
+// The runner returns a whole vector for the methods the fixture indexes into. `random` comes
+// back as all the x draws followed by all the y draws, so a fixture (row, col) with
+// args = [sample_size, seed, row, col] lands at col * sample_size + row.
+static double fixture_copula_pick(const supp::DistResult& r, const std::string& m, const json& a) {
+    if (m == "lower_tail_dependence" || m == "theta_minimum") return r.values.at(0);
+    if (m == "upper_tail_dependence" || m == "theta_maximum") return r.values.at(1);
+    if (m == "inverse_cdf") return r.values.at(static_cast<std::size_t>(a[2].get<int>()));
+    if (m == "marginal_param") return r.values.at(static_cast<std::size_t>(a[1].get<int>()));
     if (m == "random_value") {
-        // args = [sample_size, seed, row, col]. Stateless: GenerateRandomValues seeds its
-        // own internal LatinHypercube draw from `seed`, so no persistent-instance batching
-        // is needed (mirrors random_value_at() for multivariate_distribution above).
-        auto sample = c.generate_random_values(a[0].get<int>(), a[1].get<int>());
-        return sample[static_cast<std::size_t>(a[2].get<int>())][static_cast<std::size_t>(a[3].get<int>())];
+        std::size_t n = static_cast<std::size_t>(a[0].get<int>());
+        return r.values.at(static_cast<std::size_t>(a[3].get<int>()) * n +
+                           static_cast<std::size_t>(a[2].get<int>()));
     }
-    throw std::runtime_error("unknown copula fixture method: " + m);
+    return r.values.at(0);
+}
+
+// The three copula log-likelihood verbs take a paired SAMPLE, which the runner reads as one
+// flat "all x then all y" args array. Spelling 200 numbers per assertion into the fixture
+// would drown the file, so those assertions name their two datasets instead --
+// args = ["<x dataset>", "<y dataset>"] -- and every runner splices the named arrays here.
+// Documented under `bivariate_copula` in fixtures/README.md.
+static bool is_copula_log_likelihood(const std::string& m) {
+    return m == "log_likelihood_pseudo" || m == "log_likelihood_ifm" || m == "log_likelihood_full";
+}
+
+static json copula_sample_args(const json& a, const json& datasets) {
+    json out = json::array();
+    for (const auto& name : a) {
+        const std::string key = name.get<std::string>();
+        if (!datasets.contains(key))
+            throw std::runtime_error("copula log-likelihood args name an unknown dataset: " + key);
+        for (const auto& v : datasets[key]) out.push_back(parse_num(v));
+    }
+    return out;
 }
 
 static void run_bivariate_copula(const json& spec) {
     std::string target = spec["target"].get<std::string>();
     json datasets = spec.value("datasets", json::object());
     for (const auto& c : spec["cases"]) {
-        auto cop = build_copula(target, c["construct"], datasets);
         std::string name = c["name"].get<std::string>();
+        // Limitation 1: a "nan"/"inf" theta or df cannot be serialized into the grammar. Every
+        // such case asserts parameters_valid alone.
+        if (json_has_non_finite(c["construct"])) {
+            auto local = cop::create_copula(target);
+            std::vector<double> params = {parse_num(c["construct"]["theta"])};
+            if (c["construct"].contains("df")) params.push_back(parse_num(c["construct"]["df"]));
+            local->set_copula_parameters(params);
+            for (const auto& as : c["assertions"]) {
+                std::string where = target + "/" + name + "/" + as["method"].get<std::string>();
+                if (as["mode"].get<std::string>() != "bool")
+                    throw std::runtime_error(where +
+                                             ": a non-finite copula construct can only assert "
+                                             "parameters_valid");
+                check_bool(local->parameters_valid(), as, where);
+            }
+            continue;
+        }
+
+        const std::string cspec = copula_spec(target, c["construct"], datasets).dump();
         for (const auto& as : c["assertions"]) {
             std::string method = as["method"].get<std::string>();
-            json args = as.contains("args") ? as["args"] : json::array();
+            json args = args_array(as);
             std::string where = target + "/" + name + "/" + method;
-            if (as["mode"].get<std::string>() == "bool")
-                check_bool(cop->parameters_valid(), as, where);
-            else
-                check_value(dispatch_copula(*cop, method, args), as, where);
+            if (as["mode"].get<std::string>() == "bool") {
+                // The old dispatcher ignored the assertion's method for bool mode and read
+                // parameters_valid(); keep that exactly.
+                auto r = supp::run_copula(cspec, "parameters_valid", "[]");
+                check_bool(r.values.at(0) != 0.0, as, where);
+                continue;
+            }
+            if (method == "marginal_param") {
+                // args = ("x" | "y", index): the side picks the runner method, the index picks
+                // the value out of that marginal's parameter vector.
+                std::string side = args[0].get<std::string>();
+                auto r = supp::run_copula(
+                    cspec, side == "x" ? "marginal_x_parameters" : "marginal_y_parameters", "[]");
+                check_value(fixture_copula_pick(r, method, args), as, where);
+                continue;
+            }
+            if (is_copula_log_likelihood(method)) args = copula_sample_args(args, datasets);
+            auto r = supp::run_copula(cspec, fixture_copula_method(method), args.dump());
+            check_value(fixture_copula_pick(r, method, args), as, where);
         }
     }
 }

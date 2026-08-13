@@ -154,10 +154,12 @@ class Fit:
     method : str
         ``"MaximumLikelihood"``, ``"MaximumAPosteriori"``, ``"BayesianAnalysis"``, or ``"GMM"``.
     parameters : dict
-        Parameter name -> fitted value.
+        Parameter name -> fitted value. Read the Notes below before using it on a model whose
+        parameter names repeat.
     parameter_names : list of str
-        ``list(parameters)``, kept as its own attribute to match the parameter axis order of
-        :attr:`covariance`/:attr:`draws`/etc.
+        Every fitted parameter's name, in the runner's order, repeats included. This is the
+        parameter axis order of :attr:`covariance`/:attr:`draws`/etc., and it is the full-length
+        record :attr:`parameters` can be short of.
     covariance, correlation : numpy.ndarray or None
         ``n x n``, aligned with :attr:`parameter_names`. ``None`` when not computed (MLE/MAP with
         ``hessian=False``).
@@ -219,6 +221,22 @@ class Fit:
         ``None`` -- there is no over-identified case to report a p-value for.
     gmm_iterations, converged_within_tolerance, optimizer_fallback_count
         GMM only, the estimator's own bookkeeping.
+
+    Notes
+    -----
+    :attr:`parameters` is a dict keyed by parameter name, so a model whose parameter names repeat
+    loses every value but the last one under each repeated name. A mixture is the case that
+    reaches this: a two-component Normal mixture fits six parameters, two of them named ``D1`` and
+    two named ``D2``, and ``.parameters`` comes back with four entries in which the surviving
+    ``D1``/``D2`` are the standard deviations carrying the means' labels. :attr:`standard_errors`,
+    keyed the same way, collapses identically.
+
+    For the full ordered vector use :attr:`parameter_names` together with
+    ``fit.model.spec["parameter_values"]``, which are the same length and aligned elementwise, or
+    read :attr:`covariance`/:attr:`draws` directly (their axes are ``parameter_names``, never the
+    dict). :attr:`aic`, :attr:`bic`, and every diagnostic come from the C++ estimator and count
+    all six; only the dict is short. ``corehydror``'s ``coef()`` returns a plain named vector,
+    which permits duplicate names, so R is unaffected.
     """
 
     def __init__(
@@ -285,7 +303,10 @@ class Fit:
         self._construct_json = construct_json
 
     def __repr__(self) -> str:
-        bits = [f"{len(self.parameters)} parameters"]
+        # parameter_names, not parameters: the dict collapses repeated names (see the Notes on
+        # this class), and a six-parameter mixture must not print "4 parameters" while aic
+        # correctly counts six.
+        bits = [f"{len(self.parameter_names)} parameters"]
         if self.method == "GMM":
             bits.append(f"j-stat={self.j_stat:g}")
         else:

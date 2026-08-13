@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(pybind11 CONFIG REQUIRED)
 
-pybind11_add_module(_core src/bindings/gev.cpp src/bindings/dist.cpp src/bindings/mvd.cpp src/bindings/copula.cpp src/bindings/sobol.cpp src/bindings/mcmc.cpp src/bindings/bootstrap.cpp src/bindings/estimation.cpp src/bindings/analysis.cpp src/bindings/stats.cpp src/bindings/data.cpp)
+pybind11_add_module(_core src/bindings/gev.cpp src/bindings/dist.cpp src/bindings/mvd.cpp src/bindings/copula.cpp src/bindings/sobol.cpp src/bindings/mcmc.cpp src/bindings/bootstrap.cpp src/bindings/estimation.cpp src/bindings/analysis.cpp src/bindings/stats.cpp src/bindings/data.cpp src/bindings/dist_spec.cpp)
 target_include_directories(_core PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/corehydro_core/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src/bindings)
