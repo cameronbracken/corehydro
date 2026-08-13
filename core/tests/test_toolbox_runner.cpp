@@ -120,21 +120,41 @@ int main() {
     CHECK_NEAR(pct.values[0], 2.0, 1e-12);   // min
     CHECK_NEAR(pct.values[2], 10.0, 1e-12);  // max
 
-    // running_covariance: five identical pushes of a constant vector (every variable equals the
-    // push index) matches the RunningCovariance.mean_element/covariance_element oracle in
-    // fixtures/special_functions/running_covariance.json (Mean = [3,3,3,3,3], Covariance = 11 on
-    // the diagonal, 10 off-diagonal).
+    // running_covariance: five identical pushes of the same 5-element vector, one per variable.
+    // The oracle value for this exact case lives in fixtures/special_functions/
+    // running_covariance.json; this ctest instead checks relationships that hold by
+    // construction and would catch a wiring bug (wrong axis, wrong block offset) independent of
+    // any pinned literal. The mean must equal the input's own mean computed here from first
+    // principles. For the covariance block: since every one of the five variables is the
+    // identical vector, the data contribution to Cov(i, j) is the same scalar for every pair
+    // (i, j) -- so every diagonal entry must equal every other diagonal entry, and every
+    // off-diagonal entry must equal every other off-diagonal entry. The two differ by exactly 1:
+    // running_covariance_matrix.hpp seeds the accumulator's covariance at the identity matrix
+    // before the first push, which adds 1 to the diagonal and 0 off it, and nothing after that
+    // touches the two groups differently.
     std::vector<double> col{1.0, 2.0, 3.0, 4.0, 5.0};
+    double expected_mean = 0.0;
+    for (double v : col) expected_mean += v;
+    expected_mean /= static_cast<double>(col.size());
+
     auto rc = tb::run_toolbox("statistics", "running_covariance", {col, col, col, col, col}, "{}");
     CHECK_EQ(static_cast<int>(rc.values[0]), 5);   // n
     CHECK_EQ(rc.dims.size(), std::size_t{2});
     CHECK_EQ(rc.dims[0], 5);
     CHECK_EQ(rc.dims[1], 5);
     // mean block starts at index 1
-    for (int i = 0; i < 5; ++i) CHECK_NEAR(rc.values[static_cast<std::size_t>(1 + i)], 3.0, 1e-12);
-    // covariance block starts at index 1+5=6; diagonal entries are at 6 + i*5 + i
-    CHECK_NEAR(rc.values[6], 11.0, 1e-9);
-    CHECK_NEAR(rc.values[7], 10.0, 1e-9);  // (0,1) off-diagonal
+    for (int i = 0; i < 5; ++i)
+        CHECK_NEAR(rc.values[static_cast<std::size_t>(1 + i)], expected_mean, 1e-12);
+    // covariance block starts at index 1+5=6, 25 entries (5x5, row-major)
+    double diag_value = rc.values[6];      // (0,0)
+    double offdiag_value = rc.values[7];   // (0,1)
+    for (int i = 0; i < 5; ++i) {
+        for (int j = 0; j < 5; ++j) {
+            std::size_t idx = static_cast<std::size_t>(6 + i * 5 + j);
+            CHECK_NEAR(rc.values[idx], i == j ? diag_value : offdiag_value, 1e-9);
+        }
+    }
+    CHECK_NEAR(diag_value - offdiag_value, 1.0, 1e-9);
 
     // --- spectra group ---------------------------------------------------------------------
     const std::vector<double> ac_series{5.0, 6.0, 4.0, 7.0, 3.0, 8.0, 2.0, 9.0, 1.0, 10.0};
