@@ -1332,6 +1332,33 @@ def _dispatch_data_utility(fn, args, data):
     raise KeyError(f"unknown data_utility function: {fn}")
 
 
+# goodness_of_fit [function, args, observed_dataset, modeled_dataset]: routes through
+# _core.toolbox_run("gof", ...) (numerics/support/toolbox_runner.hpp), so this fixture kind and a
+# user's goodness_of_fit()/aic() call are the same code path. Mirrors dispatch_gof in
+# core/tests/test_fixtures.cpp.
+_GOF_FUNCTION_METHOD = {
+    "MSE": "mse", "MAE": "mae",
+    "NashSutcliffeEfficiency": "nse",
+    "KlingGuptaEfficiency": "kge", "KlingGuptaEfficiencyMod": "kge_mod",
+    "PBIAS": "pbias", "RSR": "rsr",
+    "IndexOfAgreement": "d", "ModifiedIndexOfAgreement": "d_mod",
+    "RefinedIndexOfAgreement": "d_ref", "VolumetricEfficiency": "ve",
+}
+
+
+def _dispatch_goodness_of_fit(fn, args, obs, mod):
+    if fn == "AIC":
+        options = json.dumps({"k": int(args[0]), "log_likelihood": args[1]})
+        return _core.toolbox_run("gof", "aic", [], options)["values"][0]
+    if fn in ("AICc", "BIC"):
+        options = json.dumps({"n": int(args[0]), "k": int(args[1]), "log_likelihood": args[2]})
+        method = "aicc" if fn == "AICc" else "bic"
+        return _core.toolbox_run("gof", method, [], options)["values"][0]
+    if fn not in _GOF_FUNCTION_METHOD:
+        raise KeyError(f"unknown goodness_of_fit function: {fn}")
+    return _core.toolbox_run("gof", _GOF_FUNCTION_METHOD[fn], [obs, mod], "{}")["values"][0]
+
+
 # Threshold-selection diagnostics: both methods share one glue call and differ only in which
 # field the function name selects. args are [u_min, u_max, n_thresholds, confidence_level,
 # point_index]; `*PointCount` ignores the index and returns how many candidate thresholds
@@ -1449,6 +1476,7 @@ def _load_cases():
             "model_estimation",
             "analysis",
             "data_utility",
+            "goodness_of_fit",
             "toolbox",
         ):
             continue
@@ -1493,6 +1521,16 @@ def test_fixture_case(kind, target, datasets, case):
         # as an unconvertible str.
         data = [_num(v) for v in datasets[case["dataset"]]] if "dataset" in case else []
         actual = _dispatch_data_utility(case["function"], args, data)
+        for a in case["assertions"]:
+            _check(actual, a)
+        return
+
+    if kind == "goodness_of_fit":
+        fn = case["function"]
+        args = case.get("args", [])
+        obs = [_num(v) for v in datasets[case["observed_dataset"]]] if "observed_dataset" in case else []
+        mod = [_num(v) for v in datasets[case["modeled_dataset"]]] if "modeled_dataset" in case else []
+        actual = _dispatch_goodness_of_fit(fn, args, obs, mod)
         for a in case["assertions"]:
             _check(actual, a)
         return

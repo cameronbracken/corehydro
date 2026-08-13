@@ -3693,7 +3693,12 @@ static double DispatchAnalysis(AnalysisData r, string m, JsonElement[] a)
 // carries whatever scalars/enum names/flags a group needs (mirrors toolbox_runner.hpp's
 // options_json contract); correlation ignores it today but a group that needs it (e.g. goodness
 // of fit's k/n/log_likelihood/threshold/distribution spec) does not have to change the signature.
-static double ToolboxDispatch(string group, string method, List<double[]> data, JsonElement options)
+// `asrt` is the fixture assertion driving this call: most methods return one scalar and ignore
+// it, but a method that returns a named/ordered set (gof's "metrics"/"classification") or a bare
+// array (gof's "aic_weights"/"rmse_weights") reads its `index`/`label` to pick one value, exactly
+// as run_toolbox_kind's client-side select does in the C++/R/Python fixture runners.
+static double ToolboxDispatch(string group, string method, List<double[]> data, JsonElement options,
+                              JsonElement asrt)
 {
     switch (group)
     {
@@ -3705,9 +3710,126 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
                 "kendall"  => Correlation.KendallsTau(data[0], data[1]),
                 _ => throw new Exception($"unknown correlation method: {method}")
             };
+        case "gof":
+            return GofDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Selects a single value out of an ordered/named result the way the fixture runners' select
+// logic does: `label` (by name) wins over `index` (by position, default 0).
+static int ToolboxSelectIndex(JsonElement asrt)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("index", out var idx))
+        return idx.GetInt32();
+    return 0;
+}
+
+static double ToolboxSelectNamed(JsonElement asrt, string[] names, double[] values)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+    {
+        string want = lbl.GetString()!;
+        int i = Array.IndexOf(names, want);
+        if (i < 0) throw new Exception($"unknown label: {want}");
+        return values[i];
+    }
+    return values[ToolboxSelectIndex(asrt)];
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_gof arm against the real
+// Numerics.Data.Statistics.GoodnessOfFit (verified method-for-method against
+// upstream/Numerics/Numerics/Data/Statistics/GoodnessOfFit.cs -- the C++ port's names are
+// lower_snake_case, the C# statics are PascalCase, and GoodnessOfFit itself has no standalone
+// Pearson method, so "pearson" dispatches to the real Correlation.Pearson the C++ port mirrors).
+static double GofDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] o = data.Count > 0 ? data[0] : Array.Empty<double>();
+    double[] m = data.Count > 1 ? data[1] : Array.Empty<double>();
+    int GetInt(string key) => options.GetProperty(key).GetInt32();
+    double GetDouble(string key) => options.GetProperty(key).GetDouble();
+    int GetK() => options.ValueKind == JsonValueKind.Object && options.TryGetProperty("k", out var kEl)
+        ? kEl.GetInt32() : 0;
+
+    if (method == "aic") return GoodnessOfFit.AIC(GetInt("k"), GetDouble("log_likelihood"));
+    if (method == "aicc") return GoodnessOfFit.AICc(GetInt("n"), GetInt("k"), GetDouble("log_likelihood"));
+    if (method == "bic") return GoodnessOfFit.BIC(GetInt("n"), GetInt("k"), GetDouble("log_likelihood"));
+    if (method == "aic_weights") return GoodnessOfFit.AICWeights(o)[ToolboxSelectIndex(asrt)];
+    if (method == "rmse_weights") return GoodnessOfFit.RMSEWeights(o)[ToolboxSelectIndex(asrt)];
+
+    if (method == "ks" || method == "ad" || method == "chi_squared" || method == "rmse_dist")
+    {
+        var obs = (double[])o.Clone();
+        Array.Sort(obs);
+        var model = BuildSpecDistribution(options.GetProperty("model"));
+        if (method == "ks") return GoodnessOfFit.KolmogorovSmirnov(obs, model);
+        if (method == "ad") return GoodnessOfFit.AndersonDarling(obs, model);
+        if (method == "chi_squared") return GoodnessOfFit.ChiSquared(obs, model);
+        return data.Count > 1 ? GoodnessOfFit.RMSE(obs, m, model) : GoodnessOfFit.RMSE(obs, model);
+    }
+
+    if (method == "classification")
+    {
+        double threshold = GetDouble("threshold");
+        var ob = o.Select(v => v >= threshold ? 1.0 : 0.0).ToArray();
+        var pb = m.Select(v => v >= threshold ? 1.0 : 0.0).ToArray();
+        int tp = 0, tn = 0, fp = 0, fn = 0;
+        for (int i = 0; i < ob.Length; i++)
+        {
+            bool ov = ob[i] > 0.5, pv = pb[i] > 0.5;
+            if (ov && pv) tp++;
+            else if (!ov && !pv) tn++;
+            else if (!ov && pv) fp++;
+            else fn++;
+        }
+        var names = new[] { "accuracy", "precision", "recall", "f1", "specificity",
+                            "balanced_accuracy", "tp", "tn", "fp", "fn" };
+        var values = new[] {
+            GoodnessOfFit.Accuracy(ob, pb), GoodnessOfFit.Precision(ob, pb), GoodnessOfFit.Recall(ob, pb),
+            GoodnessOfFit.F1Score(ob, pb), GoodnessOfFit.Specificity(ob, pb),
+            GoodnessOfFit.BalancedAccuracy(ob, pb), tp, tn, fp, fn
+        };
+        return ToolboxSelectNamed(asrt, names, values);
+    }
+
+    var allNames = new[] { "rmse", "mse", "mae", "mape", "smape", "nse", "log_nse", "kge", "kge_mod",
+                           "pbias", "rsr", "pearson", "r_squared", "d", "d_mod", "d_ref", "ve" };
+    if (method == "metrics")
+    {
+        var allValues = new[] {
+            GoodnessOfFit.RMSE(o, m, GetK()), GoodnessOfFit.MSE(o, m), GoodnessOfFit.MAE(o, m),
+            GoodnessOfFit.MAPE(o, m), GoodnessOfFit.sMAPE(o, m),
+            GoodnessOfFit.NashSutcliffeEfficiency(o, m), GoodnessOfFit.LogNashSutcliffeEfficiency(o, m),
+            GoodnessOfFit.KlingGuptaEfficiency(o, m), GoodnessOfFit.KlingGuptaEfficiencyMod(o, m),
+            GoodnessOfFit.PBIAS(o, m), GoodnessOfFit.RSR(o, m),
+            Correlation.Pearson(o, m), GoodnessOfFit.RSquared(o, m),
+            GoodnessOfFit.IndexOfAgreement(o, m), GoodnessOfFit.ModifiedIndexOfAgreement(o, m),
+            GoodnessOfFit.RefinedIndexOfAgreement(o, m), GoodnessOfFit.VolumetricEfficiency(o, m)
+        };
+        return ToolboxSelectNamed(asrt, allNames, allValues);
+    }
+    return method switch
+    {
+        "rmse" => GoodnessOfFit.RMSE(o, m, GetK()),
+        "mse" => GoodnessOfFit.MSE(o, m),
+        "mae" => GoodnessOfFit.MAE(o, m),
+        "mape" => GoodnessOfFit.MAPE(o, m),
+        "smape" => GoodnessOfFit.sMAPE(o, m),
+        "nse" => GoodnessOfFit.NashSutcliffeEfficiency(o, m),
+        "log_nse" => GoodnessOfFit.LogNashSutcliffeEfficiency(o, m),
+        "kge" => GoodnessOfFit.KlingGuptaEfficiency(o, m),
+        "kge_mod" => GoodnessOfFit.KlingGuptaEfficiencyMod(o, m),
+        "pbias" => GoodnessOfFit.PBIAS(o, m),
+        "rsr" => GoodnessOfFit.RSR(o, m),
+        "pearson" => Correlation.Pearson(o, m),
+        "r_squared" => GoodnessOfFit.RSquared(o, m),
+        "d" => GoodnessOfFit.IndexOfAgreement(o, m),
+        "d_mod" => GoodnessOfFit.ModifiedIndexOfAgreement(o, m),
+        "d_ref" => GoodnessOfFit.RefinedIndexOfAgreement(o, m),
+        "ve" => GoodnessOfFit.VolumetricEfficiency(o, m),
+        _ => throw new Exception($"unknown gof method: {method}")
+    };
 }
 
 // --dump: the sanctioned curation path (see fixtures/README.md and the Task 5 brief).
@@ -3890,12 +4012,12 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     var dumpArgs = c.TryGetProperty("data", out var dn)
                         ? dn.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
                     DumpLine($"toolbox/{group}", caseName, method, dumpArgs,
-                        () => (object)ToolboxDispatch(group, method, data, options));
+                        () => (object)ToolboxDispatch(group, method, data, options, asrt));
                     continue;
                 }
 
                 double actual;
-                try { actual = ToolboxDispatch(group, method, data, options); }
+                try { actual = ToolboxDispatch(group, method, data, options, asrt); }
                 catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }

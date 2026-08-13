@@ -19,6 +19,17 @@ from .distributions import (
     distribution_names,
 )
 from .toolbox import correlation
+from .gof import (
+    aic,
+    aic_weights,
+    aicc,
+    bic,
+    classification_metrics,
+    gof_rmse,
+    gof_test,
+    goodness_of_fit,
+    rmse_weights,
+)
 from .copula import Copula, copula_fit, copula_names
 from .mvdist import (
     MultivariateDistribution,
@@ -104,6 +115,15 @@ from .analysis import (
 __all__ = [
     "GeneralizedExtremeValue",
     "correlation",
+    "goodness_of_fit",
+    "classification_metrics",
+    "gof_test",
+    "gof_rmse",
+    "aic",
+    "aicc",
+    "bic",
+    "aic_weights",
+    "rmse_weights",
     "Distribution",
     "distribution_names",
     "dist_truncated",

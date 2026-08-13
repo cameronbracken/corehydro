@@ -102,6 +102,36 @@ dispatch_data_utility <- function(fn, args, data) {
   )
 }
 
+# goodness_of_fit [function, args, observed_dataset, modeled_dataset]: routes through
+# ch_toolbox_run_("gof", ...) (numerics/support/toolbox_runner.hpp), so this fixture kind and a
+# user's goodness_of_fit()/aic() call are the same code path. Mirrors dispatch_gof in
+# core/tests/test_fixtures.cpp.
+kGofFunctionMethod <- c(
+  MSE = "mse", MAE = "mae",
+  NashSutcliffeEfficiency = "nse",
+  KlingGuptaEfficiency = "kge", KlingGuptaEfficiencyMod = "kge_mod",
+  PBIAS = "pbias", RSR = "rsr",
+  IndexOfAgreement = "d", ModifiedIndexOfAgreement = "d_mod",
+  RefinedIndexOfAgreement = "d_ref", VolumetricEfficiency = "ve"
+)
+
+dispatch_goodness_of_fit <- function(fn, args, obs, mod) {
+  ns <- asNamespace("corehydror")
+  if (identical(fn, "AIC")) {
+    opts <- to_runner_json(list(k = as.integer(args[[1]]), log_likelihood = args[[2]]))
+    return(ns$ch_toolbox_run_("gof", "aic", list(), opts)$values[[1]])
+  }
+  if (fn %in% c("AICc", "BIC")) {
+    opts <- to_runner_json(list(n = as.integer(args[[1]]), k = as.integer(args[[2]]),
+                                log_likelihood = args[[3]]))
+    return(ns$ch_toolbox_run_("gof", if (identical(fn, "AICc")) "aicc" else "bic",
+                              list(), opts)$values[[1]])
+  }
+  method <- kGofFunctionMethod[[fn]]
+  if (is.null(method)) stop(sprintf("unknown goodness_of_fit function: %s", fn))
+  ns$ch_toolbox_run_("gof", method, list(obs, mod), "{}")$values[[1]]
+}
+
 # Threshold-selection diagnostics, split out of the switch above because both methods share one
 # glue call and differ only in which field the function name selects. args are
 # [u_min, u_max, n_thresholds, confidence_level, point_index]; `*PointCount` ignores the index and
@@ -1302,6 +1332,20 @@ test_that("oracle fixtures validate", {
           r <- ns$ch_toolbox_run_(spec$group, a$method, data, opts)
           check_assertion(toolbox_select(r, a, spec$group), a)
         }
+      }
+      next
+    }
+    if (identical(spec$kind, "goodness_of_fit")) {
+      datasets <- spec$datasets
+      for (case in spec$cases) {
+        fn <- case[["function"]]
+        args <- if (is.null(case$args)) list() else case$args
+        obs <- if (is.null(case$observed_dataset)) numeric() else
+          as.double(unlist(datasets[[case$observed_dataset]]))
+        mod <- if (is.null(case$modeled_dataset)) numeric() else
+          as.double(unlist(datasets[[case$modeled_dataset]]))
+        actual <- dispatch_goodness_of_fit(fn, args, obs, mod)
+        for (a in case$assertions) check_assertion(actual, a)
       }
       next
     }

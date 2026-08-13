@@ -11,6 +11,7 @@
 // Special functions use a flat target->lambda map.
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1258,27 +1259,38 @@ static void run_generic(const json& spec) {
 
 // --- goodness_of_fit path -------------------------------------------------------------
 
-namespace gof = corehydro::numerics::data;
+static std::string format_g17(double v) {
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%.17g", v);
+    return std::string(buf);
+}
 
+// Delegates to numerics/support/toolbox_runner.hpp so a fixture case and a user's
+// goodness_of_fit() call are one code path. The function-name-to-method mapping is this file's
+// only remaining knowledge of the group.
 static double dispatch_gof(const std::string& fn, const std::vector<double>& args,
                             const std::vector<double>& obs, const std::vector<double>& mod) {
-    if (fn == "AIC")  return gof::GoodnessOfFit::aic(static_cast<int>(args[0]), args[1]);
-    if (fn == "AICc") return gof::GoodnessOfFit::aicc(static_cast<int>(args[0]),
-                                                       static_cast<int>(args[1]), args[2]);
-    if (fn == "BIC")  return gof::GoodnessOfFit::bic(static_cast<int>(args[0]),
-                                                      static_cast<int>(args[1]), args[2]);
-    if (fn == "MSE")  return gof::GoodnessOfFit::mse(obs, mod);
-    if (fn == "MAE")  return gof::GoodnessOfFit::mae(obs, mod);
-    if (fn == "NashSutcliffeEfficiency")  return gof::GoodnessOfFit::nash_sutcliffe_efficiency(obs, mod);
-    if (fn == "KlingGuptaEfficiency")     return gof::GoodnessOfFit::kling_gupta_efficiency(obs, mod);
-    if (fn == "KlingGuptaEfficiencyMod")  return gof::GoodnessOfFit::kling_gupta_efficiency_mod(obs, mod);
-    if (fn == "PBIAS")                    return gof::GoodnessOfFit::pbias(obs, mod);
-    if (fn == "RSR")                      return gof::GoodnessOfFit::rsr(obs, mod);
-    if (fn == "IndexOfAgreement")         return gof::GoodnessOfFit::index_of_agreement(obs, mod);
-    if (fn == "ModifiedIndexOfAgreement") return gof::GoodnessOfFit::modified_index_of_agreement(obs, mod);
-    if (fn == "RefinedIndexOfAgreement")  return gof::GoodnessOfFit::refined_index_of_agreement(obs, mod);
-    if (fn == "VolumetricEfficiency")     return gof::GoodnessOfFit::volumetric_efficiency(obs, mod);
-    throw std::runtime_error("unknown goodness_of_fit function: " + fn);
+    static const std::map<std::string, std::string> kMethods = {
+        {"MSE", "mse"}, {"MAE", "mae"},
+        {"NashSutcliffeEfficiency", "nse"},
+        {"KlingGuptaEfficiency", "kge"}, {"KlingGuptaEfficiencyMod", "kge_mod"},
+        {"PBIAS", "pbias"}, {"RSR", "rsr"},
+        {"IndexOfAgreement", "d"}, {"ModifiedIndexOfAgreement", "d_mod"},
+        {"RefinedIndexOfAgreement", "d_ref"}, {"VolumetricEfficiency", "ve"},
+    };
+    if (fn == "AIC")
+        return tbx::run_toolbox("gof", "aic", {},
+                                "{\"k\":" + std::to_string(static_cast<int>(args[0])) +
+                                    ",\"log_likelihood\":" + format_g17(args[1]) + "}").values[0];
+    if (fn == "AICc" || fn == "BIC")
+        return tbx::run_toolbox("gof", fn == "AICc" ? "aicc" : "bic", {},
+                                "{\"n\":" + std::to_string(static_cast<int>(args[0])) +
+                                    ",\"k\":" + std::to_string(static_cast<int>(args[1])) +
+                                    ",\"log_likelihood\":" + format_g17(args[2]) + "}").values[0];
+    auto it = kMethods.find(fn);
+    if (it == kMethods.end())
+        throw std::runtime_error("unknown goodness_of_fit function: " + fn);
+    return tbx::run_toolbox("gof", it->second, {obs, mod}, "{}").values[0];
 }
 
 static void run_goodness_of_fit(const json& spec) {
