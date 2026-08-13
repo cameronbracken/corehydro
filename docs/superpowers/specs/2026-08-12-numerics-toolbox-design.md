@@ -13,7 +13,9 @@ sequences, stratification, joint probability, link functions, trend evaluation, 
 ported optimizers. Every one of these is ported and tested in C++ today and invisible to users of
 either package.
 
-The phase adds no numerical code. It adds glue, fixtures, docs, and examples.
+The phase adds glue, fixtures, docs, and examples. It adds numerical code exactly once:
+`Numerics/Data/Statistics/Autocorrelation.cs` turns out to be unported and unrecorded, so this
+phase ports it (see the autocorrelation row below).
 
 ## What the core supports
 
@@ -23,14 +25,14 @@ Read from the headers, not inferred.
 |---|---|---|
 | Goodness of fit | `numerics/data/goodness_of_fit.hpp` | AIC, AICc, BIC, AIC weights, RMSE in three forms (two series with a degrees-of-freedom correction, a series against a fitted distribution at Weibull plotting positions, and a series against a fitted distribution at supplied plotting positions), RMSE weights, MSE, MAE, MAPE, sMAPE, NSE, log NSE, KGE, modified KGE, PBIAS, RSR, Pearson, R squared, index of agreement (plain, modified, refined), volumetric efficiency, accuracy, confusion matrix, precision, recall, F1, specificity, balanced accuracy, Kolmogorov-Smirnov D, Anderson-Darling A squared, chi squared |
 | Correlation | `numerics/data/correlation.hpp` | Pearson, Spearman, Kendall's tau |
-| Autocorrelation and spectra | `numerics/math/fourier/fourier.hpp` | `fft`, `real_fft`, cross correlation, autocorrelation returning lag and ACF pairs. No confidence bands: upstream does not compute them |
+| Autocorrelation and spectra | `numerics/math/fourier/fourier.hpp`, plus a new `numerics/data/autocorrelation.hpp` | Ported today: `fft`, `real_fft`, cross correlation, and `Fourier::autocorrelation`, which returns lag and ACF pairs only. Upstream's `Data/Statistics/Autocorrelation.cs` (autocovariance, partial autocorrelation, and `CorrelationConfidenceInterval`) is unported and undocumented, so this phase ports it as a faithful new header pinned against `Test_Autocorrelation.cs` |
 | Summary statistics | `numerics/data/statistics.hpp` | mean, variance, standard deviation, maximum, product moments, linear moments, ranks, percentile |
 | Streaming statistics | `numerics/data/running_statistics.hpp`, `running_covariance_matrix.hpp` | count, min, max, mean, sample and population variance, standard deviation, coefficient of variation, skewness, kurtosis, a static merge of two accumulators; sample and population covariance and correlation matrices |
 | Histogram | `numerics/data/histogram.hpp` | Rice-rule and explicit-bin construction, bin bounds, midpoints and frequencies, mean, median, mode, standard deviation |
 | Interpolation | `numerics/data/interpolation/` | `Linear` and `Bilinear` over the `Interpolater` base: x and y transforms (None, Logarithmic, NormalZ), ascending or descending sort order, sequential, bisection and hunt search, and `Linear::extrapolate` |
 | Linear regression | `numerics/data/regression/linear_regression.hpp` | SVD fit with or without intercept, parameters and standard errors, covariance, residuals, standard error, degrees of freedom, R squared and adjusted R squared, `predict`, `prediction_intervals` |
 | Sampling utilities | `numerics/sampling/` | `SobolSequence` (up to 21201 dimensions, direction numbers already installed at `corehydror/inst/extdata/new-joe-kuo-6.21201`), `Stratify::XValues` over one or many `StratificationOptions`, `LatinHypercube` (already exported) |
-| Joint probability | `numerics/data/probability.hpp` | independent, perfectly positive, perfectly negative and correlation-matrix joint probability, the exceedance forms, and the HPCM path |
+| Joint probability | `numerics/data/probability.hpp` | independent, perfectly positive and perfectly negative joint probability over a probability vector, plus the indicator form (a 0/1 flag per component) which additionally takes a correlation matrix and routes to the HPCM path |
 | Link functions | `numerics/functions/`, `models/link_functions/` | the 7 Numerics links (identity, log, logit, probit, complementary log-log, Yeo-Johnson, Fisher z) and the 6 BestFit links (asinh, SES, log SES, log asinh, centered, Yeo-Johnson), each with `link`, `inverse_link` and `d_link` |
 | Trend functions | `models/trend_functions/` | the 11 trend model types with `predict(index)` and their parameters |
 | Optimizers | `numerics/math/optimization/` | DifferentialEvolution, BFGS, Powell, MLSL, NelderMead, BrentSearch, each over an objective `std::function<double(const std::vector<double>&)>` |
@@ -103,7 +105,8 @@ aic_weights(aic); rmse_weights(rmse)
 
 # Correlation, autocorrelation, spectra
 correlation(x, y, method = c("pearson", "spearman", "kendall"))
-autocorrelation(x, max_lag = NULL)
+autocorrelation(x, max_lag = NULL, type = c("correlation", "covariance", "partial"),
+                confidence_level = 0.95)
 cross_correlation(x, y)
 dft(x, inverse = FALSE); dft_real(x, inverse = FALSE)
 
@@ -129,7 +132,7 @@ stratify(lower, upper, bins, probability = FALSE, logarithmic = FALSE)
 
 # Joint probability
 joint_probability(p, dependency = c("independent", "positive", "negative", "correlation"),
-                  correlation = NULL, exceedance = FALSE, hpcm = FALSE)
+                  indicators = NULL, correlation = NULL)
 
 # Link and trend functions
 link_function(type, ...); link_names()
@@ -266,9 +269,9 @@ The phase adds roughly 35 exports across fourteen core groups, so the implementa
 into tasks that land independently, each carrying its own fixtures, tests, and reference docs:
 
 1. `toolbox_runner.hpp` plus the two glue entry points and the `toolbox` fixture kind in all four
-   runners. Everything else depends on this.
+   runners, proven end to end with the correlation group. Everything else depends on this.
 2. Goodness of fit and the information criteria.
-3. Correlation, autocorrelation, spectra, summary and streaming statistics.
+3. The `Autocorrelation.cs` port, spectra, summary and streaming statistics.
 4. Histogram, interpolation, linear regression.
 5. Sobol, stratification, joint probability.
 6. Link functions and trend evaluation.
@@ -286,5 +289,8 @@ pattern, not for the runner itself.
 - **The math layer.** Matrix decompositions, special functions, integration, root finding, and
   numerical derivatives are phase 5. `dft()` and `dft_real()` are the one exception, because
   upstream files Fourier under Data and Statistics and tests it there.
+- **Correlation matrices.** Upstream's `Correlation.Pearson(double[,])` and
+  `Correlation.Spearman(double[,])` matrix overloads are unported. The vector forms are all the
+  port carries, so the surface offers only those.
 - **`Interpolater` search tuning.** `set_search_start()` and `use_smart_search()` are
   performance controls on a stateful object. The stateless verbs use the defaults.
