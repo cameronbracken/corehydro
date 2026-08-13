@@ -204,8 +204,11 @@ running_covariance <- function(x, state = NULL) {
   opts <- if (is.null(state)) {
     list()
   } else {
-    list(state = list(n = state$n, mean = as.double(state$mean),
-                      covariance = as.double(t(state$covariance))))
+    # spec_array() forces an array even at size == 1 (a one-variable accumulator): a bare
+    # length-1 numeric vector would otherwise serialize as a JSON scalar (to_spec_json's
+    # length-1 rule), which toolbox_runner.hpp's as_double_vector() rejects.
+    list(state = list(n = state$n, mean = spec_array(as.double(state$mean)),
+                      covariance = spec_array(as.double(t(state$covariance)))))
   }
   r <- toolbox_run("statistics", "running_covariance", data, opts)
   block <- size * size

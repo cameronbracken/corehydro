@@ -65,6 +65,21 @@ test_that("running_covariance() rejects a state from a different accumulator kin
   expect_error(running_covariance(matrix(1:4, ncol = 2), state = list()), "corehydro_running_covariance")
 })
 
+test_that("running_covariance() resumes a one-column (single-variable) accumulator", {
+  # Regression test: a length-1 `mean`/`covariance` in the resume state used to serialize as a
+  # JSON scalar rather than an array (to_spec_json's length-1 rule), which the C++ side rejects
+  # with "expected a JSON array". The two-variable tests above never caught this.
+  x <- c(1, 2, 3)
+  whole <- running_covariance(matrix(c(x, 4, 5, 6), ncol = 1))
+
+  s <- running_covariance(matrix(x, ncol = 1))
+  s <- running_covariance(matrix(c(4, 5, 6), ncol = 1), state = s)
+
+  expect_equal(s$n, whole$n)
+  expect_equal(s$mean, whole$mean)
+  expect_equal(s$covariance, whole$covariance, tolerance = 1e-9)
+})
+
 test_that("autocorrelation() at lag 0 is 1 for the correlation type", {
   x <- c(5, 6, 4, 7, 3, 8, 2, 9, 1, 10, 5, 6, 4, 7, 3, 8, 2, 9, 1, 10)
   a <- autocorrelation(x, max_lag = 5)
