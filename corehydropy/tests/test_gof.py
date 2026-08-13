@@ -3,7 +3,14 @@
 # test-gof.R assertion for assertion.
 import pytest
 
-from corehydropy import Distribution, aic, aic_weights, gof_test, goodness_of_fit
+from corehydropy import (
+    Distribution,
+    aic,
+    aic_weights,
+    classification_metrics,
+    gof_test,
+    goodness_of_fit,
+)
 
 
 def test_goodness_of_fit_returns_every_metric_and_subsets_agree_with_the_whole():
@@ -15,6 +22,15 @@ def test_goodness_of_fit_returns_every_metric_and_subsets_agree_with_the_whole()
     assert goodness_of_fit(obs, mod, metrics=["nse"])["nse"] == every["nse"]
 
 
+def test_goodness_of_fit_accepts_a_bare_metric_string():
+    obs = [2, 4, 6, 8, 10]
+    mod = [2.2, 3.9, 6.4, 7.5, 10.1]
+    every = goodness_of_fit(obs, mod)
+    result = goodness_of_fit(obs, mod, metrics="nse")
+    assert list(result.keys()) == ["nse"]
+    assert result["nse"] == every["nse"]
+
+
 def test_an_unknown_metric_name_is_rejected_and_names_the_offender():
     with pytest.raises(ValueError, match="nsee"):
         goodness_of_fit([1, 2, 3, 4, 5], [1, 2, 3, 4, 5], metrics=["nsee"])
@@ -23,6 +39,14 @@ def test_an_unknown_metric_name_is_rejected_and_names_the_offender():
 def test_mismatched_lengths_are_rejected_before_reaching_cpp():
     with pytest.raises(ValueError, match="same length"):
         goodness_of_fit([1, 2, 3, 4, 5], [1, 2, 3, 4])
+
+
+def test_classification_metrics_on_identical_binary_labels():
+    obs = [1, 0, 1, 1, 0]
+    result = classification_metrics(obs, obs)
+    expected_names = {"accuracy", "precision", "recall", "f1", "specificity", "balanced_accuracy"}
+    assert expected_names <= result.keys()
+    assert result["accuracy"] == 100.0
 
 
 def test_gof_test_accepts_a_distribution_and_rejects_anything_else():

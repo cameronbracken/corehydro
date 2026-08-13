@@ -7,7 +7,7 @@
 gof_rmse(x, d, plotting_positions = NULL)
 }
 \arguments{
-\item{x}{numeric vector of observations.}
+\item{x}{numeric vector of observations. Sorted internally, as the C# methods require.}
 
 \item{d}{a \code{corehydro_dist} object.}
 

@@ -27,5 +27,6 @@ Information criteria
 }
 \examples{
 aic(k = 2, log_likelihood = -121.01131220612)
+aicc(n = 30, k = 2, log_likelihood = -121.01131220612)
 bic(n = 30, k = 2, log_likelihood = -121.01131220612)
 }

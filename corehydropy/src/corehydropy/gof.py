@@ -42,7 +42,9 @@ def goodness_of_fit(observed, modeled, metrics="all", k: int = 0) -> dict:
         ``"all"`` (the default) for every metric, or the metric names to keep, drawn from
         ``rmse``, ``mse``, ``mae``, ``mape``, ``smape``, ``nse``, ``log_nse``, ``kge``,
         ``kge_mod``, ``pbias``, ``rsr``, ``pearson``, ``r_squared``, ``d``, ``d_mod``, ``d_ref``,
-        ``ve``.
+        ``ve``. A bare string is treated as a single metric name, not a sequence of characters.
+        ``"all"`` (the default) evaluates every metric eagerly, including ``mape``, which raises
+        if ``observed`` contains a zero; ask for just the metrics you want to avoid that.
     k : int
         Degrees-of-freedom correction subtracted from the sample size in the RMSE denominator.
 
@@ -57,6 +59,8 @@ def goodness_of_fit(observed, modeled, metrics="all", k: int = 0) -> dict:
     0.9882
     """
     obs, mod = _check_pair(observed, modeled, "observed", "modeled")
+    if isinstance(metrics, str) and metrics != "all":
+        metrics = [metrics]
     if metrics != "all":
         unknown = [m for m in metrics if m not in _GOF_METRICS]
         if unknown:
@@ -137,7 +141,7 @@ def gof_rmse(x, d, plotting_positions=None) -> float:
     Parameters
     ----------
     x : array_like
-        Numeric vector of observations.
+        Numeric vector of observations. Sorted internally, as the C# methods require.
     d : Distribution
         A fitted :class:`~corehydropy.Distribution`.
     plotting_positions : array_like, optional

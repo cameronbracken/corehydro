@@ -11,7 +11,9 @@ kGofMetrics <- c("rmse", "mse", "mae", "mape", "smape", "nse", "log_nse", "kge",
 #' @param observed,modeled numeric vectors of equal length.
 #' @param metrics `"all"` (the default) for every metric as a named vector, or a character vector
 #'   of metric names drawn from `rmse`, `mse`, `mae`, `mape`, `smape`, `nse`, `log_nse`, `kge`,
-#'   `kge_mod`, `pbias`, `rsr`, `pearson`, `r_squared`, `d`, `d_mod`, `d_ref`, `ve`.
+#'   `kge_mod`, `pbias`, `rsr`, `pearson`, `r_squared`, `d`, `d_mod`, `d_ref`, `ve`. `"all"`
+#'   evaluates every metric eagerly, including `mape`, which errors if `observed` contains a
+#'   zero; ask for just the metrics you want to avoid that.
 #' @param k degrees-of-freedom correction subtracted from the sample size in the RMSE
 #'   denominator. Default 0.
 #' @return a named numeric vector.
@@ -79,7 +81,7 @@ gof_test <- function(x, d, test = c("ks", "ad", "chi_squared")) {
 
 #' Root mean squared error of a fitted distribution
 #'
-#' @param x numeric vector of observations.
+#' @param x numeric vector of observations. Sorted internally, as the C# methods require.
 #' @param d a `corehydro_dist` object.
 #' @param plotting_positions optional numeric vector of exceedance probabilities. `NULL` (the
 #'   default) uses Weibull positions, matching the C# overload.
@@ -104,6 +106,7 @@ gof_rmse <- function(x, d, plotting_positions = NULL) {
 #' @return a single numeric criterion value.
 #' @examples
 #' aic(k = 2, log_likelihood = -121.01131220612)
+#' aicc(n = 30, k = 2, log_likelihood = -121.01131220612)
 #' bic(n = 30, k = 2, log_likelihood = -121.01131220612)
 #' @export
 aic <- function(k, log_likelihood) {

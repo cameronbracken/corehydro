@@ -11,7 +11,9 @@ goodness_of_fit(observed, modeled, metrics = "all", k = 0)
 
 \item{metrics}{\code{"all"} (the default) for every metric as a named vector, or a character vector
 of metric names drawn from \code{rmse}, \code{mse}, \code{mae}, \code{mape}, \code{smape}, \code{nse}, \code{log_nse}, \code{kge},
-\code{kge_mod}, \code{pbias}, \code{rsr}, \code{pearson}, \code{r_squared}, \code{d}, \code{d_mod}, \code{d_ref}, \code{ve}.}
+\code{kge_mod}, \code{pbias}, \code{rsr}, \code{pearson}, \code{r_squared}, \code{d}, \code{d_mod}, \code{d_ref}, \code{ve}. \code{"all"}
+evaluates every metric eagerly, including \code{mape}, which errors if \code{observed} contains a
+zero; ask for just the metrics you want to avoid that.}
 
 \item{k}{degrees-of-freedom correction subtracted from the sample size in the RMSE
 denominator. Default 0.}

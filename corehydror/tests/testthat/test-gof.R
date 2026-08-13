@@ -15,6 +15,15 @@ test_that("mismatched lengths are rejected before reaching C++", {
   expect_error(goodness_of_fit(1:5, 1:4), "same length")
 })
 
+test_that("classification_metrics on identical binary labels", {
+  obs <- c(1, 0, 1, 1, 0)
+  result <- classification_metrics(obs, obs)
+  expected_names <- c("accuracy", "precision", "recall", "f1", "specificity",
+                       "balanced_accuracy")
+  expect_true(all(expected_names %in% names(result)))
+  expect_equal(unname(result[["accuracy"]]), 100)
+})
+
 test_that("gof_test accepts a corehydro_dist and rejects anything else", {
   x <- c(2.1, 3.4, 1.8, 4.9, 3.3, 2.7, 5.1, 3.9)
   d <- distribution("Normal", c(3.4, 1.1))
