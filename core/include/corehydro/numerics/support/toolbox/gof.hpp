@@ -1,10 +1,10 @@
-// corehydro ADDITION -- toolbox_runner.hpp group header, no upstream C# counterpart.
+// corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
 // Holds the `gof` group's dispatch arm: information criteria (aic/aicc/bic), distribution-backed
 // tests (ks/ad/chi_squared/rmse_dist) built off a model spec via options_model, classification
 // metrics, and the continuous simulated-vs-observed metrics (rmse/mse/mae/... and the combined
-// "metrics" call). Included by toolbox_runner.hpp, which defines the shared
-// ToolboxResult/data_at/scalar helpers used here; not meant to be included directly.
+// "metrics" call). Includes toolbox/common.hpp, which defines the shared
+// ToolboxResult/data_at/scalar helpers used here.
 #pragma once
 
 #include <algorithm>
@@ -15,6 +15,7 @@
 
 #include "corehydro/numerics/data/goodness_of_fit.hpp"
 #include "corehydro/numerics/distributions/support/dist_spec.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
 

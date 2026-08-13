@@ -1,10 +1,10 @@
-// corehydro ADDITION -- toolbox_runner.hpp group header, no upstream C# counterpart.
+// corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
 // Holds the `statistics` group's dispatch arm: the running/summary accumulator (with its
 // "resume from a prior state" path), product moments, L-moments, ranks, percentiles, and running
 // covariance, plus flatten_matrix, the one helper it needs to pack matrix blocks into a flat
-// ToolboxResult. Included by toolbox_runner.hpp, which defines the shared ToolboxResult/data_at/
-// scalar helpers used here; not meant to be included directly.
+// ToolboxResult. Includes toolbox/common.hpp, which defines the shared ToolboxResult/data_at/
+// scalar helpers used here.
 #pragma once
 
 #include <stdexcept>
@@ -15,6 +15,7 @@
 #include "corehydro/numerics/data/running_statistics.hpp"
 #include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
 

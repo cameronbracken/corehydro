@@ -1,10 +1,9 @@
-// corehydro ADDITION -- toolbox_runner.hpp group header, no upstream C# counterpart.
+// corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
 // Holds the `regression` group's dispatch arm (fit/covariance/residuals/predict/
 // prediction_intervals) plus build_regression, the one helper it needs to assemble a
-// LinearRegression from the flattened predictor matrix. Included by toolbox_runner.hpp, which
-// defines the shared ToolboxResult/data_at/scalar helpers used here; not meant to be included
-// directly.
+// LinearRegression from the flattened predictor matrix. Includes toolbox/common.hpp, which
+// defines the shared ToolboxResult/data_at/scalar helpers used here.
 #pragma once
 
 #include <stdexcept>
@@ -13,6 +12,7 @@
 
 #include "corehydro/numerics/data/regression/linear_regression.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
 

@@ -1,9 +1,9 @@
-// corehydro ADDITION -- toolbox_runner.hpp group header, no upstream C# counterpart.
+// corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
 // Holds the `spectra` group's dispatch arm: autocorrelation (correlation/covariance/partial,
 // with the confidence-interval companion), cross-correlation, and the DFT/real-DFT pair.
-// Included by toolbox_runner.hpp, which defines the shared ToolboxResult/data_at/scalar helpers
-// used here; not meant to be included directly.
+// Includes toolbox/common.hpp, which defines the shared ToolboxResult/data_at/scalar helpers
+// used here.
 #pragma once
 
 #include <stdexcept>
@@ -13,6 +13,7 @@
 
 #include "corehydro/numerics/data/autocorrelation.hpp"
 #include "corehydro/numerics/math/fourier/fourier.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
 

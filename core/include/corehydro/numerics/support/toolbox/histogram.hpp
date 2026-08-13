@@ -1,9 +1,9 @@
-// corehydro ADDITION -- toolbox_runner.hpp group header, no upstream C# counterpart.
+// corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
 // Holds the `histogram` group's dispatch arm: the per-bin table and the summary statistics, both
 // off a Histogram built from the Rice-Rule default constructor or the explicit-bin-count one.
-// Included by toolbox_runner.hpp, which defines the shared ToolboxResult/data_at/scalar helpers
-// used here; not meant to be included directly.
+// Includes toolbox/common.hpp, which defines the shared ToolboxResult/data_at/scalar helpers
+// used here.
 #pragma once
 
 #include <stdexcept>
@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "corehydro/numerics/data/histogram.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
 

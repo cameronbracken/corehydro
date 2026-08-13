@@ -1,8 +1,8 @@
-// corehydro ADDITION -- toolbox_runner.hpp group header, no upstream C# counterpart.
+// corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
 // Holds the `correlation` group's dispatch arm: Pearson, Spearman, and Kendall's tau, each a
-// scalar over two series. Included by toolbox_runner.hpp, which defines the shared
-// ToolboxResult/data_at/scalar helpers used here; not meant to be included directly.
+// scalar over two series. Includes toolbox/common.hpp, which defines the shared
+// ToolboxResult/data_at/scalar helpers used here.
 #pragma once
 
 #include <stdexcept>
@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "corehydro/numerics/data/correlation.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
 

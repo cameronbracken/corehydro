@@ -16,59 +16,15 @@
 //
 // The seven groups (correlation, gof, statistics, spectra, histogram, interpolation, regression)
 // each live in their own header under numerics/support/toolbox/, holding that group's
-// detail::run_<group> function and any helper used only by it. This file keeps the pieces those
-// group headers share -- ToolboxResult, the detail::data_at/scalar helpers -- defined before
-// including the group headers below, plus the run_toolbox dispatch table at the bottom.
+// detail::run_<group> function and any helper used only by it. Shared types and helpers are in
+// toolbox/common.hpp. This file includes all group headers and the run_toolbox dispatch table.
 #pragma once
 
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-#include "corehydro/models/json_lite.hpp"
-
-namespace corehydro::numerics::support {
-
-using corehydro::models::spec::JsonValue;
-
-// Flat result surface every binding and every fixture assertion reads. `values` holds whatever
-// the method returns, in method order; `names` labels them when the method returns a named set;
-// `dims` carries {rows, columns} when the method returns a matrix flattened row-major into
-// `values`, and is empty otherwise; `spec` carries a child object back and is empty otherwise.
-struct ToolboxResult {
-    std::vector<double> values;
-    std::vector<std::string> names;
-    std::vector<int> dims;
-    std::string spec;
-};
-
-namespace detail {
-
-inline const std::vector<double>& data_at(const std::vector<std::vector<double>>& data,
-                                          std::size_t i, const std::string& group,
-                                          const std::string& method) {
-    if (i >= data.size())
-        throw std::runtime_error("toolbox method '" + group + "." + method + "' needs " +
-                                 std::to_string(i + 1) + " data vector(s), got " +
-                                 std::to_string(data.size()));
-    return data[i];
-}
-
-inline ToolboxResult scalar(double v) {
-    ToolboxResult r;
-    r.values = {v};
-    return r;
-}
-
-}  // namespace detail
-
-}  // namespace corehydro::numerics::support
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 // --- group headers -----------------------------------------------------------------------
 // One header per group. Later tasks add headers beside these; nothing else in this file changes
-// when a group is added except this include block and the dispatch table below. Each group
-// header reopens corehydro::numerics::support::detail and uses the ToolboxResult/data_at/scalar
-// definitions above, so this include block must stay after them.
+// when a group is added except this include block and the dispatch table below.
 #include "corehydro/numerics/support/toolbox/correlation.hpp"
 #include "corehydro/numerics/support/toolbox/gof.hpp"
 #include "corehydro/numerics/support/toolbox/statistics.hpp"

@@ -1,8 +1,8 @@
-// corehydro ADDITION -- toolbox_runner.hpp group header, no upstream C# counterpart.
+// corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
 // Holds the `interpolation` group's dispatch arm (Linear/Bilinear) plus the two enum parsers
-// (transform, sort order) it needs. Included by toolbox_runner.hpp, which defines the shared
-// ToolboxResult/data_at/scalar helpers used here; not meant to be included directly.
+// (transform, sort order) it needs. Includes toolbox/common.hpp, which defines the shared
+// ToolboxResult/data_at/scalar helpers used here.
 #pragma once
 
 #include <stdexcept>
@@ -11,6 +11,7 @@
 
 #include "corehydro/numerics/data/interpolation/bilinear.hpp"
 #include "corehydro/numerics/data/interpolation/linear.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
 
