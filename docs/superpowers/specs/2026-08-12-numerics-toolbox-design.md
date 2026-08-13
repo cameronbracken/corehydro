@@ -96,7 +96,10 @@ differs stay separate.
 ```r
 # Fit and error metrics
 goodness_of_fit(observed, modeled, metrics = "all", k = 0)   # k corrects RMSE's denominator
-classification_metrics(observed, modeled, threshold)
+classification_metrics(observed, modeled)   # both arguments are already-binary label vectors,
+                                            # as the C# statics require; six metrics, no
+                                            # confusion-matrix counts (ConfusionMatrix is
+                                            # private in the port, as in C#)
 gof_test(x, d, test = c("ks", "ad", "chi_squared"))     # d is a corehydro_dist
 gof_rmse(x, d, plotting_positions = NULL)               # RMSE of a fitted distribution;
                                                         # NULL uses Weibull positions
