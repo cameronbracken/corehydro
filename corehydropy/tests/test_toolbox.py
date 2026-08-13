@@ -346,6 +346,13 @@ def test_stratify_rejects_fewer_than_2_bins():
         stratify(0, 1, bins=1)
 
 
+def test_stratify_rejects_lower_greater_than_or_equal_to_upper():
+    with pytest.raises(ValueError, match="lower.*upper"):
+        stratify(1, 1, bins=4)
+    with pytest.raises(ValueError, match="lower.*upper"):
+        stratify(2, 1, bins=4)
+
+
 def test_joint_probability_independent_multiplies_and_positive_takes_the_minimum():
     assert joint_probability([0.5, 0.5]) == pytest.approx(0.25, abs=1e-12)
     assert joint_probability([0.5, 0.5], dependency="positive") == pytest.approx(0.5, abs=1e-12)
@@ -368,3 +375,13 @@ def test_joint_probability_requires_indicators_when_correlation_is_given():
 def test_joint_probability_rejects_a_correlation_matrix_of_the_wrong_size():
     with pytest.raises(ValueError, match="3 x 3"):
         joint_probability([0.5, 0.5, 0.5], indicators=[1, 1, 1], correlation=np.eye(2))
+
+
+def test_joint_probability_rejects_correlation_dependency_missing_both_arguments():
+    with pytest.raises(ValueError, match="indicators.*correlation"):
+        joint_probability([0.5, 0.5], dependency="correlation")
+
+
+def test_joint_probability_rejects_correlation_dependency_missing_just_the_matrix():
+    with pytest.raises(ValueError, match="correlation"):
+        joint_probability([0.5, 0.5], dependency="correlation", indicators=[1, 1])

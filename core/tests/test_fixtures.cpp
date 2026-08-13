@@ -1597,7 +1597,12 @@ static void run_toolbox_kind(const json& spec) {
         std::string name = c["name"].get<std::string>();
         auto data = toolbox_data(c, datasets);
         json options = c.contains("options") ? c["options"] : json::object();
-        if (group == "sampling") options["path"] = g_sobol_path;
+        // Only the "sobol" method reads a path (SobolSequence's constructor only touches it
+        // when dimension > 1); "stratify" never does, so this stays scoped to that one method
+        // rather than the whole "sampling" group.
+        bool is_sobol = !c["assertions"].empty() &&
+                        c["assertions"][0]["method"].get<std::string>() == "sobol";
+        if (group == "sampling" && is_sobol) options["path"] = g_sobol_path;
         std::string options_str = options.dump();
         for (const auto& as : c["assertions"]) {
             std::string where = "toolbox/" + group + "/" + name;

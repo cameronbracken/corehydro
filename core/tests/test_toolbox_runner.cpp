@@ -296,14 +296,13 @@ int main() {
     auto jp_pos = tb::run_toolbox("probability", "joint", {{0.5, 0.5}}, "{\"dependency\":\"positive\"}");
     CHECK_NEAR(jp_pos.values[0], 0.5, 1e-12);
 
-    // dependency = "correlation" with no indicator vector is a usage error, not a NaN.
-    bool threw_correlation = false;
-    try {
+    // dependency = "correlation" with no indicator vector: the runner mirrors C#'s
+    // JointProbability fallthrough (returns NaN, does not throw -- see probability.hpp).
+    // Rejecting this combination outright is a wrapper concern, covered by the R/Python wrapper
+    // tests, not the runner.
+    auto jp_no_indicators =
         tb::run_toolbox("probability", "joint", {{0.5, 0.5}}, "{\"dependency\":\"correlation\"}");
-    } catch (const std::exception& e) {
-        threw_correlation = std::string(e.what()).find("indicator") != std::string::npos;
-    }
-    CHECK_TRUE(threw_correlation);
+    CHECK_TRUE(std::isnan(jp_no_indicators.values[0]));
 
     return chtest::summary("toolbox_runner");
 }

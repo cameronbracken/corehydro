@@ -1610,7 +1610,10 @@ def _toolbox_select(r, a, group):
 def _run_toolbox_case(group, case, datasets):
     data = _toolbox_case_data(case, datasets)
     options_dict = dict(case.get("options", {}))
-    if group == "sampling":
+    # Only the "sobol" method reads a path (SobolSequence's constructor only touches it when
+    # dimension > 1); "stratify" never does, so this stays scoped to that one method rather than
+    # the whole "sampling" group.
+    if group == "sampling" and case["assertions"][0]["method"] == "sobol":
         # The Sobol direction-numbers file ships inside the package; path resolution is a
         # wrapper concern (see numerics/support/toolbox/sampling.hpp's file header), so the
         # fixture itself never carries a "path" key -- this harness injects its own resolved

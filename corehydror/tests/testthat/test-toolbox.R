@@ -329,6 +329,11 @@ test_that("stratify() rejects fewer than 2 bins, naming the argument", {
   expect_error(stratify(0, 1, bins = 1), "bins")
 })
 
+test_that("stratify() rejects lower >= upper, naming both arguments", {
+  expect_error(stratify(1, 1, bins = 4), "lower.*upper")
+  expect_error(stratify(2, 1, bins = 4), "lower.*upper")
+})
+
 test_that("joint_probability() independent multiplies and positive takes the minimum", {
   expect_equal(joint_probability(c(0.5, 0.5)), 0.25, tolerance = 1e-12)
   expect_equal(joint_probability(c(0.5, 0.5), dependency = "positive"), 0.5, tolerance = 1e-12)
@@ -351,5 +356,19 @@ test_that("joint_probability() rejects a correlation matrix of the wrong size, n
   expect_error(
     joint_probability(c(0.5, 0.5, 0.5), indicators = c(1, 1, 1), correlation = diag(2)),
     "3 x 3"
+  )
+})
+
+test_that("joint_probability() rejects dependency = 'correlation' missing both arguments", {
+  expect_error(
+    joint_probability(c(0.5, 0.5), dependency = "correlation"),
+    "indicators.*correlation"
+  )
+})
+
+test_that("joint_probability() rejects dependency = 'correlation' missing just the matrix", {
+  expect_error(
+    joint_probability(c(0.5, 0.5), dependency = "correlation", indicators = c(1, 1)),
+    "correlation"
   )
 })

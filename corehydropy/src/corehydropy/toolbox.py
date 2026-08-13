@@ -848,6 +848,10 @@ def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
     numbers shipped with the package (``dimension == 1`` needs no file, matching the C# ctor);
     the packaged file is located automatically.
 
+    ``n`` and ``dimension`` are validated rather than passed through to the C++ layer, which
+    would otherwise silently return an empty result for a non-positive value instead of raising
+    an error.
+
     Parameters
     ----------
     n : int
@@ -895,6 +899,10 @@ def stratify(lower: float, upper: float, bins: int, logarithmic: bool = False,
     not the probability-stratification methods (``Probabilities``, ``XToProbability``, ...),
     which are out of scope (see ``stratify.hpp``'s file header).
 
+    ``lower``, ``upper``, and ``bins`` are validated rather than passed through to the C++
+    layer, which would otherwise silently return zero rows for ``lower >= upper`` (and for
+    ``bins < 2``) instead of raising an error.
+
     Parameters
     ----------
     lower, upper : float
@@ -922,6 +930,8 @@ def stratify(lower: float, upper: float, bins: int, logarithmic: bool = False,
     """
     if bins < 2:
         raise ValueError("`bins` must be an integer greater than 1")
+    if lower >= upper:
+        raise ValueError(f"`lower` must be less than `upper`; got lower={lower}, upper={upper}")
     options = {"lower": float(lower), "upper": float(upper), "bins": int(bins),
               "logarithmic": bool(logarithmic), "probability": bool(probability)}
     r = _toolbox_run("sampling", "stratify", [], options)
@@ -944,7 +954,10 @@ def joint_probability(p, dependency: str = "independent", indicators=None, corre
     p : array_like
         Marginal probabilities.
     dependency : {"independent", "positive", "negative", "correlation"}
-        ``"correlation"`` requires both ``indicators`` and ``correlation``.
+        ``"correlation"`` requires both ``indicators`` and ``correlation`` -- the underlying C#
+        method itself returns ``nan`` for that combination rather than raising an error, but
+        this wrapper rejects it up front and names the missing argument(s), rather than handing
+        back a silent ``nan``.
     indicators : array_like, optional
         0/1 vector, the same length as ``p``.
     correlation : array_like, optional
@@ -972,6 +985,13 @@ def joint_probability(p, dependency: str = "independent", indicators=None, corre
         raise ValueError("`p` must be a non-empty array")
     if correlation is not None and indicators is None:
         raise ValueError("`correlation` requires `indicators`")
+    if dependency == "correlation":
+        missing = [name for name, val in (("indicators", indicators), ("correlation", correlation))
+                  if val is None]
+        if missing:
+            raise ValueError(
+                f"dependency='correlation' requires " + " and ".join(f"`{m}`" for m in missing)
+            )
     data = [pa]
     if indicators is not None:
         ind = np.asarray(indicators, dtype=float).ravel()

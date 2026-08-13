@@ -28,6 +28,11 @@ overload used by the BestFit estimators' profile-likelihood grids, not the
 probability-stratification methods (\code{Probabilities}, \code{XToProbability}, ...), which are out of
 scope (see \code{stratify.hpp}'s file header).
 }
+\details{
+\code{lower}, \code{upper}, and \code{bins} are validated rather than passed through to the C++ layer, which
+would otherwise silently return zero rows for \code{lower >= upper} (and for \code{bins < 2}) instead of
+raising an error.
+}
 \examples{
 stratify(0, 1, bins = 4)
 }

@@ -37,10 +37,13 @@ inline ToolboxResult run_probability(const std::string& method,
         throw std::runtime_error("unknown dependency '" + dep +
                                  "'; expected independent, positive, negative, or correlation");
 
+    // C# JointProbability falls through to `return double.NaN` when dependency is
+    // CorrelationMatrix and no correlation matrix reaches it -- both the plain overload (no
+    // indicators at all, below) and the indicator overload with a null correlationMatrix
+    // (further down) share that fallthrough. Neither throws; the R/Python wrappers reject
+    // `dependency = "correlation"` unless both an indicator vector and a correlation matrix are
+    // supplied, so this NaN is unreachable through the user-facing verb.
     if (data.size() < 2) {
-        if (type == nd::DependencyType::CorrelationMatrix)
-            throw std::runtime_error(
-                "dependency 'correlation' needs an indicator vector and a correlation matrix");
         return scalar(nd::joint_probability(p, type));
     }
 

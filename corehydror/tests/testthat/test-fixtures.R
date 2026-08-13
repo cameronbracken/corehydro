@@ -1497,7 +1497,10 @@ test_that("oracle fixtures validate", {
       for (case in spec$cases) {
         data <- toolbox_case_data(case, datasets)
         opts_list <- if (is.null(case$options)) list() else case$options
-        if (identical(spec$group, "sampling")) {
+        # Only the "sobol" method reads a path (SobolSequence's constructor only touches it when
+        # dimension > 1); "stratify" never does, so this stays scoped to that one method rather
+        # than the whole "sampling" group.
+        if (identical(spec$group, "sampling") && identical(case$assertions[[1]]$method, "sobol")) {
           # The Sobol direction-numbers file ships inside the package; path resolution is a
           # wrapper concern (see numerics/support/toolbox/sampling.hpp's file header), so the
           # fixture itself never carries a "path" key -- this harness injects its own resolved

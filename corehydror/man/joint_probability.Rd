@@ -15,7 +15,10 @@ joint_probability(
 \item{p}{numeric vector of marginal probabilities.}
 
 \item{dependency}{one of \code{"independent"} (default), \code{"positive"}, \code{"negative"},
-\code{"correlation"}. \code{"correlation"} requires both \code{indicators} and \code{correlation}.}
+\code{"correlation"}. \code{"correlation"} requires both \code{indicators} and \code{correlation} -- the
+underlying C# method itself returns \code{NaN} for that combination rather than raising an
+error, but this wrapper rejects it up front and names the missing argument(s), rather than
+handing back a silent \code{NaN}.}
 
 \item{indicators}{optional 0/1 vector, the same length as \code{p}.}
 

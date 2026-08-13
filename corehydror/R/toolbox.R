@@ -436,6 +436,10 @@ interpolate_2d <- function(x1, x2, y, x1out, x2out,
 #' numbers shipped with the package (`dimension == 1` needs no file, matching the C# ctor); the
 #' installed file is located automatically with [system.file()].
 #'
+#' `n` and `dimension` are validated rather than passed through to the C++ layer, which would
+#' otherwise silently return an empty result for a non-positive value instead of raising an
+#' error.
+#'
 #' @param n number of points to generate, at least 1.
 #' @param dimension spatial dimension, between 1 and 21201. Default 1.
 #' @param skip number of points to skip before the first returned point: `skip = k` returns the
@@ -476,6 +480,10 @@ sobol_sequence <- function(n, dimension = 1L, skip = 0L) {
 #' probability-stratification methods (`Probabilities`, `XToProbability`, ...), which are out of
 #' scope (see `stratify.hpp`'s file header).
 #'
+#' `lower`, `upper`, and `bins` are validated rather than passed through to the C++ layer, which
+#' would otherwise silently return zero rows for `lower >= upper` (and for `bins < 2`) instead of
+#' raising an error.
+#'
 #' @param lower,upper bounds of the axis to stratify. `lower` must be less than `upper`.
 #' @param bins number of bins, greater than 1.
 #' @param logarithmic stratify on a log10 scale. Default `FALSE`.
@@ -491,6 +499,10 @@ stratify <- function(lower, upper, bins, logarithmic = FALSE, probability = FALS
   }
   if (!is.numeric(bins) || length(bins) != 1L || bins < 2) {
     stop("`bins` must be a single integer greater than 1", call. = FALSE)
+  }
+  if (lower >= upper) {
+    stop(sprintf("`lower` must be less than `upper`; got lower = %s, upper = %s", lower, upper),
+         call. = FALSE)
   }
   opts <- list(lower = as.double(lower), upper = as.double(upper), bins = as.integer(bins),
                logarithmic = isTRUE(logarithmic), probability = isTRUE(probability))
@@ -511,7 +523,10 @@ stratify <- function(lower, upper, bins, logarithmic = FALSE, probability = FALS
 #'
 #' @param p numeric vector of marginal probabilities.
 #' @param dependency one of `"independent"` (default), `"positive"`, `"negative"`,
-#'   `"correlation"`. `"correlation"` requires both `indicators` and `correlation`.
+#'   `"correlation"`. `"correlation"` requires both `indicators` and `correlation` -- the
+#'   underlying C# method itself returns `NaN` for that combination rather than raising an
+#'   error, but this wrapper rejects it up front and names the missing argument(s), rather than
+#'   handing back a silent `NaN`.
 #' @param indicators optional 0/1 vector, the same length as `p`.
 #' @param correlation optional `length(p)` by `length(p)` correlation matrix; requires
 #'   `indicators`.
@@ -528,6 +543,14 @@ joint_probability <- function(p, dependency = c("independent", "positive", "nega
   }
   if (!is.null(correlation) && is.null(indicators)) {
     stop("`correlation` requires `indicators`", call. = FALSE)
+  }
+  if (identical(dependency, "correlation")) {
+    missing_args <- c(if (is.null(indicators)) "indicators", if (is.null(correlation)) "correlation")
+    if (length(missing_args) > 0L) {
+      stop(sprintf("dependency = \"correlation\" requires %s",
+                   paste(sprintf("`%s`", missing_args), collapse = " and ")),
+           call. = FALSE)
+    }
   }
   data <- list(p)
   if (!is.null(indicators)) {

@@ -23,6 +23,11 @@ Mirrors the C# \code{SobolSequence} class. \code{dimension > 1} needs the new-jo
 numbers shipped with the package (\code{dimension == 1} needs no file, matching the C# ctor); the
 installed file is located automatically with \code{\link[=system.file]{system.file()}}.
 }
+\details{
+\code{n} and \code{dimension} are validated rather than passed through to the C++ layer, which would
+otherwise silently return an empty result for a non-positive value instead of raising an
+error.
+}
 \examples{
 sobol_sequence(5, dimension = 2)
 }
