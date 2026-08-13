@@ -334,6 +334,205 @@ in `parameters`, but builds its curve at whatever point estimator the underlying
 analysis carries, which defaults to the posterior mean. Evaluating `copula_exceedance()` at the
 reported maximum therefore answers a slightly different question than the curve does.
 
+## Beyond the bivariate normal
+
+`mvdist_normal()` is one of five multivariate families. The other four answer different
+questions: a Student-t when the joint tail should be heavier than a normal's, a Dirichlet over
+fractions that have to sum to one, a Multinomial over counts across those same categories, and a
+BivariateEmpirical when the joint distribution is read off the sample instead of fitted.
+
+### A heavier joint tail
+
+`mvdist_student_t(df, location, scale)` takes a scale matrix, not a covariance. The covariance is
+`scale * df / (df - 2)`, and it exists only for `df > 2`. Setting `scale` to
+`covar * (df - 2) / df` therefore builds a Student-t carrying exactly the covariance the fitted
+bivariate normal above carries, which is what makes the two comparable.
+
+```{r}
+df <- 4
+scale_matrix <- covar * (df - 2) / df
+mvt <- mvdist_student_t(df = df, location = c(px[1], py[1]), scale = scale_matrix)
+
+cat(sprintf(
+  "df %g;  scale[1,1] %.8f  ->  covariance[1,1] %.8f  (bivariate normal %.8f)\n",
+  mvdist_params(mvt)$df, scale_matrix[1, 1], mvdist_covariance(mvt)[1, 1], covar[1, 1]
+))
+```
+
+Both distributions are centred on the same two log-space means, so walk the two thresholds down
+together and read `mvdist_cdf()`: the probability of a year that is low in peak and low in volume
+at once.
+
+```{r}
+centre <- c(px[1], py[1])
+sd_log <- c(px[2], py[2])
+
+low <- data.frame(sd_below = c(1, 2, 3))
+low$normal <- sapply(low$sd_below, \(k) mvdist_cdf(mvn, centre - k * sd_log))
+low$student_t <- sapply(low$sd_below, \(k) mvdist_cdf(mvt, centre - k * sd_log))
+low$ratio <- low$student_t / low$normal
+round(low, 6)
+```
+
+Same covariance, different shape. One standard deviation below both means the Student-t puts less
+probability in the joint corner than the normal does, 0.075582 against 0.104527. By three
+standard deviations below, the ratio has grown to 8.049844. The heavier tail is paid for out of
+the shoulder.
+
+```{r}
+#| fig-alt: "Probability that both variables fall below a common threshold, against how many standard deviations below the mean that threshold sits: the multivariate t solid, the bivariate normal dashed, on a logarithmic vertical axis."
+grid_k <- seq(0, 4, length.out = 60)
+t_low <- sapply(grid_k, \(k) mvdist_cdf(mvt, centre - k * sd_log))
+n_low <- sapply(grid_k, \(k) mvdist_cdf(mvn, centre - k * sd_log))
+
+plot(grid_k, t_low,
+  type = "l", log = "y", lwd = 2, col = "#8c5a3b",
+  ylim = range(t_low, n_low),
+  xlab = "Standard deviations below the mean (both variables)",
+  ylab = "P(both below)",
+  main = "Joint lower tail, matched covariance"
+)
+lines(grid_k, n_low, lwd = 2, lty = 2, col = "#6b7f3f")
+legend("bottomleft",
+  legend = c("Multivariate t, df 4", "Bivariate normal"),
+  col = c("#8c5a3b", "#6b7f3f"), lwd = 2, lty = c(1, 2), bty = "n"
+)
+```
+
+The limit flagged above is upstream's, not this port's: `MultivariateStudentT` carries no
+marginal, conditional, or rectangle member in the C# library, and the binding says so by name
+rather than falling back to something else.
+
+```{r}
+cat(tryCatch(mvdist_marginal(mvt, 1), error = conditionMessage), "\n")
+```
+
+### Fractions that sum to one
+
+A Dirichlet is the distribution of a partition. Read its three dimensions as the shares of an
+annual volume arriving from three tributaries: every draw lies on the simplex, so the shares sum
+to one by construction.
+
+```{r}
+alpha <- c(6, 3, 2)
+tributaries <- mvdist_dirichlet(alpha)
+
+share <- data.frame(
+  alpha = mvdist_params(tributaries)$alpha,
+  mean_share = mvdist_mean(tributaries),
+  mode_share = mvdist_mode(tributaries),
+  sd_share = sqrt(mvdist_variance(tributaries))
+)
+row.names(share) <- c("North fork", "South fork", "East creek")
+round(share, 4)
+
+cat(sprintf("alpha sums to %g; the mean shares sum to %g\n",
+            mvdist_params(tributaries)$alpha_sum, sum(mvdist_mean(tributaries))))
+```
+
+`alpha` carries both the shape of the statement and its strength: the mean share is
+`alpha[i] / sum(alpha)`, and the sum sets how tightly the shares are held around it, which the
+conjugate update below makes visible. `mvdist_mode()` is defined only when every `alpha` exceeds
+one, which is why it can be asked for here.
+
+```{r}
+round(mvdist_covariance(tributaries), 5)
+
+observed_split <- c(0.52, 0.31, 0.17)
+cat(sprintf("density at the split (0.52, 0.31, 0.17): %.6f\n",
+            mvdist_pdf(tributaries, observed_split)))
+cat(tryCatch(mvdist_cdf(tributaries, observed_split), error = conditionMessage), "\n")
+```
+
+Every off-diagonal covariance is negative, which is what the simplex forces: one share can only
+grow at another's expense. What `mvdist_pdf()` returns is a density on that simplex rather than a
+probability, so it is free to exceed one, and here it does. `mvdist_cdf()` has no closed form
+upstream and throws instead of approximating one.
+
+### Counts across the same categories
+
+The Multinomial is the count version of the same three categories. Take twenty flood events and
+ask how many had their largest inflow from each fork, with the Dirichlet's mean shares as the
+category probabilities.
+
+```{r}
+counts <- c(11, 5, 4)
+events <- mvdist_multinomial(20, mvdist_mean(tributaries))
+
+tally <- data.frame(
+  probability = mvdist_params(events)$probabilities,
+  expected_count = mvdist_mean(events),
+  observed_count = counts
+)
+row.names(tally) <- row.names(share)
+round(tally, 4)
+
+cat(sprintf("%d trials;  P(exactly this count vector) = %.6f\n",
+            mvdist_params(events)$trials, mvdist_pdf(events, counts)))
+cat(tryCatch(mvdist_cdf(events, counts), error = conditionMessage), "\n")
+```
+
+`mvdist_pdf()` on a Multinomial returns the probability mass function, computed in log space and
+exponentiated, so it is a probability rather than a density. Its `mvdist_cdf()` is the second of
+the three upstream stubs this section runs into.
+
+The two families compose. A Dirichlet is the conjugate prior for a multinomial's category
+probabilities, so observing the counts turns `alpha` into `alpha + counts` and the posterior is
+another Dirichlet.
+
+```{r}
+posterior <- mvdist_dirichlet(alpha + counts)
+
+update <- data.frame(
+  prior_mean = mvdist_mean(tributaries),
+  observed_share = counts / sum(counts),
+  posterior_mean = mvdist_mean(posterior),
+  prior_sd = sqrt(mvdist_variance(tributaries)),
+  posterior_sd = sqrt(mvdist_variance(posterior))
+)
+row.names(update) <- row.names(share)
+round(update, 4)
+
+cat(sprintf("alpha sums to %g before the update and %g after\n",
+            mvdist_params(tributaries)$alpha_sum, mvdist_params(posterior)$alpha_sum))
+```
+
+The posterior mean falls between the prior mean and the observed shares in all three categories,
+and where it falls is fixed by the two weights: `sum(alpha)` is 11 against 20 observed events, so
+the posterior mean is the prior mean and the sample share averaged 11 to 20. Every posterior
+standard deviation is smaller than the prior's, which is the concentration `alpha` carries:
+it now sums to 31.
+
+### A joint CDF read off the sample
+
+`mvdist_bivariate_empirical()` takes a grid of joint non-exceedance probabilities and
+interpolates it bilinearly. Nothing is fitted and no marginal is assumed. Build the grid straight
+from the 48 pairs, counting how many fall below each pair of thresholds and dividing by `n + 1`
+rather than `n`, which is what keeps the top-right corner below one.
+
+```{r}
+x1 <- c(6000, 10000, 14000, 18000, 22000)
+x2 <- c(4, 7, 10, 13, 16)
+p_grid <- outer(x1, x2, Vectorize(\(a, b) sum(peak <= a & volume <= b) / (length(peak) + 1)))
+dimnames(p_grid) <- list(peak = x1, volume = x2)
+round(p_grid, 4)
+
+joint_empirical <- mvdist_bivariate_empirical(x1, x2, p_grid)
+cat(sprintf(
+  "P(peak <= 20,000 and volume <= 12):  empirical %.6f, fitted Normal copula %.6f\n",
+  mvdist_cdf(joint_empirical, c(q_peak, q_vol)), copula_cdf(normal, u, v)
+))
+cat(tryCatch(mvdist_pdf(joint_empirical, c(q_peak, q_vol)), error = conditionMessage), "\n")
+```
+
+At the design point the two routes differ in the fourth decimal place, 0.795918 against 0.795566.
+That is one ordinate on 48 pairs rather than a test of fit, but it is the comparison the family
+exists to support: the grid is the whole model, and values between its nodes are interpolations
+of it. `x1_transform`, `x2_transform`, and `p_transform` choose the space that interpolation
+happens in, `"None"`, `"Logarithmic"`, or `"NormalZ"`. The density is the third upstream stub:
+C# returns `NaN` for it, and the binding turns that into an error rather than handing the `NaN`
+back.
+
 ## Reproduction check
 
 ```{r}
@@ -400,7 +599,30 @@ stopifnot(
   near(ba$mode_curve[2], 0.083618465581119183),
   near(ba$lower_ci[2], 0.075962830775020973),
   near(ba$upper_ci[2], 0.090246696612235722),
-  near(at_map[2], 0.085331748836733334)
+  near(at_map[2], 0.085331748836733334),
+
+  # The multivariate Student-t's joint lower tail, at the bivariate normal's covariance.
+  near(low$normal[1], 0.10452733693177617),
+  near(low$student_t[1], 0.075581539079276658),
+  near(low$normal[3], 0.00045745131425917705),
+  near(low$student_t[3], 0.0036824117709023897),
+  near(low$ratio[3], 8.0498441169983277),
+
+  # Dirichlet shares, and multinomial counts over the same three categories.
+  near(share$mean_share[1], 0.54545454545454541),
+  near(share$sd_share[1], 0.14373989364401724),
+  near(mvdist_covariance(tributaries)[1, 2], -0.012396694214876033),
+  near(mvdist_pdf(tributaries, observed_split), 9.3916266254254079),
+  near(tally$expected_count[1], 10.909090909090908),
+  near(mvdist_covariance(events)[1, 2], -2.9752066115702474),
+  near(mvdist_pdf(events, counts), 0.04437237946993957),
+  near(update$posterior_mean[1], 0.54838709677419351),
+  near(update$posterior_mean[2], 0.25806451612903225),
+  near(update$posterior_sd[1], 0.087973484795449308),
+
+  # The empirical joint CDF against the fitted copula at the design point.
+  near(mvdist_cdf(joint_empirical, c(q_peak, q_vol)), 0.79591836734693877),
+  near(copula_cdf(normal, u, v), 0.79556645527912062)
 )
 
 # Internal consistency: the and-joint identity the core computes, the ordering of the three
@@ -415,6 +637,24 @@ stopifnot(
   all(cross$copula_at_map > cross$analysis_lower),
   all(cross$copula_at_map < cross$analysis_upper),
   all(diff(ba$mode_curve) < 0)
+)
+
+# Internal consistency for the four other multivariate families: the Student-t built at the
+# bivariate normal's covariance, the two simplex identities, the negative off-diagonals both
+# families carry, and the conjugate update as a weighted average of prior and sample.
+w <- sum(alpha) / (sum(alpha) + sum(counts))
+stopifnot(
+  all(mvdist_covariance(mvt) == covar),
+  low$ratio[1] < 1, low$ratio[3] > 1, all(diff(low$ratio) > 0),
+  abs(sum(mvdist_mean(tributaries)) - 1) < 1e-15,
+  abs(sum(mvdist_mean(events)) - 20) < 1e-13,
+  all(mvdist_covariance(tributaries)[upper.tri(diag(3))] < 0),
+  all(mvdist_covariance(events)[upper.tri(diag(3))] < 0),
+  all(update$posterior_sd < update$prior_sd),
+  max(abs(update$posterior_mean -
+            (w * update$prior_mean + (1 - w) * update$observed_share))) < 1e-15,
+  all((update$posterior_mean - update$prior_mean) *
+        (update$observed_share - update$posterior_mean) > 0)
 )
 cat("All reproduction checks passed.\n")
 ```
