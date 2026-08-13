@@ -3783,14 +3783,14 @@ static Numerics.Data.Transform ParseInterpolationTransform(string s) => s switch
     "none" => Numerics.Data.Transform.None,
     "log" => Numerics.Data.Transform.Logarithmic,
     "normal_z" => Numerics.Data.Transform.NormalZ,
-    _ => throw new Exception($"unknown transform: {s}")
+    _ => throw new Exception($"unknown transform '{s}'; expected none, log, or normal_z")
 };
 
 static Numerics.Data.SortOrder ParseSortOrder(string s) => s switch
 {
     "ascending" => Numerics.Data.SortOrder.Ascending,
     "descending" => Numerics.Data.SortOrder.Descending,
-    _ => throw new Exception($"unknown sort order: {s}")
+    _ => throw new Exception($"unknown sort order '{s}'; expected ascending or descending")
 };
 
 static string OptString(JsonElement options, string key, string fallback) =>

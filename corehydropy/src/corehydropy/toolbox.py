@@ -523,9 +523,9 @@ def histogram(x, bins=None) -> dict:
     Parameters
     ----------
     x : array_like
-        Observations, at least two elements.
+        Observations, at least one element.
     bins : int, optional
-        Number of bins. ``None`` (the default) uses the Rice rule.
+        Number of bins, must be positive. ``None`` (the default) uses the Rice rule.
 
     Returns
     -------
@@ -544,8 +544,8 @@ def histogram(x, bins=None) -> dict:
     6.0
     """
     xa = np.asarray(x, dtype=float).ravel()
-    if xa.size < 2:
-        raise ValueError("`x` must have at least two elements")
+    if xa.size == 0:
+        raise ValueError("`x` must be a non-empty numeric vector")
     options = {} if bins is None else {"bins": int(bins)}
     b = _toolbox_run("histogram", "bins", [xa], options)
     rows = np.asarray(b["values"], dtype=float).reshape(-1, 4)

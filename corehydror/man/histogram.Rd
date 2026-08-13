@@ -7,9 +7,9 @@
 histogram(x, bins = NULL)
 }
 \arguments{
-\item{x}{numeric vector of observations.}
+\item{x}{numeric vector of observations, at least one element.}
 
-\item{bins}{optional number of bins. \code{NULL} (the default) uses the Rice rule.}
+\item{bins}{optional positive number of bins. \code{NULL} (the default) uses the Rice rule.}
 }
 \value{
 a data frame with columns \code{lower}, \code{upper}, \code{midpoint}, and \code{frequency}, carrying the

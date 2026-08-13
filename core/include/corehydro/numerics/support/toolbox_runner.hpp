@@ -383,17 +383,23 @@ inline ToolboxResult run_spectra(const std::string& method,
     throw std::runtime_error("unknown spectra method: " + method);
 }
 
-// Histogram: bins == 0 (the default) selects the Rice-Rule constructor `Histogram(data)`;
+// Histogram: bins omitted (the default) selects the Rice-Rule constructor `Histogram(data)`;
 // bins > 0 selects the explicit-bin-count constructor `Histogram(data, bins)`. The real C#
 // class has no lower/upper-bound constructor overload -- both ctors derive their range from
-// `data` -- so no such option is accepted here.
+// `data` -- so no such option is accepted here. A non-positive explicit `bins` is an error.
 inline ToolboxResult run_histogram(const std::string& method,
                                    const std::vector<std::vector<double>>& data,
                                    const JsonValue& options) {
     const std::vector<double>& x = data_at(data, 0, "histogram", method);
-    int bins = options.value_or("bins", 0);
-    numerics::data::Histogram h = bins > 0 ? numerics::data::Histogram(x, bins)
-                                           : numerics::data::Histogram(x);
+    numerics::data::Histogram h = options.contains("bins")
+        ? [&x, &options]() {
+            int bins = options.at("bins").as_int();
+            if (bins <= 0) {
+                throw std::runtime_error("bins must be positive; got " + std::to_string(bins));
+            }
+            return numerics::data::Histogram(x, bins);
+        }()
+        : numerics::data::Histogram(x);
     if (method == "bins") {
         ToolboxResult r;
         for (int i = 0; i < h.number_of_bins(); ++i) {

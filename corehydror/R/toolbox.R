@@ -331,8 +331,8 @@ dft_real <- function(x, inverse = FALSE) {
 #' Mirrors the C# `Histogram` class of the Numerics library. With `bins = NULL` the bin count
 #' follows the Rice rule, `ceiling(2 * n^(1/3)) + 1`, exactly as the C# data constructor does.
 #'
-#' @param x numeric vector of observations.
-#' @param bins optional number of bins. `NULL` (the default) uses the Rice rule.
+#' @param x numeric vector of observations, at least one element.
+#' @param bins optional positive number of bins. `NULL` (the default) uses the Rice rule.
 #' @return a data frame with columns `lower`, `upper`, `midpoint`, and `frequency`, carrying the
 #'   histogram's `mean`, `median`, `mode`, `sd`, and `bin_width` as attributes.
 #' @examples
@@ -341,8 +341,8 @@ dft_real <- function(x, inverse = FALSE) {
 #' attr(h, "mode")
 #' @export
 histogram <- function(x, bins = NULL) {
-  if (!is.numeric(x) || length(x) < 2L) {
-    stop("`x` must be a numeric vector with at least two elements", call. = FALSE)
+  if (!is.numeric(x) || length(x) == 0L) {
+    stop("`x` must be a non-empty numeric vector", call. = FALSE)
   }
   opts <- if (is.null(bins)) list() else list(bins = as.integer(bins))
   b <- toolbox_run("histogram", "bins", list(x), opts)
