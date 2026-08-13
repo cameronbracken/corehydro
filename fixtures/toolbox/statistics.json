@@ -121,28 +121,28 @@
      "label": "mean",
      "expected": 191.317391304348,
      "mode": "abs",
-     "tol": 1e-09
+     "tol": 1e-10
     },
     {
      "method": "product_moments",
      "label": "sd",
      "expected": 47.9616113541118,
      "mode": "abs",
-     "tol": 1e-09
+     "tol": 1e-10
     },
     {
      "method": "product_moments",
      "label": "skewness",
      "expected": 0.8605451107461,
      "mode": "abs",
-     "tol": 1e-09
+     "tol": 1e-10
     },
     {
      "method": "product_moments",
      "label": "kurtosis",
      "expected": 1.3434868130194,
      "mode": "abs",
-     "tol": 1e-09
+     "tol": 1e-10
     }
    ]
   },
@@ -157,28 +157,28 @@
      "label": "l1",
      "expected": 1648.8064516,
      "mode": "abs",
-     "tol": 1e-06
+     "tol": 1e-07
     },
     {
      "method": "l_moments",
      "label": "l2",
      "expected": 138.2365591,
      "mode": "abs",
-     "tol": 1e-06
+     "tol": 1e-07
     },
     {
      "method": "l_moments",
      "label": "t3",
      "expected": 0.1033903,
      "mode": "abs",
-     "tol": 1e-06
+     "tol": 1e-07
     },
     {
      "method": "l_moments",
      "label": "t4",
      "expected": 0.1940943,
      "mode": "abs",
-     "tol": 1e-06
+     "tol": 1e-07
     }
    ]
   },
