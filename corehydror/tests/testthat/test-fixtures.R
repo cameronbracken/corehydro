@@ -164,15 +164,21 @@ toolbox_case_data <- function(case, datasets) {
   })
 }
 
-toolbox_select <- function(r, a) {
+toolbox_select <- function(r, a, group) {
   select <- if (is.null(a$select)) "value" else a$select
   if (identical(select, "length")) {
     return(as.double(length(r$values)))
   }
   if (identical(select, "rows")) {
+    if (is.null(r$dims) || length(r$dims) < 1) {
+      stop(sprintf("toolbox select 'rows' has no dims (group '%s')", group))
+    }
     return(as.double(r$dims[[1]]))
   }
   if (identical(select, "columns")) {
+    if (is.null(r$dims) || length(r$dims) < 2) {
+      stop(sprintf("toolbox select 'columns' has no dims (group '%s')", group))
+    }
     return(as.double(r$dims[[2]]))
   }
   i <- if (!is.null(a$label)) match(a$label, r$names) else (if (is.null(a$index)) 0L else as.integer(a$index)) + 1L
@@ -1294,7 +1300,7 @@ test_that("oracle fixtures validate", {
         opts <- if (is.null(case$options)) "{}" else ns$to_spec_json(case$options)
         for (a in case$assertions) {
           r <- ns$ch_toolbox_run_(spec$group, a$method, data, opts)
-          check_assertion(toolbox_select(r, a), a)
+          check_assertion(toolbox_select(r, a, spec$group), a)
         }
       }
       next

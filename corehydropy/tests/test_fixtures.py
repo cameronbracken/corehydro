@@ -1394,13 +1394,17 @@ def _toolbox_case_data(case, datasets):
     return out
 
 
-def _toolbox_select(r, a):
+def _toolbox_select(r, a, group):
     select = a.get("select", "value")
     if select == "length":
         return float(len(r["values"]))
     if select == "rows":
+        if "dims" not in r or len(r["dims"]) < 1:
+            raise ValueError(f"toolbox select 'rows' has no dims (group '{group}')")
         return float(r["dims"][0])
     if select == "columns":
+        if "dims" not in r or len(r["dims"]) < 2:
+            raise ValueError(f"toolbox select 'columns' has no dims (group '{group}')")
         return float(r["dims"][1])
     if "label" in a:
         i = list(r["names"]).index(a["label"])
@@ -1414,7 +1418,7 @@ def _run_toolbox_case(group, case, datasets):
     options = json.dumps(case.get("options", {}))
     for a in case["assertions"]:
         r = _core.toolbox_run(group, a["method"], data, options)
-        _check(_toolbox_select(r, a), a)
+        _check(_toolbox_select(r, a, group), a)
 
 
 def _load_cases():
