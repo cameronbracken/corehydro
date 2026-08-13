@@ -24,6 +24,42 @@ Design document: `docs/superpowers/specs/2026-08-12-numerics-toolbox-design.md`.
 - **Ported files carry a provenance header:** `// ported from: <upstream path> @ <sha>`. The pinned shas are Numerics `2a0357a` and RMC-BestFit `c2e6192`.
 - **Branch:** `surface-numerics-toolbox`, already created from `origin/main` and carrying the design commit.
 
+## Pre-flight corrections (binding, decided before Task 1)
+
+Three things the plan text below was written without knowing. Where they conflict with a task's
+text, these govern.
+
+1. **The ctest harness is `core/tests/check.hpp`**, not `test_support.hpp`. Its macros are
+   `CHECK_EQ(actual, expected)`, `CHECK_TRUE(cond)`, `CHECK_NEAR(actual, expected, tol)`,
+   `CHECK_THROWS(expr)`, and `CHECK_THROWS_MSG(expr, needle)`, and a test file ends with
+   `return chtest::summary("<suite name>");`. Every ctest code block below is written in the
+   wrong macro dialect; translate as you go. `core/tests/test_dist_runner.cpp` is the model to
+   copy.
+2. **`fixtures/special_functions/` already pins much of this surface**, C++-only, under the
+   `special_function` kind with a flat `target` plus `args` encoding: correlation (9 cases),
+   histogram (49), bilinear (2), fourier (25), percentile (12), probability (4),
+   running_statistics (33), running_covariance (20), search (24), differential_evolution (6).
+   The R and Python fixture runners skip the whole kind today.
+   **Decision: wire it into them.** For each toolbox group a task exposes, that task also
+   (a) routes the C++ `special_function` dispatch for its targets through the new toolbox runner,
+   so there is one code path, and (b) teaches the R and Python fixture runners that target
+   family's args encoding, so the already-pinned values become cross-language checks. Author a
+   NEW `toolbox` fixture only where no `special_function` coverage exists: linear interpolation,
+   linear regression, Sobol, stratification, link functions, trend evaluation, the
+   autocorrelation port's covariance and partial types, the goodness-of-fit metrics the existing
+   `goodness_of_fit` kind misses, and the five non-DE optimizers.
+   **Never duplicate an oracle value into a second file.** If a value is already pinned in
+   `fixtures/special_functions/`, reach it there.
+3. **`core/tests/optimization_test_functions.hpp` already carries all 16 `TestFunctions.cs`
+   objectives** (`fx`, `fxyz`, `de_jong`, `sum_of_power_functions`, `rosenbrock`, `booth`,
+   `matyas`, `mccormick`, `rastrigin`, `ackley`, `beale`, `goldstein_price`, `bukin`,
+   `three_hump_camel`, `eggholder`, `tp2`). **Decision: reuse it.** `optimizer_runner.hpp` ships
+   NO objective registry, so no test function lands in a distributed header. The C++ ctest and
+   `core/tests/test_fixtures.cpp` include that header; the R and Python fixture runners write the
+   two or three objectives an optimizer fixture needs as native closures, which exercises the real
+   host callback path on every fixture case. Task 8's `builtin_objective` does not exist; wherever
+   the text names it, use `test_functions::<name>` in C++ and a native closure in R and Python.
+
 ## Build and test commands
 
 ```bash
@@ -114,7 +150,7 @@ Create `core/tests/test_toolbox_runner.cpp`:
 #include <vector>
 
 #include "corehydro/numerics/support/toolbox_runner.hpp"
-#include "test_support.hpp"
+#include "check.hpp"
 
 namespace tb = corehydro::numerics::support;
 
@@ -123,14 +159,14 @@ int main() {
     const std::vector<double> y{10.0, 5.0, 7.0, 4.0, 3.0, 8.0};
 
     auto pearson = tb::run_toolbox("correlation", "pearson", {x, y}, "{}");
-    CHTEST_EXPECT_EQ(pearson.values.size(), std::size_t{1});
-    CHTEST_EXPECT_NEAR(pearson.values[0], 0.54502739907793, 1e-12);
+    CHECK_EQ(pearson.values.size(), std::size_t{1});
+    CHECK_NEAR(pearson.values[0], 0.54502739907793, 1e-12);
 
     auto spearman = tb::run_toolbox("correlation", "spearman", {x, y}, "{}");
-    CHTEST_EXPECT_NEAR(spearman.values[0], 0.771428571428571, 1e-12);
+    CHECK_NEAR(spearman.values[0], 0.771428571428571, 1e-12);
 
     auto tau = tb::run_toolbox("correlation", "kendall", {x, y}, "{}");
-    CHTEST_EXPECT_NEAR(tau.values[0], 0.6, 1e-12);
+    CHECK_NEAR(tau.values[0], 0.6, 1e-12);
 
     // An unknown group names the group; an unknown method names the method.
     bool threw_group = false;
@@ -139,7 +175,7 @@ int main() {
     } catch (const std::exception& e) {
         threw_group = std::string(e.what()).find("nope") != std::string::npos;
     }
-    CHTEST_EXPECT_TRUE(threw_group);
+    CHECK_TRUE(threw_group);
 
     bool threw_method = false;
     try {
@@ -147,7 +183,7 @@ int main() {
     } catch (const std::exception& e) {
         threw_method = std::string(e.what()).find("nope") != std::string::npos;
     }
-    CHTEST_EXPECT_TRUE(threw_method);
+    CHECK_TRUE(threw_method);
 
     // Too few data vectors is an error, not a crash.
     bool threw_arity = false;
@@ -156,13 +192,13 @@ int main() {
     } catch (const std::exception&) {
         threw_arity = true;
     }
-    CHTEST_EXPECT_TRUE(threw_arity);
+    CHECK_TRUE(threw_arity);
 
-    return chtest::summary();
+    return chtest::summary("toolbox_runner");
 }
 ```
 
-Check the macro names actually used in `core/tests/test_support.hpp` first and match them; if the header spells them differently (for example `CHECK_NEAR`), use its spelling throughout this file.
+`core/tests/test_dist_runner.cpp` is the file to copy for structure and macro usage.
 
 - [ ] **Step 3: Register the test and run it to see it fail**
 
@@ -877,29 +913,29 @@ exact C++ name of each static. The R metric names in this task map to them as:
 
 - [ ] **Step 2: Write the failing ctest additions**
 
-Append to `core/tests/test_toolbox_runner.cpp`, before `return chtest::summary();`:
+Append to `core/tests/test_toolbox_runner.cpp`, before `return chtest::summary("toolbox_runner");`:
 
 ```cpp
     // gof: the named set and the individual metric agree, and the set is labelled.
     const std::vector<double> obs{2.0, 4.0, 6.0, 8.0, 10.0};
     const std::vector<double> mod{2.2, 3.9, 6.4, 7.5, 10.1};
     auto set = tb::run_toolbox("gof", "metrics", {obs, mod}, "{}");
-    CHTEST_EXPECT_EQ(set.values.size(), set.names.size());
-    CHTEST_EXPECT_EQ(set.values.size(), std::size_t{17});
+    CHECK_EQ(set.values.size(), set.names.size());
+    CHECK_EQ(set.values.size(), std::size_t{17});
     auto one = tb::run_toolbox("gof", "nse", {obs, mod}, "{}");
     std::size_t nse_at = 0;
     for (std::size_t i = 0; i < set.names.size(); ++i)
         if (set.names[i] == "nse") nse_at = i;
-    CHTEST_EXPECT_NEAR(set.values[nse_at], one.values[0], 0.0);
+    CHECK_NEAR(set.values[nse_at], one.values[0], 0.0);
 
     // aic takes its arguments from options, not from a data vector.
     auto aic = tb::run_toolbox("gof", "aic", {}, "{\"k\":2,\"log_likelihood\":-121.01131220612}");
-    CHTEST_EXPECT_NEAR(aic.values[0], 246.02262441224, 1e-9);
+    CHECK_NEAR(aic.values[0], 246.02262441224, 1e-9);
 
     // The distribution-backed tests build their model from a dist spec in the options.
     auto ks = tb::run_toolbox("gof", "ks", {obs},
                               "{\"model\":{\"family\":\"Normal\",\"parameters\":[6.0,3.0]}}");
-    CHTEST_EXPECT_TRUE(ks.values[0] > 0.0 && ks.values[0] < 1.0);
+    CHECK_TRUE(ks.values[0] > 0.0 && ks.values[0] < 1.0);
 ```
 
 Run: `cmake --build core/build && ctest --test-dir core/build -R test_toolbox_runner --output-on-failure`
@@ -1750,20 +1786,20 @@ Append to `core/tests/test_toolbox_runner.cpp`:
     // histogram: Rice-rule bin count, and the frequencies sum to the sample size.
     const std::vector<double> h{1.0, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 8.0, 9.0};
     auto bins = tb::run_toolbox("histogram", "bins", {h}, "{}");
-    CHTEST_EXPECT_EQ(bins.dims.size(), std::size_t{2});
-    CHTEST_EXPECT_EQ(bins.dims[1], 4);
+    CHECK_EQ(bins.dims.size(), std::size_t{2});
+    CHECK_EQ(bins.dims[1], 4);
     double total = 0.0;
     for (int row = 0; row < bins.dims[0]; ++row)
         total += bins.values[static_cast<std::size_t>(row * 4 + 3)];
-    CHTEST_EXPECT_NEAR(total, 10.0, 0.0);
+    CHECK_NEAR(total, 10.0, 0.0);
 
     // interpolation: a point on a knot returns that knot's y exactly.
     const std::vector<double> ix{1.0, 2.0, 3.0, 4.0};
     const std::vector<double> iy{10.0, 20.0, 30.0, 40.0};
     auto lin = tb::run_toolbox("interpolation", "linear", {ix, iy, {2.5, 3.0}}, "{}");
-    CHTEST_EXPECT_EQ(lin.values.size(), std::size_t{2});
-    CHTEST_EXPECT_NEAR(lin.values[0], 25.0, 1e-12);
-    CHTEST_EXPECT_NEAR(lin.values[1], 30.0, 1e-12);
+    CHECK_EQ(lin.values.size(), std::size_t{2});
+    CHECK_NEAR(lin.values[0], 25.0, 1e-12);
+    CHECK_NEAR(lin.values[1], 30.0, 1e-12);
 ```
 
 Run the ctest. Expected: FAIL, `unknown toolbox group: histogram`.
@@ -2566,7 +2602,7 @@ git commit -m "feat: expose link functions and trend evaluation in R and Python"
 - Test: `core/tests/test_optimizer_runner.cpp`, `corehydror/tests/testthat/test-optim.R`, `corehydropy/tests/test_optim.py`
 
 **Interfaces:**
-- Produces: `corehydro::numerics::support::Objective = std::function<double(const std::vector<double>&)>`, `OptimResult { std::vector<double> parameters; double value; int iterations; int function_evaluations; std::string status; std::vector<double> hessian; std::vector<int> hessian_dims; }`, `OptimResult run_optimizer(const std::string& spec_json, const Objective& objective)`, and `Objective builtin_objective(const std::string& name)`.
+- Produces: `corehydro::numerics::support::Objective = std::function<double(const std::vector<double>&)>`, `OptimResult { std::vector<double> parameters; double value; int iterations; int function_evaluations; std::string status; std::vector<double> hessian; std::vector<int> hessian_dims; }`, `OptimResult run_optimizer(const std::string& spec_json, const Objective& objective)`, . No objective registry ships in this header (see Pre-flight correction 3).
 - Produces: R `optim_minimize()`, `optim_maximize()`, `print.corehydro_optim`; Python `optim_minimize()`, `optim_maximize()`, `OptimResult`.
 
 - [ ] **Step 1: Read the optimizer headers and the C# test functions**
@@ -2595,7 +2631,9 @@ Create `core/tests/test_optimizer_runner.cpp`:
 #include <vector>
 
 #include "corehydro/numerics/support/optimizer_runner.hpp"
-#include "test_support.hpp"
+
+#include "check.hpp"
+#include "optimization_test_functions.hpp"
 
 namespace tb = corehydro::numerics::support;
 
@@ -2604,9 +2642,9 @@ int main() {
     for (const char* method : {"de", "bfgs", "powell", "nelder_mead"}) {
         std::string spec = std::string("{\"method\":\"") + method +
                            "\",\"lower\":[-5,-5],\"upper\":[5,5],\"initial\":[1,1],\"seed\":12345}";
-        tb::OptimResult r = tb::run_optimizer(spec, tb::builtin_objective("DeJong"));
-        CHTEST_EXPECT_EQ(r.parameters.size(), std::size_t{2});
-        CHTEST_EXPECT_TRUE(r.value < 1e-6);
+        tb::OptimResult r = tb::run_optimizer(spec, test_functions::de_jong);
+        CHECK_EQ(r.parameters.size(), std::size_t{2});
+        CHECK_TRUE(r.value < 1e-6);
     }
 
     // A throwing objective surfaces as that exception, not as a silent Failure status.
@@ -2619,16 +2657,16 @@ int main() {
     } catch (const std::exception& e) {
         rethrown = std::string(e.what()).find("objective exploded") != std::string::npos;
     }
-    CHTEST_EXPECT_TRUE(rethrown);
+    CHECK_TRUE(rethrown);
 
     // A seeded DE run is reproducible.
     std::string spec = "{\"method\":\"de\",\"lower\":[-5,-5],\"upper\":[5,5],\"seed\":777}";
-    auto a = tb::run_optimizer(spec, tb::builtin_objective("Rosenbrock"));
-    auto b = tb::run_optimizer(spec, tb::builtin_objective("Rosenbrock"));
-    CHTEST_EXPECT_NEAR(a.value, b.value, 0.0);
-    CHTEST_EXPECT_NEAR(a.parameters[0], b.parameters[0], 0.0);
+    auto a = tb::run_optimizer(spec, test_functions::rosenbrock);
+    auto b = tb::run_optimizer(spec, test_functions::rosenbrock);
+    CHECK_NEAR(a.value, b.value, 0.0);
+    CHECK_NEAR(a.parameters[0], b.parameters[0], 0.0);
 
-    return chtest::summary();
+    return chtest::summary("toolbox_runner");
 }
 ```
 
@@ -2694,10 +2732,10 @@ matches C# and keeps the seeded stream identical to a C# run, so prefer it and m
 sign follow the direction. Adjust `sentinel()` to return negative infinity when `maximize_` is
 true, and say why in the comment.
 
-`builtin_objective(name)` returns the transcribed test function by name and throws listing the
-fourteen accepted names. Each transcription carries a
-`// transcribed from: Test_Numerics/Mathematics/Optimization/TestFunctions.cs @ 2a0357a` comment.
-These exist for the fixtures and the emitter, not for users.
+No objective registry lives in this header: `core/tests/optimization_test_functions.hpp` already
+carries all 16 `TestFunctions.cs` objectives, the C++ ctest and fixture runner include it, and the
+R and Python fixture runners write their own closures (Pre-flight correction 3). Keeping test
+functions out of a distributed header is the point.
 
 Run the ctest. Expected: PASS.
 
@@ -2911,7 +2949,9 @@ confirmation, so put the throwing test early in the file rather than last.
 Create `fixtures/toolbox/optimizers.json` with `"kind": "optimizer"`, cases naming a built-in
 objective, a method, bounds, and a seed, asserting the converged value and parameters against the
 literals in the six upstream optimizer test files. Wire the `optimizer` kind into all four
-runners: C++ calls `run_optimizer(spec, builtin_objective(name))`; R and Python call
+runners: C++ calls `run_optimizer(spec, test_functions::<name>)` from
+`core/tests/optimization_test_functions.hpp`, mapping the fixture's objective name to the function
+in one small table; R and Python call
 `ch_optim_run_` / `optim_run` with a wrapper around the same objective **implemented in the
 fixture runner** so the callback path itself is exercised by every fixture case; the emitter
 drives the real C# optimizer with the C# `TestFunctions` delegate.
