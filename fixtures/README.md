@@ -1867,7 +1867,34 @@ ind_0..ind_(n-1), corr(n*n flattened row-major)]` (n inferred from the argument 
 corresponding `conditionalProbabilities[i]` out-value. Exercises `JointProbabilityHPCM`'s v2.1.4
 `minimumCdf` guard fix (see `core/include/corehydro/numerics/data/probability.hpp`'s file
 header); curating this case surfaced and fixed an unrelated, pre-existing precision bug in this
-port's own `Normal::standard_cdf` (see `docs/upstream-csharp-issues.md`).
+port's own `Normal::standard_cdf` (see `docs/upstream-csharp-issues.md`). Task 6 additionally
+routes `Probability.hpcm_joint` (but not `hpcm_conditional_at`, which needs the
+`conditionalProbabilities` out-value the toolbox group below does not expose) through the new
+`probability` toolbox group's `joint` method (`dependency: "correlation"`), so that one pinned
+value is also a cross-language check.
+
+Task 6 adds two `toolbox`-kind files: `fixtures/toolbox/sampling.json` (group `sampling`, methods
+`sobol` and `stratify`) and `fixtures/toolbox/joint_probability.json` (group `probability`,
+method `joint`). `sobol`'s cases are scraped verbatim from `Test_SobolSequence.cs`'s `Test_Sobol`
+(dimension 2, first 10 points, verified upstream against R's `randtoolbox::sobol()`) plus a
+`skip_to` identity implied by the same oracle (`SkipTo(k)` reconstructs the Gray-code state up to
+point `k - 1`, so the first `NextDouble()` after it returns point `k`). `stratify`'s cases are
+scraped verbatim from `Test_Stratification.cs`'s `Test_XValues` (linear) and `Test_XValues_Log10`
+(logarithmic); only the single-`StratificationOptions` overload is exposed (the
+`List<StratificationOptions>` overload `Test_XValues_Multi` exercises has no toolbox verb -- see
+`stratify.hpp`'s file header on that overload's own scope). Sobol's direction-numbers file path is
+a wrapper concern (R's `system.file()`, Python's `importlib.resources`, the C++/R/Python fixture
+harnesses' own resolution against `core/data/`), so `options` in the fixture itself never carries
+a `path` key -- each harness injects its own resolved path before dispatching, and the dotnet
+emitter does not need one at all (the real `SobolSequence` ctor takes no path; the direction
+numbers are a compiled resource). `joint_probability.json`'s six cases are scraped verbatim from
+`Test_Probability.cs`'s `Test_JointABCD_{Independent,PositivelyDependent,NegativelyDependent}`
+(the plain `probabilities` + `DependencyType` overload) and the matching `_PCM` variants (the
+`indicators` + correlation-matrix overload, which routes to `JointProbabilityHPCM` under the
+default `CorrelationMatrix` dependency) -- contrary to an earlier assumption, `Test_Probability.cs`
+does carry dedicated coverage for these methods; only the correlated-mode `JointProbabilityMVN`/
+`UnionMVN`/exclusive-probability regions (unreached by any ported call site -- see
+`probability.hpp`'s file header) remain uncurated.
 
 The `MCMCDiagnostics.minimum_sample_size` target (`fixtures/special_functions/mcmc_diagnostics.json`)
 takes `args = [quantile, tolerance, probability]` (the Raftery-Lewis normal-approximation

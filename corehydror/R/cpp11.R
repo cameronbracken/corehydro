@@ -248,14 +248,6 @@ ch_mvt_val_ <- function(method, df, location, scale_flat, args) {
   .Call(`_corehydror_ch_mvt_val_`, method, df, location, scale_flat, args)
 }
 
-ch_sobol_generate_ <- function(dimension, n_steps, path) {
-  .Call(`_corehydror_ch_sobol_generate_`, dimension, n_steps, path)
-}
-
-ch_sobol_skip_to_ <- function(dimension, index, path) {
-  .Call(`_corehydror_ch_sobol_skip_to_`, dimension, index, path)
-}
-
 ch_mgbt_test_ <- function(x) {
   .Call(`_corehydror_ch_mgbt_test_`, x)
 }

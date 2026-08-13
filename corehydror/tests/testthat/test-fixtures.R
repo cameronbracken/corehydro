@@ -237,8 +237,30 @@ kRoutedSpecialFunctionTargets <- c(
   names(kCorrelationSpecialFunctionMethod), names(kRunningStatisticsSpecialFunctionIndex),
   names(kRunningCovarianceSpecialFunctionBlock), names(kFourierToolboxMethod),
   "Statistics.percentile", names(kHistogramStatisticsIndex), names(kHistogramBinsColumn),
-  "Bilinear.log_floor_value"
+  "Bilinear.log_floor_value", "Probability.hpcm_joint"
 )
+
+# special_function/Probability.hpcm_joint (Task 6): the same routing pattern, through the new
+# "probability" toolbox group's "joint" method (dependency = "correlation"). Mirrors
+# core/tests/test_fixtures.cpp's own routing exactly -- see that file's special_function_table()
+# entry for "Probability.hpcm_joint" for the args convention (args = [p_0..p_(n-1),
+# ind_0..ind_(n-1), corr(n*n flattened row-major)], n inferred from the argument count).
+# Probability.hpcm_conditional_at stays unrouted: it needs the conditionalProbabilities
+# out-value, which the "probability" toolbox group's "joint" method does not expose.
+run_special_function_probability_hpcm_joint_case <- function(args_raw) {
+  ns <- asNamespace("corehydror")
+  args <- vapply(args_raw, parse_num, numeric(1))
+  n <- 0L
+  for (candidate in 1:20) {
+    if (2L * candidate + candidate * candidate == length(args)) { n <- candidate; break }
+  }
+  if (n == 0L) stop("cannot infer n for Probability.hpcm args")
+  p <- args[seq_len(n)]
+  ind <- args[(n + 1L):(2L * n)]
+  corr <- args[(2L * n + 1L):length(args)]
+  ns$ch_toolbox_run_("probability", "joint", list(p, ind, corr),
+                     '{"dependency":"correlation"}')$values[[1]]
+}
 
 # Histogram fixture args convention: args = [explicit_bins, data...] for the whole-histogram
 # scalar targets; the bin_*_at targets append one trailing 0-based bin-index probe. An empty R
@@ -321,6 +343,9 @@ run_special_function_case <- function(target, args_raw) {
     r <- ns$ch_toolbox_run_("interpolation", "bilinear",
                             list(coords, coords, flat, args[1], args[2]), opts)
     return(r$values[[1]])
+  }
+  if (identical(target, "Probability.hpcm_joint")) {
+    return(run_special_function_probability_hpcm_joint_case(args_raw))
   }
   stop(sprintf("unrouted special_function target: %s", target))
 }
@@ -1471,7 +1496,15 @@ test_that("oracle fixtures validate", {
       datasets <- spec$datasets
       for (case in spec$cases) {
         data <- toolbox_case_data(case, datasets)
-        opts <- if (is.null(case$options)) "{}" else ns$to_spec_json(case$options)
+        opts_list <- if (is.null(case$options)) list() else case$options
+        if (identical(spec$group, "sampling")) {
+          # The Sobol direction-numbers file ships inside the package; path resolution is a
+          # wrapper concern (see numerics/support/toolbox/sampling.hpp's file header), so the
+          # fixture itself never carries a "path" key -- this harness injects its own resolved
+          # path, mirroring what sobol_sequence() does for a real caller.
+          opts_list$path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+        }
+        opts <- if (length(opts_list) == 0L) "{}" else ns$to_spec_json(opts_list)
         for (a in case$assertions) {
           r <- ns$ch_toolbox_run_(spec$group, a$method, data, opts)
           check_assertion(toolbox_select(r, a, spec$group), a)

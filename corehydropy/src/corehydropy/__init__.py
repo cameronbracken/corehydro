@@ -30,6 +30,7 @@ from .toolbox import (
     histogram,
     interpolate,
     interpolate_2d,
+    joint_probability,
     l_moments,
     linear_regression,
     percentile,
@@ -37,6 +38,8 @@ from .toolbox import (
     ranks,
     running_covariance,
     running_statistics,
+    sobol_sequence,
+    stratify,
     summary_statistics,
 )
 from .gof import (
@@ -153,6 +156,9 @@ __all__ = [
     "interpolate_2d",
     "LinearRegressionResult",
     "linear_regression",
+    "sobol_sequence",
+    "stratify",
+    "joint_probability",
     "goodness_of_fit",
     "classification_metrics",
     "gof_test",

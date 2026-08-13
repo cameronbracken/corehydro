@@ -285,3 +285,71 @@ test_that("vcov.corehydro_lm() agrees with stats::lm()'s vcov() on the same data
   ref_v <- stats::vcov(ref)
   expect_equal(unname(v), unname(as.matrix(ref_v)), tolerance = 1e-8)
 })
+
+# The "sampling" and "probability" toolbox groups (Task 6). The oracle-pinned values (from
+# Test_SobolSequence.cs, Test_Stratification.cs, and Test_Probability.cs) are validated
+# cross-language by fixtures/toolbox/{sampling,joint_probability}.json; these tests exercise the
+# R-facing API (argument checks, shapes, self-consistency) instead of re-pinning literals.
+
+test_that("sobol_sequence() returns an n by dimension matrix with every value in [0, 1)", {
+  m <- sobol_sequence(8, dimension = 3)
+  expect_equal(dim(m), c(8L, 3L))
+  expect_true(all(m >= 0 & m < 1))
+})
+
+test_that("sobol_sequence() needs no direction-numbers file at dimension 1", {
+  m <- sobol_sequence(1)
+  expect_equal(m[1, 1], 0.5, tolerance = 0)
+})
+
+test_that("sobol_sequence() skip moves the stream: point 1 with skip = k equals point k+1", {
+  seq5 <- sobol_sequence(5, dimension = 2)
+  skipped <- sobol_sequence(1, dimension = 2, skip = 4)
+  expect_equal(skipped[1, ], seq5[5, ], tolerance = 0)
+})
+
+test_that("sobol_sequence() rejects a non-positive n or dimension, naming the argument", {
+  expect_error(sobol_sequence(0), "n")
+  expect_error(sobol_sequence(5, dimension = 0), "dimension")
+})
+
+test_that("stratify() returns bins whose weights sum to the axis length", {
+  s <- stratify(0, 1, bins = 10)
+  expect_equal(nrow(s), 10L)
+  expect_equal(names(s), c("lower", "upper", "midpoint", "weight"))
+  expect_equal(sum(s$weight), 1, tolerance = 1e-12)
+})
+
+test_that("stratify() with probability = TRUE returns zero rows", {
+  s <- stratify(0, 1, bins = 10, probability = TRUE)
+  expect_equal(nrow(s), 0L)
+})
+
+test_that("stratify() rejects fewer than 2 bins, naming the argument", {
+  expect_error(stratify(0, 1, bins = 1), "bins")
+})
+
+test_that("joint_probability() independent multiplies and positive takes the minimum", {
+  expect_equal(joint_probability(c(0.5, 0.5)), 0.25, tolerance = 1e-12)
+  expect_equal(joint_probability(c(0.5, 0.5), dependency = "positive"), 0.5, tolerance = 1e-12)
+  expect_equal(joint_probability(c(0.5, 0.5), dependency = "negative"), 0, tolerance = 1e-12)
+})
+
+test_that("joint_probability() with indicators and a correlation matrix reaches the HPCM path", {
+  p <- c(0.25, 0.35, 0.5, 0.5)
+  ind <- c(1, 1, 1, 1)
+  corr <- diag(4)
+  out <- joint_probability(p, dependency = "correlation", indicators = ind, correlation = corr)
+  expect_equal(out, 0.021875, tolerance = 1e-6)
+})
+
+test_that("joint_probability() requires indicators when correlation is given", {
+  expect_error(joint_probability(c(0.5, 0.5), correlation = diag(2)), "indicators")
+})
+
+test_that("joint_probability() rejects a correlation matrix of the wrong size, naming the shape", {
+  expect_error(
+    joint_probability(c(0.5, 0.5, 0.5), indicators = c(1, 1, 1), correlation = diag(2)),
+    "3 x 3"
+  )
+})

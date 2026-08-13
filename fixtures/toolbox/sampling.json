@@ -1,0 +1,52 @@
+{
+ "kind": "toolbox",
+ "group": "sampling",
+ "source": "Numerics/Sampling/SobolSequence.cs; Numerics/Sampling/Stratify.cs",
+ "reference": "Numerics @ 2a0357a. `sobol` cases scraped verbatim from Test_SobolSequence.cs's Test_Sobol (dimension 2, first 10 points, themselves verified against R's randtoolbox::sobol()) plus a skip_to identity the same test's oracle already implies (SkipTo(k+1) == the (k+1)-th sequential NextDouble(), traced from SobolSequence.cs's own Gray-code reconstruction). `stratify` cases scraped verbatim from Test_Stratification.cs's Test_XValues (linear) and Test_XValues_Log10 (logarithmic); only the single-StratificationOptions overload is exposed here (Stratify::XValues(List<StratificationOptions>, ...), exercised by Test_XValues_Multi, has no toolbox verb -- stratify.hpp's own file header documents the multi-options overload as in scope for the estimators that need it, but no fixture/wrapper wires a second StratificationOptions list through this grammar). This harness resolves and injects the Sobol direction-numbers file path itself (see numerics/support/toolbox/sampling.hpp's file header) -- the fixture's own `options` never carries a `path` key.",
+ "cases": [
+  {
+   "name": "sobol_dimension2_first10",
+   "options": {"dimension": 2, "n": 10, "skip": 0},
+   "assertions": [
+    {"method": "sobol", "select": "rows", "expected": 10, "mode": "equal"},
+    {"method": "sobol", "select": "columns", "expected": 2, "mode": "equal"},
+    {"method": "sobol", "index": 0, "expected": 0.5, "mode": "equal", "source": "Test_Sobol point 1 (row 0, dim 0)"},
+    {"method": "sobol", "index": 1, "expected": 0.5, "mode": "equal", "source": "Test_Sobol point 1 (row 0, dim 1)"},
+    {"method": "sobol", "index": 6, "expected": 0.375, "mode": "equal", "source": "Test_Sobol point 4 (row 3, dim 0)"},
+    {"method": "sobol", "index": 7, "expected": 0.375, "mode": "equal", "source": "Test_Sobol point 4 (row 3, dim 1)"},
+    {"method": "sobol", "index": 12, "expected": 0.125, "mode": "equal", "source": "Test_Sobol point 7 (row 6, dim 0)"},
+    {"method": "sobol", "index": 13, "expected": 0.625, "mode": "equal", "source": "Test_Sobol point 7 (row 6, dim 1)"},
+    {"method": "sobol", "index": 18, "expected": 0.9375, "mode": "equal", "source": "Test_Sobol point 10 (row 9, dim 0)"},
+    {"method": "sobol", "index": 19, "expected": 0.0625, "mode": "equal", "source": "Test_Sobol point 10 (row 9, dim 1)"}
+   ]
+  },
+  {
+   "name": "sobol_skip_matches_sequential_point2",
+   "options": {"dimension": 2, "n": 1, "skip": 1},
+   "assertions": [
+    {"method": "sobol", "index": 0, "expected": 0.75, "mode": "equal", "source": "Test_Sobol point 2 (row 1, dim 0); SkipTo(1) reconstructs the state up to point 1 via the Gray-code trick, so the first NextDouble() call after it returns point 2"},
+    {"method": "sobol", "index": 1, "expected": 0.25, "mode": "equal", "source": "Test_Sobol point 2 (row 1, dim 1)"}
+   ]
+  },
+  {
+   "name": "stratify_xvalues_linear",
+   "options": {"lower": 100.0, "upper": 200.0, "bins": 100},
+   "assertions": [
+    {"method": "stratify", "select": "rows", "expected": 100, "mode": "equal"},
+    {"method": "stratify", "index": 2, "expected": 100.5, "mode": "abs", "tol": 1e-6, "source": "Test_XValues true_midpoint[0]"},
+    {"method": "stratify", "index": 6, "expected": 101.5, "mode": "abs", "tol": 1e-6, "source": "Test_XValues true_midpoint[1]"},
+    {"method": "stratify", "index": 202, "expected": 150.5, "mode": "abs", "tol": 1e-6, "source": "Test_XValues true_midpoint[50]"},
+    {"method": "stratify", "index": 398, "expected": 199.5, "mode": "abs", "tol": 1e-6, "source": "Test_XValues true_midpoint[99] (last bin)"}
+   ]
+  },
+  {
+   "name": "stratify_xvalues_log10",
+   "options": {"lower": 100.0, "upper": 200.0, "bins": 100, "logarithmic": true},
+   "assertions": [
+    {"method": "stratify", "index": 2, "expected": 100.347777502836, "mode": "abs", "tol": 1e-6, "source": "Test_XValues_Log10 true_midpoint[0]"},
+    {"method": "stratify", "index": 6, "expected": 101.045751492337, "mode": "abs", "tol": 1e-6, "source": "Test_XValues_Log10 true_midpoint[1]"},
+    {"method": "stratify", "index": 398, "expected": 199.309249543709, "mode": "abs", "tol": 1e-6, "source": "Test_XValues_Log10 true_midpoint[99] (last bin)"}
+   ]
+  }
+ ]
+}

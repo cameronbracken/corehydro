@@ -3722,9 +3722,87 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return InterpolationDispatch(method, data, options, asrt);
         case "regression":
             return RegressionDispatch(method, data, options, asrt);
+        case "sampling":
+            return SamplingDispatch(method, data, options, asrt);
+        case "probability":
+            return ProbabilityDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor
+// takes no path (the direction numbers are a compiled resource -- see sobol.hpp's own
+// divergence note), so a "path" key in options, if present, is simply not read here.
+static double SamplingDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "sobol")
+    {
+        int dimension = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("dimension", out var d)
+            ? d.GetInt32() : 1;
+        int n = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("n", out var nEl)
+            ? nEl.GetInt32() : 1;
+        int skip = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("skip", out var sk)
+            ? sk.GetInt32() : 0;
+        var sobol = new SobolSequence(dimension);
+        if (skip > 0) sobol.SkipTo(skip);
+        var flat = new List<double>();
+        for (int i = 0; i < n; i++) flat.AddRange(sobol.NextDouble());
+        return ToolboxSelectFlat(asrt, flat.ToArray(), n, dimension);
+    }
+    if (method == "stratify")
+    {
+        double lower = options.GetProperty("lower").GetDouble();
+        double upper = options.GetProperty("upper").GetDouble();
+        int bins = options.GetProperty("bins").GetInt32();
+        bool probability = OptBool(options, "probability", false);
+        bool logarithmic = OptBool(options, "logarithmic", false);
+        var stratOptions = new StratificationOptions(lower, upper, bins, probability);
+        var strat = Stratify.XValues(stratOptions, logarithmic);
+        var flat = new List<double>();
+        foreach (var b in strat)
+        {
+            flat.Add(b.LowerBound);
+            flat.Add(b.UpperBound);
+            flat.Add(b.Midpoint);
+            flat.Add(b.Weight);
+        }
+        return ToolboxSelectFlat(asrt, flat.ToArray(), strat.Count, 4);
+    }
+    throw new Exception($"unknown sampling method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/probability.hpp's run_probability arm against the real
+// Numerics.Data.Statistics.Probability.
+static double ProbabilityDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method != "joint") throw new Exception($"unknown probability method: {method}");
+    double[] p = data[0];
+    string dep = OptString(options, "dependency", "independent");
+    var type = dep switch
+    {
+        "independent" => Probability.DependencyType.Independent,
+        "positive" => Probability.DependencyType.PerfectlyPositive,
+        "negative" => Probability.DependencyType.PerfectlyNegative,
+        "correlation" => Probability.DependencyType.CorrelationMatrix,
+        _ => throw new Exception($"unknown dependency '{dep}'; expected independent, positive, negative, or correlation")
+    };
+    if (data.Count < 2)
+    {
+        if (type == Probability.DependencyType.CorrelationMatrix)
+            throw new Exception("dependency 'correlation' needs an indicator vector and a correlation matrix");
+        return Probability.JointProbability(p, type);
+    }
+    var indicators = data[1].Select(v => (int)v).ToArray();
+    if (data.Count < 3) return Probability.JointProbability(p, indicators, null, type);
+    int n = p.Length;
+    double[] flat = data[2];
+    if (flat.Length != n * n) throw new Exception($"the correlation matrix must be {n} by {n}");
+    var corr = new double[n, n];
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            corr[i, j] = flat[i * n + j];
+    return Probability.JointProbability(p, indicators, corr, type);
 }
 
 // Selects a value the way the fixture runners' client-side "select" logic does, generalized

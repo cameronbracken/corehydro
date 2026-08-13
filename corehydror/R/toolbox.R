@@ -424,3 +424,125 @@ interpolate_2d <- function(x1, x2, y, x1out, x2out,
               list(x1_transform = x1_transform, x2_transform = x2_transform,
                    y_transform = y_transform, sort_order = sort_order))$values
 }
+
+# The "sampling" and "probability" toolbox groups (Task 6). "sampling" is the C# SobolSequence
+# quasi-random low-discrepancy sequence and Stratify::XValues equal-width axis stratification;
+# "probability" is Probability's joint-probability dispatch (plain dependency form and the
+# indicator + correlation-matrix HPCM form).
+
+#' Sobol quasi-random low-discrepancy sequence
+#'
+#' Mirrors the C# `SobolSequence` class. `dimension > 1` needs the new-joe-kuo-6 direction
+#' numbers shipped with the package (`dimension == 1` needs no file, matching the C# ctor); the
+#' installed file is located automatically with [system.file()].
+#'
+#' @param n number of points to generate, at least 1.
+#' @param dimension spatial dimension, between 1 and 21201. Default 1.
+#' @param skip number of points to skip before the first returned point: `skip = k` returns the
+#'   same first point as the C# `SkipTo(k)` call, i.e. the sequence's `(k + 1)`-th point.
+#'   Default 0 (no skip).
+#' @return an `n` by `dimension` numeric matrix, every value in `[0, 1)`.
+#' @examples
+#' sobol_sequence(5, dimension = 2)
+#' @export
+sobol_sequence <- function(n, dimension = 1L, skip = 0L) {
+  if (!is.numeric(n) || length(n) != 1L || n < 1) {
+    stop("`n` must be a single positive integer", call. = FALSE)
+  }
+  if (!is.numeric(dimension) || length(dimension) != 1L || dimension < 1) {
+    stop("`dimension` must be a single positive integer", call. = FALSE)
+  }
+  path <- ""
+  if (dimension > 1L) {
+    path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+    if (!nzchar(path)) {
+      stop("direction-numbers file not found in corehydror inst/extdata", call. = FALSE)
+    }
+  }
+  opts <- list(dimension = as.integer(dimension), n = as.integer(n), skip = as.integer(skip),
+               path = path)
+  r <- toolbox_run("sampling", "sobol", list(), opts)
+  matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+}
+
+#' Stratify an axis into equal-width bins
+#'
+#' Mirrors the C# `Stratify.XValues(StratificationOptions, isLogarithmic)`: splits
+#' `[lower, upper]` into `bins` equal-width strata (equal-width in log10 space when
+#' `logarithmic = TRUE`), each carrying a weight defaulting to its own width. `probability =
+#' TRUE` always returns zero rows, matching `Stratify.XValues`'s own early return for
+#' probability-space options -- the ported header exposes only the `StratificationOptions`
+#' overload used by the BestFit estimators' profile-likelihood grids, not the
+#' probability-stratification methods (`Probabilities`, `XToProbability`, ...), which are out of
+#' scope (see `stratify.hpp`'s file header).
+#'
+#' @param lower,upper bounds of the axis to stratify. `lower` must be less than `upper`.
+#' @param bins number of bins, greater than 1.
+#' @param logarithmic stratify on a log10 scale. Default `FALSE`.
+#' @param probability mark the axis as a probability axis; kept only for parity with the C#
+#'   constructor argument -- it always yields zero bins (see Details). Default `FALSE`.
+#' @return a data frame with columns `lower`, `upper`, `midpoint`, `weight`, one row per bin.
+#' @examples
+#' stratify(0, 1, bins = 4)
+#' @export
+stratify <- function(lower, upper, bins, logarithmic = FALSE, probability = FALSE) {
+  if (!is.numeric(lower) || !is.numeric(upper) || length(lower) != 1L || length(upper) != 1L) {
+    stop("`lower` and `upper` must be single numbers", call. = FALSE)
+  }
+  if (!is.numeric(bins) || length(bins) != 1L || bins < 2) {
+    stop("`bins` must be a single integer greater than 1", call. = FALSE)
+  }
+  opts <- list(lower = as.double(lower), upper = as.double(upper), bins = as.integer(bins),
+               logarithmic = isTRUE(logarithmic), probability = isTRUE(probability))
+  r <- toolbox_run("sampling", "stratify", list(), opts)
+  out <- as.data.frame(matrix(r$values, ncol = 4L, byrow = TRUE))
+  names(out) <- r$names
+  out
+}
+
+#' Joint probability of multiple events
+#'
+#' Mirrors the C# `Probability.JointProbability`. The plain form dispatches on a dependency
+#' assumption alone (`"independent"` multiplies, `"positive"` takes the minimum, `"negative"`
+#' clamps the excess of the sum over 1). Passing `indicators` (a 0/1 flag per component,
+#' selecting which components participate) switches to the indicator-aware form; passing
+#' `correlation` too routes `dependency = "correlation"` through Haden Smith's modification of
+#' Pandey's Product-of-Conditional-Marginals method (HPCM).
+#'
+#' @param p numeric vector of marginal probabilities.
+#' @param dependency one of `"independent"` (default), `"positive"`, `"negative"`,
+#'   `"correlation"`. `"correlation"` requires both `indicators` and `correlation`.
+#' @param indicators optional 0/1 vector, the same length as `p`.
+#' @param correlation optional `length(p)` by `length(p)` correlation matrix; requires
+#'   `indicators`.
+#' @return a single numeric probability.
+#' @examples
+#' joint_probability(c(0.5, 0.5))
+#' joint_probability(c(0.5, 0.5), dependency = "positive")
+#' @export
+joint_probability <- function(p, dependency = c("independent", "positive", "negative", "correlation"),
+                              indicators = NULL, correlation = NULL) {
+  dependency <- match.arg(dependency)
+  if (!is.numeric(p) || length(p) == 0L) {
+    stop("`p` must be a non-empty numeric vector", call. = FALSE)
+  }
+  if (!is.null(correlation) && is.null(indicators)) {
+    stop("`correlation` requires `indicators`", call. = FALSE)
+  }
+  data <- list(p)
+  if (!is.null(indicators)) {
+    if (length(indicators) != length(p)) {
+      stop("`indicators` must be the same length as `p`", call. = FALSE)
+    }
+    data[[2]] <- as.double(indicators)
+    if (!is.null(correlation)) {
+      correlation <- as.matrix(correlation)
+      n <- length(p)
+      if (!identical(dim(correlation), c(n, n))) {
+        stop(sprintf("`correlation` must be a %d x %d matrix", n, n), call. = FALSE)
+      }
+      data[[3]] <- as.double(t(correlation))
+    }
+  }
+  toolbox_run("probability", "joint", data, list(dependency = dependency))$values[[1]]
+}

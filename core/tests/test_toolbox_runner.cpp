@@ -250,5 +250,60 @@ int main() {
     CHECK_EQ(rpi.dims[1], 3);
     CHECK_NEAR(rpi.values[2], 3.0, 1e-9);  // mean column matches predict()
 
+    // --- sampling group ----------------------------------------------------------------------
+    // Structural checks only -- the oracle-pinned Sobol/stratify values (from
+    // Test_SobolSequence.cs/Test_Stratification.cs) live in fixtures/toolbox/sampling.json and
+    // are exercised cross-language by the generic fixture runner, not re-pinned here. Dimension
+    // 1 needs no direction-numbers file (SobolSequence's unit initialization), so "path" is the
+    // empty string throughout -- run_sampling's "sobol" arm still requires the key to be
+    // present, just unused when dimension == 1.
+    auto sob = tb::run_toolbox("sampling", "sobol", {},
+                               "{\"dimension\":1,\"n\":10,\"skip\":0,\"path\":\"\"}");
+    CHECK_EQ(sob.dims.size(), std::size_t{2});
+    CHECK_EQ(sob.dims[0], 10);
+    CHECK_EQ(sob.dims[1], 1);
+    CHECK_EQ(sob.values.size(), std::size_t{10});
+    for (double v : sob.values) CHECK_TRUE(v >= 0.0 && v < 1.0);
+
+    // skip moves the stream: point 1 with skip = 1 equals point 2 (0-based index 1) with skip = 0.
+    auto sob_seq = tb::run_toolbox("sampling", "sobol", {}, "{\"dimension\":1,\"n\":2,\"path\":\"\"}");
+    auto sob_skip = tb::run_toolbox("sampling", "sobol", {},
+                                    "{\"dimension\":1,\"n\":1,\"skip\":1,\"path\":\"\"}");
+    CHECK_NEAR(sob_skip.values[0], sob_seq.values[1], 0.0);
+
+    // stratify: on a [0, 1] axis (non-probability), bin weights (defaulting to bin width) sum
+    // to exactly the axis length, i.e. 1.
+    auto strat = tb::run_toolbox("sampling", "stratify", {}, "{\"lower\":0,\"upper\":1,\"bins\":10}");
+    CHECK_EQ(strat.dims.size(), std::size_t{2});
+    CHECK_EQ(strat.dims[0], 10);
+    CHECK_EQ(strat.dims[1], 4);
+    double weight_sum = 0.0;
+    for (int row = 0; row < strat.dims[0]; ++row)
+        weight_sum += strat.values[static_cast<std::size_t>(row * 4 + 3)];
+    CHECK_NEAR(weight_sum, 1.0, 1e-12);
+
+    // probability = true always yields zero bins (Stratify::XValues's documented early return).
+    auto strat_prob = tb::run_toolbox("sampling", "stratify", {},
+                                      "{\"lower\":0,\"upper\":1,\"bins\":10,\"probability\":true}");
+    CHECK_EQ(strat_prob.dims[0], 0);
+
+    // --- probability group --------------------------------------------------------------------
+    // Hand-computable arithmetic (independent_joint_probability is a product, positive is a
+    // min) -- the upstream-pinned oracle cases (Test_Probability.cs) live in
+    // fixtures/toolbox/joint_probability.json.
+    auto jp_ind = tb::run_toolbox("probability", "joint", {{0.5, 0.5}}, "{\"dependency\":\"independent\"}");
+    CHECK_NEAR(jp_ind.values[0], 0.25, 1e-12);
+    auto jp_pos = tb::run_toolbox("probability", "joint", {{0.5, 0.5}}, "{\"dependency\":\"positive\"}");
+    CHECK_NEAR(jp_pos.values[0], 0.5, 1e-12);
+
+    // dependency = "correlation" with no indicator vector is a usage error, not a NaN.
+    bool threw_correlation = false;
+    try {
+        tb::run_toolbox("probability", "joint", {{0.5, 0.5}}, "{\"dependency\":\"correlation\"}");
+    } catch (const std::exception& e) {
+        threw_correlation = std::string(e.what()).find("indicator") != std::string::npos;
+    }
+    CHECK_TRUE(threw_correlation);
+
     return chtest::summary("toolbox_runner");
 }

@@ -13,6 +13,7 @@ from corehydropy import (
     histogram,
     interpolate,
     interpolate_2d,
+    joint_probability,
     l_moments,
     linear_regression,
     percentile,
@@ -20,6 +21,8 @@ from corehydropy import (
     ranks,
     running_covariance,
     running_statistics,
+    sobol_sequence,
+    stratify,
     summary_statistics,
 )
 
@@ -294,3 +297,74 @@ def test_predict_rejects_newdata_with_the_wrong_number_of_columns():
     fit = linear_regression(x, y)
     with pytest.raises(ValueError, match="2"):
         fit.predict([[1, 2, 3]])
+
+
+# The "sampling" and "probability" toolbox groups (Task 6). The oracle-pinned values (from
+# Test_SobolSequence.cs, Test_Stratification.cs, and Test_Probability.cs) are validated
+# cross-language by fixtures/toolbox/{sampling,joint_probability}.json; these tests exercise the
+# Python-facing API (argument checks, shapes, self-consistency) instead of re-pinning literals.
+
+
+def test_sobol_sequence_returns_an_n_by_dimension_array_with_every_value_in_0_1():
+    m = sobol_sequence(8, dimension=3)
+    assert m.shape == (8, 3)
+    assert np.all((m >= 0) & (m < 1))
+
+
+def test_sobol_sequence_needs_no_direction_numbers_file_at_dimension_1():
+    m = sobol_sequence(1)
+    assert m[0, 0] == 0.5
+
+
+def test_sobol_sequence_skip_moves_the_stream():
+    seq5 = sobol_sequence(5, dimension=2)
+    skipped = sobol_sequence(1, dimension=2, skip=4)
+    np.testing.assert_array_equal(skipped[0], seq5[4])
+
+
+def test_sobol_sequence_rejects_a_non_positive_n_or_dimension():
+    with pytest.raises(ValueError, match="n"):
+        sobol_sequence(0)
+    with pytest.raises(ValueError, match="dimension"):
+        sobol_sequence(5, dimension=0)
+
+
+def test_stratify_returns_bins_whose_weights_sum_to_the_axis_length():
+    s = stratify(0, 1, bins=10)
+    assert len(s["weight"]) == 10
+    assert set(s.keys()) == {"lower", "upper", "midpoint", "weight"}
+    assert s["weight"].sum() == pytest.approx(1.0, abs=1e-12)
+
+
+def test_stratify_with_probability_true_returns_zero_rows():
+    s = stratify(0, 1, bins=10, probability=True)
+    assert len(s["weight"]) == 0
+
+
+def test_stratify_rejects_fewer_than_2_bins():
+    with pytest.raises(ValueError, match="bins"):
+        stratify(0, 1, bins=1)
+
+
+def test_joint_probability_independent_multiplies_and_positive_takes_the_minimum():
+    assert joint_probability([0.5, 0.5]) == pytest.approx(0.25, abs=1e-12)
+    assert joint_probability([0.5, 0.5], dependency="positive") == pytest.approx(0.5, abs=1e-12)
+    assert joint_probability([0.5, 0.5], dependency="negative") == pytest.approx(0.0, abs=1e-12)
+
+
+def test_joint_probability_with_indicators_and_correlation_reaches_the_hpcm_path():
+    p = [0.25, 0.35, 0.5, 0.5]
+    ind = [1, 1, 1, 1]
+    corr = np.eye(4)
+    out = joint_probability(p, dependency="correlation", indicators=ind, correlation=corr)
+    assert out == pytest.approx(0.021875, abs=1e-6)
+
+
+def test_joint_probability_requires_indicators_when_correlation_is_given():
+    with pytest.raises(ValueError, match="indicators"):
+        joint_probability([0.5, 0.5], correlation=np.eye(2))
+
+
+def test_joint_probability_rejects_a_correlation_matrix_of_the_wrong_size():
+    with pytest.raises(ValueError, match="3 x 3"):
+        joint_probability([0.5, 0.5, 0.5], indicators=[1, 1, 1], correlation=np.eye(2))

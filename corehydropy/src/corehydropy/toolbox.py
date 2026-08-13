@@ -6,6 +6,7 @@ across as numeric vectors, not JSON. Mirrors ``corehydror``'s ``R/toolbox.R`` ve
 from __future__ import annotations
 
 import json
+from importlib.resources import files
 
 import numpy as np
 
@@ -31,6 +32,9 @@ __all__ = [
     "interpolate_2d",
     "LinearRegressionResult",
     "linear_regression",
+    "sobol_sequence",
+    "stratify",
+    "joint_probability",
 ]
 
 
@@ -829,3 +833,156 @@ def linear_regression(x, y, intercept: bool = True) -> LinearRegressionResult:
         _y=ya,
         _intercept=bool(intercept),
     )
+
+
+# The "sampling" and "probability" toolbox groups (Task 6). "sampling" is the C# SobolSequence
+# quasi-random low-discrepancy sequence and Stratify::XValues equal-width axis stratification;
+# "probability" is Probability's joint-probability dispatch (plain dependency form and the
+# indicator + correlation-matrix HPCM form). Mirrors corehydror's R/toolbox.R verb for verb.
+
+
+def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
+    """Sobol quasi-random low-discrepancy sequence.
+
+    Mirrors the C# ``SobolSequence`` class. ``dimension > 1`` needs the new-joe-kuo-6 direction
+    numbers shipped with the package (``dimension == 1`` needs no file, matching the C# ctor);
+    the packaged file is located automatically.
+
+    Parameters
+    ----------
+    n : int
+        Number of points to generate, at least 1.
+    dimension : int
+        Spatial dimension, between 1 and 21201. Default 1.
+    skip : int
+        Number of points to skip before the first returned point: ``skip=k`` returns the same
+        first point as the C# ``SkipTo(k)`` call, i.e. the sequence's ``(k + 1)``-th point.
+        Default 0 (no skip).
+
+    Returns
+    -------
+    numpy.ndarray
+        An ``(n, dimension)`` array, every value in ``[0, 1)``.
+
+    Examples
+    --------
+    >>> from corehydropy import sobol_sequence
+    >>> sobol_sequence(1, dimension=2)
+    array([[0.5, 0.5]])
+    """
+    if n < 1:
+        raise ValueError("`n` must be a positive integer")
+    if dimension < 1:
+        raise ValueError("`dimension` must be a positive integer")
+    path = ""
+    if dimension > 1:
+        path = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+    options = {"dimension": int(dimension), "n": int(n), "skip": int(skip), "path": path}
+    r = _toolbox_run("sampling", "sobol", [], options)
+    return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
+
+
+def stratify(lower: float, upper: float, bins: int, logarithmic: bool = False,
+            probability: bool = False) -> dict:
+    """Stratify an axis into equal-width bins.
+
+    Mirrors the C# ``Stratify.XValues(StratificationOptions, isLogarithmic)``: splits
+    ``[lower, upper]`` into ``bins`` equal-width strata (equal-width in log10 space when
+    ``logarithmic=True``), each carrying a weight defaulting to its own width.
+    ``probability=True`` always returns zero rows, matching ``Stratify.XValues``'s own early
+    return for probability-space options -- the ported header exposes only the
+    ``StratificationOptions`` overload used by the BestFit estimators' profile-likelihood grids,
+    not the probability-stratification methods (``Probabilities``, ``XToProbability``, ...),
+    which are out of scope (see ``stratify.hpp``'s file header).
+
+    Parameters
+    ----------
+    lower, upper : float
+        Bounds of the axis to stratify. ``lower`` must be less than ``upper``.
+    bins : int
+        Number of bins, greater than 1.
+    logarithmic : bool
+        Stratify on a log10 scale. Default ``False``.
+    probability : bool
+        Mark the axis as a probability axis; kept only for parity with the C# constructor
+        argument -- it always yields zero bins (see above). Default ``False``.
+
+    Returns
+    -------
+    dict
+        Keys ``lower``, ``upper``, ``midpoint``, ``weight`` (each :class:`numpy.ndarray`, one
+        entry per bin).
+
+    Examples
+    --------
+    >>> from corehydropy import stratify
+    >>> s = stratify(0, 1, bins=4)
+    >>> s["midpoint"]
+    array([0.125, 0.375, 0.625, 0.875])
+    """
+    if bins < 2:
+        raise ValueError("`bins` must be an integer greater than 1")
+    options = {"lower": float(lower), "upper": float(upper), "bins": int(bins),
+              "logarithmic": bool(logarithmic), "probability": bool(probability)}
+    r = _toolbox_run("sampling", "stratify", [], options)
+    rows = np.asarray(r["values"], dtype=float).reshape(-1, 4)
+    return {name: rows[:, i] for i, name in enumerate(r["names"])}
+
+
+def joint_probability(p, dependency: str = "independent", indicators=None, correlation=None) -> float:
+    """Joint probability of multiple events.
+
+    Mirrors the C# ``Probability.JointProbability``. The plain form dispatches on a dependency
+    assumption alone (``"independent"`` multiplies, ``"positive"`` takes the minimum,
+    ``"negative"`` clamps the excess of the sum over 1). Passing ``indicators`` (a 0/1 flag per
+    component, selecting which components participate) switches to the indicator-aware form;
+    passing ``correlation`` too routes ``dependency="correlation"`` through Haden Smith's
+    modification of Pandey's Product-of-Conditional-Marginals method (HPCM).
+
+    Parameters
+    ----------
+    p : array_like
+        Marginal probabilities.
+    dependency : {"independent", "positive", "negative", "correlation"}
+        ``"correlation"`` requires both ``indicators`` and ``correlation``.
+    indicators : array_like, optional
+        0/1 vector, the same length as ``p``.
+    correlation : array_like, optional
+        ``len(p)`` by ``len(p)`` correlation matrix; requires ``indicators``.
+
+    Returns
+    -------
+    float
+
+    Examples
+    --------
+    >>> from corehydropy import joint_probability
+    >>> joint_probability([0.5, 0.5])
+    0.25
+    >>> joint_probability([0.5, 0.5], dependency="positive")
+    0.5
+    """
+    if dependency not in ("independent", "positive", "negative", "correlation"):
+        raise ValueError(
+            f"`dependency` must be one of 'independent', 'positive', 'negative', 'correlation'; "
+            f"got {dependency!r}"
+        )
+    pa = np.asarray(p, dtype=float).ravel()
+    if pa.size == 0:
+        raise ValueError("`p` must be a non-empty array")
+    if correlation is not None and indicators is None:
+        raise ValueError("`correlation` requires `indicators`")
+    data = [pa]
+    if indicators is not None:
+        ind = np.asarray(indicators, dtype=float).ravel()
+        if ind.size != pa.size:
+            raise ValueError("`indicators` must be the same length as `p`")
+        data.append(ind)
+        if correlation is not None:
+            corr = np.asarray(correlation, dtype=float)
+            n = pa.size
+            if corr.shape != (n, n):
+                raise ValueError(f"`correlation` must be a {n} x {n} matrix")
+            data.append(corr.ravel())
+    r = _toolbox_run("probability", "joint", data, {"dependency": dependency})
+    return float(r["values"][0])

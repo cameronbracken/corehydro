@@ -1477,7 +1477,32 @@ _ROUTED_SPECIAL_FUNCTION_TARGETS = (
     | set(_HISTOGRAM_STATISTICS_INDEX)
     | set(_HISTOGRAM_BINS_COLUMN)
     | {"Bilinear.log_floor_value"}
+    | {"Probability.hpcm_joint"}
 )
+
+
+# special_function/Probability.hpcm_joint (Task 6): the same routing pattern, through the new
+# "probability" toolbox group's "joint" method (dependency = "correlation"). Mirrors
+# core/tests/test_fixtures.cpp's special_function_table() entry for "Probability.hpcm_joint" for
+# the args convention (args = [p_0..p_(n-1), ind_0..ind_(n-1), corr(n*n flattened row-major)], n
+# inferred from the argument count). Probability.hpcm_conditional_at stays unrouted: it needs the
+# conditionalProbabilities out-value, which the "probability" toolbox group's "joint" method does
+# not expose.
+def _run_special_function_probability_hpcm_joint_case(args_raw):
+    args = [_num(v) for v in args_raw]
+    n = None
+    for candidate in range(1, 21):
+        if 2 * candidate + candidate * candidate == len(args):
+            n = candidate
+            break
+    if n is None:
+        raise ValueError("cannot infer n for Probability.hpcm args")
+    p = args[:n]
+    ind = args[n : 2 * n]
+    corr = args[2 * n :]
+    return _core.toolbox_run(
+        "probability", "joint", [p, ind, corr], json.dumps({"dependency": "correlation"})
+    )["values"][0]
 
 
 def _run_special_function_case(target, args_raw):
@@ -1546,6 +1571,9 @@ def _run_special_function_case(target, args_raw):
         )
         return r["values"][0]
 
+    if target == "Probability.hpcm_joint":
+        return _run_special_function_probability_hpcm_joint_case(args_raw)
+
     raise KeyError(f"unrouted special_function target: {target}")
 
 
@@ -1581,7 +1609,14 @@ def _toolbox_select(r, a, group):
 
 def _run_toolbox_case(group, case, datasets):
     data = _toolbox_case_data(case, datasets)
-    options = json.dumps(case.get("options", {}))
+    options_dict = dict(case.get("options", {}))
+    if group == "sampling":
+        # The Sobol direction-numbers file ships inside the package; path resolution is a
+        # wrapper concern (see numerics/support/toolbox/sampling.hpp's file header), so the
+        # fixture itself never carries a "path" key -- this harness injects its own resolved
+        # path, mirroring what sobol_sequence() does for a real caller.
+        options_dict["path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+    options = json.dumps(options_dict)
     for a in case["assertions"]:
         r = _core.toolbox_run(group, a["method"], data, options)
         _check(_toolbox_select(r, a, group), a)

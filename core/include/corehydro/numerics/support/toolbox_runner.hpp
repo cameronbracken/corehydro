@@ -32,6 +32,8 @@
 #include "corehydro/numerics/support/toolbox/histogram.hpp"
 #include "corehydro/numerics/support/toolbox/interpolation.hpp"
 #include "corehydro/numerics/support/toolbox/regression.hpp"
+#include "corehydro/numerics/support/toolbox/sampling.hpp"
+#include "corehydro/numerics/support/toolbox/probability.hpp"
 
 namespace corehydro::numerics::support {
 
@@ -46,6 +48,8 @@ inline ToolboxResult run_toolbox(const std::string& group, const std::string& me
     if (group == "histogram") return detail::run_histogram(method, data, options);
     if (group == "interpolation") return detail::run_interpolation(method, data, options);
     if (group == "regression") return detail::run_regression(method, data, options);
+    if (group == "sampling") return detail::run_sampling(method, data, options);
+    if (group == "probability") return detail::run_probability(method, data, options);
     throw std::runtime_error("unknown toolbox group: " + group);
 }
 

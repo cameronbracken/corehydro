@@ -1028,8 +1028,21 @@ special_function_table() {
         {"Bilinear.log_floor_value", bilinear_log_floor_value},
         // Probability.hpcm_* family (args: see probability_hpcm_joint()/
         // probability_hpcm_conditional_at() above and
-        // fixtures/special_functions/probability.json)
-        {"Probability.hpcm_joint", [](const std::vector<double>& a) { return probability_hpcm_joint(a); }},
+        // fixtures/special_functions/probability.json). Task 6 routes hpcm_joint (but not
+        // hpcm_conditional_at, which needs the conditional_probabilities out-param the
+        // "probability" toolbox group's "joint" method does not expose) through run_toolbox,
+        // the same "pin once, exercise the toolbox dispatch too" pattern Correlation.*/
+        // Bilinear.log_floor_value use -- so this pinned value is also a cross-language check.
+        {"Probability.hpcm_joint",
+         [](const std::vector<double>& a) {
+             int n = probability_hpcm_n(a.size());
+             std::vector<double> p(a.begin(), a.begin() + n);
+             std::vector<double> ind(a.begin() + n, a.begin() + 2 * n);
+             std::vector<double> corr(a.begin() + 2 * n, a.end());
+             return tbx::run_toolbox("probability", "joint", {p, ind, corr},
+                                     "{\"dependency\":\"correlation\"}")
+                 .values.at(0);
+         }},
         {"Probability.hpcm_conditional_at", probability_hpcm_conditional_at},
         // Tools.log10 (args: [x] -- see fixtures/special_functions/tools.json)
         {"Tools.log10", [](const std::vector<double>& a) { return corehydro::numerics::clamped_log10(a[0]); }},
@@ -1569,16 +1582,26 @@ static double toolbox_select(const tbx::ToolboxResult& r, const json& as, const 
     return r.values[i];
 }
 
+// Set once in main() from argv[1] (the fixtures directory); the Sobol direction-numbers file
+// lives at core/data/ next to it. Path resolution is a wrapper concern (see
+// numerics/support/toolbox/sampling.hpp's file header) -- fixtures/toolbox/sampling.json's own
+// `options` never carries a `path` key, so this harness injects its own resolved path before
+// calling run_toolbox, the same way corehydror's sobol_sequence() and corehydropy's
+// sobol_sequence() resolve theirs.
+static std::string g_sobol_path;
+
 static void run_toolbox_kind(const json& spec) {
     json datasets = spec.value("datasets", json::object());
     std::string group = spec["group"].get<std::string>();
     for (const auto& c : spec["cases"]) {
         std::string name = c["name"].get<std::string>();
         auto data = toolbox_data(c, datasets);
-        std::string options = c.contains("options") ? c["options"].dump() : "{}";
+        json options = c.contains("options") ? c["options"] : json::object();
+        if (group == "sampling") options["path"] = g_sobol_path;
+        std::string options_str = options.dump();
         for (const auto& as : c["assertions"]) {
             std::string where = "toolbox/" + group + "/" + name;
-            auto r = tbx::run_toolbox(group, as["method"].get<std::string>(), data, options);
+            auto r = tbx::run_toolbox(group, as["method"].get<std::string>(), data, options_str);
             check_value(toolbox_select(r, as, group), as, where);
         }
     }
@@ -3369,6 +3392,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: %s <fixtures-dir>\n", argv[0]);
         return 2;
     }
+    g_sobol_path = (fs::path(argv[1]) / ".." / "core" / "data" / "new-joe-kuo-6.21201").string();
     int files = 0;
     for (const auto& entry : fs::recursive_directory_iterator(argv[1])) {
         if (entry.path().extension() != ".json") continue;
