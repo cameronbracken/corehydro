@@ -25,6 +25,7 @@ set(BF_TESTS
   test_mcmc_extra
   test_dist_runner
   test_toolbox_runner
+  test_autocorrelation
   test_mixture
   test_mixture_em_seeding
   test_empirical_distribution

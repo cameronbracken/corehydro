@@ -3712,9 +3712,53 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             };
         case "gof":
             return GofDispatch(method, data, options, asrt);
+        case "spectra":
+            return SpectraDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_spectra arm for the two methods
+// fixtures/toolbox/autocorrelation.json pins: "autocorrelation" (covariance and partial types --
+// the correlation type is already cross-checked against Fourier.Autocorrelation by
+// fixtures/special_functions/fourier.json's Fourier.autocorrelation_at) and
+// "autocorrelation_ci". cross_correlation/dft/dft_real reuse the values already pinned by
+// Fourier.correlation_at/fft_at/real_fft_at in fourier.json, so they are not re-dispatched here.
+// "autocorrelation" flattens the {lag, value} pairs row-major (dims = {n, 2}, matching the C++
+// port), so asrt.index selects a FLAT position -- fixture cases use index = 2*lag + 1 to read the
+// value column. correlation_confidence_interval's C++ names are {"lower","upper"}, matching
+// Autocorrelation.CorrelationConfidenceInterval's {lo, hi} order.
+static double SpectraDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "autocorrelation")
+    {
+        double[] x = data[0];
+        int lagMax = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("lag_max", out var lm)
+            ? lm.GetInt32() : -1;
+        string typeName = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("type", out var t)
+            ? t.GetString()! : "correlation";
+        var type = typeName switch
+        {
+            "covariance" => Autocorrelation.Type.Covariance,
+            "partial" => Autocorrelation.Type.Partial,
+            "correlation" => Autocorrelation.Type.Correlation,
+            _ => throw new Exception($"unknown spectra.autocorrelation type: {typeName}")
+        };
+        var acf = Autocorrelation.Function(x, lagMax, type);
+        if (acf is null) throw new Exception("spectra.autocorrelation: series too short for the requested lag");
+        int flatIndex = ToolboxSelectIndex(asrt);
+        return acf[flatIndex / 2, flatIndex % 2];
+    }
+    if (method == "autocorrelation_ci")
+    {
+        int sampleSize = options.GetProperty("sample_size").GetInt32();
+        double interval = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("confidence_level", out var cl)
+            ? cl.GetDouble() : 0.95;
+        var ci = Autocorrelation.CorrelationConfidenceInterval(sampleSize, interval);
+        return ToolboxSelectNamed(asrt, new[] { "lower", "upper" }, ci);
+    }
+    throw new Exception($"spectra method '{method}' has no dumped oracle case wired in the emitter");
 }
 
 // Selects a single value out of an ordered/named result the way the fixture runners' select

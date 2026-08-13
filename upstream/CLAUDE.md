@@ -88,6 +88,20 @@ The Sobol generator embeds `Properties/new-joe-kuo-6.21201` as a resource.
 - **MSTest** (`[TestClass]`/`[TestMethod]`), one test class per type, named `Test_<Type>`.
 - `ImplicitUsings` is on. Reproducible builds + SourceLink are on.
 
+### Port history notes
+
+- **`Numerics/Data/Statistics/Autocorrelation.cs`** was unported through Phase 0-10 (the port
+  that reached FULL PARITY on every distribution/estimator/model/analysis surface never needed
+  it) and through the upstream sync and the estimation/distribution surface phases that followed.
+  It was ported in the `surface-numerics-toolbox` branch's Task 3 (August 2026) as
+  `core/include/corehydro/numerics/data/autocorrelation.hpp`, reachable from R and Python via the
+  `spectra` toolbox group's `autocorrelation`/`autocorrelation_ci` verbs. Only the
+  `IList<double>` overloads are ported; the `TimeSeries` overloads remain a documented severance
+  (see that header's own file comment). Its sibling `Correlation.cs`'s matrix overloads
+  (`Correlation.Pearson(double[,])` / `Correlation.Spearman(double[,])`, column-pairwise
+  correlation matrices over an `[n, p]` table) remain unported -- no caller needs them yet (see
+  `numerics/data/correlation.hpp`'s own file comment).
+
 ---
 
 ## RMC.BestFit (`upstream/RMC-BestFit/`)
