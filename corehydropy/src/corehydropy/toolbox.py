@@ -288,7 +288,11 @@ class RunningCovariance:
     and the ``covariance``, ``sample_covariance``, ``sample_correlation``,
     ``population_covariance``, and ``population_correlation`` matrices (each ``size`` by
     ``size``) as plain attributes. ``covariance`` is unadjusted by sample size;
-    ``sample_*``/``population_*`` are the N-1- and N-normalized variants.
+    ``sample_*``/``population_*`` are the N-1- and N-normalized variants. The C# accumulator
+    seeds ``covariance`` at the identity matrix before the first push (a stability prior for its
+    other consumer, adaptive MCMC), so every derived matrix carries a small diagonal-only bias
+    that only fades as ``n`` grows -- do not expect an exact match to ``numpy.cov``/
+    ``numpy.corrcoef`` on the same data at small ``n``.
     """
 
     __slots__ = ("n", "mean", "covariance", "sample_covariance", "sample_correlation",

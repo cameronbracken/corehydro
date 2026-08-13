@@ -335,7 +335,7 @@ inline ToolboxResult run_spectra(const std::string& method,
         return r;
     }
     if (method == "autocorrelation_ci") {
-        int sample_size = static_cast<int>(options.at("sample_size").as_int());
+        int sample_size = options.at("sample_size").as_int();
         double interval = options.value_or("confidence_level", 0.95);
         ToolboxResult r;
         r.values = nd::Autocorrelation::correlation_confidence_interval(sample_size, interval);

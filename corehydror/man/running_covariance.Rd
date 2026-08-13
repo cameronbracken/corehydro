@@ -17,7 +17,11 @@ default) to start a fresh accumulator.}
 a \code{corehydro_running_covariance} list with \code{n}, \code{mean} (length-\code{ncol(x)}), and the
 \code{covariance}, \code{sample_covariance}, \code{sample_correlation}, \code{population_covariance}, and
 \code{population_correlation} matrices (each \code{ncol(x)} by \code{ncol(x)}). \code{covariance} is unadjusted
-by sample size; \verb{sample_*}/\verb{population_*} are the N-1- and N-normalized variants.
+by sample size; \verb{sample_*}/\verb{population_*} are the N-1- and N-normalized variants. The C#
+accumulator seeds \code{covariance} at the identity matrix before the first push (a stability
+prior for its other consumer, adaptive MCMC), so every derived matrix carries a small
+diagonal-only bias that only fades as \code{n} grows -- do not expect an exact match to
+\code{stats::cov()}/\code{stats::cor()} on the same data at small \code{n}.
 }
 \description{
 Accumulates a running mean vector and covariance matrix over one or more chunks of
