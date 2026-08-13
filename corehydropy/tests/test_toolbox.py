@@ -72,6 +72,11 @@ def test_percentile_accepts_a_vector_of_probabilities():
     np.testing.assert_array_equal(p, [1, 3, 5])
 
 
+def test_percentile_rejects_a_non_numeric_probs_argument():
+    with pytest.raises(ValueError, match="probs"):
+        percentile([1, 2, 3], probs="half")
+
+
 def test_running_covariance_chunked_matches_a_single_call():
     x = [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]]
     whole = running_covariance(x)
@@ -87,6 +92,21 @@ def test_running_covariance_chunked_matches_a_single_call():
 def test_running_covariance_rejects_a_state_of_the_wrong_type():
     with pytest.raises(TypeError, match="RunningCovariance"):
         running_covariance([[1, 2], [3, 4]], state={})
+
+
+def test_running_covariance_resumes_a_one_column_single_variable_accumulator():
+    # Parity test for a bug on the R side (a length-1 mean/covariance in the resume state used
+    # to serialize as a JSON scalar instead of an array); Python's json.dumps() never had this
+    # problem, but the same case should be asserted on both sides.
+    x = [[1], [2], [3]]
+    whole = running_covariance([[1], [2], [3], [4], [5], [6]])
+
+    c1 = running_covariance(x)
+    c2 = running_covariance([[4], [5], [6]], state=c1)
+
+    assert c2.n == whole.n
+    np.testing.assert_allclose(c2.mean, whole.mean)
+    np.testing.assert_allclose(c2.covariance, whole.covariance, atol=1e-9)
 
 
 def test_running_covariance_repr():

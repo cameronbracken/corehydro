@@ -215,7 +215,10 @@ def percentile(x, probs, sorted: bool = False) -> np.ndarray:
     array([2., 3., 4.])
     """
     xa = np.asarray(x, dtype=float).ravel()
-    pa = np.asarray(probs, dtype=float).ravel()
+    probs_raw = np.asarray(probs)
+    if probs_raw.dtype.kind not in "iuf":
+        raise ValueError("`probs` must be numeric")
+    pa = probs_raw.astype(float).ravel()
     r = _toolbox_run("statistics", "percentile", [xa, pa], {"sorted": bool(sorted)})
     return np.asarray(r["values"])
 
@@ -387,7 +390,7 @@ def autocorrelation(x, max_lag=None, type: str = "correlation", confidence_level
     --------
     >>> from corehydropy import autocorrelation
     >>> x = [5, 6, 4, 7, 3, 8, 2, 9, 1, 10, 5, 6, 4, 7, 3, 8, 2, 9, 1, 10]
-    >>> round(autocorrelation(x, max_lag=5)["value"][0], 12)
+    >>> round(float(autocorrelation(x, max_lag=5)["value"][0]), 12)
     1.0
     """
     if type not in ("correlation", "covariance", "partial"):
