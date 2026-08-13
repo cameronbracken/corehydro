@@ -47,6 +47,7 @@
 #include "corehydro/models/univariate_distribution/univariate_distribution_model.hpp"
 #include "corehydro/numerics/data/box_cox.hpp"
 #include "corehydro/numerics/data/correlation.hpp"
+#include "corehydro/numerics/support/toolbox_runner.hpp"
 #include "corehydro/numerics/data/goodness_of_fit.hpp"
 #include "corehydro/numerics/data/histogram.hpp"
 #include "corehydro/numerics/data/interpolation/bilinear.hpp"
@@ -114,6 +115,7 @@ using json = nlohmann::json;
 namespace fs = std::filesystem;
 namespace dist = corehydro::numerics::distributions;
 namespace supp = corehydro::numerics::distributions::support;
+namespace tbx = corehydro::numerics::support;
 namespace prob = corehydro::numerics::data::probability;
 using dist::EstimationMethod;
 using dist::GeneralizedExtremeValue;
@@ -603,21 +605,24 @@ special_function_table() {
         {"Bessel.i0", [](const std::vector<double>& a) { return sf::bessel::i0(a[0]); }},
         {"Bessel.i1", [](const std::vector<double>& a) { return sf::bessel::i1(a[0]); }},
         // Correlation family (args: [x..., y...], split at the midpoint -- see
-        // fixtures/special_functions/correlation.json for the full convention)
+        // fixtures/special_functions/correlation.json for the full convention). Routed through
+        // run_toolbox (numerics/support/toolbox_runner.hpp) rather than calling bfdata::pearson
+        // etc. directly, so these pinned special_function values also exercise the toolbox
+        // dispatch path the "correlation" verb runs through in both languages.
         {"Correlation.pearson", [](const std::vector<double>& a) {
             std::vector<double> x, y;
             correlation_split(a, x, y);
-            return bfdata::pearson(x, y);
+            return tbx::run_toolbox("correlation", "pearson", {x, y}, "{}").values.at(0);
         }},
         {"Correlation.spearman", [](const std::vector<double>& a) {
             std::vector<double> x, y;
             correlation_split(a, x, y);
-            return bfdata::spearman(x, y);
+            return tbx::run_toolbox("correlation", "spearman", {x, y}, "{}").values.at(0);
         }},
         {"Correlation.kendalls_tau", [](const std::vector<double>& a) {
             std::vector<double> x, y;
             correlation_split(a, x, y);
-            return bfdata::kendalls_tau(x, y);
+            return tbx::run_toolbox("correlation", "kendall", {x, y}, "{}").values.at(0);
         }},
         // LU family (args: flattened row-major matrix, n inferred from length -- reuses
         // the Cholesky-fixture flatten helpers above, which are generic matrix-args
@@ -1382,6 +1387,61 @@ static void run_data_utility(const json& spec) {
         for (const auto& as : c["assertions"]) {
             std::string where = "data_utility/" + name;
             check_value(actual, as, where);
+        }
+    }
+}
+
+// --- toolbox path -----------------------------------------------------------------------
+// Every Numerics utility group (correlation, goodness of fit, statistics, interpolation, ...)
+// runs through numerics/support/toolbox_runner.hpp. A case carries its data vectors and an
+// options object; each assertion names a method and selects one value out of the result.
+
+static std::vector<std::vector<double>> toolbox_data(const json& c, const json& datasets) {
+    std::vector<std::vector<double>> out;
+    if (!c.contains("data")) return out;
+    for (const auto& d : c["data"]) {
+        std::vector<double> v;
+        if (d.is_string()) {
+            for (const auto& e : datasets[d.get<std::string>()]) v.push_back(parse_num(e));
+        } else {
+            for (const auto& e : d) v.push_back(parse_num(e));
+        }
+        out.push_back(std::move(v));
+    }
+    return out;
+}
+
+static double toolbox_select(const tbx::ToolboxResult& r, const json& as) {
+    std::string select = as.value("select", std::string("value"));
+    if (select == "length") return static_cast<double>(r.values.size());
+    if (select == "rows") return r.dims.empty() ? -1.0 : static_cast<double>(r.dims[0]);
+    if (select == "columns") return r.dims.size() < 2 ? -1.0 : static_cast<double>(r.dims[1]);
+    std::size_t i = 0;
+    if (as.contains("label")) {
+        std::string label = as["label"].get<std::string>();
+        bool found = false;
+        for (std::size_t k = 0; k < r.names.size(); ++k)
+            if (r.names[k] == label) { i = k; found = true; break; }
+        if (!found) throw std::runtime_error("toolbox result has no label '" + label + "'");
+    } else {
+        i = static_cast<std::size_t>(as.value("index", 0));
+    }
+    if (i >= r.values.size())
+        throw std::runtime_error("toolbox result index out of range");
+    return r.values[i];
+}
+
+static void run_toolbox_kind(const json& spec) {
+    json datasets = spec.value("datasets", json::object());
+    std::string group = spec["group"].get<std::string>();
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+        auto data = toolbox_data(c, datasets);
+        std::string options = c.contains("options") ? c["options"].dump() : "{}";
+        for (const auto& as : c["assertions"]) {
+            std::string where = "toolbox/" + group + "/" + name;
+            auto r = tbx::run_toolbox(group, as["method"].get<std::string>(), data, options);
+            check_value(toolbox_select(r, as), as, where);
         }
     }
 }
@@ -3184,6 +3244,8 @@ int main(int argc, char** argv) {
             run_goodness_of_fit(spec);
         } else if (kind == "data_utility") {
             run_data_utility(spec);
+        } else if (kind == "toolbox") {
+            run_toolbox_kind(spec);
         } else if (kind == "univariate_distribution") {
             if (spec.value("target", "") == "GeneralizedExtremeValue")
                 run_gev(spec);

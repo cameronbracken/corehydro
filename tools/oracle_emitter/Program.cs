@@ -3689,6 +3689,24 @@ static double DispatchAnalysis(AnalysisData r, string m, JsonElement[] a)
     }
 }
 
+// One arm per toolbox group. Later tasks extend this switch; the shape never changes.
+static double ToolboxDispatch(string group, string method, List<double[]> data)
+{
+    switch (group)
+    {
+        case "correlation":
+            return method switch
+            {
+                "pearson"  => Correlation.Pearson(data[0], data[1]),
+                "spearman" => Correlation.Spearman(data[0], data[1]),
+                "kendall"  => Correlation.KendallsTau(data[0], data[1]),
+                _ => throw new Exception($"unknown correlation method: {method}")
+            };
+        default:
+            throw new Exception($"unknown toolbox group: {group}");
+    }
+}
+
 // --dump: the sanctioned curation path (see fixtures/README.md and the Task 5 brief).
 // Author a fixture case with placeholder "expected" values, run
 // `verify_oracles.py --dump` (threads this flag through to `dotnet run -- --dump`), paste
@@ -3829,6 +3847,52 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
             {
                 string where = $"gof/{caseName}";
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- toolbox branch ------------------------------------------------------------------
+    // Every Numerics utility group. Mirrors the GRAMMAR of numerics/support/toolbox_runner.hpp
+    // against the real C# statics; the dispatch below is this file's own transcription, so an
+    // oracle never runs the code under test. --dump supported for curation (see DumpLine()).
+    if (kindStr == "toolbox")
+    {
+        var tbSets = new Dictionary<string, double[]>();
+        if (root.TryGetProperty("datasets", out var tbDs))
+            foreach (var kv in tbDs.EnumerateObject())
+                tbSets[kv.Name] = kv.Value.EnumerateArray().Select(ParseNum).ToArray();
+
+        string group = root.GetProperty("group").GetString()!;
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            var data = new List<double[]>();
+            if (c.TryGetProperty("data", out var dataNode))
+                foreach (var d in dataNode.EnumerateArray())
+                    data.Add(d.ValueKind == JsonValueKind.String
+                        ? tbSets[d.GetString()!]
+                        : d.EnumerateArray().Select(ParseNum).ToArray());
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string method = asrt.GetProperty("method").GetString()!;
+                string where = $"toolbox/{group}/{caseName}/{method}";
+
+                if (dump)
+                {
+                    var dumpArgs = c.TryGetProperty("data", out var dn)
+                        ? dn.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+                    DumpLine($"toolbox/{group}", caseName, method, dumpArgs,
+                        () => (object)ToolboxDispatch(group, method, data));
+                    continue;
+                }
+
+                double actual;
+                try { actual = ToolboxDispatch(group, method, data); }
+                catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
             }

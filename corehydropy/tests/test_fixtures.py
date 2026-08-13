@@ -1363,15 +1363,79 @@ def _dispatch_threshold_diagnostic(fn, args, data):
     return float(r[_TD_FIELDS[fn]][int(args[4])])
 
 
+# special_function/Correlation.* only: routes fixtures/special_functions/correlation.json's
+# three Correlation targets through _core.toolbox_run (numerics/support/toolbox_runner.hpp)
+# rather than adding bespoke glue, so the pinned pearson/spearman/kendalls_tau values become
+# cross-language checks. Every other special_function target stays C++-only and unexercised
+# here, exactly as before this kind gained any Python handling at all.
+_CORRELATION_SPECIAL_FUNCTION_METHOD = {
+    "Correlation.pearson": "pearson",
+    "Correlation.spearman": "spearman",
+    "Correlation.kendalls_tau": "kendall",
+}
+
+
+def _run_special_function_correlation_case(target, args_raw):
+    args = [_num(v) for v in args_raw]
+    mid = len(args) // 2
+    x, y = args[:mid], args[mid:]
+    method = _CORRELATION_SPECIAL_FUNCTION_METHOD[target]
+    return _core.toolbox_run("correlation", method, [x, y], "{}")["values"][0]
+
+
+# toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
+# utility group runs through _core.toolbox_run. Mirrors run_toolbox_kind in
+# core/tests/test_fixtures.cpp.
+def _toolbox_case_data(case, datasets):
+    out = []
+    for d in case.get("data", []):
+        src = datasets[d] if isinstance(d, str) else d
+        out.append([_num(v) for v in src])
+    return out
+
+
+def _toolbox_select(r, a):
+    select = a.get("select", "value")
+    if select == "length":
+        return float(len(r["values"]))
+    if select == "rows":
+        return float(r["dims"][0])
+    if select == "columns":
+        return float(r["dims"][1])
+    if "label" in a:
+        i = list(r["names"]).index(a["label"])
+    else:
+        i = int(a.get("index", 0))
+    return float(r["values"][i])
+
+
+def _run_toolbox_case(group, case, datasets):
+    data = _toolbox_case_data(case, datasets)
+    options = json.dumps(case.get("options", {}))
+    for a in case["assertions"]:
+        r = _core.toolbox_run(group, a["method"], data, options)
+        _check(_toolbox_select(r, a), a)
+
+
 def _load_cases():
     out = []
     for fx in sorted(_fixtures_dir().rglob("*.json")):
         spec = json.loads(fx.read_text())
-        # Only validate univariate_distribution / multivariate_distribution /
-        # bivariate_copula / mcmc_sampler fixtures; skip other kinds (e.g.
-        # special_function) which are validated in C++ only and are not exposed to the
-        # Python package.
         kind = spec.get("kind")
+        if kind == "special_function":
+            # Only the three Correlation targets are exposed to Python (see
+            # _run_special_function_correlation_case above); every other special_function
+            # target is validated in C++ only and generates no Python case.
+            file_target = spec.get("target")
+            for case in spec["cases"]:
+                target = case.get("target", file_target)
+                if target not in _CORRELATION_SPECIAL_FUNCTION_METHOD:
+                    continue
+                out.append(("special_function", target, {}, case))
+            continue
+        # Only validate univariate_distribution / multivariate_distribution /
+        # bivariate_copula / mcmc_sampler / toolbox fixtures; skip other kinds which are
+        # validated in C++ only and are not exposed to the Python package.
         if kind not in (
             "univariate_distribution",
             "multivariate_distribution",
@@ -1381,10 +1445,11 @@ def _load_cases():
             "model_estimation",
             "analysis",
             "data_utility",
+            "toolbox",
         ):
             continue
         for case in spec["cases"]:
-            out.append((kind, spec.get("target", kind), spec.get("datasets", {}), case))
+            out.append((kind, spec.get("target", spec.get("group", kind)), spec.get("datasets", {}), case))
     return out
 
 
@@ -1395,6 +1460,16 @@ CASES = _load_cases()
     "kind,target,datasets,case", CASES, ids=[f"{k}:{t}:{c['name']}" for k, t, _, c in CASES]
 )
 def test_fixture_case(kind, target, datasets, case):
+    if kind == "special_function":
+        actual = _run_special_function_correlation_case(target, case["args"])
+        for a in case["assertions"]:
+            _check(actual, a)
+        return
+
+    if kind == "toolbox":
+        _run_toolbox_case(target, case, datasets)
+        return
+
     if kind == "model_estimation":
         _run_estimation_case(target, case["construct"], case["assertions"], datasets)
         return

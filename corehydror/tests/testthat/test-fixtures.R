@@ -131,6 +131,57 @@ dispatch_threshold_diagnostic <- function(fn, args, data) {
   as.double(r[[field]][[as.integer(args[[5]]) + 1L]])
 }
 
+# special_function/Correlation.* only: routes fixtures/special_functions/correlation.json's
+# three Correlation targets through ch_toolbox_run_ (numerics/support/toolbox_runner.hpp) rather
+# than adding bespoke glue, so the pinned pearson/spearman/kendalls_tau values become
+# cross-language checks. Every other special_function target stays C++-only and unrouted here,
+# as it was before this kind gained any R handling at all.
+kCorrelationSpecialFunctionMethod <- c(
+  "Correlation.pearson" = "pearson",
+  "Correlation.spearman" = "spearman",
+  "Correlation.kendalls_tau" = "kendall"
+)
+
+run_special_function_correlation_case <- function(target, args_raw) {
+  ns <- asNamespace("corehydror")
+  args <- vapply(args_raw, parse_num, numeric(1))
+  mid <- length(args) %/% 2L
+  x <- args[seq_len(mid)]
+  y <- args[(mid + 1L):length(args)]
+  method <- kCorrelationSpecialFunctionMethod[[target]]
+  ns$ch_toolbox_run_("correlation", method, list(x, y), "{}")$values[[1]]
+}
+
+# toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
+# utility group runs through ch_toolbox_run_. Mirrors run_toolbox_kind in
+# core/tests/test_fixtures.cpp.
+toolbox_case_data <- function(case, datasets) {
+  if (is.null(case$data)) {
+    return(list())
+  }
+  lapply(case$data, function(d) {
+    if (is.character(d)) as.double(unlist(datasets[[d]])) else as.double(unlist(d))
+  })
+}
+
+toolbox_select <- function(r, a) {
+  select <- if (is.null(a$select)) "value" else a$select
+  if (identical(select, "length")) {
+    return(as.double(length(r$values)))
+  }
+  if (identical(select, "rows")) {
+    return(as.double(r$dims[[1]]))
+  }
+  if (identical(select, "columns")) {
+    return(as.double(r$dims[[2]]))
+  }
+  i <- if (!is.null(a$label)) match(a$label, r$names) else (if (is.null(a$index)) 0L else as.integer(a$index)) + 1L
+  if (is.na(i) || i > length(r$values)) {
+    stop("toolbox result selection out of range")
+  }
+  as.double(r$values[[i]])
+}
+
 check_assertion <- function(actual, a) {
   mode <- a$mode
   if (mode == "bool") {
@@ -1221,6 +1272,29 @@ test_that("oracle fixtures validate", {
       datasets <- spec$datasets
       for (case in spec$cases) {
         run_bootstrap_case(case$construct, case$assertions, datasets)
+      }
+      next
+    }
+    if (identical(spec$kind, "special_function")) {
+      file_target <- spec$target
+      for (case in spec$cases) {
+        target <- if (is.null(case$target)) file_target else case$target
+        if (!target %in% names(kCorrelationSpecialFunctionMethod)) next
+        actual <- run_special_function_correlation_case(target, case$args)
+        for (a in case$assertions) check_assertion(actual, a)
+      }
+      next
+    }
+    if (identical(spec$kind, "toolbox")) {
+      ns <- asNamespace("corehydror")
+      datasets <- spec$datasets
+      for (case in spec$cases) {
+        data <- toolbox_case_data(case, datasets)
+        opts <- if (is.null(case$options)) "{}" else ns$to_spec_json(case$options)
+        for (a in case$assertions) {
+          r <- ns$ch_toolbox_run_(spec$group, a$method, data, opts)
+          check_assertion(toolbox_select(r, a), a)
+        }
       }
       next
     }

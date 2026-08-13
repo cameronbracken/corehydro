@@ -1643,10 +1643,46 @@ argmin of a flat likelihood, port termination differs slightly from C#);
 `[sample_size, dimension, seed, row, col]` (element of the seeded Latin hypercube sample;
 stateless, locks the C# stream bit-for-bit).
 
+### `toolbox`
+
+The Numerics utility layer (Phase 4 of the docs/examples effort: correlation, goodness of fit,
+statistics, histogram, interpolation, regression, Sobol, links, trends, optimizers), reached
+through the shared `run_toolbox` dispatcher (`numerics/support/toolbox_runner.hpp`) rather than
+per-group glue. A case carries its data vectors (inline or by dataset name) and an optional
+options object; each assertion names a `method` and selects one value out of the flat
+`ToolboxResult` the runner returns. Processed by all four runners (`--dump` supported).
+
+```jsonc
+{
+  "kind": "toolbox",
+  "group": "correlation",                    // selects the run_toolbox group arm
+  "datasets": { "x": [ ...numbers... ], "y": [ ...numbers... ] },
+  "cases": [
+    {
+      "name": "small_sample",
+      "data": ["x", "y"],                     // dataset names OR inline arrays, in group order
+      "options": {},                          // optional; serialized to the grammar's options_json
+      "assertions": [
+        { "method": "pearson", "expected": 0.54502739907793, "mode": "abs", "tol": 1e-10 }
+      ]
+    }
+  ]
+}
+```
+
+Each assertion may also carry `index` (0-based, default 0, selects `values[index]`), `label`
+(selects by name out of `names` instead of by index), or `select` -- `"value"` (default),
+`"length"` (`len(values)`), `"rows"` / `"columns"` (out of `dims`, for a group whose method
+returns a flattened matrix).
+
 ### `special_function`
 
 For internal C++ math utilities (not exposed to R/Python). The R and Python fixture runners
-skip files with this kind; only the C++ runner and the dotnet oracle gate process them.
+skip files with this kind; only the C++ runner and the dotnet oracle gate process them. The one
+exception is the three `Correlation.*` targets below, which are additionally routed through
+`run_toolbox` in all four runners (same dispatch the `toolbox`/`correlation` group above uses),
+so those pinned values are cross-language checks even though the file itself stays
+`special_function`-shaped for the special-function-only targets around it.
 
 ```jsonc
 {
