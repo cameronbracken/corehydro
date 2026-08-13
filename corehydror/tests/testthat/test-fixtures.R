@@ -1248,9 +1248,10 @@ test_that("oracle fixtures validate", {
   expect_gt(length(files), 0)
   for (f in files) {
     spec <- jsonlite::read_json(f, simplifyVector = FALSE)
-    # Only validate univariate_distribution, multivariate_distribution,
-    # bivariate_copula, mcmc_sampler, bootstrap, and model_estimation fixtures; skip other
-    # kinds (e.g. special_function) which are validated in C++ only and are not exposed to
+    # Only validate univariate_distribution, multivariate_distribution, bivariate_copula,
+    # mcmc_sampler, bootstrap, model_estimation, and toolbox fixtures, plus the three
+    # Correlation.* special_function targets (see run_special_function_correlation_case
+    # above); every other special_function kind stays validated in C++ only, not exposed to
     # the R package.
     if (identical(spec$kind, "model_estimation")) {
       target <- spec$target
