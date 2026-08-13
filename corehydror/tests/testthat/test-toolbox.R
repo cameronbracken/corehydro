@@ -110,3 +110,51 @@ test_that("dft() round-trips to within 1e-12", {
 test_that("cross_correlation() rejects mismatched lengths, naming the arguments", {
   expect_error(cross_correlation(c(1, 2, 3, 4), c(1, 2)), "x.*y")
 })
+
+test_that("histogram() bin frequencies sum to length(x)", {
+  x <- c(1, 2, 2.5, 3, 3.5, 4, 5, 7, 8, 9)
+  h <- histogram(x)
+  expect_equal(sum(h$frequency), length(x))
+  expect_equal(attr(h, "bins"), nrow(h))
+})
+
+test_that("histogram() with an explicit bin count uses exactly that many bins", {
+  x <- c(1, 2, 2.5, 3, 3.5, 4, 5, 7, 8, 9)
+  h <- histogram(x, bins = 4)
+  expect_equal(nrow(h), 4L)
+  expect_equal(sum(h$frequency), length(x))
+})
+
+test_that("interpolate() clamps to the end knot without extrapolate, and extends with it", {
+  x <- c(1, 2, 3, 4)
+  y <- c(10, 20, 30, 40)
+  clamped <- interpolate(x, y, 10)
+  expect_equal(clamped, 40)
+  extended <- interpolate(x, y, 10, extrapolate = TRUE)
+  expect_equal(extended, 100)
+})
+
+test_that("interpolate() rejects an unknown transform name, listing the accepted values", {
+  expect_error(interpolate(c(1, 2), c(1, 2), 1.5, x_transform = "bogus"),
+               "none.*log.*normal_z")
+})
+
+test_that("interpolate() on a log-log grid reproduces the C# Test_Log oracle", {
+  x <- c(50, 100, 150, 200, 250)
+  y <- c(100, 200, 300, 400, 500)
+  expect_equal(interpolate(x, y, 75, x_transform = "log", y_transform = "log"), 150.0,
+               tolerance = 1e-6)
+})
+
+test_that("interpolate_2d() rejects a y matrix whose dimensions don't match x1 by x2", {
+  expect_error(
+    interpolate_2d(c(1, 2, 3), c(1, 2), matrix(1:4, nrow = 2), 1.5, 1.5),
+    "3 x 2"
+  )
+})
+
+test_that("interpolate_2d() reproduces a known bilinear value on an identity grid", {
+  y <- diag(3)
+  out <- interpolate_2d(c(1, 2, 3), c(1, 2, 3), y, 1.5, 1.5)
+  expect_equal(out, 0.5, tolerance = 1e-12)
+})

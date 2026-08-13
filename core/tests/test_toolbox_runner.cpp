@@ -186,5 +186,25 @@ int main() {
     auto real_fwd = tb::run_toolbox("spectra", "dft_real", {a}, "{}");
     CHECK_EQ(real_fwd.values.size(), std::size_t{4});
 
+    // --- histogram group ---------------------------------------------------------------------
+    // Rice-rule bin count, and the frequencies sum to the sample size.
+    const std::vector<double> h{1.0, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 8.0, 9.0};
+    auto bins = tb::run_toolbox("histogram", "bins", {h}, "{}");
+    CHECK_EQ(bins.dims.size(), std::size_t{2});
+    CHECK_EQ(bins.dims[1], 4);
+    double total = 0.0;
+    for (int row = 0; row < bins.dims[0]; ++row)
+        total += bins.values[static_cast<std::size_t>(row * 4 + 3)];
+    CHECK_NEAR(total, 10.0, 0.0);
+
+    // --- interpolation group -------------------------------------------------------------------
+    // a point on a knot returns that knot's y exactly.
+    const std::vector<double> ix{1.0, 2.0, 3.0, 4.0};
+    const std::vector<double> iy{10.0, 20.0, 30.0, 40.0};
+    auto lin = tb::run_toolbox("interpolation", "linear", {ix, iy, {2.5, 3.0}}, "{}");
+    CHECK_EQ(lin.values.size(), std::size_t{2});
+    CHECK_NEAR(lin.values[0], 25.0, 1e-12);
+    CHECK_NEAR(lin.values[1], 30.0, 1e-12);
+
     return chtest::summary("toolbox_runner");
 }

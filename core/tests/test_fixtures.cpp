@@ -492,6 +492,13 @@ static bfdata::Histogram histogram_build(const std::vector<double>& a, std::size
     return bfdata::Histogram(data);
 }
 
+// Same [explicit_bins, ...] convention as histogram_build(), but for the run_toolbox-routed
+// Histogram.* table entries below: builds the "histogram" group's options_json (bins > 0 sets
+// the "bins" option; bins == 0 omits it, selecting the Rice-Rule constructor).
+static std::string histogram_toolbox_options(int explicit_bins) {
+    return explicit_bins > 0 ? "{\"bins\":" + std::to_string(explicit_bins) + "}" : "{}";
+}
+
 // Histogram.adapt_* fixture args convention (fixtures/special_functions/histogram.json):
 // args = [explicit_bins, num_adds, data..., adds(num_adds)...] -- builds the histogram via
 // the same explicit_bins/data convention as histogram_build() above, then replays each of
@@ -512,14 +519,15 @@ static bfdata::Histogram histogram_build_adapt(const std::vector<double>& a) {
 // axes, y[i][j] = x1_values[i] for every j) with X1/X2/Y all Transform::Logarithmic -- the
 // exact grid the new v2.1.4 Test_LogarithmicFloorMatchesLinearInterpolation uses to prove
 // Bilinear's guarded log10 floor now matches Linear's (see bilinear.hpp's file header).
+// Routed through run_toolbox (numerics/support/toolbox_runner.hpp's "interpolation.bilinear"
+// method) rather than calling bfdata::Bilinear directly, so this pinned value also exercises
+// the toolbox dispatch path interpolate_2d() runs through in both languages.
 static double bilinear_log_floor_value(const std::vector<double>& a) {
     std::vector<double> coords = {0.0, 1e-15, 1.0};
-    std::vector<std::vector<double>> y = {{0.0, 0.0, 0.0}, {1e-15, 1e-15, 1e-15}, {1.0, 1.0, 1.0}};
-    bfdata::Bilinear bilin(coords, coords, y);
-    bilin.x1_transform = bfdata::Transform::Logarithmic;
-    bilin.x2_transform = bfdata::Transform::Logarithmic;
-    bilin.y_transform = bfdata::Transform::Logarithmic;
-    return bilin.interpolate(a[0], a[1]);
+    std::vector<double> flat = {0.0, 0.0, 0.0, 1e-15, 1e-15, 1e-15, 1.0, 1.0, 1.0};
+    std::string opts = "{\"x1_transform\":\"log\",\"x2_transform\":\"log\",\"y_transform\":\"log\"}";
+    auto r = tbx::run_toolbox("interpolation", "bilinear", {coords, coords, flat, {a[0]}, {a[1]}}, opts);
+    return r.values.at(0);
 }
 
 // Probability.hpcm_* fixture args convention (fixtures/special_functions/probability.json):
@@ -861,30 +869,79 @@ special_function_table() {
         // fixtures/special_functions/differential_evolution.json for the args convention)
         {"DifferentialEvolution.best_value", differential_evolution_best_value},
         // Histogram family (args: [explicit_bins, data..., trailing probe?] -- see
-        // histogram_build() above and fixtures/special_functions/histogram.json)
+        // histogram_build() above and fixtures/special_functions/histogram.json). The
+        // whole-histogram scalar targets and the bin_*_at element lookups are routed through
+        // run_toolbox (numerics/support/toolbox_runner.hpp's "histogram.statistics"/"histogram.bins"
+        // methods) rather than calling bfdata::Histogram directly, so these pinned special_function
+        // values also exercise the toolbox dispatch path histogram() runs through in both
+        // languages -- and, for bin_*_at, the FIRST toolbox method to return a real matrix through
+        // `dims`. data_count and get_bin_index_of have no toolbox-method equivalent (neither
+        // "statistics" nor "bins" exposes them) and adapt_* needs AddData(), which the toolbox
+        // arm's stateless one-shot construction never calls, so those stay direct calls, mirroring
+        // the RunningStatistics.population_variance precedent above.
         {"Histogram.number_of_bins", [](const std::vector<double>& a) {
-            return static_cast<double>(histogram_build(a, 0).number_of_bins());
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(7);  // "bins"
         }},
-        {"Histogram.bin_width", [](const std::vector<double>& a) { return histogram_build(a, 0).bin_width(); }},
-        {"Histogram.lower_bound", [](const std::vector<double>& a) { return histogram_build(a, 0).lower_bound(); }},
-        {"Histogram.upper_bound", [](const std::vector<double>& a) { return histogram_build(a, 0).upper_bound(); }},
+        {"Histogram.bin_width", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(6);  // "bin_width"
+        }},
+        {"Histogram.lower_bound", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(4);  // "lower"
+        }},
+        {"Histogram.upper_bound", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(5);  // "upper"
+        }},
         {"Histogram.data_count", [](const std::vector<double>& a) {
             return static_cast<double>(histogram_build(a, 0).data_count());
         }},
-        {"Histogram.mean", [](const std::vector<double>& a) { return histogram_build(a, 0).mean(); }},
-        {"Histogram.median", [](const std::vector<double>& a) { return histogram_build(a, 0).median(); }},
-        {"Histogram.mode", [](const std::vector<double>& a) { return histogram_build(a, 0).mode(); }},
+        {"Histogram.mean", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(0);  // "mean"
+        }},
+        {"Histogram.median", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(1);  // "median"
+        }},
+        {"Histogram.mode", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(2);  // "mode"
+        }},
         {"Histogram.standard_deviation", [](const std::vector<double>& a) {
-            return histogram_build(a, 0).standard_deviation();
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(3);  // "sd"
         }},
         {"Histogram.bin_lower_bound_at", [](const std::vector<double>& a) {
-            return histogram_build(a, 1).bin(static_cast<int>(a.back())).lower_bound;
+            int probe = static_cast<int>(a.back());
+            std::vector<double> data(a.begin() + 1, a.end() - 1);
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            auto r = tbx::run_toolbox("histogram", "bins", {data}, opts);
+            return r.values.at(static_cast<std::size_t>(probe) * 4 + 0);
         }},
         {"Histogram.bin_upper_bound_at", [](const std::vector<double>& a) {
-            return histogram_build(a, 1).bin(static_cast<int>(a.back())).upper_bound;
+            int probe = static_cast<int>(a.back());
+            std::vector<double> data(a.begin() + 1, a.end() - 1);
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            auto r = tbx::run_toolbox("histogram", "bins", {data}, opts);
+            return r.values.at(static_cast<std::size_t>(probe) * 4 + 1);
         }},
         {"Histogram.bin_frequency_at", [](const std::vector<double>& a) {
-            return static_cast<double>(histogram_build(a, 1).bin(static_cast<int>(a.back())).frequency);
+            int probe = static_cast<int>(a.back());
+            std::vector<double> data(a.begin() + 1, a.end() - 1);
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            auto r = tbx::run_toolbox("histogram", "bins", {data}, opts);
+            return r.values.at(static_cast<std::size_t>(probe) * 4 + 3);
         }},
         {"Histogram.get_bin_index_of", [](const std::vector<double>& a) {
             return static_cast<double>(histogram_build(a, 1).get_bin_index_of(a.back()));
@@ -927,7 +984,11 @@ special_function_table() {
             return pp[static_cast<std::size_t>(static_cast<int>(a[1]))];
         }},
         // Search family (args: [values..., x, start] -- see
-        // fixtures/special_functions/search.json)
+        // fixtures/special_functions/search.json). Stays a direct bfdata::search:: call: neither
+        // toolbox method the "interpolation" group exposes ("linear"/"bilinear") returns a search
+        // index, only an interpolated y -- the same "no run_toolbox-reachable equivalent" reasoning
+        // that keeps RunningStatistics.population_variance and Fourier.autocorrelation_at direct
+        // above.
         {"Search.sequential", [](const std::vector<double>& a) {
             std::size_t n = a.size() - 2;
             std::vector<double> values(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));

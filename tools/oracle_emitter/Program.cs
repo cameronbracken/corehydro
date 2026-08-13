@@ -3716,9 +3716,122 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return SpectraDispatch(method, data, options, asrt);
         case "statistics":
             return StatisticsDispatch(method, data, options, asrt);
+        case "histogram":
+            return HistogramToolboxDispatch(method, data, options, asrt);
+        case "interpolation":
+            return InterpolationDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Selects a value the way the fixture runners' client-side "select" logic does, generalized
+// to a FLAT array with a known {rows, cols} shape (numbers.support.toolbox_runner.hpp's `dims`):
+// "length" -> flat.Length, "rows"/"columns" -> the shape, else index/label into flat[index].
+static double ToolboxSelectFlat(JsonElement asrt, double[] flat, int rows, int cols)
+{
+    string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
+        ? s.GetString()! : "value";
+    if (select == "length") return flat.Length;
+    if (select == "rows") return rows;
+    if (select == "columns") return cols;
+    return flat[ToolboxSelectIndex(asrt)];
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_histogram arm. bins == 0 (the default)
+// selects the Rice-Rule constructor `Histogram(data)`; bins > 0 selects `Histogram(data, bins)`
+// -- there is no lower/upper-bound overload to expose. "bins" flattens {lower, upper, midpoint,
+// frequency} row-major (dims = {NumberOfBins, 4}); "statistics" returns the named
+// {mean, median, mode, sd, lower, upper, bin_width, bins} set.
+static double HistogramToolboxDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] x = data[0];
+    int bins = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("bins", out var b)
+        ? b.GetInt32() : 0;
+    var h = bins > 0 ? new Histogram(x, bins) : new Histogram(x);
+    if (method == "bins")
+    {
+        var flat = new List<double>();
+        for (int i = 0; i < h.NumberOfBins; i++)
+        {
+            var bin = h[i];
+            flat.Add(bin.LowerBound);
+            flat.Add(bin.UpperBound);
+            flat.Add(bin.Midpoint);
+            flat.Add(bin.Frequency);
+        }
+        return ToolboxSelectFlat(asrt, flat.ToArray(), h.NumberOfBins, 4);
+    }
+    if (method == "statistics")
+    {
+        var names = new[] { "mean", "median", "mode", "sd", "lower", "upper", "bin_width", "bins" };
+        var values = new[]
+        {
+            h.Mean, h.Median, h.Mode, h.StandardDeviation, h.LowerBound, h.UpperBound,
+            h.BinWidth, (double)h.NumberOfBins
+        };
+        return ToolboxSelectNamed(asrt, names, values);
+    }
+    throw new Exception($"unknown histogram method: {method}");
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_interpolation arm: Linear's separate
+// Extrapolate() surface (vs. the clamp-to-end-knot Interpolate()) and Bilinear's three
+// independent transforms.
+static Numerics.Data.Transform ParseInterpolationTransform(string s) => s switch
+{
+    "none" => Numerics.Data.Transform.None,
+    "log" => Numerics.Data.Transform.Logarithmic,
+    "normal_z" => Numerics.Data.Transform.NormalZ,
+    _ => throw new Exception($"unknown transform: {s}")
+};
+
+static Numerics.Data.SortOrder ParseSortOrder(string s) => s switch
+{
+    "ascending" => Numerics.Data.SortOrder.Ascending,
+    "descending" => Numerics.Data.SortOrder.Descending,
+    _ => throw new Exception($"unknown sort order: {s}")
+};
+
+static string OptString(JsonElement options, string key, string fallback) =>
+    options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetString()! : fallback;
+
+static bool OptBool(JsonElement options, string key, bool fallback) =>
+    options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetBoolean() : fallback;
+
+static double InterpolationDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    var order = ParseSortOrder(OptString(options, "sort_order", "ascending"));
+    if (method == "linear")
+    {
+        double[] x = data[0], y = data[1], xout = data[2];
+        var interp = new Linear(x, y, order)
+        {
+            XTransform = ParseInterpolationTransform(OptString(options, "x_transform", "none")),
+            YTransform = ParseInterpolationTransform(OptString(options, "y_transform", "none"))
+        };
+        bool extrapolate = OptBool(options, "extrapolate", false);
+        var values = xout.Select(v => extrapolate ? interp.Extrapolate(v) : interp.Interpolate(v)).ToArray();
+        return ToolboxSelectFlat(asrt, values, 1, values.Length);
+    }
+    if (method == "bilinear")
+    {
+        double[] x1 = data[0], x2 = data[1], flat = data[2], x1out = data[3], x2out = data[4];
+        var y = new double[x1.Length, x2.Length];
+        for (int i = 0; i < x1.Length; i++)
+            for (int j = 0; j < x2.Length; j++)
+                y[i, j] = flat[i * x2.Length + j];
+        var interp = new Bilinear(x1, x2, y, order)
+        {
+            X1Transform = ParseInterpolationTransform(OptString(options, "x1_transform", "none")),
+            X2Transform = ParseInterpolationTransform(OptString(options, "x2_transform", "none")),
+            YTransform = ParseInterpolationTransform(OptString(options, "y_transform", "none"))
+        };
+        var values = new double[x1out.Length];
+        for (int i = 0; i < x1out.Length; i++) values[i] = interp.Interpolate(x1out[i], x2out[i]);
+        return ToolboxSelectFlat(asrt, values, 1, values.Length);
+    }
+    throw new Exception($"unknown interpolation method: {method}");
 }
 
 // Mirrors numerics/support/toolbox_runner.hpp's run_spectra arm for the two methods

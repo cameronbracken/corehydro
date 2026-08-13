@@ -215,11 +215,38 @@ kFourierToolboxMethod <- c(
   "Fourier.correlation_at" = "cross_correlation"
 )
 
+# special_function/{Histogram,Bilinear} (Task 4): the same routing pattern, one subset per
+# family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's Histogram.*
+# table entries and bilinear_log_floor_value() for the args conventions). Histogram.data_count/
+# get_bin_index_of have no toolbox-method equivalent (neither "statistics" nor "bins" exposes
+# them) and Histogram.adapt_* needs AddData(), which the toolbox arm's stateless construction
+# never calls, so those four stay unrouted -- the same "no run_toolbox-reachable equivalent"
+# reasoning as RunningStatistics's population_* variants. Search.* also stays unrouted: neither
+# "linear" nor "bilinear" returns a search index, only an interpolated y.
+kHistogramStatisticsIndex <- c(
+  "Histogram.mean" = 0L, "Histogram.median" = 1L, "Histogram.mode" = 2L,
+  "Histogram.standard_deviation" = 3L, "Histogram.lower_bound" = 4L, "Histogram.upper_bound" = 5L,
+  "Histogram.bin_width" = 6L, "Histogram.number_of_bins" = 7L
+)
+kHistogramBinsColumn <- c(
+  "Histogram.bin_lower_bound_at" = 0L, "Histogram.bin_upper_bound_at" = 1L,
+  "Histogram.bin_frequency_at" = 3L
+)
+
 kRoutedSpecialFunctionTargets <- c(
   names(kCorrelationSpecialFunctionMethod), names(kRunningStatisticsSpecialFunctionIndex),
   names(kRunningCovarianceSpecialFunctionBlock), names(kFourierToolboxMethod),
-  "Statistics.percentile"
+  "Statistics.percentile", names(kHistogramStatisticsIndex), names(kHistogramBinsColumn),
+  "Bilinear.log_floor_value"
 )
+
+# Histogram fixture args convention: args = [explicit_bins, data...] for the whole-histogram
+# scalar targets; the bin_*_at targets append one trailing 0-based bin-index probe. An empty R
+# list serializes to "[]", not "{}" (jsonlite's unnamed-list rule -- see to_runner_json's own
+# comment above), so explicit_bins == 0 returns the literal "{}" rather than to_runner_json(list()).
+histogram_toolbox_options <- function(explicit_bins) {
+  if (explicit_bins > 0) to_runner_json(list(bins = as.integer(explicit_bins))) else "{}"
+}
 
 run_special_function_case <- function(target, args_raw) {
   ns <- asNamespace("corehydror")
@@ -271,6 +298,29 @@ run_special_function_case <- function(target, args_raw) {
     opts <- if (inverse) '{"inverse":true}' else "{}"
     r <- ns$ch_toolbox_run_("spectra", kFourierToolboxMethod[[target]], list(data), opts)
     return(r$values[[index + 1L]])
+  }
+  if (target %in% names(kHistogramStatisticsIndex)) {
+    explicit_bins <- as.integer(args[[1]])
+    data <- args[-1]
+    opts <- histogram_toolbox_options(explicit_bins)
+    r <- ns$ch_toolbox_run_("histogram", "statistics", list(data), opts)
+    return(r$values[[kHistogramStatisticsIndex[[target]] + 1L]])
+  }
+  if (target %in% names(kHistogramBinsColumn)) {
+    explicit_bins <- as.integer(args[[1]])
+    probe <- as.integer(args[[length(args)]])
+    data <- args[-c(1, length(args))]
+    opts <- histogram_toolbox_options(explicit_bins)
+    r <- ns$ch_toolbox_run_("histogram", "bins", list(data), opts)
+    return(r$values[[probe * 4L + kHistogramBinsColumn[[target]] + 1L]])
+  }
+  if (identical(target, "Bilinear.log_floor_value")) {
+    coords <- c(0, 1e-15, 1)
+    flat <- c(0, 0, 0, 1e-15, 1e-15, 1e-15, 1, 1, 1)
+    opts <- '{"x1_transform":"log","x2_transform":"log","y_transform":"log"}'
+    r <- ns$ch_toolbox_run_("interpolation", "bilinear",
+                            list(coords, coords, flat, args[1], args[2]), opts)
+    return(r$values[[1]])
   }
   stop(sprintf("unrouted special_function target: %s", target))
 }

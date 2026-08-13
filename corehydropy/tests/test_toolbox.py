@@ -10,6 +10,9 @@ from corehydropy import (
     autocorrelation,
     cross_correlation,
     dft,
+    histogram,
+    interpolate,
+    interpolate_2d,
     l_moments,
     percentile,
     product_moments,
@@ -144,3 +147,49 @@ def test_dft_round_trips_to_within_1e_minus_12():
 def test_cross_correlation_rejects_mismatched_lengths():
     with pytest.raises(ValueError):
         cross_correlation([1, 2, 3, 4], [1, 2])
+
+
+def test_histogram_bin_frequencies_sum_to_len_x():
+    x = [1, 2, 2.5, 3, 3.5, 4, 5, 7, 8, 9]
+    h = histogram(x)
+    assert float(h["frequency"].sum()) == len(x)
+    assert h["statistics"]["bins"] == len(h["lower"])
+
+
+def test_histogram_with_an_explicit_bin_count_uses_exactly_that_many_bins():
+    x = [1, 2, 2.5, 3, 3.5, 4, 5, 7, 8, 9]
+    h = histogram(x, bins=4)
+    assert len(h["lower"]) == 4
+    assert float(h["frequency"].sum()) == len(x)
+
+
+def test_interpolate_clamps_to_the_end_knot_without_extrapolate_and_extends_with_it():
+    x = [1, 2, 3, 4]
+    y = [10, 20, 30, 40]
+    clamped = interpolate(x, y, [10])
+    np.testing.assert_allclose(clamped, [40])
+    extended = interpolate(x, y, [10], extrapolate=True)
+    np.testing.assert_allclose(extended, [100])
+
+
+def test_interpolate_rejects_an_unknown_transform_name_listing_the_accepted_values():
+    with pytest.raises(ValueError, match="none.*log.*normal_z"):
+        interpolate([1, 2], [1, 2], [1.5], x_transform="bogus")
+
+
+def test_interpolate_on_a_log_log_grid_reproduces_the_csharp_test_log_oracle():
+    x = [50, 100, 150, 200, 250]
+    y = [100, 200, 300, 400, 500]
+    out = interpolate(x, y, [75], x_transform="log", y_transform="log")
+    np.testing.assert_allclose(out, [150.0], atol=1e-6)
+
+
+def test_interpolate_2d_rejects_a_y_array_whose_shape_does_not_match_x1_by_x2():
+    with pytest.raises(ValueError, match=r"3 x 2"):
+        interpolate_2d([1, 2, 3], [1, 2], np.arange(4).reshape(2, 2), [1.5], [1.5])
+
+
+def test_interpolate_2d_reproduces_a_known_bilinear_value_on_an_identity_grid():
+    y = np.eye(3)
+    out = interpolate_2d([1, 2, 3], [1, 2, 3], y, [1.5], [1.5])
+    np.testing.assert_allclose(out, [0.5], atol=1e-12)

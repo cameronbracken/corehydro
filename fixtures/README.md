@@ -1809,7 +1809,14 @@ data..., adds(num_adds)...]`: build the histogram as above from `data`, then rep
 (`lower_bound`/`upper_bound`/`bin_first_lower_bound`/`bin_last_upper_bound`/
 `bin_first_frequency`/`bin_last_frequency`/`data_count`) off the result -- exercising
 `AddData`'s v2.1.4 endpoint-auto-adapt fix (see `core/include/corehydro/numerics/data/
-histogram.hpp`'s file header).
+histogram.hpp`'s file header). Task 4 additionally routes the whole-histogram scalar targets
+through the `histogram` toolbox group's `statistics` method and the `bin_*_at` element-lookup
+targets through its `bins` method (`numerics/support/toolbox_runner.hpp`'s `run_histogram` arm),
+the same "pin once, exercise the toolbox dispatch too" pattern `Correlation.*`/`RunningStatistics.*`
+use above -- so these values are also cross-language checks. `data_count`/`get_bin_index_of` (no
+`histogram`-group method exposes them) and `adapt_*` (needs `AddData()`, which the toolbox arm's
+stateless one-shot construction never calls) stay C++-only, the same reasoning as
+`RunningStatistics`'s population-normalized variants.
 
 The `PlottingPositions.*` targets (`fixtures/special_functions/plotting_positions.json`) take
 `weibull_at` `args = [N, i]` (0-based `i`, analytic `PP[i] = (i+1)/(N+1)`) and `function_at`
@@ -1827,14 +1834,30 @@ targets (new in v2.1.4, adapted from the new `Test_Search.cs`) use the same `arg
 `SortOrder.Descending` explicitly, exercising `bisection()`'s v2.1.4 descending-branch fix (see
 `core/include/corehydro/numerics/data/interpolation/search.hpp`'s file header) -- two of the
 `bisection_descending_*` cases genuinely distinguish the pre-fix (`start`) from the fixed (correct
-bracketing index) behavior.
+bracketing index) behavior. Unlike `Histogram.*`/`Bilinear.log_floor_value` below, `Search.*` stays
+C++-only even after Task 4: neither `interpolation` toolbox method (`linear`/`bilinear`) returns a
+search index, only an interpolated `y`.
 
 The `Bilinear.log_floor_value` target (`fixtures/special_functions/bilinear.json`, new in v2.1.4,
 adapted from `Test_LogarithmicFloorMatchesLinearInterpolation`) takes `args = [x1_query,
 x2_query]` against a FIXED 3x3 identity grid (`{0, 1E-15, 1}` on both axes) with
 X1Transform/X2Transform/YTransform all `Logarithmic`, exercising Bilinear's v2.1.4 switch to the
 guarded `Tools.Log10` (see `core/include/corehydro/numerics/data/interpolation/bilinear.hpp`'s
-file header) -- before the fix both cases returned NaN.
+file header) -- before the fix both cases returned NaN. Task 4 additionally routes this target
+through the `interpolation` toolbox group's `bilinear` method (`x1_transform`/`x2_transform`/
+`y_transform` all `"log"`), so this pinned value is also a cross-language check.
+
+Task 4 also adds two small `toolbox`-kind files that pin what no `special_function` file already
+does: `fixtures/toolbox/histogram.json`'s `bins_kind_proof` case is the first to exercise the
+`toolbox` kind's dims-shaped-matrix selection (`select: "rows"`/`"columns"`, and a flat `index`
+into a row-major-flattened `bins` result), on a dataset distinct from `Test_Histogram.cs`'s own
+sample so it curates an honest new pin (via `oracle_emitter --dump`) rather than re-asserting an
+existing one; `fixtures/toolbox/interpolation.json` pins the `linear` method's transform matrix
+(`none`/`log`/`normal_z` on `x` and/or `y`), both sort orders, and the `interpolate()`-clamps-vs-
+`extrapolate()`-extends distinction, scraped verbatim from `Test_Linear.cs` (the exact class this
+method wraps, unlike the `Test_PairedDataInterpolation.cs`/`OrderedPairedData` class that exercises
+the identical transform formulas through a different C# type) -- no other fixture in this repo pins
+`Linear.Interpolate()`/`Extrapolate()` directly.
 
 The `Probability.hpcm_joint`/`Probability.hpcm_conditional_at` targets
 (`fixtures/special_functions/probability.json`, new in v2.1.4, adapted from the new

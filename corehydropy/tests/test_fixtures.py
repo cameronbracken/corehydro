@@ -1443,12 +1443,40 @@ _FOURIER_TOOLBOX_METHOD = {
     "Fourier.correlation_at": "cross_correlation",
 }
 
+# special_function/{Histogram,Bilinear} (Task 4): the same routing pattern, one subset per
+# family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's Histogram.*
+# table entries and bilinear_log_floor_value() for the args conventions). Histogram.data_count/
+# get_bin_index_of have no toolbox-method equivalent (neither "statistics" nor "bins" exposes
+# them) and Histogram.adapt_* needs AddData(), which the toolbox arm's stateless construction
+# never calls, so those four stay unrouted -- the same "no toolbox_run-reachable equivalent"
+# reasoning as RunningStatistics's population_* variants. Search.* also stays unrouted: neither
+# "linear" nor "bilinear" returns a search index, only an interpolated y.
+_HISTOGRAM_STATISTICS_INDEX = {
+    "Histogram.mean": 0, "Histogram.median": 1, "Histogram.mode": 2,
+    "Histogram.standard_deviation": 3, "Histogram.lower_bound": 4, "Histogram.upper_bound": 5,
+    "Histogram.bin_width": 6, "Histogram.number_of_bins": 7,
+}
+
+_HISTOGRAM_BINS_COLUMN = {
+    "Histogram.bin_lower_bound_at": 0,
+    "Histogram.bin_upper_bound_at": 1,
+    "Histogram.bin_frequency_at": 3,
+}
+
+
+def _histogram_toolbox_options(explicit_bins):
+    return json.dumps({"bins": explicit_bins}) if explicit_bins > 0 else "{}"
+
+
 _ROUTED_SPECIAL_FUNCTION_TARGETS = (
     set(_CORRELATION_SPECIAL_FUNCTION_METHOD)
     | set(_RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX)
     | set(_RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK)
     | set(_FOURIER_TOOLBOX_METHOD)
     | {"Statistics.percentile"}
+    | set(_HISTOGRAM_STATISTICS_INDEX)
+    | set(_HISTOGRAM_BINS_COLUMN)
+    | {"Bilinear.log_floor_value"}
 )
 
 
@@ -1493,6 +1521,30 @@ def _run_special_function_case(target, args_raw):
         options = json.dumps({"inverse": True}) if inverse else "{}"
         r = _core.toolbox_run("spectra", _FOURIER_TOOLBOX_METHOD[target], [data], options)
         return r["values"][index]
+
+    if target in _HISTOGRAM_STATISTICS_INDEX:
+        explicit_bins = int(args[0])
+        data = args[1:]
+        options = _histogram_toolbox_options(explicit_bins)
+        r = _core.toolbox_run("histogram", "statistics", [data], options)
+        return r["values"][_HISTOGRAM_STATISTICS_INDEX[target]]
+
+    if target in _HISTOGRAM_BINS_COLUMN:
+        explicit_bins = int(args[0])
+        probe = int(args[-1])
+        data = args[1:-1]
+        options = _histogram_toolbox_options(explicit_bins)
+        r = _core.toolbox_run("histogram", "bins", [data], options)
+        return r["values"][probe * 4 + _HISTOGRAM_BINS_COLUMN[target]]
+
+    if target == "Bilinear.log_floor_value":
+        coords = [0.0, 1e-15, 1.0]
+        flat = [0.0, 0.0, 0.0, 1e-15, 1e-15, 1e-15, 1.0, 1.0, 1.0]
+        options = json.dumps({"x1_transform": "log", "x2_transform": "log", "y_transform": "log"})
+        r = _core.toolbox_run(
+            "interpolation", "bilinear", [coords, coords, flat, [args[0]], [args[1]]], options
+        )
+        return r["values"][0]
 
     raise KeyError(f"unrouted special_function target: {target}")
 

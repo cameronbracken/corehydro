@@ -1,0 +1,196 @@
+{
+ "kind": "toolbox",
+ "group": "interpolation",
+ "source": "Numerics/Data/Interpolation/Linear.cs; literals scraped verbatim from Test_Numerics/Data/Interpolation/Test_Linear.cs (Test_Log, Test_Log_List, Test_Z, Test_Z_R, Test_RevLin, Test_Rev_Log, Test_Rev_Z, Test_Extrapolate, Test_Extrapolate_Log, Test_Extrapolate_Z).",
+ "reference": "Numerics @ 2a0357a. No other fixture in this repo pins the `linear` toolbox method (fixtures/special_functions/bilinear.json covers only Bilinear's guarded-log10-floor edge case, and fixtures/special_functions/search.json covers only the raw Interpolater search functions, not Linear's own Interpolate()/Extrapolate() surface), so this file is that pin -- the transform matrix (none/log/normal_z on x and/or y), both sort orders, and the interpolate()-clamps-vs-extrapolate()-extends distinction. Test_Linear.cs's own tolerances are preserved per case (1e-6 for the single-value and normal-z-list assertions, 1e-4 for the log-transform list assertions, matching that test file exactly).",
+ "datasets": {
+  "lin_x": [50, 100, 150, 200, 250],
+  "lin_y": [100, 200, 300, 400, 500],
+  "lin_x_desc": [250, 200, 150, 100, 50],
+  "lin_y_desc": [500, 400, 300, 200, 100],
+  "z_x": [0.05, 0.1, 0.15, 0.2, 0.25],
+  "z_y": [0.1, 0.2, 0.3, 0.4, 0.5],
+  "z_x_desc": [0.25, 0.2, 0.15, 0.1, 0.05],
+  "z_y_desc": [0.5, 0.4, 0.3, 0.2, 0.1],
+  "zr_y": [0.001, 0.01, 0.7, 0.95, 0.99],
+  "log_xout": [76, 80, 96, 162, 170, 216],
+  "zr_xout": [0.07, 0.09, 0.12, 0.18, 0.21, 0.23],
+  "extrap_xout": [300, 310, 350, 400, 440],
+  "z_extrap_xout": [0.3, 0.45, 0.5, 0.6, 0.77]
+ },
+ "cases": [
+  {
+   "name": "none_none_single_value",
+   "data": ["lin_x", "lin_y", [75]],
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 150.0, "mode": "abs", "tol": 1e-6, "source": "Test_Lin"}
+   ]
+  },
+  {
+   "name": "log_transform_matrix_single_value",
+   "data": ["lin_x", "lin_y", [75]],
+   "options": {"y_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 141.42135623731, "mode": "abs", "tol": 1e-6, "source": "Test_Log LinLog"}
+   ]
+  },
+  {
+   "name": "log_lin_single_value",
+   "data": ["lin_x", "lin_y", [75]],
+   "options": {"x_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 158.496250072116, "mode": "abs", "tol": 1e-6, "source": "Test_Log LogLin"}
+   ]
+  },
+  {
+   "name": "log_log_single_value",
+   "data": ["lin_x", "lin_y", [75]],
+   "options": {"x_transform": "log", "y_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 150.0, "mode": "abs", "tol": 1e-6, "source": "Test_Log LogLog"}
+   ]
+  },
+  {
+   "name": "lin_log_list",
+   "data": ["lin_x", "lin_y", "log_xout"],
+   "options": {"y_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 143.3955, "mode": "abs", "tol": 1e-4, "source": "Test_Log_List LinLog"},
+    {"method": "linear", "index": 3, "expected": 321.4449, "mode": "abs", "tol": 1e-4, "source": "Test_Log_List LinLog"},
+    {"method": "linear", "index": 5, "expected": 429.6068, "mode": "abs", "tol": 1e-4, "source": "Test_Log_List LinLog"}
+   ]
+  },
+  {
+   "name": "log_lin_list",
+   "data": ["lin_x", "lin_y", "log_xout"],
+   "options": {"x_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 160.4071, "mode": "abs", "tol": 1e-4, "source": "Test_Log_List LogLin"},
+    {"method": "linear", "index": 3, "expected": 326.7521, "mode": "abs", "tol": 1e-4, "source": "Test_Log_List LogLin"},
+    {"method": "linear", "index": 5, "expected": 434.4895, "mode": "abs", "tol": 1e-4, "source": "Test_Log_List LogLin"}
+   ]
+  },
+  {
+   "name": "log_log_list",
+   "data": ["lin_x", "lin_y", "log_xout"],
+   "options": {"x_transform": "log", "y_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 152, "mode": "abs", "tol": 1e-6, "source": "Test_Log_List LogLog"},
+    {"method": "linear", "index": 3, "expected": 324, "mode": "abs", "tol": 1e-6, "source": "Test_Log_List LogLog"},
+    {"method": "linear", "index": 5, "expected": 432, "mode": "abs", "tol": 1e-6, "source": "Test_Log_List LogLog"}
+   ]
+  },
+  {
+   "name": "lin_z_single_value",
+   "data": ["z_x", "z_y", [0.18]],
+   "options": {"y_transform": "normal_z"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 0.358762529, "mode": "abs", "tol": 1e-6, "source": "Test_Z LinZ"}
+   ]
+  },
+  {
+   "name": "z_lin_single_value",
+   "data": ["z_x", "z_y", [0.18]],
+   "options": {"x_transform": "normal_z"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 0.362146174, "mode": "abs", "tol": 1e-6, "source": "Test_Z ZLin"}
+   ]
+  },
+  {
+   "name": "z_z_single_value",
+   "data": ["z_x", "z_y", [0.18]],
+   "options": {"x_transform": "normal_z", "y_transform": "normal_z"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 0.36093855992815, "mode": "abs", "tol": 1e-6, "source": "Test_Z ZZ"}
+   ]
+  },
+  {
+   "name": "lin_z_list",
+   "data": ["z_x", "zr_y", "zr_xout"],
+   "options": {"y_transform": "normal_z"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 0.002679041, "mode": "abs", "tol": 1e-6, "source": "Test_Z_R LinZ"},
+    {"method": "linear", "index": 3, "expected": 0.884282862, "mode": "abs", "tol": 1e-6, "source": "Test_Z_R LinZ"},
+    {"method": "linear", "index": 5, "expected": 0.980000061, "mode": "abs", "tol": 1e-6, "source": "Test_Z_R LinZ"}
+   ]
+  },
+  {
+   "name": "z_lin_list",
+   "data": ["z_x", "zr_y", "zr_xout"],
+   "options": {"x_transform": "normal_z"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 0.005188150, "mode": "abs", "tol": 1e-6, "source": "Test_Z_R ZLin"},
+    {"method": "linear", "index": 3, "expected": 0.855365435, "mode": "abs", "tol": 1e-6, "source": "Test_Z_R ZLin"},
+    {"method": "linear", "index": 5, "expected": 0.974597253, "mode": "abs", "tol": 1e-6, "source": "Test_Z_R ZLin"}
+   ]
+  },
+  {
+   "name": "descending_none_none",
+   "data": ["lin_x_desc", "lin_y_desc", [75]],
+   "options": {"sort_order": "descending"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 150.0, "mode": "abs", "tol": 1e-6, "source": "Test_RevLin"}
+   ]
+  },
+  {
+   "name": "descending_log_log",
+   "data": ["lin_x_desc", "lin_y_desc", [75]],
+   "options": {"sort_order": "descending", "x_transform": "log", "y_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 150.0, "mode": "abs", "tol": 1e-6, "source": "Test_Rev_Log LogLog"}
+   ]
+  },
+  {
+   "name": "descending_log_lin",
+   "data": ["lin_x_desc", "lin_y_desc", [75]],
+   "options": {"sort_order": "descending", "x_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 158.496250072116, "mode": "abs", "tol": 1e-6, "source": "Test_Rev_Log LogLin"}
+   ]
+  },
+  {
+   "name": "descending_normal_z",
+   "data": ["z_x_desc", "z_y_desc", [0.18]],
+   "options": {"sort_order": "descending", "y_transform": "normal_z"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 0.358762529, "mode": "abs", "tol": 1e-6, "source": "Test_Rev_Z LinZ"}
+   ]
+  },
+  {
+   "name": "extrapolate_none_none",
+   "data": ["lin_x", "lin_y", "extrap_xout"],
+   "options": {"extrapolate": true},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 600, "mode": "abs", "tol": 1e-6, "source": "Test_Extrapolate"},
+    {"method": "linear", "index": 2, "expected": 700, "mode": "abs", "tol": 1e-6, "source": "Test_Extrapolate"},
+    {"method": "linear", "index": 4, "expected": 880, "mode": "abs", "tol": 1e-6, "source": "Test_Extrapolate"}
+   ]
+  },
+  {
+   "name": "extrapolate_log_lin",
+   "data": ["lin_x", "lin_y", "extrap_xout"],
+   "options": {"extrapolate": true, "x_transform": "log"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 581.7059, "mode": "abs", "tol": 1e-4, "source": "Test_Extrapolate_Log LogLin"},
+    {"method": "linear", "index": 4, "expected": 753.3409, "mode": "abs", "tol": 1e-4, "source": "Test_Extrapolate_Log LogLin"}
+   ]
+  },
+  {
+   "name": "extrapolate_normal_z_x",
+   "data": ["z_x", "z_y", "z_extrap_xout"],
+   "options": {"extrapolate": true, "x_transform": "normal_z"},
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 0.5898031, "mode": "abs", "tol": 1e-6, "source": "Test_Extrapolate_Z ZLin"},
+    {"method": "linear", "index": 4, "expected": 1.3456435, "mode": "abs", "tol": 1e-6, "source": "Test_Extrapolate_Z ZLin"}
+   ]
+  },
+  {
+   "name": "no_extrapolate_clamps_to_end_knot",
+   "data": ["lin_x", "lin_y", "extrap_xout"],
+   "assertions": [
+    {"method": "linear", "index": 0, "expected": 500.0, "mode": "abs", "tol": 0.0, "source": "structural invariant: interpolate() (extrapolate defaults to false) clamps any x beyond the last knot to the last knot's y (linear.hpp base_interpolate's documented first branch), not an independently-computed value"},
+    {"method": "linear", "index": 4, "expected": 500.0, "mode": "abs", "tol": 0.0, "source": "same structural invariant at the largest out-of-range x"}
+   ]
+  }
+ ]
+}

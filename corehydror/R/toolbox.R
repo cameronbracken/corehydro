@@ -320,3 +320,107 @@ dft <- function(x, inverse = FALSE) {
 dft_real <- function(x, inverse = FALSE) {
   toolbox_run("spectra", "dft_real", list(x), list(inverse = isTRUE(inverse)))$values
 }
+
+# The "histogram" and "interpolation" toolbox groups (Task 4). "histogram" mirrors the C#
+# Histogram class (Rice-rule or explicit bin count, both deriving their range from the data --
+# there is no lower/upper-bound constructor overload to expose); "interpolation" mirrors Linear
+# and Bilinear, including their independent x/y transforms and Linear's separate extrapolate path.
+
+#' Bin a sample into a histogram
+#'
+#' Mirrors the C# `Histogram` class of the Numerics library. With `bins = NULL` the bin count
+#' follows the Rice rule, `ceiling(2 * n^(1/3)) + 1`, exactly as the C# data constructor does.
+#'
+#' @param x numeric vector of observations.
+#' @param bins optional number of bins. `NULL` (the default) uses the Rice rule.
+#' @return a data frame with columns `lower`, `upper`, `midpoint`, and `frequency`, carrying the
+#'   histogram's `mean`, `median`, `mode`, `sd`, and `bin_width` as attributes.
+#' @examples
+#' h <- histogram(c(1, 2, 2.5, 3, 3.5, 4, 5, 7, 8, 9))
+#' h
+#' attr(h, "mode")
+#' @export
+histogram <- function(x, bins = NULL) {
+  if (!is.numeric(x) || length(x) < 2L) {
+    stop("`x` must be a numeric vector with at least two elements", call. = FALSE)
+  }
+  opts <- if (is.null(bins)) list() else list(bins = as.integer(bins))
+  b <- toolbox_run("histogram", "bins", list(x), opts)
+  out <- as.data.frame(matrix(b$values, ncol = 4L, byrow = TRUE))
+  names(out) <- b$names
+  s <- toolbox_run("histogram", "statistics", list(x), opts)
+  for (i in seq_along(s$names)) attr(out, s$names[[i]]) <- s$values[[i]]
+  out
+}
+
+#' Interpolate a paired series
+#'
+#' Mirrors the C# `Linear` interpolater of the Numerics library, including its x and y
+#' transforms.
+#'
+#' @param x,y numeric vectors of equal length defining the knots.
+#' @param xout numeric vector of positions to interpolate at.
+#' @param x_transform,y_transform one of `"none"` (the default), `"log"`, or `"normal_z"`.
+#' @param sort_order `"ascending"` (the default) or `"descending"`, describing `x`.
+#' @param extrapolate whether to extend the end segments beyond the knots. Default `FALSE`,
+#'   which clamps to the end knot, matching the C# `Interpolate()` default; `TRUE` calls the C#
+#'   `Extrapolate()` method instead.
+#' @return a numeric vector the same length as `xout`.
+#' @examples
+#' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5))
+#' @export
+interpolate <- function(x, y, xout, x_transform = c("none", "log", "normal_z"),
+                        y_transform = c("none", "log", "normal_z"),
+                        sort_order = c("ascending", "descending"), extrapolate = FALSE) {
+  check_pair(x, y)
+  if (!is.numeric(xout)) {
+    stop("`xout` must be numeric", call. = FALSE)
+  }
+  x_transform <- match.arg(x_transform)
+  y_transform <- match.arg(y_transform)
+  sort_order <- match.arg(sort_order)
+  toolbox_run("interpolation", "linear", list(x, y, xout),
+              list(x_transform = x_transform, y_transform = y_transform,
+                   sort_order = sort_order, extrapolate = isTRUE(extrapolate)))$values
+}
+
+#' Interpolate a 2D grid (bilinear interpolation)
+#'
+#' Mirrors the C# `Bilinear` interpolater of the Numerics library.
+#'
+#' @param x1,x2 numeric vectors of grid coordinates.
+#' @param y numeric matrix with `length(x1)` rows and `length(x2)` columns, `y[i, j]` the value
+#'   at `(x1[i], x2[j])`.
+#' @param x1out,x2out numeric vectors of equal length, positions to interpolate at.
+#' @param x1_transform,x2_transform,y_transform one of `"none"` (the default), `"log"`, or
+#'   `"normal_z"`.
+#' @param sort_order `"ascending"` (the default) or `"descending"`, describing `x1` and `x2`.
+#' @return a numeric vector the same length as `x1out`/`x2out`.
+#' @examples
+#' interpolate_2d(c(1, 2, 3), c(1, 2, 3), diag(3), c(1.5), c(1.5))
+#' @export
+interpolate_2d <- function(x1, x2, y, x1out, x2out,
+                           x1_transform = c("none", "log", "normal_z"),
+                           x2_transform = c("none", "log", "normal_z"),
+                           y_transform = c("none", "log", "normal_z"),
+                           sort_order = c("ascending", "descending")) {
+  if (!is.numeric(x1) || !is.numeric(x2)) {
+    stop("`x1` and `x2` must be numeric vectors", call. = FALSE)
+  }
+  y <- as.matrix(y)
+  if (!identical(dim(y), c(length(x1), length(x2)))) {
+    stop(sprintf("`y` must be a %d x %d matrix (length(x1) x length(x2)); got %d x %d",
+                 length(x1), length(x2), nrow(y), ncol(y)), call. = FALSE)
+  }
+  if (!is.numeric(x1out) || !is.numeric(x2out) || length(x1out) != length(x2out)) {
+    stop("`x1out` and `x2out` must be numeric vectors of the same length", call. = FALSE)
+  }
+  x1_transform <- match.arg(x1_transform)
+  x2_transform <- match.arg(x2_transform)
+  y_transform <- match.arg(y_transform)
+  sort_order <- match.arg(sort_order)
+  toolbox_run("interpolation", "bilinear",
+              list(x1, x2, as.double(t(y)), x1out, x2out),
+              list(x1_transform = x1_transform, x2_transform = x2_transform,
+                   y_transform = y_transform, sort_order = sort_order))$values
+}

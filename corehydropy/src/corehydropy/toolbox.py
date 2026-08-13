@@ -26,6 +26,9 @@ __all__ = [
     "cross_correlation",
     "dft",
     "dft_real",
+    "histogram",
+    "interpolate",
+    "interpolate_2d",
 ]
 
 
@@ -501,3 +504,163 @@ def dft_real(x, inverse: bool = False) -> np.ndarray:
     """
     xa = np.asarray(x, dtype=float).ravel()
     return np.asarray(_toolbox_run("spectra", "dft_real", [xa], {"inverse": bool(inverse)})["values"])
+
+
+# The "histogram" and "interpolation" toolbox groups (Task 4). "histogram" mirrors the C#
+# Histogram class (Rice-rule or explicit bin count, both deriving their range from the data --
+# there is no lower/upper-bound constructor overload to expose); "interpolation" mirrors Linear
+# and Bilinear, including their independent x/y transforms and Linear's separate extrapolate path.
+# Mirrors corehydror's R/toolbox.R verb for verb.
+
+
+def histogram(x, bins=None) -> dict:
+    """Bin a sample into a histogram.
+
+    Mirrors the C# ``Histogram`` class of the Numerics library. With ``bins=None`` the bin
+    count follows the Rice rule, ``ceil(2 * n**(1/3)) + 1``, exactly as the C# data constructor
+    does.
+
+    Parameters
+    ----------
+    x : array_like
+        Observations, at least two elements.
+    bins : int, optional
+        Number of bins. ``None`` (the default) uses the Rice rule.
+
+    Returns
+    -------
+    dict
+        Keys ``lower``, ``upper``, ``midpoint``, ``frequency`` (each :class:`numpy.ndarray`,
+        one entry per bin) and ``statistics`` (a dict with ``mean``, ``median``, ``mode``,
+        ``sd``, ``lower``, ``upper``, ``bin_width``, ``bins``).
+
+    Examples
+    --------
+    >>> from corehydropy import histogram
+    >>> h = histogram([1, 2, 2.5, 3, 3.5, 4, 5, 7, 8, 9])
+    >>> float(h["frequency"].sum())
+    10.0
+    >>> h["statistics"]["bins"]
+    6.0
+    """
+    xa = np.asarray(x, dtype=float).ravel()
+    if xa.size < 2:
+        raise ValueError("`x` must have at least two elements")
+    options = {} if bins is None else {"bins": int(bins)}
+    b = _toolbox_run("histogram", "bins", [xa], options)
+    rows = np.asarray(b["values"], dtype=float).reshape(-1, 4)
+    out = {name: rows[:, i] for i, name in enumerate(b["names"])}
+    s = _toolbox_run("histogram", "statistics", [xa], options)
+    out["statistics"] = dict(zip(s["names"], s["values"]))
+    return out
+
+
+def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none",
+                sort_order: str = "ascending", extrapolate: bool = False) -> np.ndarray:
+    """Interpolate a paired series.
+
+    Mirrors the C# ``Linear`` interpolater of the Numerics library, including its x and y
+    transforms.
+
+    Parameters
+    ----------
+    x, y : array_like
+        Equal-length knots.
+    xout : array_like
+        Positions to interpolate at.
+    x_transform, y_transform : {"none", "log", "normal_z"}
+    sort_order : {"ascending", "descending"}
+        Describes ``x``.
+    extrapolate : bool
+        Whether to extend the end segments beyond the knots. ``False`` (the default) clamps to
+        the end knot, matching the C# ``Interpolate()`` default; ``True`` calls the C#
+        ``Extrapolate()`` method instead.
+
+    Returns
+    -------
+    numpy.ndarray
+        Same length as ``xout``.
+
+    Examples
+    --------
+    >>> from corehydropy import interpolate
+    >>> interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5, 2.5])
+    array([15., 25.])
+    """
+    xa, ya = _check_pair(x, y)
+    if x_transform not in ("none", "log", "normal_z"):
+        raise ValueError(
+            f"`x_transform` must be one of 'none', 'log', 'normal_z'; got {x_transform!r}"
+        )
+    if y_transform not in ("none", "log", "normal_z"):
+        raise ValueError(
+            f"`y_transform` must be one of 'none', 'log', 'normal_z'; got {y_transform!r}"
+        )
+    if sort_order not in ("ascending", "descending"):
+        raise ValueError(f"`sort_order` must be one of 'ascending', 'descending'; got {sort_order!r}")
+    xouta = np.asarray(xout, dtype=float).ravel()
+    options = {
+        "x_transform": x_transform,
+        "y_transform": y_transform,
+        "sort_order": sort_order,
+        "extrapolate": bool(extrapolate),
+    }
+    return np.asarray(_toolbox_run("interpolation", "linear", [xa, ya, xouta], options)["values"])
+
+
+def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_transform: str = "none",
+                   y_transform: str = "none", sort_order: str = "ascending") -> np.ndarray:
+    """Interpolate a 2D grid (bilinear interpolation).
+
+    Mirrors the C# ``Bilinear`` interpolater of the Numerics library.
+
+    Parameters
+    ----------
+    x1, x2 : array_like
+        Grid coordinates.
+    y : array_like
+        2D array, ``len(x1)`` rows by ``len(x2)`` columns; ``y[i, j]`` is the value at
+        ``(x1[i], x2[j])``.
+    x1out, x2out : array_like
+        Equal-length positions to interpolate at.
+    x1_transform, x2_transform, y_transform : {"none", "log", "normal_z"}
+    sort_order : {"ascending", "descending"}
+        Describes ``x1`` and ``x2``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Same length as ``x1out``/``x2out``.
+
+    Examples
+    --------
+    >>> from corehydropy import interpolate_2d
+    >>> import numpy as np
+    >>> interpolate_2d([1, 2, 3], [1, 2, 3], np.eye(3), [1.5], [1.5])
+    array([0.5])
+    """
+    x1a = np.asarray(x1, dtype=float).ravel()
+    x2a = np.asarray(x2, dtype=float).ravel()
+    ya = np.asarray(y, dtype=float)
+    if ya.shape != (x1a.size, x2a.size):
+        raise ValueError(
+            f"`y` must be a {x1a.size} x {x2a.size} array (len(x1) x len(x2)); got {ya.shape}"
+        )
+    x1outa = np.asarray(x1out, dtype=float).ravel()
+    x2outa = np.asarray(x2out, dtype=float).ravel()
+    if x1outa.size != x2outa.size:
+        raise ValueError("`x1out` and `x2out` must be the same length")
+    for name, t in (("x1_transform", x1_transform), ("x2_transform", x2_transform),
+                    ("y_transform", y_transform)):
+        if t not in ("none", "log", "normal_z"):
+            raise ValueError(f"`{name}` must be one of 'none', 'log', 'normal_z'; got {t!r}")
+    if sort_order not in ("ascending", "descending"):
+        raise ValueError(f"`sort_order` must be one of 'ascending', 'descending'; got {sort_order!r}")
+    options = {
+        "x1_transform": x1_transform,
+        "x2_transform": x2_transform,
+        "y_transform": y_transform,
+        "sort_order": sort_order,
+    }
+    data = [x1a, x2a, ya.ravel(), x1outa, x2outa]
+    return np.asarray(_toolbox_run("interpolation", "bilinear", data, options)["values"])
