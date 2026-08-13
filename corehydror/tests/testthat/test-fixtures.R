@@ -182,6 +182,99 @@ run_special_function_correlation_case <- function(target, args_raw) {
   ns$ch_toolbox_run_("correlation", method, list(x, y), "{}")$values[[1]]
 }
 
+# special_function/{RunningStatistics,RunningCovariance,Fourier,Statistics.percentile} (Task 3):
+# the same "route the pinned value through ch_toolbox_run_" pattern as Correlation.* above, one
+# subset per family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's
+# running_covariance_toolbox()/running_covariance_element(), the RunningStatistics.* table
+# entries, and the Fourier.{fft_at,real_fft_at,correlation_at} functions for the args
+# conventions and the reasoning for which targets route and which stay C++-only:
+# RunningStatistics's four population-normalized variants and its combined_*/clone_* cases have
+# no run_statistics()-reachable equivalent, and Fourier.autocorrelation_at deliberately stays off
+# this list because the toolbox "spectra.autocorrelation" method wraps the newer
+# data::Autocorrelation class, not Fourier::autocorrelation itself).
+kRunningStatisticsSpecialFunctionIndex <- c(
+  "RunningStatistics.count" = 0L, "RunningStatistics.minimum" = 1L,
+  "RunningStatistics.maximum" = 2L, "RunningStatistics.mean" = 3L,
+  "RunningStatistics.variance" = 4L, "RunningStatistics.standard_deviation" = 5L,
+  "RunningStatistics.coefficient_of_variation" = 6L, "RunningStatistics.skewness" = 7L,
+  "RunningStatistics.kurtosis" = 8L
+)
+
+kRunningCovarianceSpecialFunctionBlock <- c(
+  "RunningCovariance.mean_element" = 0L,
+  "RunningCovariance.covariance_element" = 1L,
+  "RunningCovariance.sample_covariance_element" = 2L,
+  "RunningCovariance.sample_correlation_element" = 3L,
+  "RunningCovariance.population_covariance_element" = 4L,
+  "RunningCovariance.population_correlation_element" = 5L
+)
+
+kFourierToolboxMethod <- c(
+  "Fourier.fft_at" = "dft",
+  "Fourier.real_fft_at" = "dft_real",
+  "Fourier.correlation_at" = "cross_correlation"
+)
+
+kRoutedSpecialFunctionTargets <- c(
+  names(kCorrelationSpecialFunctionMethod), names(kRunningStatisticsSpecialFunctionIndex),
+  names(kRunningCovarianceSpecialFunctionBlock), names(kFourierToolboxMethod),
+  "Statistics.percentile"
+)
+
+run_special_function_case <- function(target, args_raw) {
+  ns <- asNamespace("corehydror")
+  args <- vapply(args_raw, parse_num, numeric(1))
+
+  if (target %in% names(kCorrelationSpecialFunctionMethod)) {
+    return(run_special_function_correlation_case(target, args_raw))
+  }
+  if (identical(target, "Statistics.percentile")) {
+    n <- length(args) - 2L
+    data <- args[seq_len(n)]
+    k <- args[[n + 1L]]
+    sorted <- args[[n + 2L]] != 0
+    opts <- if (sorted) '{"sorted":true}' else "{}"
+    return(ns$ch_toolbox_run_("statistics", "percentile", list(data, k), opts)$values[[1]])
+  }
+  if (target %in% names(kRunningStatisticsSpecialFunctionIndex)) {
+    r <- ns$ch_toolbox_run_("statistics", "summary", list(args), "{}")
+    return(r$values[[kRunningStatisticsSpecialFunctionIndex[[target]] + 1L]])
+  }
+  if (target %in% names(kRunningCovarianceSpecialFunctionBlock)) {
+    size <- as.integer(args[[1]])
+    num_pushes <- as.integer(args[[2]])
+    cols <- lapply(seq_len(size), function(j) {
+      vapply(seq_len(num_pushes), function(p) args[[2L + (p - 1L) * size + j]], numeric(1))
+    })
+    r <- ns$ch_toolbox_run_("statistics", "running_covariance", cols, "{}")
+    base <- 2L + num_pushes * size
+    i <- as.integer(args[[base + 1L]])
+    block <- kRunningCovarianceSpecialFunctionBlock[[target]]
+    if (block == 0L) return(r$values[[1L + i + 1L]])
+    j <- as.integer(args[[base + 2L]])
+    offset <- 1L + size + (block - 1L) * (size * size)
+    return(r$values[[offset + i * size + j + 1L]])
+  }
+  if (target %in% names(kFourierToolboxMethod)) {
+    if (identical(target, "Fourier.correlation_at")) {
+      n <- (length(args) - 1L) %/% 2L
+      data1 <- args[seq_len(n)]
+      data2 <- args[(n + 1L):(2L * n)]
+      index <- as.integer(args[[2L * n + 1L]])
+      r <- ns$ch_toolbox_run_("spectra", "cross_correlation", list(data1, data2), "{}")
+      return(r$values[[index + 1L]])
+    }
+    n <- length(args) - 2L
+    data <- args[seq_len(n)]
+    inverse <- args[[n + 1L]] != 0
+    index <- as.integer(args[[n + 2L]])
+    opts <- if (inverse) '{"inverse":true}' else "{}"
+    r <- ns$ch_toolbox_run_("spectra", kFourierToolboxMethod[[target]], list(data), opts)
+    return(r$values[[index + 1L]])
+  }
+  stop(sprintf("unrouted special_function target: %s", target))
+}
+
 # toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
 # utility group runs through ch_toolbox_run_. Mirrors run_toolbox_kind in
 # core/tests/test_fixtures.cpp.
@@ -1285,10 +1378,11 @@ test_that("oracle fixtures validate", {
   for (f in files) {
     spec <- jsonlite::read_json(f, simplifyVector = FALSE)
     # Only validate univariate_distribution, multivariate_distribution, bivariate_copula,
-    # mcmc_sampler, bootstrap, model_estimation, and toolbox fixtures, plus the three
-    # Correlation.* special_function targets (see run_special_function_correlation_case
-    # above); every other special_function kind stays validated in C++ only, not exposed to
-    # the R package.
+    # mcmc_sampler, bootstrap, model_estimation, and toolbox fixtures, plus the
+    # special_function targets in kRoutedSpecialFunctionTargets (Correlation.*, the routable
+    # RunningStatistics.*/RunningCovariance.*/Fourier.* subsets, and Statistics.percentile --
+    # see run_special_function_case above); every other special_function kind stays validated
+    # in C++ only, not exposed to the R package.
     if (identical(spec$kind, "model_estimation")) {
       target <- spec$target
       datasets <- spec$datasets
@@ -1316,8 +1410,8 @@ test_that("oracle fixtures validate", {
       file_target <- spec$target
       for (case in spec$cases) {
         target <- if (is.null(case$target)) file_target else case$target
-        if (!target %in% names(kCorrelationSpecialFunctionMethod)) next
-        actual <- run_special_function_correlation_case(target, case$args)
+        if (!target %in% kRoutedSpecialFunctionTargets) next
+        actual <- run_special_function_case(target, case$args)
         for (a in case$assertions) check_assertion(actual, a)
       }
       next

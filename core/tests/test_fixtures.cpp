@@ -273,18 +273,33 @@ static la::Matrix cholesky_matrix_from_flat(const std::vector<double>& a, int n)
 }
 
 // RunningCovariance fixture args: [size, num_pushes, data_flat(num_pushes*size), trailing
-// index/indices] -- see fixtures/special_functions/running_covariance.json for the
-// convention. Builds a RunningCovarianceMatrix and replays `num_pushes` push()es of
-// `size`-length rows sliced from the flattened data.
-static bfdata::RunningCovarianceMatrix running_covariance_build(const std::vector<double>& a, int size,
-                                                                  int num_pushes) {
-    bfdata::RunningCovarianceMatrix rcm(size);
-    for (int p = 0; p < num_pushes; ++p) {
-        std::vector<double> row(a.begin() + 2 + static_cast<std::ptrdiff_t>(p) * size,
-                                 a.begin() + 2 + static_cast<std::ptrdiff_t>(p + 1) * size);
-        rcm.push(row);
-    }
-    return rcm;
+// index/indices] -- see fixtures/special_functions/running_covariance.json for the convention.
+// Routed through run_toolbox (numerics/support/toolbox_runner.hpp's "statistics.running_covariance"
+// method) rather than building bfdata::RunningCovarianceMatrix directly, so these pinned
+// special_function values also exercise the toolbox dispatch path the running_covariance() verb
+// runs through in both languages. The toolbox convention transposes the fixture's row-major push
+// data into one column vector per variable; running_covariance_element() below then knows the
+// flat-packed result layout (n, mean, covariance, sample_covariance, sample_correlation,
+// population_covariance, population_correlation -- see run_statistics's own comment) well enough
+// to pick a single (block, i, j) element back out.
+static tbx::ToolboxResult running_covariance_toolbox(const std::vector<double>& a, int size, int num_pushes) {
+    std::vector<std::vector<double>> columns(static_cast<std::size_t>(size),
+                                             std::vector<double>(static_cast<std::size_t>(num_pushes)));
+    for (int p = 0; p < num_pushes; ++p)
+        for (int j = 0; j < size; ++j)
+            columns[static_cast<std::size_t>(j)][static_cast<std::size_t>(p)] =
+                a[2 + static_cast<std::size_t>(p) * static_cast<std::size_t>(size) + static_cast<std::size_t>(j)];
+    return tbx::run_toolbox("statistics", "running_covariance", columns, "{}");
+}
+
+// block: 0 = mean (i only), 1 = covariance, 2 = sample_covariance, 3 = sample_correlation,
+// 4 = population_covariance, 5 = population_correlation (each size x size, i, j both used).
+static double running_covariance_element(const tbx::ToolboxResult& r, int size, int block, int i, int j = 0) {
+    std::size_t block_size = static_cast<std::size_t>(size) * static_cast<std::size_t>(size);
+    std::size_t offset = 1;  // skip n
+    if (block == 0) return r.values[offset + static_cast<std::size_t>(i)];
+    offset += static_cast<std::size_t>(size) + static_cast<std::size_t>(block - 1) * block_size;
+    return r.values[offset + static_cast<std::size_t>(i) * static_cast<std::size_t>(size) + static_cast<std::size_t>(j)];
 }
 
 // RunningStatistics combine fixture args: [n1, sample1(n1 values), sample2(remaining
@@ -318,21 +333,31 @@ static bfdata::RunningStatistics running_statistics_clone(const std::vector<doub
 //  - Fourier.autocorrelation_at: args = [series..., lag_max, lag] -- n = len(args) - 2;
 //    autocorrelation(series, (int)lag_max) (lag_max == -1 triggers the default auto-lag),
 //    returns the acf value (column 1) at row `lag`.
+//
+// fft_at/real_fft_at/correlation_at are routed through run_toolbox (numerics/support/
+// toolbox_runner.hpp's "spectra.dft"/"dft_real"/"cross_correlation" methods, each a direct
+// wrapper with no behavior substitution), so these pinned special_function values also exercise
+// the toolbox dispatch path the dft()/dft_real()/cross_correlation() verbs run through.
+// autocorrelation_at stays a DIRECT call to bffourier::autocorrelation(): the toolbox
+// "spectra.autocorrelation" method wraps the newer, oracle-proven-equivalent
+// data::Autocorrelation class instead (see autocorrelation.hpp), not this FFT-based function, so
+// routing this particular target through it would silently swap which implementation gets
+// exercised rather than merely adding a toolbox-path check.
 static double fourier_fft_at(const std::vector<double>& a) {
     std::size_t n = a.size() - 2;
     std::vector<double> data(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));
     bool inverse = a[n] != 0.0;
     int index = static_cast<int>(a[n + 1]);
-    bffourier::fft(data, inverse);
-    return data[static_cast<std::size_t>(index)];
+    std::string opts = inverse ? "{\"inverse\":true}" : "{}";
+    return tbx::run_toolbox("spectra", "dft", {data}, opts).values.at(static_cast<std::size_t>(index));
 }
 static double fourier_real_fft_at(const std::vector<double>& a) {
     std::size_t n = a.size() - 2;
     std::vector<double> data(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));
     bool inverse = a[n] != 0.0;
     int index = static_cast<int>(a[n + 1]);
-    bffourier::real_fft(data, inverse);
-    return data[static_cast<std::size_t>(index)];
+    std::string opts = inverse ? "{\"inverse\":true}" : "{}";
+    return tbx::run_toolbox("spectra", "dft_real", {data}, opts).values.at(static_cast<std::size_t>(index));
 }
 static double fourier_correlation_at(const std::vector<double>& a) {
     std::size_t n = (a.size() - 1) / 2;
@@ -340,8 +365,8 @@ static double fourier_correlation_at(const std::vector<double>& a) {
     std::vector<double> data2(a.begin() + static_cast<std::ptrdiff_t>(n),
                                a.begin() + static_cast<std::ptrdiff_t>(2 * n));
     int index = static_cast<int>(a[2 * n]);
-    auto corr = bffourier::correlation(data1, data2);
-    return corr[static_cast<std::size_t>(index)];
+    return tbx::run_toolbox("spectra", "cross_correlation", {data1, data2}, "{}")
+        .values.at(static_cast<std::size_t>(index));
 }
 static double fourier_autocorrelation_at(const std::vector<double>& a) {
     std::size_t n = a.size() - 2;
@@ -648,13 +673,17 @@ special_function_table() {
             return lu.solve(la::Vector(std::move(rhs)))[i];
         }},
         // Percentile (args: [data_1..data_n, k, data_is_sorted (0.0/1.0)] -- see
-        // fixtures/special_functions/percentile.json for the convention)
+        // fixtures/special_functions/percentile.json for the convention). Routed through
+        // run_toolbox (numerics/support/toolbox_runner.hpp's "statistics.percentile" method)
+        // rather than calling bfdata::percentile directly, so these pinned special_function
+        // values also exercise the toolbox dispatch path the percentile() verb runs through.
         {"Statistics.percentile", [](const std::vector<double>& a) {
             std::size_t n = a.size() - 2;
             std::vector<double> data(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));
             double k = a[n];
             bool sorted = a[n + 1] != 0.0;
-            return bfdata::percentile(data, k, sorted);
+            std::string opts = sorted ? "{\"sorted\":true}" : "{}";
+            return tbx::run_toolbox("statistics", "percentile", {data, {k}}, opts).values.at(0);
         }},
         // Extensions/MersenneTwister ranged-draw family (see
         // fixtures/special_functions/extension_methods.json for the conventions)
@@ -688,75 +717,103 @@ special_function_table() {
             return static_cast<double>(result);
         }},
         // RunningCovarianceMatrix family (args: [size, num_pushes, data_flat, trailing
-        // index/indices] -- see fixtures/special_functions/running_covariance.json)
+        // index/indices] -- see fixtures/special_functions/running_covariance.json). Routed
+        // through run_toolbox (running_covariance_toolbox()/running_covariance_element() above)
+        // rather than building bfdata::RunningCovarianceMatrix directly.
         {"RunningCovariance.mean_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
-            return rcm.mean()(i, 0);
+            return running_covariance_element(r, size, 0, i);
         }},
         {"RunningCovariance.covariance_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.covariance()(i, j);
+            return running_covariance_element(r, size, 1, i, j);
         }},
         {"RunningCovariance.sample_covariance_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.sample_covariance()(i, j);
+            return running_covariance_element(r, size, 2, i, j);
         }},
         {"RunningCovariance.sample_correlation_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.sample_correlation()(i, j);
+            return running_covariance_element(r, size, 3, i, j);
         }},
         {"RunningCovariance.population_covariance_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.population_covariance()(i, j);
+            return running_covariance_element(r, size, 4, i, j);
         }},
         {"RunningCovariance.population_correlation_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.population_correlation()(i, j);
+            return running_covariance_element(r, size, 5, i, j);
         }},
         // RunningStatistics family (args: the flat sample; see
-        // fixtures/special_functions/running_statistics.json)
-        {"RunningStatistics.mean", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).mean(); }},
-        {"RunningStatistics.variance", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).variance(); }},
-        {"RunningStatistics.standard_deviation", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).standard_deviation(); }},
+        // fixtures/special_functions/running_statistics.json). The nine properties the toolbox
+        // "statistics.summary" method exposes are routed through run_toolbox, so these pinned
+        // special_function values also exercise the toolbox dispatch path the
+        // running_statistics() verb runs through in both languages. The four population-
+        // normalized variants (population_variance/population_standard_deviation/
+        // population_skewness/population_kurtosis) have no run_statistics equivalent -- the
+        // "summary" method's fixed 13-name result mirrors only what running_statistics() exposes
+        // -- so those four, plus combined_*/clone_* below (which exercise combine()/clone(), not
+        // reachable through any toolbox verb), stay direct bfdata::RunningStatistics calls.
+        {"RunningStatistics.mean", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(3);  // "mean"
+        }},
+        {"RunningStatistics.variance", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(4);  // "variance"
+        }},
+        {"RunningStatistics.standard_deviation", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(5);  // "sd"
+        }},
         {"RunningStatistics.population_variance", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_variance(); }},
         {"RunningStatistics.population_standard_deviation", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_standard_deviation(); }},
-        {"RunningStatistics.coefficient_of_variation", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).coefficient_of_variation(); }},
-        {"RunningStatistics.skewness", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).skewness(); }},
+        {"RunningStatistics.coefficient_of_variation", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(6);  // "cv"
+        }},
+        {"RunningStatistics.skewness", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(7);  // "skewness"
+        }},
         {"RunningStatistics.population_skewness", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_skewness(); }},
-        {"RunningStatistics.kurtosis", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).kurtosis(); }},
+        {"RunningStatistics.kurtosis", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(8);  // "kurtosis"
+        }},
         {"RunningStatistics.population_kurtosis", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_kurtosis(); }},
-        {"RunningStatistics.minimum", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).minimum(); }},
-        {"RunningStatistics.maximum", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).maximum(); }},
-        {"RunningStatistics.count", [](const std::vector<double>& a) { return static_cast<double>(bfdata::RunningStatistics(a).count()); }},
+        {"RunningStatistics.minimum", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(1);  // "minimum"
+        }},
+        {"RunningStatistics.maximum", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(2);  // "maximum"
+        }},
+        {"RunningStatistics.count", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(0);  // "n"
+        }},
         // RunningStatistics combine family (args: [n1, sample1(n1), sample2(m)] -- see
         // running_statistics_combined() above and fixtures/special_functions/running_statistics.json)
         {"RunningStatistics.combined_minimum", [](const std::vector<double>& a) { return running_statistics_combined(a).minimum(); }},

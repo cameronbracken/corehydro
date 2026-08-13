@@ -1410,6 +1410,93 @@ def _run_special_function_correlation_case(target, args_raw):
     return _core.toolbox_run("correlation", method, [x, y], "{}")["values"][0]
 
 
+# special_function/{RunningStatistics,RunningCovariance,Fourier,Statistics.percentile} (Task 3):
+# the same "route the pinned value through _core.toolbox_run" pattern as Correlation above, one
+# subset per family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's
+# running_covariance_toolbox()/running_covariance_element(), the RunningStatistics.* table
+# entries, and the Fourier.{fft_at,real_fft_at,correlation_at} functions for the args
+# conventions and the reasoning for which targets route and which stay C++-only:
+# RunningStatistics's four population-normalized variants and its combined_*/clone_* cases have
+# no toolbox_run("statistics", "summary", ...)-reachable equivalent, and Fourier.autocorrelation_at
+# deliberately stays off this list because the toolbox "spectra.autocorrelation" method wraps the
+# newer Autocorrelation class, not Fourier::autocorrelation itself).
+_RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX = {
+    "RunningStatistics.count": 0, "RunningStatistics.minimum": 1,
+    "RunningStatistics.maximum": 2, "RunningStatistics.mean": 3,
+    "RunningStatistics.variance": 4, "RunningStatistics.standard_deviation": 5,
+    "RunningStatistics.coefficient_of_variation": 6, "RunningStatistics.skewness": 7,
+    "RunningStatistics.kurtosis": 8,
+}
+
+_RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK = {
+    "RunningCovariance.mean_element": 0,
+    "RunningCovariance.covariance_element": 1,
+    "RunningCovariance.sample_covariance_element": 2,
+    "RunningCovariance.sample_correlation_element": 3,
+    "RunningCovariance.population_covariance_element": 4,
+    "RunningCovariance.population_correlation_element": 5,
+}
+
+_FOURIER_TOOLBOX_METHOD = {
+    "Fourier.fft_at": "dft",
+    "Fourier.real_fft_at": "dft_real",
+    "Fourier.correlation_at": "cross_correlation",
+}
+
+_ROUTED_SPECIAL_FUNCTION_TARGETS = (
+    set(_CORRELATION_SPECIAL_FUNCTION_METHOD)
+    | set(_RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX)
+    | set(_RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK)
+    | set(_FOURIER_TOOLBOX_METHOD)
+    | {"Statistics.percentile"}
+)
+
+
+def _run_special_function_case(target, args_raw):
+    if target in _CORRELATION_SPECIAL_FUNCTION_METHOD:
+        return _run_special_function_correlation_case(target, args_raw)
+
+    args = [_num(v) for v in args_raw]
+
+    if target == "Statistics.percentile":
+        n = len(args) - 2
+        data, k, sorted_ = args[:n], args[n], args[n + 1] != 0.0
+        options = json.dumps({"sorted": True}) if sorted_ else "{}"
+        return _core.toolbox_run("statistics", "percentile", [data, [k]], options)["values"][0]
+
+    if target in _RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX:
+        r = _core.toolbox_run("statistics", "summary", [args], "{}")
+        return r["values"][_RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX[target]]
+
+    if target in _RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK:
+        size, num_pushes = int(args[0]), int(args[1])
+        columns = [[args[2 + p * size + j] for p in range(num_pushes)] for j in range(size)]
+        r = _core.toolbox_run("statistics", "running_covariance", columns, "{}")
+        base = 2 + num_pushes * size
+        i = int(args[base])
+        block = _RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK[target]
+        if block == 0:
+            return r["values"][1 + i]
+        j = int(args[base + 1])
+        offset = 1 + size + (block - 1) * (size * size)
+        return r["values"][offset + i * size + j]
+
+    if target in _FOURIER_TOOLBOX_METHOD:
+        if target == "Fourier.correlation_at":
+            n = (len(args) - 1) // 2
+            data1, data2 = args[:n], args[n : 2 * n]
+            index = int(args[2 * n])
+            r = _core.toolbox_run("spectra", "cross_correlation", [data1, data2], "{}")
+            return r["values"][index]
+        n = len(args) - 2
+        data, inverse, index = args[:n], args[n] != 0.0, int(args[n + 1])
+        options = json.dumps({"inverse": True}) if inverse else "{}"
+        r = _core.toolbox_run("spectra", _FOURIER_TOOLBOX_METHOD[target], [data], options)
+        return r["values"][index]
+
+    raise KeyError(f"unrouted special_function target: {target}")
+
+
 # toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
 # utility group runs through _core.toolbox_run. Mirrors run_toolbox_kind in
 # core/tests/test_fixtures.cpp.
@@ -1454,13 +1541,13 @@ def _load_cases():
         spec = json.loads(fx.read_text())
         kind = spec.get("kind")
         if kind == "special_function":
-            # Only the three Correlation targets are exposed to Python (see
-            # _run_special_function_correlation_case above); every other special_function
-            # target is validated in C++ only and generates no Python case.
+            # Only the targets in _ROUTED_SPECIAL_FUNCTION_TARGETS are exposed to Python (see
+            # _run_special_function_case above); every other special_function target is
+            # validated in C++ only and generates no Python case.
             file_target = spec.get("target")
             for case in spec["cases"]:
                 target = case.get("target", file_target)
-                if target not in _CORRELATION_SPECIAL_FUNCTION_METHOD:
+                if target not in _ROUTED_SPECIAL_FUNCTION_TARGETS:
                     continue
                 out.append(("special_function", target, {}, case))
             continue
@@ -1493,7 +1580,7 @@ CASES = _load_cases()
 )
 def test_fixture_case(kind, target, datasets, case):
     if kind == "special_function":
-        actual = _run_special_function_correlation_case(target, case["args"])
+        actual = _run_special_function_case(target, case["args"])
         for a in case["assertions"]:
             _check(actual, a)
         return

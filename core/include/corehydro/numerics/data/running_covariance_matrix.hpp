@@ -50,6 +50,17 @@ class RunningCovarianceMatrix {
     // The covariance matrix. This is unadjusted by the sample size.
     const math::linalg::Matrix& covariance() const { return covariance_; }
 
+    // corehydro ADDITION: the stateless R/Python surface serializes the accumulator (n, mean,
+    // covariance) between calls, so a round-trip is needed to resume push()ing across calls. No
+    // C# counterpart.
+    static RunningCovarianceMatrix from_state(int n, math::linalg::Matrix mean, math::linalg::Matrix covariance) {
+        RunningCovarianceMatrix rcm(mean.number_of_rows());
+        rcm.n_ = n;
+        rcm.mean_ = std::move(mean);
+        rcm.covariance_ = std::move(covariance);
+        return rcm;
+    }
+
     // Mutable access to the covariance matrix. corehydro ADDITION -- no direct upstream C#
     // counterpart, but needed to reproduce one: C#'s `Covariance` property returns a
     // reference-type `Matrix`, so ARWMH's MAP hot-start (`InitializeCustomSettings`) can

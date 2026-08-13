@@ -3714,6 +3714,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return GofDispatch(method, data, options, asrt);
         case "spectra":
             return SpectraDispatch(method, data, options, asrt);
+        case "statistics":
+            return StatisticsDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -3759,6 +3761,21 @@ static double SpectraDispatch(string method, List<double[]> data, JsonElement op
         return ToolboxSelectNamed(asrt, new[] { "lower", "upper" }, ci);
     }
     throw new Exception($"spectra method '{method}' has no dumped oracle case wired in the emitter");
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_statistics arm for the three methods
+// fixtures/toolbox/statistics.json pins (product_moments/l_moments/ranks -- the only statistics
+// methods with no existing special_function pin). summary/running/percentile/running_covariance
+// are exercised by the ctest/testthat/pytest suites directly, not by a dumped C# oracle here.
+static double StatisticsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] x = data[0];
+    if (method == "product_moments")
+        return ToolboxSelectNamed(asrt, new[] { "mean", "sd", "skewness", "kurtosis" }, Statistics.ProductMoments(x));
+    if (method == "l_moments")
+        return ToolboxSelectNamed(asrt, new[] { "l1", "l2", "t3", "t4" }, Statistics.LinearMoments(x));
+    if (method == "ranks") return Statistics.RanksInPlace(x)[ToolboxSelectIndex(asrt)];
+    throw new Exception($"statistics method '{method}' has no dumped oracle case wired in the emitter");
 }
 
 // Selects a single value out of an ordered/named result the way the fixture runners' select

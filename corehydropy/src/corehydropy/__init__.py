@@ -18,7 +18,22 @@ from .distributions import (
     dist_truncated,
     distribution_names,
 )
-from .toolbox import correlation
+from .toolbox import (
+    RunningCovariance,
+    RunningStatistics,
+    autocorrelation,
+    correlation,
+    cross_correlation,
+    dft,
+    dft_real,
+    l_moments,
+    percentile,
+    product_moments,
+    ranks,
+    running_covariance,
+    running_statistics,
+    summary_statistics,
+)
 from .gof import (
     aic,
     aic_weights,
@@ -115,6 +130,19 @@ from .analysis import (
 __all__ = [
     "GeneralizedExtremeValue",
     "correlation",
+    "summary_statistics",
+    "product_moments",
+    "l_moments",
+    "ranks",
+    "percentile",
+    "RunningStatistics",
+    "running_statistics",
+    "RunningCovariance",
+    "running_covariance",
+    "autocorrelation",
+    "cross_correlation",
+    "dft",
+    "dft_real",
     "goodness_of_fit",
     "classification_metrics",
     "gof_test",
