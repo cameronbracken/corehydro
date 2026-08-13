@@ -157,39 +157,54 @@ inline ToolboxResult run_gof(const std::string& method,
         return r;
     }
 
-    // Continuous metrics: two series, optional k for the RMSE denominator.
+    // Continuous metrics: two series, optional k for the RMSE denominator. Each metric is
+    // dispatched individually rather than through one shared eagerly-evaluated list -- MAPE is
+    // undefined when `observed` contains a zero, and a caller asking for `mse` on that same
+    // series must not fail because of it. Only "metrics" (every metric at once) accepts that
+    // an unsuitable series makes the whole set unavailable, exactly as a direct MAPE call would.
     const std::vector<double>& o = data_at(data, 0, "gof", method);
     const std::vector<double>& m = data_at(data, 1, "gof", method);
     int k = options.value_or("k", 0);
-    const std::vector<std::pair<const char*, double>> all = {
-        {"rmse", GOF::rmse(o, m, k)},
-        {"mse", GOF::mse(o, m)},
-        {"mae", GOF::mae(o, m)},
-        {"mape", GOF::mape(o, m)},
-        {"smape", GOF::smape(o, m)},
-        {"nse", GOF::nash_sutcliffe_efficiency(o, m)},
-        {"log_nse", GOF::log_nash_sutcliffe_efficiency(o, m)},
-        {"kge", GOF::kling_gupta_efficiency(o, m)},
-        {"kge_mod", GOF::kling_gupta_efficiency_mod(o, m)},
-        {"pbias", GOF::pbias(o, m)},
-        {"rsr", GOF::rsr(o, m)},
-        {"pearson", GOF::pearson(o, m)},
-        {"r_squared", GOF::r_squared(o, m)},
-        {"d", GOF::index_of_agreement(o, m)},
-        {"d_mod", GOF::modified_index_of_agreement(o, m)},
-        {"d_ref", GOF::refined_index_of_agreement(o, m)},
-        {"ve", GOF::volumetric_efficiency(o, m)},
-    };
     if (method == "metrics") {
         ToolboxResult r;
-        for (const auto& kv : all) {
-            r.values.push_back(kv.second);
-            r.names.push_back(kv.first);
-        }
+        r.names = {"rmse", "mse", "mae", "mape", "smape", "nse", "log_nse", "kge", "kge_mod",
+                   "pbias", "rsr", "pearson", "r_squared", "d", "d_mod", "d_ref", "ve"};
+        r.values = {GOF::rmse(o, m, k),
+                    GOF::mse(o, m),
+                    GOF::mae(o, m),
+                    GOF::mape(o, m),
+                    GOF::smape(o, m),
+                    GOF::nash_sutcliffe_efficiency(o, m),
+                    GOF::log_nash_sutcliffe_efficiency(o, m),
+                    GOF::kling_gupta_efficiency(o, m),
+                    GOF::kling_gupta_efficiency_mod(o, m),
+                    GOF::pbias(o, m),
+                    GOF::rsr(o, m),
+                    GOF::pearson(o, m),
+                    GOF::r_squared(o, m),
+                    GOF::index_of_agreement(o, m),
+                    GOF::modified_index_of_agreement(o, m),
+                    GOF::refined_index_of_agreement(o, m),
+                    GOF::volumetric_efficiency(o, m)};
         return r;
     }
-    for (const auto& kv : all)
-        if (method == kv.first) return scalar(kv.second);
+    if (method == "rmse") return scalar(GOF::rmse(o, m, k));
+    if (method == "mse") return scalar(GOF::mse(o, m));
+    if (method == "mae") return scalar(GOF::mae(o, m));
+    if (method == "mape") return scalar(GOF::mape(o, m));
+    if (method == "smape") return scalar(GOF::smape(o, m));
+    if (method == "nse") return scalar(GOF::nash_sutcliffe_efficiency(o, m));
+    if (method == "log_nse") return scalar(GOF::log_nash_sutcliffe_efficiency(o, m));
+    if (method == "kge") return scalar(GOF::kling_gupta_efficiency(o, m));
+    if (method == "kge_mod") return scalar(GOF::kling_gupta_efficiency_mod(o, m));
+    if (method == "pbias") return scalar(GOF::pbias(o, m));
+    if (method == "rsr") return scalar(GOF::rsr(o, m));
+    if (method == "pearson") return scalar(GOF::pearson(o, m));
+    if (method == "r_squared") return scalar(GOF::r_squared(o, m));
+    if (method == "d") return scalar(GOF::index_of_agreement(o, m));
+    if (method == "d_mod") return scalar(GOF::modified_index_of_agreement(o, m));
+    if (method == "d_ref") return scalar(GOF::refined_index_of_agreement(o, m));
+    if (method == "ve") return scalar(GOF::volumetric_efficiency(o, m));
     throw std::runtime_error("unknown gof method: " + method);
 }
 
