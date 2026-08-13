@@ -295,3 +295,7 @@ ch_plotting_positions_alpha_ <- function(n, alpha) {
 ch_latin_hypercube_ <- function(sample_size, dimension, seed, median) {
   .Call(`_corehydror_ch_latin_hypercube_`, sample_size, dimension, seed, median)
 }
+
+ch_toolbox_run_ <- function(group, method, data, options_json) {
+  .Call(`_corehydror_ch_toolbox_run_`, group, method, data, options_json)
+}

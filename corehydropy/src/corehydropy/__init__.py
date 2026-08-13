@@ -18,6 +18,7 @@ from .distributions import (
     dist_truncated,
     distribution_names,
 )
+from .toolbox import correlation
 from .copula import Copula, copula_fit, copula_names
 from .mvdist import (
     MultivariateDistribution,
@@ -102,6 +103,7 @@ from .analysis import (
 
 __all__ = [
     "GeneralizedExtremeValue",
+    "correlation",
     "Distribution",
     "distribution_names",
     "dist_truncated",

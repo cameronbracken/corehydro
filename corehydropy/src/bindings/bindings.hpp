@@ -15,3 +15,4 @@ void register_analysis(pybind11::module_& m);
 void register_stats(pybind11::module_& m);
 void register_data(pybind11::module_& m);
 void register_dist_spec(pybind11::module_& m);
+void register_toolbox(pybind11::module_& m);

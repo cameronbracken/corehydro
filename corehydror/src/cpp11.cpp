@@ -523,6 +523,13 @@ extern "C" SEXP _corehydror_ch_latin_hypercube_(SEXP sample_size, SEXP dimension
     return cpp11::as_sexp(ch_latin_hypercube_(cpp11::as_cpp<cpp11::decay_t<int>>(sample_size), cpp11::as_cpp<cpp11::decay_t<int>>(dimension), cpp11::as_cpp<cpp11::decay_t<int>>(seed), cpp11::as_cpp<cpp11::decay_t<bool>>(median)));
   END_CPP11
 }
+// toolbox.cpp
+list ch_toolbox_run_(std::string group, std::string method, list data, std::string options_json);
+extern "C" SEXP _corehydror_ch_toolbox_run_(SEXP group, SEXP method, SEXP data, SEXP options_json) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_toolbox_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(group), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<list>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json)));
+  END_CPP11
+}
 
 extern "C" {
 static const R_CallMethodDef CallEntries[] = {
@@ -597,6 +604,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_sobol_generate_",               (DL_FUNC) &_corehydror_ch_sobol_generate_,                3},
     {"_corehydror_ch_sobol_skip_to_",                (DL_FUNC) &_corehydror_ch_sobol_skip_to_,                 3},
     {"_corehydror_ch_threshold_diagnostics_",        (DL_FUNC) &_corehydror_ch_threshold_diagnostics_,         6},
+    {"_corehydror_ch_toolbox_run_",                  (DL_FUNC) &_corehydror_ch_toolbox_run_,                   4},
     {"_corehydror_ch_yeo_johnson_",                  (DL_FUNC) &_corehydror_ch_yeo_johnson_,                   2},
     {"_corehydror_ch_yeo_johnson_inverse_",          (DL_FUNC) &_corehydror_ch_yeo_johnson_inverse_,           2},
     {"_corehydror_ch_yeo_johnson_lambda_",           (DL_FUNC) &_corehydror_ch_yeo_johnson_lambda_,            1},

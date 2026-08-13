@@ -92,4 +92,7 @@ PYBIND11_MODULE(_core, m) {
 
     // The shared distribution-spec runner (composite distributions, copulas, multivariate).
     register_dist_spec(m);
+
+    // The shared toolbox runner (correlation and the rest of the Numerics utility layer).
+    register_toolbox(m);
 }
