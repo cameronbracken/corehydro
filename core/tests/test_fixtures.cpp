@@ -47,7 +47,6 @@
 #include "corehydro/models/univariate_distribution/univariate_distribution_model.hpp"
 #include "corehydro/numerics/data/box_cox.hpp"
 #include "corehydro/numerics/data/correlation.hpp"
-#include "corehydro/numerics/support/toolbox_runner.hpp"
 #include "corehydro/numerics/data/goodness_of_fit.hpp"
 #include "corehydro/numerics/data/histogram.hpp"
 #include "corehydro/numerics/data/interpolation/bilinear.hpp"
@@ -56,6 +55,7 @@
 #include "corehydro/numerics/data/multiple_grubbs_beck_test.hpp"
 #include "corehydro/numerics/data/plotting_positions.hpp"
 #include "corehydro/numerics/data/yeo_johnson.hpp"
+#include "corehydro/numerics/support/toolbox_runner.hpp"
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
@@ -1411,11 +1411,19 @@ static std::vector<std::vector<double>> toolbox_data(const json& c, const json& 
     return out;
 }
 
-static double toolbox_select(const tbx::ToolboxResult& r, const json& as) {
+static double toolbox_select(const tbx::ToolboxResult& r, const json& as, const std::string& group) {
     std::string select = as.value("select", std::string("value"));
     if (select == "length") return static_cast<double>(r.values.size());
-    if (select == "rows") return r.dims.empty() ? -1.0 : static_cast<double>(r.dims[0]);
-    if (select == "columns") return r.dims.size() < 2 ? -1.0 : static_cast<double>(r.dims[1]);
+    if (select == "rows") {
+        if (r.dims.empty())
+            throw std::runtime_error("toolbox select 'rows' has no dims (group '" + group + "')");
+        return static_cast<double>(r.dims[0]);
+    }
+    if (select == "columns") {
+        if (r.dims.size() < 2)
+            throw std::runtime_error("toolbox select 'columns' has no dims (group '" + group + "')");
+        return static_cast<double>(r.dims[1]);
+    }
     std::size_t i = 0;
     if (as.contains("label")) {
         std::string label = as["label"].get<std::string>();
@@ -1441,7 +1449,7 @@ static void run_toolbox_kind(const json& spec) {
         for (const auto& as : c["assertions"]) {
             std::string where = "toolbox/" + group + "/" + name;
             auto r = tbx::run_toolbox(group, as["method"].get<std::string>(), data, options);
-            check_value(toolbox_select(r, as), as, where);
+            check_value(toolbox_select(r, as, group), as, where);
         }
     }
 }

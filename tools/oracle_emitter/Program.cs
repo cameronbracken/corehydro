@@ -3689,8 +3689,11 @@ static double DispatchAnalysis(AnalysisData r, string m, JsonElement[] a)
     }
 }
 
-// One arm per toolbox group. Later tasks extend this switch; the shape never changes.
-static double ToolboxDispatch(string group, string method, List<double[]> data)
+// One arm per toolbox group. Later tasks extend this switch; the shape never changes. `options`
+// carries whatever scalars/enum names/flags a group needs (mirrors toolbox_runner.hpp's
+// options_json contract); correlation ignores it today but a group that needs it (e.g. goodness
+// of fit's k/n/log_likelihood/threshold/distribution spec) does not have to change the signature.
+static double ToolboxDispatch(string group, string method, List<double[]> data, JsonElement options)
 {
     switch (group)
     {
@@ -3875,6 +3878,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     data.Add(d.ValueKind == JsonValueKind.String
                         ? tbSets[d.GetString()!]
                         : d.EnumerateArray().Select(ParseNum).ToArray());
+            JsonElement options = c.TryGetProperty("options", out var optionsEl) ? optionsEl : default;
 
             foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
             {
@@ -3886,12 +3890,12 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     var dumpArgs = c.TryGetProperty("data", out var dn)
                         ? dn.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
                     DumpLine($"toolbox/{group}", caseName, method, dumpArgs,
-                        () => (object)ToolboxDispatch(group, method, data));
+                        () => (object)ToolboxDispatch(group, method, data, options));
                     continue;
                 }
 
                 double actual;
-                try { actual = ToolboxDispatch(group, method, data); }
+                try { actual = ToolboxDispatch(group, method, data, options); }
                 catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
