@@ -840,6 +840,13 @@ static Func<double, double>? CallbackScalarFunction(string name) => name switch
     "Quad_Sine" => x => Math.Sin(x),
     "Quad_FXX" => x => 0.5 + 24 * x + 3 * x * x,
     "Quad_FXXX" => x => 0.5 + 24 * x + 3 * x * x + 8 * x * x * x,
+    // corehydro addition, no upstream integrand: every Integrands.cs function the upstream tests
+    // integrate converges on the first whole-interval G10K21 evaluation, so none of them reaches
+    // the subdividing branch of the recursion. This Lorentzian peak (half-width 0.01 on [-1, 1])
+    // does, and it is written with multiplication and division only -- no transcendental -- so the
+    // C++/R/Python/C# closures for it are bit-identical and the evaluation count is an oracle
+    // rather than a libm coincidence.
+    "Quad_Peak" => x => 1d / (1d + 1e4 * x * x),
     _ => null
 };
 static Func<double[], double>? CallbackVectorFunction(string name) => name switch
@@ -4732,7 +4739,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                         agk.MaxFunctionEvaluations = (int)ParseNum(mfe);
                 }
                 agk.Integrate();
-                values = [agk.Result, agk.FunctionEvaluations];
+                values = [agk.Result, agk.FunctionEvaluations, agk.StandardError];
                 dims = [];
                 statusName = agk.Status.ToString();
             }

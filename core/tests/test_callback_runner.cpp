@@ -168,8 +168,27 @@ int main() {
         CHECK_NEAR(r.values.at(0), 9.0, 1e-10);
         CHECK_EQ(r.names.at(0), std::string("integral"));
         CHECK_EQ(r.names.at(1), std::string("function_evaluations"));
+        CHECK_EQ(r.names.at(2), std::string("standard_error"));
         CHECK_EQ(r.status, std::string("Success"));
         CHECK_TRUE(r.values.at(1) > 0.0);  // function evaluations were counted
+        // G10K21 is exact for a quadratic, so the Gauss and Kronrod estimates agree, nothing is
+        // subdivided and the ported StandardError is zero. The subdividing case below is where it
+        // is not.
+        CHECK_EQ(r.values.at(2), 0.0);
+    }
+    {
+        // The one case here that reaches the SUBDIVIDING branch: a Lorentzian peak of half-width
+        // 0.01 over [-1, 1] (the fixture's Quad_Peak). The C#-pinned oracle for the same run is
+        // fixtures/callback/math.json's quadrature_peak_subdivides; this asserts the two
+        // properties that make it worth having -- many more than one panel's 21 evaluations, and
+        // a standard error the run actually accumulated.
+        sup::CallbackSet cbs;
+        cbs.scalar = [](double x) { return 1.0 / (1.0 + 1.0e4 * x * x); };
+        sup::CallbackResult r = sup::run_callback(
+            "math", "quadrature", R"({"lower": -1.0, "upper": 1.0})", cbs);
+        CHECK_EQ(r.status, std::string("Success"));
+        CHECK_TRUE(r.values.at(1) > 21.0);
+        CHECK_TRUE(r.values.at(2) > 0.0);
     }
     {
         // sin(x) over [0, 1] = 1 - cos(1), and the tolerances are settable.

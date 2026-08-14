@@ -33,6 +33,36 @@ test_that("quadrature integrates a user-written R function", {
   expect_equal(as.numeric(quadrature(exp, lower = 0, upper = 1)), exp(1) - 1, tolerance = 1e-8)
 })
 
+test_that("quadrature reports the rule's own standard error", {
+  # x^2 needs no subdivision (G10K21 is exact for it), so the accumulated error is exactly zero.
+  q <- quadrature(function(x) x^2, lower = 0, upper = 3)
+  expect_equal(attr(q, "standard_error"), 0)
+  # A Lorentzian peak of half-width 0.01 does subdivide, so the error estimate is real. The
+  # C#-pinned values for this exact run are fixtures/callback/math.json's
+  # quadrature_peak_subdivides; here only the qualitative properties, to keep the oracle in the
+  # fixture where it belongs.
+  peak <- quadrature(function(x) 1 / (1 + 1e4 * x * x), lower = -1, upper = 1)
+  expect_gt(attr(peak, "function_evaluations"), 21L)
+  expect_gt(attr(peak, "standard_error"), 0)
+  expect_lt(attr(peak, "standard_error"), 1e-6)
+})
+
+test_that("an unsupplied option leaves the ported routine's own default in force", {
+  # The wrapper writes an option key only when the caller passes one, so NULL and the ported
+  # default must give the identical run. Python's twin asserts the same.
+  f <- function(x) 1 / (1 + 1e4 * x * x)
+  default_run <- quadrature(f, lower = -1, upper = 1)
+  explicit_run <- quadrature(f, lower = -1, upper = 1, absolute_tolerance = 1e-8,
+                             relative_tolerance = 1e-8, max_function_evaluations = 10000000L)
+  expect_identical(as.numeric(default_run), as.numeric(explicit_run))
+  expect_identical(attr(default_run, "function_evaluations"),
+                   attr(explicit_run, "function_evaluations"))
+  expect_identical(root_find(function(x) x^2 - 2, lower = 0, upper = 2),
+                   root_find(function(x) x^2 - 2, lower = 0, upper = 2, tolerance = 1e-8,
+                             max_iterations = 1000L))
+  expect_identical(derivative(function(x) x^3, 2), derivative(function(x) x^3, 2, step_size = -1))
+})
+
 test_that("quadrature reports the evaluation cap in its status instead of raising", {
   # 1 / sqrt(x) is unbounded at 0, so the rule never converges and the cap stops it.
   q <- quadrature(function(x) if (x <= 0) 0 else 1 / sqrt(x),

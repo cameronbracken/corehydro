@@ -8,9 +8,9 @@ quadrature(
   f,
   lower,
   upper,
-  absolute_tolerance = 1e-08,
-  relative_tolerance = 1e-08,
-  max_function_evaluations = 10000000L
+  absolute_tolerance = NULL,
+  relative_tolerance = NULL,
+  max_function_evaluations = NULL
 )
 }
 \arguments{
@@ -20,15 +20,19 @@ quadrature(
 infinite (the ported rule integrates a finite interval).}
 
 \item{absolute_tolerance, relative_tolerance}{the convergence tolerances on the difference
-between the Gauss and Kronrod estimates. Each must lie between 1e-15 and 1.}
+between the Gauss and Kronrod estimates. Each must lie between 1e-15 and 1. \code{NULL}, the
+default, leaves the ported integrator's own defaults (1e-8) in force.}
 
 \item{max_function_evaluations}{the cap on evaluations of \code{f}. Reaching it stops the
-subdivision and reports it in the status rather than raising an error.}
+subdivision and reports it in the status rather than raising an error. \code{NULL}, the default,
+leaves the ported integrator's own default in force.}
 }
 \value{
-the integral, a single number, carrying two attributes: \code{status}, one of \code{"Success"},
+the integral, a single number, carrying three attributes: \code{status}, one of \code{"Success"},
 \code{"MaximumFunctionEvaluationsReached"}, \code{"MaximumIterationsReached"}, \code{"Failure"} or
-\code{"None"}; and \code{function_evaluations}, the number of times \code{f} was called.
+\code{"None"}; \code{function_evaluations}, the number of times \code{f} was called; and \code{standard_error},
+the rule's own error estimate (the square root of the accumulated squared differences between
+the Gauss and Kronrod estimates, zero when the interval never needed subdividing).
 }
 \description{
 Computes the definite integral of \code{f} over \verb{[lower, upper]} with the ported Numerics
@@ -43,4 +47,5 @@ The name is \code{quadrature()} rather than \code{integrate()} so it does not ma
 quadrature(function(x) x^2, lower = 0, upper = 3)
 q <- quadrature(sin, lower = 0, upper = pi)
 attr(q, "status")
+attr(q, "standard_error")
 }

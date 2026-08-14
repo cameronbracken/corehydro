@@ -6,7 +6,7 @@
 \alias{hessian}
 \title{Differentiate a user-written function}
 \usage{
-derivative(f, x, step_size = -1)
+derivative(f, x, step_size = NULL)
 
 gradient(f, x)
 
@@ -19,8 +19,9 @@ hessian(f, x)
 \item{x}{the point to differentiate at: one number for \code{derivative()}, a numeric vector for
 \code{gradient()} and \code{hessian()}.}
 
-\item{step_size}{the finite-difference step for \code{derivative()}. The default, any value at or
-below zero, selects the adaptive step \verb{eps^(1/2) * (1 + |x|)}.}
+\item{step_size}{the finite-difference step for \code{derivative()}. \code{NULL}, the default, leaves the
+ported routine's own step selection in force, as does any value at or below zero: the adaptive
+step \verb{eps^(1/2) * (1 + |x|)}.}
 }
 \value{
 \code{derivative()} returns a single number, \code{gradient()} a numeric vector the length of

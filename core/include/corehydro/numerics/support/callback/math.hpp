@@ -20,9 +20,12 @@
 // default: the key is only written when present, so a later change to a C# default lands here.
 //
 // `quadrature` is the only method returning more than the answer: `values` is
-// {integral, function_evaluations} and `status` is the ported IntegrationStatus rather than the
-// unconditional "Success" the other three report, because AdaptiveGaussKronrod is the only one of
-// the four whose C# class has an Integrator base to report one.
+// {integral, function_evaluations, standard_error} and `status` is the ported IntegrationStatus
+// rather than the unconditional "Success" the other three report, because AdaptiveGaussKronrod is
+// the only one of the four whose C# class has an Integrator base to report one. The standard error
+// is the C# StandardError property (the square root of the accumulated squared Gauss-Kronrod
+// differences); it is returned rather than dropped because it is the run's own error estimate and
+// a caller integrating an unfamiliar function wants it beside the status.
 //
 // EVERY drive site here wraps the ported call in try/catch and prefers the guard's stored host
 // exception (see callback_guard.hpp's "USE IT IN PAIRS" note). This is not defensive
@@ -155,8 +158,9 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
             throw;
         }
         g.rethrow_if_aborted();
-        r.values = {agk.result(), static_cast<double>(agk.function_evaluations())};
-        r.names = {"integral", "function_evaluations"};
+        r.values = {agk.result(), static_cast<double>(agk.function_evaluations()),
+                    agk.standard_error()};
+        r.names = {"integral", "function_evaluations", "standard_error"};
         r.status = integration::status_name(agk.status());
         return r;
     }

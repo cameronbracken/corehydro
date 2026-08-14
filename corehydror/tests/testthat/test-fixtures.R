@@ -445,6 +445,10 @@ callback_fixture_function <- function(name) {
     Quad_Sine = function(x) sin(x),
     Quad_FXX = function(x) 0.5 + 24 * x + 3 * x^2,
     Quad_FXXX = function(x) 0.5 + 24 * x + 3 * x^2 + 8 * x^3,
+    # corehydro addition, no upstream integrand -- the one callback that reaches the subdividing
+    # branch of the recursion. Written with `x * x` rather than `x^2`, arithmetic only, so all
+    # four runners agree bit for bit and the evaluation count is a real oracle.
+    Quad_Peak = function(x) 1 / (1 + 1e4 * x * x),
     stop(sprintf("unknown callback fixture callback: %s", name))
   )
 }

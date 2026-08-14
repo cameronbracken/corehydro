@@ -1,4 +1,6 @@
+import copy
 import math
+import pickle
 
 import numpy as np
 import pytest
@@ -53,6 +55,63 @@ def test_quadrature_integrates_a_python_function():
     assert isinstance(q, float)
     assert ch.quadrature(math.sin, 0, math.pi) == pytest.approx(2.0, abs=1e-8)
     assert ch.quadrature(math.exp, 0, 1) == pytest.approx(math.e - 1, abs=1e-8)
+
+
+def test_quadrature_reports_the_rules_own_standard_error():
+    # x**2 needs no subdivision (G10K21 is exact for it), so the accumulated error is exactly zero.
+    assert ch.quadrature(lambda x: x**2, 0, 3).standard_error == 0.0
+    # A Lorentzian peak of half-width 0.01 does subdivide, so the error estimate is real. The
+    # C#-pinned values for this exact run are fixtures/callback/math.json's
+    # quadrature_peak_subdivides; here only the qualitative properties, to keep the oracle in the
+    # fixture where it belongs.
+    peak = ch.quadrature(lambda x: 1.0 / (1.0 + 1.0e4 * x * x), -1, 1)
+    assert peak.function_evaluations > 21
+    assert 0.0 < peak.standard_error < 1e-6
+
+
+def test_a_quadrature_result_survives_pickle_and_deepcopy():
+    # A float subclass whose __new__ takes more than the value needs __getnewargs__ or both round
+    # trips raise "__new__() missing required positional arguments". OptimResult, the other object
+    # this surface returns, is picklable, so this one has to be too.
+    q = ch.quadrature(lambda x: 1.0 / (1.0 + 1.0e4 * x * x), -1, 1)
+    for clone in (pickle.loads(pickle.dumps(q)), copy.deepcopy(q), copy.copy(q)):
+        assert isinstance(clone, ch.QuadratureResult)
+        assert float(clone) == float(q)
+        assert clone.status == q.status
+        assert clone.function_evaluations == q.function_evaluations
+        assert clone.standard_error == q.standard_error
+
+
+def test_a_quadrature_result_reprs_its_report():
+    # The bare float repr would hide everything but the value; R's print() shows both attributes.
+    q = ch.quadrature(lambda x: x**2, 0, 3)
+    text = repr(q)
+    assert "status='Success'" in text
+    assert f"function_evaluations={q.function_evaluations}" in text
+    assert "standard_error=" in text
+
+
+def test_an_unsupplied_option_leaves_the_ported_default_in_force():
+    # The wrapper writes an option key only when the caller passes one, so None and the ported
+    # default must give the identical run. R's twin asserts the same.
+    def f(x):
+        return 1.0 / (1.0 + 1.0e4 * x * x)
+
+    default_run = ch.quadrature(f, -1, 1)
+    explicit_run = ch.quadrature(
+        f,
+        -1,
+        1,
+        absolute_tolerance=1e-8,
+        relative_tolerance=1e-8,
+        max_function_evaluations=10000000,
+    )
+    assert float(default_run) == float(explicit_run)
+    assert default_run.function_evaluations == explicit_run.function_evaluations
+    assert ch.root_find(lambda x: x**2 - 2, lower=0, upper=2) == ch.root_find(
+        lambda x: x**2 - 2, lower=0, upper=2, tolerance=1e-8, max_iterations=1000
+    )
+    assert ch.derivative(lambda x: x**3, 2) == ch.derivative(lambda x: x**3, 2, step_size=-1.0)
 
 
 def test_quadrature_reports_the_evaluation_cap_in_its_status():

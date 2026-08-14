@@ -1779,8 +1779,15 @@ shaped vector (`math/gradient`), and `{rows, cols}` for a row-major matrix (`mat
 A `"status"` assertion is only as strong as the driven class: `math/quadrature` reports the ported
 `IntegrationStatus` read off `AdaptiveGaussKronrod`, so its status is a real oracle, while
 `root_find`/`derivative`/`gradient`/`hessian` sit on static C# methods with no status object and
-report `"Success"` unconditionally in every runner. `math/quadrature` also returns two values,
-`{integral, function_evaluations}`, so `"value"` with `args: [1]` pins the evaluation counter.
+report `"Success"` unconditionally in every runner. `math/quadrature` also returns three values,
+`{integral, function_evaluations, standard_error}`, so `"value"` with `args: [1]` pins the
+evaluation counter and `args: [2]` the rule's own error estimate. Neither the counter, the error
+estimate nor the status has an upstream test literal (the C# tests read only `Result`), so those
+assertions are read off the real C# library through the emitter and say so in their `source`, which
+opens with `EMITTER-READ`. `Quad_Peak` in `fixtures/callback/math.json` is likewise a corehydro
+addition rather than an upstream integrand: every upstream integrand converges on the first
+whole-interval evaluation at 21 evaluations, so it is the one callback pinning the SUBDIVIDING
+branch of the recursion.
 
 ### `toolbox_cross_language`
 

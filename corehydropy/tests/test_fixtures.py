@@ -1752,6 +1752,11 @@ def _callback_fixture_function(name):
         return lambda x: 0.5 + 24.0 * x + 3.0 * x ** 2
     if name == "Quad_FXXX":
         return lambda x: 0.5 + 24.0 * x + 3.0 * x ** 2 + 8.0 * x ** 3
+    if name == "Quad_Peak":
+        # corehydro addition, no upstream integrand -- the one callback that reaches the
+        # subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
+        # bit and the evaluation count is a real oracle.
+        return lambda x: 1.0 / (1.0 + 1.0e4 * x * x)
     raise KeyError(f"unknown callback fixture callback: {name}")
 
 

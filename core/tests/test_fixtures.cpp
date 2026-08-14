@@ -1713,6 +1713,11 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
         cbs.scalar = [](double x) { return 0.5 + 24.0 * x + 3.0 * x * x; };
     } else if (name == "Quad_FXXX") {
         cbs.scalar = [](double x) { return 0.5 + 24.0 * x + 3.0 * x * x + 8.0 * x * x * x; };
+    } else if (name == "Quad_Peak") {
+        // corehydro addition, no upstream integrand -- the one callback that reaches the
+        // subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
+        // bit and the evaluation count is a real oracle. See the fixture's `callbacks` note.
+        cbs.scalar = [](double x) { return 1.0 / (1.0 + 1.0e4 * x * x); };
     } else {
         throw std::runtime_error("unknown callback fixture callback: " + name);
     }

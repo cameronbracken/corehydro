@@ -33,13 +33,16 @@ callback_check_point <- function(x) {
 #'
 #' @param f a function taking one number and returning one number.
 #' @param lower,upper the bracketing interval.
-#' @param tolerance the convergence tolerance on the bracket width.
-#' @param max_iterations the iteration cap; the search raises an error if it is reached.
+#' @param tolerance the convergence tolerance on the bracket width. `NULL`, the default, leaves the
+#'   ported Brent solver's own default (1e-8) in force; the value is not restated here, so a change
+#'   to it lands in one place.
+#' @param max_iterations the iteration cap; the search raises an error if it is reached. `NULL`,
+#'   the default, leaves the ported solver's own default (1000) in force.
 #' @return the root, a single number.
 #' @examples
 #' root_find(function(x) x^2 - 2, lower = 0, upper = 2)
 #' @export
-root_find <- function(f, lower, upper, tolerance = 1e-8, max_iterations = 1000L) {
+root_find <- function(f, lower, upper, tolerance = NULL, max_iterations = NULL) {
   callback_check_fn(f)
   if (!is.numeric(lower) || length(lower) != 1L || !is.finite(lower) ||
       !is.numeric(upper) || length(upper) != 1L || !is.finite(upper)) {
@@ -48,16 +51,23 @@ root_find <- function(f, lower, upper, tolerance = 1e-8, max_iterations = 1000L)
   if (lower >= upper) {
     stop("`lower` must be below `upper`", call. = FALSE)
   }
-  if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
-    stop("`tolerance` must be a single positive number", call. = FALSE)
+  # An option key is written ONLY when the caller supplied it, so an unset argument reaches the
+  # ported routine's own default rather than a copy of that default made here. Mirrors
+  # corehydropy's root_find() and the same rule in callback/math.hpp and the oracle emitter.
+  opts <- list(lower = as.double(lower), upper = as.double(upper))
+  if (!is.null(tolerance)) {
+    if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
+      stop("`tolerance` must be a single positive number", call. = FALSE)
+    }
+    opts$tolerance <- as.double(tolerance)
   }
-  if (!is.numeric(max_iterations) || length(max_iterations) != 1L || max_iterations < 1) {
-    stop("`max_iterations` must be a single positive integer", call. = FALSE)
+  if (!is.null(max_iterations)) {
+    if (!is.numeric(max_iterations) || length(max_iterations) != 1L || max_iterations < 1) {
+      stop("`max_iterations` must be a single positive integer", call. = FALSE)
+    }
+    opts$max_iterations <- as.integer(max_iterations)
   }
-  opts <- to_spec_json(list(lower = as.double(lower), upper = as.double(upper),
-                            tolerance = as.double(tolerance),
-                            max_iterations = as.integer(max_iterations)))
-  ch_callback_math_("root_find", opts, f)$values[[1]]
+  ch_callback_math_("root_find", to_spec_json(opts), f)$values[[1]]
 }
 
 #' Integrate a user-written function
@@ -73,19 +83,24 @@ root_find <- function(f, lower, upper, tolerance = 1e-8, max_iterations = 1000L)
 #' @param lower,upper the limits of integration. `upper` must be above `lower`; neither may be
 #'   infinite (the ported rule integrates a finite interval).
 #' @param absolute_tolerance,relative_tolerance the convergence tolerances on the difference
-#'   between the Gauss and Kronrod estimates. Each must lie between 1e-15 and 1.
+#'   between the Gauss and Kronrod estimates. Each must lie between 1e-15 and 1. `NULL`, the
+#'   default, leaves the ported integrator's own defaults (1e-8) in force.
 #' @param max_function_evaluations the cap on evaluations of `f`. Reaching it stops the
-#'   subdivision and reports it in the status rather than raising an error.
-#' @return the integral, a single number, carrying two attributes: `status`, one of `"Success"`,
+#'   subdivision and reports it in the status rather than raising an error. `NULL`, the default,
+#'   leaves the ported integrator's own default in force.
+#' @return the integral, a single number, carrying three attributes: `status`, one of `"Success"`,
 #'   `"MaximumFunctionEvaluationsReached"`, `"MaximumIterationsReached"`, `"Failure"` or
-#'   `"None"`; and `function_evaluations`, the number of times `f` was called.
+#'   `"None"`; `function_evaluations`, the number of times `f` was called; and `standard_error`,
+#'   the rule's own error estimate (the square root of the accumulated squared differences between
+#'   the Gauss and Kronrod estimates, zero when the interval never needed subdividing).
 #' @examples
 #' quadrature(function(x) x^2, lower = 0, upper = 3)
 #' q <- quadrature(sin, lower = 0, upper = pi)
 #' attr(q, "status")
+#' attr(q, "standard_error")
 #' @export
-quadrature <- function(f, lower, upper, absolute_tolerance = 1e-8, relative_tolerance = 1e-8,
-                       max_function_evaluations = 10000000L) {
+quadrature <- function(f, lower, upper, absolute_tolerance = NULL, relative_tolerance = NULL,
+                       max_function_evaluations = NULL) {
   callback_check_fn(f)
   if (!is.numeric(lower) || length(lower) != 1L || !is.finite(lower) ||
       !is.numeric(upper) || length(upper) != 1L || !is.finite(upper)) {
@@ -94,26 +109,34 @@ quadrature <- function(f, lower, upper, absolute_tolerance = 1e-8, relative_tole
   if (lower >= upper) {
     stop("`lower` must be below `upper`", call. = FALSE)
   }
-  if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
-      absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
-    stop("`absolute_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+  # See root_find() above: a key is written only when the caller supplied it.
+  opts <- list(lower = as.double(lower), upper = as.double(upper))
+  if (!is.null(absolute_tolerance)) {
+    if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
+        absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
+      stop("`absolute_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+    }
+    opts$absolute_tolerance <- as.double(absolute_tolerance)
   }
-  if (!is.numeric(relative_tolerance) || length(relative_tolerance) != 1L ||
-      relative_tolerance < 1e-15 || relative_tolerance > 1) {
-    stop("`relative_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+  if (!is.null(relative_tolerance)) {
+    if (!is.numeric(relative_tolerance) || length(relative_tolerance) != 1L ||
+        relative_tolerance < 1e-15 || relative_tolerance > 1) {
+      stop("`relative_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+    }
+    opts$relative_tolerance <- as.double(relative_tolerance)
   }
-  if (!is.numeric(max_function_evaluations) || length(max_function_evaluations) != 1L ||
-      max_function_evaluations < 1) {
-    stop("`max_function_evaluations` must be a single positive integer", call. = FALSE)
+  if (!is.null(max_function_evaluations)) {
+    if (!is.numeric(max_function_evaluations) || length(max_function_evaluations) != 1L ||
+        max_function_evaluations < 1) {
+      stop("`max_function_evaluations` must be a single positive integer", call. = FALSE)
+    }
+    opts$max_function_evaluations <- as.integer(max_function_evaluations)
   }
-  opts <- to_spec_json(list(lower = as.double(lower), upper = as.double(upper),
-                            absolute_tolerance = as.double(absolute_tolerance),
-                            relative_tolerance = as.double(relative_tolerance),
-                            max_function_evaluations = as.integer(max_function_evaluations)))
-  res <- ch_callback_math_("quadrature", opts, f)
+  res <- ch_callback_math_("quadrature", to_spec_json(opts), f)
   structure(res$values[[1]],
             status = res$status,
-            function_evaluations = as.integer(res$values[[2]]))
+            function_evaluations = as.integer(res$values[[2]]),
+            standard_error = res$values[[3]])
 }
 
 #' Differentiate a user-written function
@@ -126,8 +149,9 @@ quadrature <- function(f, lower, upper, absolute_tolerance = 1e-8, relative_tole
 #'   `gradient()` and `hessian()`, a function taking a numeric vector and returning one number.
 #' @param x the point to differentiate at: one number for `derivative()`, a numeric vector for
 #'   `gradient()` and `hessian()`.
-#' @param step_size the finite-difference step for `derivative()`. The default, any value at or
-#'   below zero, selects the adaptive step `eps^(1/2) * (1 + |x|)`.
+#' @param step_size the finite-difference step for `derivative()`. `NULL`, the default, leaves the
+#'   ported routine's own step selection in force, as does any value at or below zero: the adaptive
+#'   step `eps^(1/2) * (1 + |x|)`.
 #' @return `derivative()` returns a single number, `gradient()` a numeric vector the length of
 #'   `x`, and `hessian()` a square symmetric matrix.
 #' @note `gradient()` and `hessian()` share their names with functions in \pkg{numDeriv} and
@@ -140,16 +164,20 @@ quadrature <- function(f, lower, upper, absolute_tolerance = 1e-8, relative_tole
 #' corehydror::gradient(rosenbrock, c(1, 1))
 #' corehydror::hessian(rosenbrock, c(1, 1))
 #' @export
-derivative <- function(f, x, step_size = -1) {
+derivative <- function(f, x, step_size = NULL) {
   callback_check_fn(f)
   if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
     stop("`x` must be a single finite number", call. = FALSE)
   }
-  if (!is.numeric(step_size) || length(step_size) != 1L) {
-    stop("`step_size` must be a single number", call. = FALSE)
+  # See root_find() above: `step_size` is written only when the caller supplied it.
+  opts <- list(point = as.double(x))
+  if (!is.null(step_size)) {
+    if (!is.numeric(step_size) || length(step_size) != 1L) {
+      stop("`step_size` must be a single number", call. = FALSE)
+    }
+    opts$step_size <- as.double(step_size)
   }
-  opts <- to_spec_json(list(point = as.double(x), step_size = as.double(step_size)))
-  ch_callback_math_("derivative", opts, f)$values[[1]]
+  ch_callback_math_("derivative", to_spec_json(opts), f)$values[[1]]
 }
 
 #' @rdname derivative

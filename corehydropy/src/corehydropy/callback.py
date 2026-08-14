@@ -37,16 +37,44 @@ class QuadratureResult(float):
         ``IntegrationStatus``.
     function_evaluations : int
         The number of times ``f`` was called.
+    standard_error : float
+        The rule's own error estimate, the ported ``StandardError``: the square root of the
+        accumulated squared differences between the Gauss and Kronrod estimates. Zero when the
+        interval never needed subdividing.
     """
 
     status: str
     function_evaluations: int
+    standard_error: float
 
-    def __new__(cls, value: float, status: str, function_evaluations: int) -> "QuadratureResult":
+    def __new__(
+        cls,
+        value: float,
+        status: str,
+        function_evaluations: int,
+        standard_error: float,
+    ) -> "QuadratureResult":
         self = super().__new__(cls, value)
         self.status = status
         self.function_evaluations = int(function_evaluations)
+        self.standard_error = float(standard_error)
         return self
+
+    # A float subclass whose __new__ takes more than the value cannot be reconstructed by the
+    # default pickle/copy protocol, which calls cls(value) with the one argument __reduce_ex__
+    # harvests. Without this, pickle.dumps() and copy.deepcopy() both fail with "__new__() missing
+    # required positional arguments" -- and OptimResult, the other object this surface returns,
+    # is picklable. Returning the full argument tuple restores both round trips.
+    def __getnewargs__(self) -> tuple:
+        return (float(self), self.status, self.function_evaluations, self.standard_error)
+
+    def __repr__(self) -> str:
+        # The bare float repr would hide the two fields the R twin prints as attributes.
+        return (
+            f"{float(self)!r} (status={self.status!r}, "
+            f"function_evaluations={self.function_evaluations}, "
+            f"standard_error={self.standard_error!r})"
+        )
 
 
 def _check_fn(f: object) -> None:
@@ -68,8 +96,8 @@ def root_find(
     f: Callable[[float], float],
     lower: float,
     upper: float,
-    tolerance: float = 1e-8,
-    max_iterations: int = 1000,
+    tolerance: float | None = None,
+    max_iterations: int | None = None,
 ) -> float:
     """Find a root of a user-written function.
 
@@ -83,9 +111,12 @@ def root_find(
     lower, upper : float
         The bracketing interval.
     tolerance : float, optional
-        The convergence tolerance on the bracket width.
+        The convergence tolerance on the bracket width. Left unset, the ported Brent solver's own
+        default (1e-8) applies; the value is not restated here, so a change to it lands in one
+        place.
     max_iterations : int, optional
-        The iteration cap; the search raises if it is reached.
+        The iteration cap; the search raises if it is reached. Left unset, the ported solver's own
+        default (1000) applies.
 
     Returns
     -------
@@ -105,16 +136,18 @@ def root_find(
         raise ValueError("`lower` and `upper` must each be a single finite number")
     if lower >= upper:
         raise ValueError("`lower` must be below `upper`")
-    if float(tolerance) <= 0:
-        raise ValueError("`tolerance` must be a single positive number")
-    if int(max_iterations) < 1:
-        raise ValueError("`max_iterations` must be a single positive integer")
-    options = {
-        "lower": lower,
-        "upper": upper,
-        "tolerance": float(tolerance),
-        "max_iterations": int(max_iterations),
-    }
+    # An option key is written ONLY when the caller supplied it, so an unset argument reaches the
+    # ported routine's own default rather than a copy of that default made here. Mirrors
+    # corehydror's root_find() and the same rule in callback/math.hpp and the oracle emitter.
+    options: dict[str, float | int] = {"lower": lower, "upper": upper}
+    if tolerance is not None:
+        if float(tolerance) <= 0:
+            raise ValueError("`tolerance` must be a single positive number")
+        options["tolerance"] = float(tolerance)
+    if max_iterations is not None:
+        if int(max_iterations) < 1:
+            raise ValueError("`max_iterations` must be a single positive integer")
+        options["max_iterations"] = int(max_iterations)
     return float(_core.callback_math("root_find", json.dumps(options), f)["values"][0])
 
 
@@ -122,9 +155,9 @@ def quadrature(
     f: Callable[[float], float],
     lower: float,
     upper: float,
-    absolute_tolerance: float = 1e-8,
-    relative_tolerance: float = 1e-8,
-    max_function_evaluations: int = 10000000,
+    absolute_tolerance: float | None = None,
+    relative_tolerance: float | None = None,
+    max_function_evaluations: int | None = None,
 ) -> QuadratureResult:
     """Integrate a user-written function over a finite interval.
 
@@ -143,15 +176,17 @@ def quadrature(
         The limits of integration. ``upper`` must be above ``lower``; neither may be infinite.
     absolute_tolerance, relative_tolerance : float, optional
         The convergence tolerances on the difference between the Gauss and Kronrod estimates.
-        Each must lie between 1e-15 and 1.
+        Each must lie between 1e-15 and 1. Left unset, the ported integrator's own defaults
+        (1e-8) apply.
     max_function_evaluations : int, optional
         The cap on evaluations of ``f``. Reaching it stops the subdivision and is reported in the
-        status rather than raising.
+        status rather than raising. Left unset, the ported integrator's own default applies.
 
     Returns
     -------
     QuadratureResult
-        The integral, a ``float`` carrying ``status`` and ``function_evaluations``.
+        The integral, a ``float`` carrying ``status``, ``function_evaluations`` and
+        ``standard_error``.
 
     Examples
     --------
@@ -168,24 +203,25 @@ def quadrature(
         raise ValueError("`lower` and `upper` must each be a single finite number")
     if lower >= upper:
         raise ValueError("`lower` must be below `upper`")
-    if not 1e-15 <= float(absolute_tolerance) <= 1:
-        raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
-    if not 1e-15 <= float(relative_tolerance) <= 1:
-        raise ValueError("`relative_tolerance` must be a single number between 1e-15 and 1")
-    if int(max_function_evaluations) < 1:
-        raise ValueError("`max_function_evaluations` must be a single positive integer")
-    options = {
-        "lower": lower,
-        "upper": upper,
-        "absolute_tolerance": float(absolute_tolerance),
-        "relative_tolerance": float(relative_tolerance),
-        "max_function_evaluations": int(max_function_evaluations),
-    }
+    # See root_find above: a key is written only when the caller supplied it.
+    options: dict[str, float | int] = {"lower": lower, "upper": upper}
+    if absolute_tolerance is not None:
+        if not 1e-15 <= float(absolute_tolerance) <= 1:
+            raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
+        options["absolute_tolerance"] = float(absolute_tolerance)
+    if relative_tolerance is not None:
+        if not 1e-15 <= float(relative_tolerance) <= 1:
+            raise ValueError("`relative_tolerance` must be a single number between 1e-15 and 1")
+        options["relative_tolerance"] = float(relative_tolerance)
+    if max_function_evaluations is not None:
+        if int(max_function_evaluations) < 1:
+            raise ValueError("`max_function_evaluations` must be a single positive integer")
+        options["max_function_evaluations"] = int(max_function_evaluations)
     res = _core.callback_math("quadrature", json.dumps(options), f)
-    return QuadratureResult(res["values"][0], res["status"], res["values"][1])
+    return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
 
 
-def derivative(f: Callable[[float], float], x: float, step_size: float = -1.0) -> float:
+def derivative(f: Callable[[float], float], x: float, step_size: float | None = None) -> float:
     """Take the first derivative of a single-variable function by central difference.
 
     Parameters
@@ -195,8 +231,8 @@ def derivative(f: Callable[[float], float], x: float, step_size: float = -1.0) -
     x : float
         The point to differentiate at.
     step_size : float, optional
-        The finite-difference step. The default, any value at or below zero, selects the adaptive
-        step ``eps**(1/2) * (1 + abs(x))``.
+        The finite-difference step. Left unset, or given any value at or below zero, the ported
+        routine's adaptive step ``eps**(1/2) * (1 + abs(x))`` is used.
 
     Returns
     -------
@@ -213,7 +249,10 @@ def derivative(f: Callable[[float], float], x: float, step_size: float = -1.0) -
     x = float(x)
     if not np.isfinite(x):
         raise ValueError("`x` must be a single finite number")
-    options = {"point": x, "step_size": float(step_size)}
+    # See root_find above: `step_size` is written only when the caller supplied it.
+    options: dict[str, float] = {"point": x}
+    if step_size is not None:
+        options["step_size"] = float(step_size)
     return float(_core.callback_math("derivative", json.dumps(options), f)["values"][0])
 
 

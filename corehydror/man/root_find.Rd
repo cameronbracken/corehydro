@@ -4,16 +4,19 @@
 \alias{root_find}
 \title{Find a root of a user-written function}
 \usage{
-root_find(f, lower, upper, tolerance = 1e-08, max_iterations = 1000L)
+root_find(f, lower, upper, tolerance = NULL, max_iterations = NULL)
 }
 \arguments{
 \item{f}{a function taking one number and returning one number.}
 
 \item{lower, upper}{the bracketing interval.}
 
-\item{tolerance}{the convergence tolerance on the bracket width.}
+\item{tolerance}{the convergence tolerance on the bracket width. \code{NULL}, the default, leaves the
+ported Brent solver's own default (1e-8) in force; the value is not restated here, so a change
+to it lands in one place.}
 
-\item{max_iterations}{the iteration cap; the search raises an error if it is reached.}
+\item{max_iterations}{the iteration cap; the search raises an error if it is reached. \code{NULL},
+the default, leaves the ported solver's own default (1000) in force.}
 }
 \value{
 the root, a single number.
