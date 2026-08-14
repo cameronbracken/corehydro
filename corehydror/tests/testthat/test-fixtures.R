@@ -449,6 +449,21 @@ callback_fixture_function <- function(name) {
     # branch of the recursion. Written with `x * x` rather than `x^2`, arithmetic only, so all
     # four runners agree bit for bit and the evaluation count is a real oracle.
     Quad_Peak = function(x) 1 / (1 + 1e4 * x * x),
+    # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
+    # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
+    # user's proposal function would do -- rather than reaching for a generator of its own, which
+    # is the property the fixture exists to pin.
+    Rng_Uniform = function(parameters, rng) rng_uniform(rng, parameters[1]),
+    Rng_Integers = function(parameters, rng) {
+      rng_integers(rng, parameters[1], parameters[2], parameters[3])
+    },
+    Rng_Interleaved = function(parameters, rng) {
+      c(rng_uniform(rng, 2), rng_integers(rng, 2, 0, 100), rng_uniform(rng, 1))
+    },
+    Rng_Warmup1000 = function(parameters, rng) {
+      rng_uniform(rng, 1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
+      rng_uniform(rng, 10)
+    },
     stop(sprintf("unknown callback fixture callback: %s", name))
   )
 }
@@ -1654,14 +1669,17 @@ test_that("oracle fixtures validate", {
       ns <- asNamespace("corehydror")
       for (case in spec$cases) {
         construct <- case$construct
-        # Only the "math" group has R glue so far; the mcmc/bootstrap/gmm groups arrive with
+        # Only "math" and "rng" have R glue so far; the mcmc/bootstrap/gmm groups arrive with
         # their own entry points in later tasks.
-        if (!identical(construct$group, "math")) {
+        opts <- callback_options_json(ns, construct$options)
+        fn <- callback_fixture_function(construct$callback)
+        r <- if (identical(construct$group, "math")) {
+          ns$ch_callback_math_(construct$method, opts, fn)
+        } else if (identical(construct$group, "rng")) {
+          ns$ch_rng_probe_(opts, fn)
+        } else {
           stop(sprintf("unknown callback fixture group: %s", construct$group))
         }
-        r <- ns$ch_callback_math_(construct$method,
-                                  callback_options_json(ns, construct$options),
-                                  callback_fixture_function(construct$callback))
         for (a in case$assertions) {
           idx <- if (is.null(a$args)) 1L else a$args[[1]] + 1L
           if (identical(a$method, "value")) {

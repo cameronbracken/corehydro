@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import corehydropy as ch
+from corehydropy.callback import _rng_probe
 
 
 def _boom(*_args):
@@ -183,3 +184,119 @@ def test_argument_checks_fire_before_the_core_is_reached():
         ch.root_find(lambda x: x, lower=2, upper=0)
     with pytest.raises(ValueError):
         ch.gradient(lambda p: sum(p), [])
+
+
+# --- the RNG handle -------------------------------------------------------------------------
+#
+# The handle cannot be constructed by a user -- it is only ever handed to a callback -- so it is
+# tested through _rng_probe(), the internal verb that seeds a generator, hands a handle to `f`, and
+# returns what `f` drew. The C#-pinned values for these runs live in
+# fixtures/callback/rng_handle.json; here only the properties, and the lifetime rule. The R twin
+# (corehydror/tests/testthat/test-callback.R) asserts the identical things.
+
+
+def test_the_rng_handle_draws_from_the_core_seeded_stream_and_invalidates_after_the_call():
+    captured = {}
+
+    def f(parameters, rng):
+        captured["rng"] = rng
+        return rng.uniform(int(parameters[0]))
+
+    out = _rng_probe(seed=12345, parameters=[3], f=f)
+    assert len(out) == 3
+    assert all(0.0 < v < 1.0 for v in out)
+    assert isinstance(captured["rng"], ch.Rng)
+    # The handle borrows the generator; using it after the call must raise, not read freed memory.
+    with pytest.raises(RuntimeError, match="no longer valid"):
+        captured["rng"].uniform(1)
+    with pytest.raises(RuntimeError, match="no longer valid"):
+        captured["rng"].integers(1, 0, 10)
+
+
+def test_the_same_seed_gives_the_same_draws_and_a_different_seed_does_not():
+    def draw(seed):
+        return _rng_probe(seed, [5], lambda parameters, rng: rng.uniform(int(parameters[0])))
+
+    assert draw(12345) == draw(12345)
+    assert draw(12345) != draw(54321)
+
+
+def test_rng_integers_draws_whole_numbers_on_a_half_open_range():
+    k = _rng_probe(
+        999,
+        [50, 3, 7],
+        lambda parameters, rng: rng.integers(*(int(v) for v in parameters)),
+    )
+    assert len(k) == 50
+    # The upper bound is EXCLUDED, as in C# Next(minInclusive, maxExclusive).
+    assert all(v in (3, 4, 5, 6) for v in k)
+    # Uniforms and integers share one state, so interleaving them is not the same as taking them
+    # separately -- the second uniform must continue after the integer, not repeat it.
+    interleaved = _rng_probe(
+        2024,
+        [],
+        lambda parameters, rng: list(rng.uniform(1))
+        + [float(v) for v in rng.integers(1, 0, 1000)]
+        + list(rng.uniform(1)),
+    )
+    straight = _rng_probe(2024, [], lambda parameters, rng: rng.uniform(2))
+    assert interleaved[0] == straight[0]
+    assert interleaved[2] != straight[1]
+
+
+def test_a_handle_stored_from_an_earlier_call_is_dead_inside_a_later_one():
+    # The misuse a garbage-collected host makes easy: keep the object, call again, reach for the
+    # old one. The second call's handle is live; the first call's is not, and says so.
+    kept = {}
+
+    def first(parameters, rng):
+        kept["rng"] = rng
+        return rng.uniform(1)
+
+    _rng_probe(1, [1], first)
+
+    def second(parameters, rng):
+        with pytest.raises(RuntimeError, match="no longer valid"):
+            kept["rng"].uniform(1)
+        return rng.uniform(1)
+
+    assert len(_rng_probe(2, [1], second)) == 1
+
+    # A handle captured in a closure built inside the callback is the same story: the closure
+    # outlives the call, the borrow does not.
+    def capture(parameters, rng):
+        kept["later"] = lambda: rng.uniform(1)
+        return rng.uniform(1)
+
+    _rng_probe(3, [1], capture)
+    with pytest.raises(RuntimeError, match="no longer valid"):
+        kept["later"]()
+
+
+def test_a_nested_call_gets_its_own_handle_and_leaves_the_outer_one_alone():
+    # Each call scopes its OWN borrow, so an inner call cannot invalidate the outer handle and
+    # cannot disturb the outer generator. Tasks 5 and 6 need this: a proposal that runs a nested
+    # seeded verb must come back to a live handle and an undisturbed stream.
+    def outer_fn(parameters, outer):
+        a = list(outer.uniform(1))
+        inner = _rng_probe(6, [1], lambda p2, rng2: rng2.uniform(1))
+        return a + inner + list(outer.uniform(1))
+
+    out = _rng_probe(5, [1], outer_fn)
+    straight = _rng_probe(5, [1], lambda parameters, rng: rng.uniform(2))
+    assert [out[0], out[2]] == straight
+
+
+def test_the_rng_handle_rejects_nonsense_arguments():
+    with pytest.raises(ValueError, match="positive whole number"):
+        _rng_probe(1, [1], lambda parameters, rng: rng.uniform(0))
+    with pytest.raises(ValueError, match="must be below"):
+        _rng_probe(1, [1], lambda parameters, rng: rng.integers(2, 5, 5))
+    # The class is handed out, never constructed: a user cannot make one to point anywhere.
+    with pytest.raises(TypeError):
+        ch.Rng()
+
+
+def test_an_error_raised_inside_an_rng_callback_reaches_the_caller_unchanged():
+    with pytest.raises(ValueError, match="my own error"):
+        _rng_probe(1, [1], _boom)

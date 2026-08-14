@@ -1,0 +1,82 @@
+{
+  "kind": "callback",
+  "source": "Numerics/Sampling/Test_MersenneTwister.cs",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"rng\", method \"probe\": the runner seeds a MersenneTwister, hands the callback named by `construct.callback` a HANDLE on it (core/include/corehydro/numerics/support/rng_handle.hpp), and returns what the callback drew. The callback is written by each of the four runners itself as a native closure -- a C++ lambda, an R closure, a Python lambda, a C# delegate on upstream's own `(double[] parameters, Random prng)` Gibbs.Proposal signature -- so every case draws through a real host-language callback. THAT IS THE POINT OF THIS FILE: if a user's proposal or resample function drew from R's or Python's own generator instead of the one the run seeded, seeded results would stop being reproducible and would stop agreeing between the two languages, and nothing else in the suite would notice. Pinning the exact draws here is what makes the handle's stream an oracle rather than an assumption. `mt19937_reference_stream` carries genuine upstream literals: it is Test_MersenneTwister.Test_MT19937 -- the same int[] seeding, 1000 draws discarded, then ten NextDouble values whose expected numbers come from the reference mt19937ar.c output file -- transcribed verbatim with its 1E-8 delta. The other three cases have no upstream test literal (no upstream test seeds 12345 and reads NextDouble/Next), so their values are read off the REAL C# MersenneTwister through tools/oracle_emitter and are labeled EMITTER-READ. Neither kind is ever a value computed by this repo's own C++.",
+  "callbacks": {
+    "Rng_Uniform": "f(parameters, rng) -> parameters[0] draws of rng.uniform, the ported C# MersenneTwister.NextDouble",
+    "Rng_Integers": "f(parameters, rng) -> parameters[0] draws of rng.integers on [parameters[1], parameters[2]), the ported C# MersenneTwister.Next(minInclusive, maxExclusive)",
+    "Rng_Interleaved": "f(parameters, rng) -> 2 uniforms, 2 integers on [0, 100), 1 uniform, off ONE generator [corehydro addition: pins the draw ORDER, not just the values]",
+    "Rng_Warmup1000": "f(parameters, rng) -> 1000 uniforms discarded, then 10 kept  [the shape of Test_MersenneTwister.Test_MT19937]"
+  },
+  "cases": [
+    {
+      "name": "mt19937_reference_stream",
+      "construct": {
+        "group": "rng",
+        "method": "probe",
+        "callback": "Rng_Warmup1000",
+        "options": { "seeds": [291, 564, 837, 1110] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.76275443, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[0]; the delta is the upstream 1E-8)" },
+        { "method": "value", "args": [1], "expected": 0.99000644, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[1])" },
+        { "method": "value", "args": [2], "expected": 0.98670464, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[2])" },
+        { "method": "value", "args": [3], "expected": 0.10143112, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[3])" },
+        { "method": "value", "args": [4], "expected": 0.27933125, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[4])" },
+        { "method": "value", "args": [5], "expected": 0.69867227, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[5])" },
+        { "method": "value", "args": [6], "expected": 0.94218740, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[6])" },
+        { "method": "value", "args": [7], "expected": 0.03427201, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[7])" },
+        { "method": "value", "args": [8], "expected": 0.78842173, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[8])" },
+        { "method": "value", "args": [9], "expected": 0.28180608, "mode": "abs", "tol": 1e-8, "source": "Test_MersenneTwister.Test_MT19937 (trueDouble[9])" },
+        { "method": "dim", "args": [0], "expected": 10, "mode": "abs", "tol": 0, "source": "Test_MersenneTwister.Test_MT19937 (ten trueDouble literals, so ten draws kept)" }
+      ]
+    },
+    {
+      "name": "uniform_seed_12345",
+      "construct": {
+        "group": "rng",
+        "method": "probe",
+        "callback": "Rng_Uniform",
+        "options": { "seed": 12345, "parameters": [3] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.9296160866506398, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: the draw read off the REAL C# MersenneTwister(12345).NextDouble(). Exact (tol 0): the value is a uint32 divided by 2^32, so every runner produces the identical double or a different one, never a nearby one" },
+        { "method": "value", "args": [1], "expected": 0.8901547130662948, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: the second draw off the SAME generator, which is what makes this a stream assertion rather than three independent ones -- a runner that reseeded between draws would reproduce the first value and neither of the others" },
+        { "method": "value", "args": [2], "expected": 0.31637556036002934, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: the third draw off the same generator" },
+        { "method": "dim", "args": [0], "expected": 3, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: three values drawn, the count the `parameters` vector asked for" }
+      ]
+    },
+    {
+      "name": "integers_seed_999",
+      "construct": {
+        "group": "rng",
+        "method": "probe",
+        "callback": "Rng_Integers",
+        "options": { "seed": 999, "parameters": [5, 3, 7] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 3, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: read off the REAL C# MersenneTwister(999).Next(3, 7). Next() is a REJECTION loop, not a modulo, so it consumes an unpredictable number of uint32 draws -- a runner that faked it with floor(uniform * range) would agree here only by luck and would desynchronize the stream for everything after it" },
+        { "method": "value", "args": [1], "expected": 3, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: second Next(3, 7) off the same generator" },
+        { "method": "value", "args": [2], "expected": 4, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: third Next(3, 7) off the same generator" },
+        { "method": "value", "args": [3], "expected": 4, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: fourth Next(3, 7) off the same generator" },
+        { "method": "value", "args": [4], "expected": 3, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: fifth Next(3, 7) off the same generator. All five land in 3..6 because the upper bound is EXCLUSIVE, as in C# Next(minInclusive, maxExclusive)" }
+      ]
+    },
+    {
+      "name": "interleaved_seed_2024",
+      "construct": {
+        "group": "rng",
+        "method": "probe",
+        "callback": "Rng_Interleaved",
+        "options": { "seed": 2024 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.5880145151168108, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: first NextDouble off the REAL C# MersenneTwister(2024)" },
+        { "method": "value", "args": [1], "expected": 0.7571533904410899, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: second NextDouble off the same generator" },
+        { "method": "value", "args": [2], "expected": 84, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: first Next(0, 100), taken AFTER the two uniforms -- the uniform and integer verbs share one state, so this value pins the draw order" },
+        { "method": "value", "args": [3], "expected": 60, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: second Next(0, 100)" },
+        { "method": "value", "args": [4], "expected": 0.1881519618909806, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: the trailing NextDouble, the assertion that actually catches a reordering: it is the fifth thing drawn, and it differs from what the third draw of five straight uniforms would be" }
+      ]
+    }
+  ]
+}

@@ -19,7 +19,13 @@ import numpy as np
 
 from . import _core
 
-__all__ = ["root_find", "quadrature", "QuadratureResult", "derivative", "gradient", "hessian"]
+__all__ = ["root_find", "quadrature", "QuadratureResult", "derivative", "gradient", "hessian", "Rng"]
+
+# The handle a callback is given on the core's seeded generator, defined in bindings/callback.cpp
+# (see its RngHandle). Re-exported here so a user can type-annotate a proposal or resample
+# function, and so the documentation site has something to point at. It has no constructor: the
+# only way to get one is to be handed one.
+Rng = _core.Rng
 
 
 class QuadratureResult(float):
@@ -311,3 +317,16 @@ def hessian(f: Callable[[Sequence[float]], float], x: Sequence[float]) -> np.nda
     options = {"point": point.tolist()}
     res = _core.callback_math("hessian", json.dumps(options), f)
     return np.asarray(res["values"], dtype=float).reshape(res["dims"])
+
+
+def _rng_probe(seed: float, parameters: Sequence[float], f: Callable) -> list:
+    """Internal, test-only: seed a generator, hand ``f`` a handle on it, return what ``f`` drew.
+
+    ``f`` takes ``(parameters, rng)``, the Gibbs proposal's own signature, so what the fixtures
+    prove here about the handle carries over to the samplers. Not public -- a user reaches the
+    handle through a real verb, never through this. Mirrors ``corehydror``'s ``rng_probe()``.
+    """
+    if not callable(f):
+        raise TypeError("`f` must be a function taking (parameters, rng)")
+    options = {"seed": float(seed), "parameters": [float(v) for v in parameters]}
+    return list(_core.rng_probe(json.dumps(options), f)["values"])

@@ -28,16 +28,18 @@
 #include "corehydro/numerics/support/callback/gmm.hpp"
 #include "corehydro/numerics/support/callback/math.hpp"
 #include "corehydro/numerics/support/callback/mcmc.hpp"
+#include "corehydro/numerics/support/callback/rng.hpp"
 
 namespace corehydro::numerics::support {
 
-// Runs `method` of `group` (one of "math", "mcmc", "bootstrap", "gmm") against the callbacks in
-// `cbs`, configured by `options_json`, and returns a flat CallbackResult. Each group header
+// Runs `method` of `group` (one of "math", "rng", "mcmc", "bootstrap", "gmm") against the callbacks
+// in `cbs`, configured by `options_json`, and returns a flat CallbackResult. Each group header
 // documents its own options grammar and which CallbackSet members it requires.
 inline CallbackResult run_callback(const std::string& group, const std::string& method,
                                    const std::string& options_json, const CallbackSet& cbs) {
     JsonValue o = detail::parse_options(options_json);
     if (group == "math") return detail::run_math(method, o, cbs);
+    if (group == "rng") return detail::run_rng(method, o, cbs);
     if (group == "mcmc") return detail::run_mcmc(method, o, cbs);
     if (group == "bootstrap") return detail::run_bootstrap(method, o, cbs);
     if (group == "gmm") return detail::run_gmm(method, o, cbs);

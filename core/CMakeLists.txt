@@ -102,6 +102,7 @@ set(BF_TESTS
   test_adaptive_gauss_kronrod
   test_optimizer_runner
   test_callback_runner
+  test_rng_handle
 )
 
 # Sobol test takes the direction-number file as its sole argument.

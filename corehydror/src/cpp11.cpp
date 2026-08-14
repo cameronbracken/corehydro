@@ -61,6 +61,27 @@ extern "C" SEXP _corehydror_ch_callback_math_(SEXP method, SEXP options_json, SE
     return cpp11::as_sexp(ch_callback_math_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(f)));
   END_CPP11
 }
+// callback.cpp
+list ch_rng_probe_(std::string options_json, function f);
+extern "C" SEXP _corehydror_ch_rng_probe_(SEXP options_json, SEXP f) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_rng_probe_(cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(f)));
+  END_CPP11
+}
+// callback.cpp
+doubles ch_rng_uniform_(sexp handle, int n);
+extern "C" SEXP _corehydror_ch_rng_uniform_(SEXP handle, SEXP n) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_rng_uniform_(cpp11::as_cpp<cpp11::decay_t<sexp>>(handle), cpp11::as_cpp<cpp11::decay_t<int>>(n)));
+  END_CPP11
+}
+// callback.cpp
+integers ch_rng_integers_(sexp handle, int n, int min_inclusive, int max_exclusive);
+extern "C" SEXP _corehydror_ch_rng_integers_(SEXP handle, SEXP n, SEXP min_inclusive, SEXP max_exclusive) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_rng_integers_(cpp11::as_cpp<cpp11::decay_t<sexp>>(handle), cpp11::as_cpp<cpp11::decay_t<int>>(n), cpp11::as_cpp<cpp11::decay_t<int>>(min_inclusive), cpp11::as_cpp<cpp11::decay_t<int>>(max_exclusive)));
+  END_CPP11
+}
 // copula.cpp
 double ch_cop_val_(std::string type, doubles params, std::string method, doubles args, std::string marg_x_target, doubles marg_x_params, std::string marg_y_target, doubles marg_y_params);
 extern "C" SEXP _corehydror_ch_cop_val_(SEXP type, SEXP params, SEXP method, SEXP args, SEXP marg_x_target, SEXP marg_x_params, SEXP marg_y_target, SEXP marg_y_params) {
@@ -603,6 +624,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_optim_run_",                    (DL_FUNC) &_corehydror_ch_optim_run_,                     2},
     {"_corehydror_ch_plotting_positions_",           (DL_FUNC) &_corehydror_ch_plotting_positions_,            2},
     {"_corehydror_ch_plotting_positions_alpha_",     (DL_FUNC) &_corehydror_ch_plotting_positions_alpha_,      2},
+    {"_corehydror_ch_rng_integers_",                 (DL_FUNC) &_corehydror_ch_rng_integers_,                  4},
+    {"_corehydror_ch_rng_probe_",                    (DL_FUNC) &_corehydror_ch_rng_probe_,                     2},
+    {"_corehydror_ch_rng_uniform_",                  (DL_FUNC) &_corehydror_ch_rng_uniform_,                   2},
     {"_corehydror_ch_threshold_diagnostics_",        (DL_FUNC) &_corehydror_ch_threshold_diagnostics_,         6},
     {"_corehydror_ch_toolbox_run_",                  (DL_FUNC) &_corehydror_ch_toolbox_run_,                   4},
     {"_corehydror_ch_yeo_johnson_",                  (DL_FUNC) &_corehydror_ch_yeo_johnson_,                   2},

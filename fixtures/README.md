@@ -1739,14 +1739,14 @@ or `"status"` (the exact `OptimizationStatus` name).
 
 The ported routines whose input is a live host-language function rather than serializable data,
 run through the shared callback runner (`numerics/support/callback_runner.hpp`) and its exception
-guard. `construct` names a `group` (only `"math"` so far -- `"mcmc"`, `"bootstrap"` and `"gmm"`
-follow), a `method`, a `callback` (a NAMED built-in each of the four runners writes itself as a
+guard. `construct` names a `group` (`"math"` and `"rng"` so far -- `"mcmc"`, `"bootstrap"` and
+`"gmm"` follow), a `method`, a `callback` (a NAMED built-in each of the four runners writes itself as a
 native closure: a C++ lambda, an R closure, a Python lambda, a C# delegate), and an `options`
 object passed through verbatim as the runner's options JSON. The catalog names are documented in
 each fixture's own `callbacks` block; they are deliberately NOT the `optimizer` kind's names
 (`Diff_FXYZ` is `Test_Differentiation.FXYZ`, unrelated to the optimizer catalog's `FXYZ`), and the
-`Root_`/`Diff_`/`Quad_` prefixes keep two upstream test files' identically named functions apart
-(`Diff_FX` and `Quad_FX3` are both `x^3`), so nothing can be confused. Processed by all four
+`Root_`/`Diff_`/`Quad_`/`Rng_` prefixes keep two upstream test files' identically named functions
+apart (`Diff_FX` and `Quad_FX3` are both `x^3`), so nothing can be confused. Processed by all four
 runners; `--dump` is supported.
 
 ```jsonc
@@ -1788,6 +1788,21 @@ opens with `EMITTER-READ`. `Quad_Peak` in `fixtures/callback/math.json` is likew
 addition rather than an upstream integrand: every upstream integrand converges on the first
 whole-interval evaluation at 21 evaluations, so it is the one callback pinning the SUBDIVIDING
 branch of the recursion.
+
+The `"rng"` group has one method, `probe`, and one job: prove that a draw taken INSIDE a
+host-language callback comes off the core's seeded stream rather than off R's or Python's own
+generator. Its `options` carry exactly one of `seed` (a number, the C# `MersenneTwister(int)`
+constructor) or `seeds` (an array, the `MersenneTwister(int[])` constructor upstream's own
+`Test_MersenneTwister` uses), plus an optional `parameters` array; the callback is handed
+`(parameters, rng)` -- upstream's own `Gibbs.Proposal` signature -- and returns what it drew, so
+`values` is the draw vector and `dims` is `{n}`. `fixtures/callback/rng_handle.json` is the one
+file of this group: its `mt19937_reference_stream` case carries genuine upstream literals
+(`Test_MersenneTwister.Test_MT19937`, whose expected numbers come from the reference
+`mt19937ar.c` output file), and its other three cases are `EMITTER-READ`, since no upstream test
+seeds 12345 and reads `NextDouble`/`Next`. Because the handle borrows the generator for one call
+only, there is nothing for a fixture to assert about its expiry -- that half is asserted in each
+package's own tests (`corehydror/tests/testthat/test-callback.R`,
+`corehydropy/tests/test_callback.py`).
 
 ### `toolbox_cross_language`
 

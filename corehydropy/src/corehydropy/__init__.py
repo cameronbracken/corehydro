@@ -54,6 +54,7 @@ from .toolbox import (
 from .optim import OptimResult, optim_maximize, optim_minimize
 from .callback import (
     QuadratureResult,
+    Rng,
     derivative,
     gradient,
     hessian,
@@ -195,6 +196,7 @@ __all__ = [
     "derivative",
     "gradient",
     "hessian",
+    "Rng",
     "goodness_of_fit",
     "classification_metrics",
     "gof_test",

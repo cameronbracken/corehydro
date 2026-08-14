@@ -104,6 +104,116 @@ test_that("the R-side argument checks fire before the core is reached", {
                "between 1e-15 and 1")
 })
 
+test_that("the rng handle draws from the core seeded stream and invalidates after the call", {
+  # The handle cannot be constructed by a user -- it is only ever handed to a callback -- so it is
+  # tested through rng_probe(), the internal verb that seeds a generator, hands a handle to `f`,
+  # and returns what `f` drew. The C#-pinned values for these runs live in
+  # fixtures/callback/rng_handle.json; here only the properties, and the lifetime rule.
+  ns <- asNamespace("corehydror")
+  seen <- NULL
+  captured <- NULL
+  out <- ns$rng_probe(seed = 12345, parameters = 3, f = function(parameters, rng) {
+    captured <<- rng
+    seen <<- rng_uniform(rng, parameters[1])
+    seen
+  })
+  expect_length(seen, 3)
+  expect_true(all(seen > 0 & seen < 1))
+  expect_equal(out, seen)
+  expect_s3_class(captured, "corehydro_rng")
+  # The handle borrows the generator; using it after the call must error, not read freed memory.
+  expect_error(rng_uniform(captured, 1), "no longer valid")
+  expect_error(rng_integers(captured, 1, 0, 10), "no longer valid")
+})
+
+test_that("the same seed gives the same draws and a different seed does not", {
+  ns <- asNamespace("corehydror")
+  draw <- function(seed) {
+    ns$rng_probe(seed, 5, function(parameters, rng) rng_uniform(rng, parameters[1]))
+  }
+  expect_identical(draw(12345), draw(12345))
+  expect_false(isTRUE(all.equal(draw(12345), draw(54321))))
+})
+
+test_that("rng_integers draws whole numbers on [min, max) off the same stream", {
+  ns <- asNamespace("corehydror")
+  k <- ns$rng_probe(999, c(50, 3, 7), function(parameters, rng) {
+    rng_integers(rng, parameters[1], parameters[2], parameters[3])
+  })
+  expect_length(k, 50)
+  expect_true(all(k == floor(k)))
+  expect_true(all(k >= 3 & k <= 6))  # the upper bound is exclusive, as in C# Next(min, max)
+  # Uniforms and integers share one state, so interleaving them is not the same as taking them
+  # separately -- the second uniform must continue after the integer, not repeat it.
+  interleaved <- ns$rng_probe(2024, 0, function(parameters, rng) {
+    c(rng_uniform(rng, 1), rng_integers(rng, 1, 0, 1000), rng_uniform(rng, 1))
+  })
+  straight <- ns$rng_probe(2024, 0, function(parameters, rng) rng_uniform(rng, 2))
+  expect_identical(interleaved[1], straight[1])
+  expect_false(isTRUE(all.equal(interleaved[3], straight[2])))
+})
+
+test_that("a handle stored from an earlier call is dead inside a later one", {
+  # The misuse a garbage-collected host makes easy: keep the SEXP, call again, reach for the old
+  # one. The second call's handle is live; the first call's is not, and says so.
+  ns <- asNamespace("corehydror")
+  first <- NULL
+  ns$rng_probe(1, 1, function(parameters, rng) {
+    first <<- rng
+    rng_uniform(rng, 1)
+  })
+  second_ok <- ns$rng_probe(2, 1, function(parameters, rng) {
+    expect_error(rng_uniform(first, 1), "no longer valid")
+    rng_uniform(rng, 1)
+  })
+  expect_length(second_ok, 1)
+  # A handle captured in a closure built inside the callback is the same story: the closure
+  # outlives the call, the borrow does not.
+  later <- NULL
+  ns$rng_probe(3, 1, function(parameters, rng) {
+    later <<- function() rng_uniform(rng, 1)
+    rng_uniform(rng, 1)
+  })
+  expect_error(later(), "no longer valid")
+})
+
+test_that("a nested call gets its own handle and leaves the outer one alone", {
+  # Each call scopes its OWN borrow, so an inner call cannot invalidate the outer handle and
+  # cannot disturb the outer generator. Tasks 5 and 6 need this: a proposal that runs a nested
+  # seeded verb must come back to a live handle and an undisturbed stream.
+  ns <- asNamespace("corehydror")
+  out <- ns$rng_probe(5, 1, function(parameters, outer) {
+    a <- rng_uniform(outer, 1)
+    inner <- ns$rng_probe(6, 1, function(p2, rng2) rng_uniform(rng2, 1))
+    c(a, inner, rng_uniform(outer, 1))
+  })
+  straight <- ns$rng_probe(5, 1, function(parameters, rng) rng_uniform(rng, 2))
+  expect_identical(out[c(1L, 3L)], straight)
+})
+
+test_that("the rng handle rejects nonsense arguments and non-handles", {
+  ns <- asNamespace("corehydror")
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) rng_uniform(rng, 0)),
+    "positive whole number"
+  )
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) rng_integers(rng, 2, 5, 5)),
+    "must be below"
+  )
+  # Anything that is not a handle is refused by name rather than crashing on a bad pointer.
+  expect_error(rng_uniform(42, 1), "random number generator handle")
+  expect_error(rng_integers("nope", 1, 0, 2), "random number generator handle")
+})
+
+test_that("an error raised inside an rng callback reaches the caller unchanged", {
+  ns <- asNamespace("corehydror")
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) stop("my own error")),
+    "my own error"
+  )
+})
+
 test_that("a non-finite point is rejected by name, the same way Python rejects it", {
   # Without the finite check this failed three layers down in the spec serializer with
   # "spec values must be finite", naming neither `x` nor the verb. The Python twin

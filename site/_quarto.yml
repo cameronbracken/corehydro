@@ -281,3 +281,14 @@ quartodoc:
         - derivative
         - gradient
         - hessian
+    - title: The generator a callback is handed
+      desc: >-
+        Drawing from the core's seeded random number generator inside a function you write, so
+        the run stays reproducible and agrees with the identical run in R.
+      contents:
+        # `Rng` is defined in the pybind11 layer (bindings/callback.cpp), so griffe's static
+        # analysis sees only the `Rng = _core.Rng` alias and would render an empty page. `dynamic`
+        # imports it instead, which is what picks up the class and method docstrings written on the
+        # binding.
+        - name: Rng
+          dynamic: true

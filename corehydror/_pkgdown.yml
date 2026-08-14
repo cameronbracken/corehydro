@@ -248,3 +248,9 @@ reference:
       - root_find
       - quadrature
       - derivative
+  - title: The generator a callback is handed
+    desc: >
+      Drawing from the core's seeded random number generator inside a function you write, so
+      the run stays reproducible and agrees with the identical run in Python.
+    contents:
+      - rng_uniform

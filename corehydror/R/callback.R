@@ -198,3 +198,70 @@ hessian <- function(f, x) {
   res <- ch_callback_math_("hessian", opts, f)
   matrix(res$values, nrow = res$dims[[1]], ncol = res$dims[[2]], byrow = TRUE)
 }
+
+#' Draw from the generator a callback is handed
+#'
+#' Some corehydro verbs call a function you write and hand it the seeded random number generator
+#' the run is using: the proposal function of a Gibbs sampler, the resample function of a
+#' bootstrap. `rng_uniform()` and `rng_integers()` are how that generator is drawn from.
+#'
+#' Use them for every random number your callback needs. Reaching for R's own generator
+#' ([stats::runif()], [base::sample()]) instead is not an error and will not be caught, but it
+#' silently breaks two guarantees corehydro otherwise makes: the run stops being reproducible from
+#' its seed, and it stops agreeing with the identical run in Python. The handle draws from the same
+#' Mersenne Twister the core seeded, so both hold.
+#'
+#' @param rng the handle your callback was given. It cannot be created any other way.
+#' @param n how many values to draw; a single positive whole number.
+#' @param min,max the bounds for `rng_integers()`. `min` is included and `max` is EXCLUDED,
+#'   matching the ported Numerics `Next(minInclusive, maxExclusive)` a C# proposal is written
+#'   against, so `rng_integers(rng, 1, 0, 10)` draws one of `0:9`.
+#' @return `rng_uniform()` a numeric vector of length `n` with values in `[0, 1)`;
+#'   `rng_integers()` an integer vector of length `n`.
+#' @section Lifetime:
+#' The handle borrows the generator for the duration of the one call it was given to. It is not an
+#' object to keep. Storing it and drawing from it after your callback has returned raises an error
+#' ("this random number generator handle is no longer valid"), which is deliberate: the generator
+#' it pointed at no longer exists, and reading it would crash the session rather than merely
+#' misbehave.
+#' @seealso [stats::runif()] for ordinary R random numbers, which is what to use anywhere OUTSIDE
+#'   a corehydro callback.
+#' @name rng_uniform
+NULL
+
+#' @rdname rng_uniform
+#' @export
+rng_uniform <- function(rng, n) {
+  ch_rng_uniform_(rng, rng_check_count(n))
+}
+
+#' @rdname rng_uniform
+#' @export
+rng_integers <- function(rng, n, min, max) {
+  if (!is.numeric(min) || length(min) != 1L || !is.finite(min) ||
+      !is.numeric(max) || length(max) != 1L || !is.finite(max)) {
+    stop("`min` and `max` must each be a single finite whole number", call. = FALSE)
+  }
+  ch_rng_integers_(rng, rng_check_count(n), as.integer(min), as.integer(max))
+}
+
+# Internal: the count check both verbs share, worded exactly as the core's own check so a caller
+# cannot tell which layer refused. Kept in step with corehydropy's _check_count.
+rng_check_count <- function(n) {
+  if (!is.numeric(n) || length(n) != 1L || !is.finite(n) || n < 1) {
+    stop("`n` must be a single positive whole number", call. = FALSE)
+  }
+  as.integer(n)
+}
+
+# Internal, test-only: seed a generator, hand `f` a handle on it, return what `f` drew. `f` takes
+# (parameters, rng), the Gibbs proposal's own signature, so what the fixtures prove here about the
+# handle carries over to the samplers. Not exported -- a user reaches the handle through a real
+# verb, never through this. Reached from the tests and the fixture runner via
+# asNamespace("corehydror"), the same way the ch_* entry points are.
+rng_probe <- function(seed, parameters, f) {
+  callback_check_fn(f)
+  opts <- list(seed = as.double(seed))
+  if (length(parameters) > 0L) opts$parameters <- spec_array(as.double(parameters))
+  ch_rng_probe_(to_spec_json(opts), f)$values
+}

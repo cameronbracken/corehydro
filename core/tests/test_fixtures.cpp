@@ -58,6 +58,7 @@
 #include "corehydro/numerics/data/yeo_johnson.hpp"
 #include "corehydro/numerics/support/toolbox_runner.hpp"
 #include "corehydro/numerics/support/callback_runner.hpp"
+#include "corehydro/numerics/support/rng_handle.hpp"
 #include "corehydro/numerics/support/optimizer_runner.hpp"
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
@@ -1718,6 +1719,38 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
         // subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
         // bit and the evaluation count is a real oracle. See the fixture's `callbacks` note.
         cbs.scalar = [](double x) { return 1.0 / (1.0 + 1.0e4 * x * x); };
+    } else if (name == "Rng_Uniform") {
+        // The rng catalog (fixtures/callback/rng_handle.json). Each of these takes the handle the
+        // runner hands it -- the C++ analogue of the R closure calling rng_uniform() and the Python
+        // lambda calling rng.uniform() -- rather than reaching for the generator directly, so the
+        // fixture pins what a USER's callback draws and not merely what the generator emits.
+        cbs.vector_rng = [](const std::vector<double>& p, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            return scope.handle()->uniform(static_cast<int>(p.at(0)));
+        };
+    } else if (name == "Rng_Integers") {
+        cbs.vector_rng = [](const std::vector<double>& p, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            std::vector<int> k = scope.handle()->integers(
+                static_cast<int>(p.at(0)), static_cast<int>(p.at(1)), static_cast<int>(p.at(2)));
+            return std::vector<double>(k.begin(), k.end());
+        };
+    } else if (name == "Rng_Interleaved") {
+        cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            tbx::RngBorrowPtr rng = scope.handle();
+            std::vector<double> out = rng->uniform(2);
+            for (int k : rng->integers(2, 0, 100)) out.push_back(static_cast<double>(k));
+            out.push_back(rng->uniform(1).at(0));
+            return out;
+        };
+    } else if (name == "Rng_Warmup1000") {
+        cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            tbx::RngBorrowPtr rng = scope.handle();
+            rng->uniform(1000);  // discarded, as upstream's own test discards 1000 GenRandInt32
+            return rng->uniform(10);
+        };
     } else {
         throw std::runtime_error("unknown callback fixture callback: " + name);
     }

@@ -1757,20 +1757,44 @@ def _callback_fixture_function(name):
         # subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
         # bit and the evaluation count is a real oracle.
         return lambda x: 1.0 / (1.0 + 1.0e4 * x * x)
+    # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
+    # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
+    # user's proposal function would do -- rather than reaching for a generator of its own, which
+    # is the property the fixture exists to pin.
+    if name == "Rng_Uniform":
+        return lambda parameters, rng: rng.uniform(int(parameters[0]))
+    if name == "Rng_Integers":
+        return lambda parameters, rng: [
+            float(v) for v in rng.integers(int(parameters[0]), int(parameters[1]), int(parameters[2]))
+        ]
+    if name == "Rng_Interleaved":
+        return lambda parameters, rng: (
+            list(rng.uniform(2))
+            + [float(v) for v in rng.integers(2, 0, 100)]
+            + list(rng.uniform(1))
+        )
+    if name == "Rng_Warmup1000":
+        return _rng_warmup_1000
     raise KeyError(f"unknown callback fixture callback: {name}")
+
+
+def _rng_warmup_1000(parameters, rng):
+    rng.uniform(1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
+    return rng.uniform(10)
 
 
 def _run_callback_case(case):
     construct = case["construct"]
-    # Only the "math" group has Python glue so far; the mcmc/bootstrap/gmm groups arrive with
+    # Only "math" and "rng" have Python glue so far; the mcmc/bootstrap/gmm groups arrive with
     # their own entry points in later tasks.
-    if construct["group"] != "math":
+    options_json = json.dumps(construct.get("options", {}))
+    fn = _callback_fixture_function(construct["callback"])
+    if construct["group"] == "math":
+        r = _core.callback_math(construct["method"], options_json, fn)
+    elif construct["group"] == "rng":
+        r = _core.rng_probe(options_json, fn)
+    else:
         raise KeyError(f"unknown callback fixture group: {construct['group']}")
-    r = _core.callback_math(
-        construct["method"],
-        json.dumps(construct.get("options", {})),
-        _callback_fixture_function(construct["callback"]),
-    )
     for a in case["assertions"]:
         index = a["args"][0] if "args" in a else 0
         if a["method"] == "value":

@@ -857,6 +857,58 @@ static Func<double[], double>? CallbackVectorFunction(string name) => name switc
     _ => null
 };
 
+// The callback surface, Task 3: the rng-group catalog for fixtures/callback/rng_handle.json. The
+// delegate signature is `(double[] parameters, Random prng)` -- upstream's OWN Gibbs.Proposal
+// signature -- and these are the C# counterparts of the four runners' native closures, each drawing
+// from the generator the runner seeded and hands in. What they pin is the property the RNG handle
+// exists for: a draw taken inside a host-language callback is a draw off THIS stream, so R and
+// Python agree with C# value for value. Loops rather than LINQ, so the draw ORDER is written down
+// rather than left to deferred execution.
+static Func<double[], Random, double[]>? CallbackRngFunction(string name) => name switch
+{
+    // n uniforms; n comes from the parameters vector so one entry serves any count.
+    "Rng_Uniform" => (p, prng) =>
+    {
+        var v = new double[(int)p[0]];
+        for (int i = 0; i < v.Length; i++) v[i] = prng.NextDouble();
+        return v;
+    },
+    // n integers on [min, max), i.e. Next(minInclusive, maxExclusive): parameters are n, min, max.
+    "Rng_Integers" => (p, prng) =>
+    {
+        var v = new double[(int)p[0]];
+        for (int i = 0; i < v.Length; i++) v[i] = prng.Next((int)p[1], (int)p[2]);
+        return v;
+    },
+    // Two uniforms, two integers, one uniform, off ONE generator. Uniforms and integers share the
+    // state, so this pins the draw ORDER as well as the values: a runner that took its integers
+    // from a second generator, or that reordered the two verbs, would reproduce neither the third
+    // uniform nor the integers.
+    "Rng_Interleaved" => (p, prng) =>
+    {
+        var v = new double[5];
+        v[0] = prng.NextDouble();
+        v[1] = prng.NextDouble();
+        v[2] = prng.Next(0, 100);
+        v[3] = prng.Next(0, 100);
+        v[4] = prng.NextDouble();
+        return v;
+    },
+    // 1000 draws discarded, then 10 kept -- the shape of upstream's own Test_MersenneTwister
+    // (Sampling/Test_MersenneTwister.cs), whose ten trueDouble literals come from the reference
+    // mt19937ar.c output file. NextDouble() is GenRandReal2, one GenRandInt32 per call, so
+    // discarding 1000 of them advances the state exactly as the upstream test's 1000 GenRandInt32
+    // calls do and the eleventh through twentieth draws are its literals.
+    "Rng_Warmup1000" => (p, prng) =>
+    {
+        for (int i = 0; i < 1000; i++) prng.NextDouble();
+        var v = new double[10];
+        for (int i = 0; i < v.Length; i++) v[i] = prng.NextDouble();
+        return v;
+    },
+    _ => null
+};
+
 // numerical_derivative fixture args convention -- MUST mirror
 // numerical_derivative_parse()/gradient_element()/hessian_element() in
 // core/tests/test_fixtures.cpp exactly.
@@ -4665,7 +4717,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             string caseName = c.GetProperty("name").GetString()!;
             var construct = c.GetProperty("construct");
             string group = construct.GetProperty("group").GetString()!;
-            if (group != "math") throw new Exception($"unknown callback fixture group: {group}");
+            if (group != "math" && group != "rng")
+                throw new Exception($"unknown callback fixture group: {group}");
             string method = construct.GetProperty("method").GetString()!;
             string callbackName = construct.GetProperty("callback").GetString()!;
             var options = construct.TryGetProperty("options", out var optEl)
@@ -4687,7 +4740,29 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             // their arms leave this at the "Success" the C++ runner unconditionally reports for
             // them -- see the status assertion below.
             string statusName = "Success";
-            if (method == "root_find")
+            if (group == "rng")
+            {
+                if (method != "probe") throw new Exception($"unknown rng fixture method: {method}");
+                var f = CallbackRngFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an rng function");
+                // Exactly as callback/rng.hpp: `seeds` (the C# int[] constructor, upstream's own
+                // Test_MersenneTwister seeding) wins over `seed` (the int constructor every
+                // sampler uses).
+                MersenneTwister prng;
+                if (options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("seeds", out var seedsEl))
+                    prng = new MersenneTwister(seedsEl.EnumerateArray().Select(v => (int)ParseNum(v)).ToArray());
+                else
+                    prng = new MersenneTwister((int)Opt("seed", 0d));
+                double[] parameters =
+                    options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("parameters", out var parEl)
+                        ? parEl.EnumerateArray().Select(ParseNum).ToArray()
+                        : Array.Empty<double>();
+                values = f(parameters, prng);
+                dims = [values.Length];
+            }
+            else if (method == "root_find")
             {
                 var f = CallbackScalarFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
