@@ -100,6 +100,7 @@ set(BF_TESTS
   test_multivariate_normal_api
   test_brent_search
   test_optimizer_runner
+  test_callback_runner
 )
 
 # Sobol test takes the direction-number file as its sole argument.
