@@ -31,6 +31,26 @@ def test_goodness_of_fit_accepts_a_bare_metric_string():
     assert result["nse"] == every["nse"]
 
 
+def test_a_subset_that_excludes_mape_succeeds_on_a_zero_containing_series():
+    obs = [0, 2, 4]
+    mod = [0.1, 2.1, 3.9]
+    with pytest.raises(Exception, match="zero"):
+        goodness_of_fit(obs, mod)
+    result = goodness_of_fit(obs, mod, metrics="mse")
+    assert result["mse"] == pytest.approx(0.01)
+
+
+def test_a_subset_returns_the_same_values_as_the_full_call_in_the_requested_order():
+    obs = [2, 4, 6, 8, 10]
+    mod = [2.2, 3.9, 6.4, 7.5, 10.1]
+    every = goodness_of_fit(obs, mod)
+    subset = goodness_of_fit(obs, mod, metrics=["kge", "nse", "mse"])
+    assert list(subset.keys()) == ["kge", "nse", "mse"]
+    assert subset["kge"] == every["kge"]
+    assert subset["nse"] == every["nse"]
+    assert subset["mse"] == every["mse"]
+
+
 def test_an_unknown_metric_name_is_rejected_and_names_the_offender():
     with pytest.raises(ValueError, match="nsee"):
         goodness_of_fit([1, 2, 3, 4, 5], [1, 2, 3, 4, 5], metrics=["nsee"])

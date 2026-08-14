@@ -78,6 +78,18 @@
    ]
   },
   {
+   "name": "metrics_matches_individual_arms_by_label",
+   "data": ["gm_obs", "gm_mod"],
+   "assertions": [
+    {"method": "metrics", "label": "rmse", "expected": 1.0, "mode": "abs", "tol": 1e-9},
+    {"method": "metrics", "label": "mape", "expected": 3.397321428571429, "mode": "abs", "tol": 1e-9},
+    {"method": "metrics", "label": "smape", "expected": 3.349940048308349, "mode": "abs", "tol": 1e-9},
+    {"method": "metrics", "label": "log_nse", "expected": 0.9959450301426391, "mode": "abs", "tol": 1e-9},
+    {"method": "metrics", "label": "pearson", "expected": 0.999076724020674, "mode": "abs", "tol": 1e-9},
+    {"method": "metrics", "label": "r_squared", "expected": 0.9981543004798821, "mode": "abs", "tol": 1e-9}
+   ]
+  },
+  {
    "name": "aic_weights_literal",
    "data": ["aicw_vals"],
    "assertions": [

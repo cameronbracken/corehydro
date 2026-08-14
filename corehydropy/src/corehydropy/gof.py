@@ -61,15 +61,19 @@ def goodness_of_fit(observed, modeled, metrics="all", k: int = 0) -> dict:
     obs, mod = _check_pair(observed, modeled, "observed", "modeled")
     if isinstance(metrics, str) and metrics != "all":
         metrics = [metrics]
-    if metrics != "all":
-        unknown = [m for m in metrics if m not in _GOF_METRICS]
-        if unknown:
-            raise ValueError(
-                f"unknown metric(s): {', '.join(unknown)}. Available: {', '.join(_GOF_METRICS)}"
-            )
-    r = _toolbox_run("gof", "metrics", [obs, mod], {"k": int(k)})
-    out = dict(zip(r["names"], r["values"]))
-    return out if metrics == "all" else {m: out[m] for m in metrics}
+    if metrics == "all":
+        r = _toolbox_run("gof", "metrics", [obs, mod], {"k": int(k)})
+        return dict(zip(r["names"], r["values"]))
+    unknown = [m for m in metrics if m not in _GOF_METRICS]
+    if unknown:
+        raise ValueError(
+            f"unknown metric(s): {', '.join(unknown)}. Available: {', '.join(_GOF_METRICS)}"
+        )
+    # Dispatched one metric at a time so a caller asking for e.g. "mse" never pays MAPE's
+    # zero-observed-value precondition; only metrics = "all" evaluates the eager combined arm.
+    return {
+        m: float(_toolbox_run("gof", m, [obs, mod], {"k": int(k)})["values"][0]) for m in metrics
+    }
 
 
 def classification_metrics(observed, modeled) -> dict:

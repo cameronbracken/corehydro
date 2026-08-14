@@ -7,6 +7,25 @@ test_that("goodness_of_fit returns every metric, and subsets agree with the whol
   expect_equal(goodness_of_fit(obs, mod, metrics = "nse")[["nse"]], all[["nse"]])
 })
 
+test_that("a subset that excludes mape succeeds on a zero-containing series", {
+  obs <- c(0, 2, 4)
+  mod <- c(0.1, 2.1, 3.9)
+  expect_error(goodness_of_fit(obs, mod), "zero")
+  result <- goodness_of_fit(obs, mod, metrics = "mse")
+  expect_true(is.finite(result[["mse"]]))
+})
+
+test_that("a subset returns the same values as the full call, in the requested order", {
+  obs <- c(2, 4, 6, 8, 10)
+  mod <- c(2.2, 3.9, 6.4, 7.5, 10.1)
+  all <- goodness_of_fit(obs, mod)
+  subset <- goodness_of_fit(obs, mod, metrics = c("kge", "nse", "mse"))
+  expect_equal(names(subset), c("kge", "nse", "mse"))
+  expect_equal(unname(subset[["kge"]]), unname(all[["kge"]]))
+  expect_equal(unname(subset[["nse"]]), unname(all[["nse"]]))
+  expect_equal(unname(subset[["mse"]]), unname(all[["mse"]]))
+})
+
 test_that("an unknown metric name is rejected and names the offender", {
   expect_error(goodness_of_fit(1:5, 1:5, metrics = "nsee"), "nsee")
 })

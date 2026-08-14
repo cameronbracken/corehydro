@@ -25,17 +25,22 @@ kGofMetrics <- c("rmse", "mse", "mae", "mape", "smape", "nse", "log_nse", "kge",
 #' @export
 goodness_of_fit <- function(observed, modeled, metrics = "all", k = 0) {
   check_pair(observed, modeled, "observed", "modeled")
-  if (!identical(metrics, "all")) {
-    unknown <- setdiff(metrics, kGofMetrics)
-    if (length(unknown) > 0L) {
-      stop(sprintf("unknown metric(s): %s. Available: %s",
-                   paste(unknown, collapse = ", "), paste(kGofMetrics, collapse = ", ")),
-           call. = FALSE)
-    }
+  if (identical(metrics, "all")) {
+    r <- toolbox_run("gof", "metrics", list(observed, modeled), list(k = k))
+    return(stats::setNames(r$values, r$names))
   }
-  r <- toolbox_run("gof", "metrics", list(observed, modeled), list(k = k))
-  out <- stats::setNames(r$values, r$names)
-  if (identical(metrics, "all")) out else out[metrics]
+  unknown <- setdiff(metrics, kGofMetrics)
+  if (length(unknown) > 0L) {
+    stop(sprintf("unknown metric(s): %s. Available: %s",
+                 paste(unknown, collapse = ", "), paste(kGofMetrics, collapse = ", ")),
+         call. = FALSE)
+  }
+  # Dispatched one metric at a time so a caller asking for e.g. "mse" never pays MAPE's
+  # zero-observed-value precondition; only metrics = "all" evaluates the eager combined arm.
+  values <- vapply(metrics, function(m) {
+    toolbox_run("gof", m, list(observed, modeled), list(k = k))$values[[1]]
+  }, numeric(1))
+  stats::setNames(values, metrics)
 }
 
 #' Classification metrics for two binary label vectors
