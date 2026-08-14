@@ -1675,6 +1675,87 @@ Each assertion may also carry `index` (0-based, default 0, selects `values[index
 `"length"` (`len(values)`), `"rows"` / `"columns"` (out of `dims`, for a group whose method
 returns a flattened matrix).
 
+**Known limitation (Task 9 review):** the dotnet emitter's `ToolboxSelectFlat` helper -- the
+hand-rolled reproduction of `run_toolbox`'s selection logic used by the groups whose C# result is
+a positional flattened array rather than a named vector (Sobol, Stratify, Histogram bins, linear
+regression's coefficient/covariance/residual matrices, ...) -- has no `names` array to look
+`label` up against, so a `label` key on one of those groups' assertions is silently ignored and
+falls through to `"index"`-or-0, where the C++/R/Python `toolbox_select` helpers honor it
+correctly. Recorded rather than fixed: no fixture pairs `label` with one of those flattened-matrix
+groups today (`label` is only ever used against a named-vector group, e.g. `gof`'s
+`metrics`/`classification`, which the emitter dispatches through `ToolboxSelectNamed` instead), so
+a real fix would mean threading a names array through every `ToolboxSelectFlat` call site for a
+combination nothing currently exercises. See `ToolboxSelectFlat`'s own header comment in
+`tools/oracle_emitter/Program.cs`.
+
+### `optimizer`
+
+The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a
+NAMED built-in objective (one of `FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`, the same formulas
+`core/tests/optimization_test_functions.hpp` and each fixture runner's own native closure
+implement) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
+`toolbox` group, reached through its own runner (`numerics/support/optimizer_runner.hpp`) and its
+own glue (`ch_optim_run_` / `_core.optim_run`). `construct` is passed straight through as the
+runner's spec JSON, minus the `objective` key (not part of the runner's own grammar). Processed by
+all four runners; the emitter does not support `--dump` for this kind (a failed comparison's own
+error message already prints the actual value at `G17` precision, which is the curation path used
+in practice -- see `toolbox_cross_language` below for a worked example of pinning digest-precision
+literals this way).
+
+```jsonc
+{
+  "kind": "optimizer",
+  "cases": [
+    {
+      "name": "de_booth",
+      "construct": {
+        "method": "de", "objective": "Booth",
+        "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4 },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4 },
+        { "method": "status", "expected": "Success" }
+      ]
+    }
+  ]
+}
+```
+
+Assertion `method` is `"value"` (the objective's own value at the optimum, in its own sign
+convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
+or `"status"` (the exact `OptimizationStatus` name).
+
+### `toolbox_cross_language`
+
+One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose
+kind: its single case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
+case's `construct`/`assertions`) alongside `"sobol"` and `"stratify"` sub-blocks (each shaped
+exactly like a `toolbox`-kind group-`"sampling"` case's `options`/`assertions`), so that ONE
+fixture drives a seeded stochastic optimizer run and two deterministic sequence generators through
+all four runners together. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
+`short_exact`-digest precedent: proving R and Python agree bit for bit, this time across the
+toolbox/optimizer surface rather than a Bayesian MCMC chain. Every value is dumped from the REAL
+C# `DifferentialEvolution`/`SobolSequence`/`Stratify` via `tools/oracle_emitter --dump` and
+reproduced by `tools/verify_oracles.py`, at digest-precision tolerances (not the loose
+`optimizer`-kind MSTest deltas above) -- see the fixture's own `reference` field for why the DE
+values carry real trailing digits instead of the rounded textbook optimum.
+
+```jsonc
+{
+  "kind": "toolbox_cross_language",
+  "cases": [
+    {
+      "name": "de_booth_sobol_stratify_short_exact",
+      "optimizer": { "construct": { ... }, "assertions": [ ... ] },
+      "sobol":     { "options":   { ... }, "assertions": [ ... ] },
+      "stratify":  { "options":   { ... }, "assertions": [ ... ] }
+    }
+  ]
+}
+```
+
 ### `special_function`
 
 For internal C++ math utilities (not exposed to R/Python). The R and Python fixture runners

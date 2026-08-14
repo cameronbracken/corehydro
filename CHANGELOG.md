@@ -7,6 +7,124 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-13
+
+The numerics toolbox layer. Every general-purpose Numerics utility that is not itself a
+distribution, copula, model, or estimator -- correlation, goodness of fit, descriptive and
+running statistics, spectral analysis, histograms, interpolation, linear regression, Sobol
+sequences, stratification, joint probability, link functions, trend evaluation, and all six
+ported optimizers -- is reachable from R and Python for the first time. Two shared runners carry
+the whole surface: `numerics/support/toolbox_runner.hpp` (eleven groups, each a standalone header
+under `numerics/support/toolbox/`) for everything that operates on serializable data, and
+`numerics/support/optimizer_runner.hpp` for the six optimizers, which take a live host-language
+callback instead. The cpp11 glue, the pybind11 glue, the C++ fixture runner, and the dotnet oracle
+emitter all drive the same two runners, so a fixture case, an oracle replay, and a user's
+`correlation()` or `optim_minimize()` call are the same code path -- the pattern the estimation
+and distribution layers already established, now covering the last major slice of the port.
+
+### Added
+
+- **`correlation()`** -- Pearson, Spearman, and Kendall's tau.
+- **`goodness_of_fit()`, `classification_metrics()`, `gof_test()`, `gof_rmse()`, `aic()`,
+  `aicc()`, `bic()`, `aic_weights()`, `rmse_weights()`** -- the C# `GoodnessOfFit` class's
+  seventeen continuous metrics (RMSE, NSE, KGE, and friends) plus six binary classification
+  metrics, the Kolmogorov-Smirnov/Anderson-Darling/chi-squared test statistics for a fitted
+  distribution, the three information criteria, and Akaike/RMSE model weights.
+- **`summary_statistics()`, `product_moments()`, `l_moments()`, `ranks()`, `percentile()`,
+  `running_statistics()`, `running_covariance()`, `autocorrelation()`, `cross_correlation()`,
+  `dft()`, `dft_real()`** -- descriptive and streaming (online) statistics, autocorrelation with
+  PACF and confidence bands, and the discrete Fourier transform.
+- **`histogram()`, `interpolate()`, `interpolate_2d()`** -- histogram binning, and one- and
+  two-dimensional interpolation with optional axis transforms (log, normal-Z).
+- **`linear_regression()`** -- ordinary least squares, returning a `corehydro_lm` (R) /
+  `LinearRegressionResult` (Python) with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict`.
+- **`sobol_sequence()`, `stratify()`, `joint_probability()`** -- quasi-random Sobol sequences,
+  deterministic interval stratification, and joint exceedance probability under independence,
+  positive/negative dependency, or an explicit correlation.
+- **`link_function()`, `link()`, `link_inverse()`, `link_derivative()`, `link_names()`,
+  `trend_predict()`, `trend_parameters()`, `trend_names()`** -- the Numerics link-function layer
+  (identity, log, logit, probit, complementary-log-log, Fisher-z, Yeo-Johnson) and evaluation of
+  the ten BestFit trend models. Python's `link_function()` takes `lambda_` rather than `lambda`
+  (a reserved word), the one deliberate naming difference from R, matching the existing
+  `corehydropy.stats` precedent.
+- **`optim_minimize()`, `optim_maximize()`** -- the six ported optimizers (Differential Evolution,
+  BFGS, Powell, MLSL, Nelder-Mead, Brent) over a user-written R or Python objective, the same
+  optimizers the estimation layer already used internally, now public. A seeded `"de"`/`"mlsl"`
+  run's PRNG lives in the shared C++ core, so its candidate-generation stream -- and therefore its
+  result, in the well-separated cases this release's own fixtures and examples exercise -- is
+  reproducible run to run and identical language to language.
+- Two worked example pairs: model evaluation (ranking candidate distributions with the new
+  goodness-of-fit surface) and a custom objective (fitting a hand-written likelihood with
+  `optim_minimize()`/`optim_maximize()`, global versus local, cross-language DE reproduction).
+- A cross-language digest fixture (`fixtures/toolbox/toolbox_cross_language.json`, a new
+  `toolbox_cross_language` fixture kind) pinning one seeded DE run, one Sobol block, and one
+  stratification together, so all four runners assert the same values from the same construct --
+  the toolbox layer's counterpart to the estimation layer's `fit_cross_language.json`.
+
+### Fixed
+
+- **`Numerics/Data/Statistics/Autocorrelation.cs` was never ported**, through Phase 0-10, the
+  upstream sync, and the estimation and distribution surface phases that followed -- nothing
+  needed it until the toolbox layer's `spectra` group did. It is now
+  `numerics/data/autocorrelation.hpp`, reachable via `autocorrelation()`/the `autocorrelation_ci`
+  verb (the `TimeSeries` overloads remain a documented severance; see the header's own comment).
+  Its sibling `Correlation.cs`'s matrix overloads (`Pearson(double[,])`/`Spearman(double[,])`,
+  column-pairwise correlation matrices over an `[n, p]` table) were a real but previously
+  unrecorded severance -- no caller has needed them yet -- now written up in
+  `numerics/data/correlation.hpp`'s own file comment and `upstream/CLAUDE.md`, alongside the
+  Autocorrelation port.
+- **`linear_regression()`'s `vcov()` was unscaled.** The C++ runner's `covariance()` correctly
+  returns the raw `(X'X)^-1` term (matching the C# `LinearRegression.Covariance`), but the R and
+  Python wrappers passed it straight through instead of multiplying by `sigma^2` the way the fit
+  itself already does for `standard_errors`, so `vcov(fit)` disagreed with
+  `sqrt(diag(vcov(fit))) == standard_errors` by a factor of `sigma^2`.
+- **The optimizer callback guard had a hole for `"bfgs"` and `"mlsl"`.** Every `run_optimizer` arm
+  called the optimizer and checked the guard only afterward, with no `try` around the call itself.
+  When the guard's sentinel value drove BFGS/MLSL's first gradient probe to throw a C++
+  `std::domain_error` internally, `Optimizer::minimize()`'s own catch-all rethrew THAT exception
+  before the guard's stored one was ever consulted, dropping the user's original R/Python
+  exception -- precisely the half-unwound-host-stack hazard the guard exists to prevent. All six
+  arms now wrap the call in a `try` that always prefers the guard's stored exception.
+- `goodness_of_fit(metrics = "nse")` in Python iterated the string's individual characters instead
+  of treating it as one metric name; a bare string is now normalized to a one-element list before
+  validation, matching the R twin's existing behavior.
+- `classification_metrics()` had an invented threshold argument neither R, Python, nor the C#
+  source has; dropped, and both label vectors are documented as already-binary.
+- `histogram()` rejected too few or too many explicit bins inconsistently between languages, and a
+  toolbox dispatch error from the C# emitter leaked its internal message instead of naming the
+  method; both now validate and report symmetrically.
+- The joint-probability runner threw for one half of the `dependency = "correlation"` no-matrix
+  case while silently returning `NaN` for the other; both now fall through to `NaN`, matching the
+  C# source, and the R/Python wrappers reject the combination symmetrically instead of leaking the
+  asymmetry. `stratify()` now also rejects `lower >= upper` instead of silently returning zero
+  rows.
+- `running_covariance()`'s resume state was not array-wrapped, so a single-variable accumulator
+  failed to round-trip through a second call.
+
+### Known limitation
+
+- The dotnet oracle emitter's `ToolboxSelectFlat` helper (used for groups whose C# result is a
+  positional flattened array -- Sobol, Stratify, Histogram bins, linear regression's
+  coefficient/covariance/residual matrices) has no `names` array to look an assertion's `label`
+  key up against, unlike the C++/R/Python `toolbox_select` helpers, which honor it. Recorded
+  rather than fixed: no fixture pairs `label` with one of those flattened-matrix groups today, so
+  the gap is latent. See `ToolboxSelectFlat`'s header comment in `tools/oracle_emitter/Program.cs`
+  and `fixtures/README.md`'s `toolbox` section.
+
+### Documentation
+
+- Reference entries for every new R export and Python name, in six new `_pkgdown.yml`/
+  `quartodoc.sections` groups: correlation and goodness of fit, statistics, interpolation and
+  regression, sampling utilities, links and trends, and optimizers. `correlation()` itself,
+  shipped in this phase's first task, had been missing from both indexes until now.
+
+### Validation
+
+ctest 84/84; oracle gate 5209 reproduced, 0 failed, 11 skipped (the documented GEV standard-error
+set, unchanged); testthat 5634/0; pytest 1344 passed. `R CMD check --as-cran` holds at three NOTEs
+(the CRAN-incoming non-FOSS-license note, the long-path note listing vendored core headers, and a
+local HTML-tidy-version note) with no WARNING.
+
 ## [0.5.0] - 2026-08-12
 
 The distribution layer is complete. Five composite univariate distributions, all seven bivariate
@@ -304,7 +422,8 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/cameronbracken/corehydro/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cameronbracken/corehydro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cameronbracken/corehydro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cameronbracken/corehydro/compare/v0.2.0...v0.3.0

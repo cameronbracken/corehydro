@@ -1,0 +1,37 @@
+{
+  "kind": "toolbox_cross_language",
+  "source": "Numerics/Mathematics/Optimization/Global/DifferentialEvolution.cs; Numerics/Sampling/{SobolSequence.cs,Stratify.cs}",
+  "reference": "Numerics @ 2a0357a. Exact oracle values dumped from the REAL C# DifferentialEvolution/SobolSequence/Stratify (via tools/oracle_emitter, Task 9) and reproduced by tools/verify_oracles.py. Unlike every other toolbox/optimizer fixture (whose job is pinning ACCURACY against an upstream MSTest literal, so their tolerances are the loose Assert.AreEqual delta the C# test itself uses -- e.g. fixtures/toolbox/optimizers.json's de_booth case asserts abs tol 1e-4), this file's job is the CROSS-LANGUAGE guarantee: the same construct drives the C++, R, Python and C# harnesses, so a digest that reproduces in all four proves a seeded stochastic optimizer run AND two deterministic sequence generators are bit-identical across the packages -- the property both packages promise their users, mirroring the short_exact digest precedent of fixtures/estimation/fit_cross_language.json. The DE run reuses optimizers.json's de_booth construct (Booth objective, seed 12345) but pins the RAW converged value/parameters at digest precision instead of the rounded textbook optimum (1.0, 3.0) at MSTest's loose delta -- DE is stochastic and iteration-limited, so its converged point carries real trailing digits worth reproducing exactly. The Sobol and Stratify blocks reuse fixtures/toolbox/sampling.json's own cases (dimension 2, first 10 points; lower=100/upper=200/bins=100 linear stratification) at two of its already-pinned indices: both are closed-form/deterministic (no PRNG stream), so their cross-language risk is a code-path/arithmetic-order bug rather than a stream-divergence one, and reproducing them here alongside the DE digest is what makes this one fixture a single end-to-end proof of the whole cross-language toolbox surface (a stochastic optimizer plus two deterministic generators) rather than three separate ones.",
+  "cases": [
+    {
+      "name": "de_booth_sobol_stratify_short_exact",
+      "optimizer": {
+        "construct": {
+          "method": "de", "objective": "Booth",
+          "lower": [-10, -10], "upper": [10, 10],
+          "seed": 12345
+        },
+        "assertions": [
+          { "method": "value", "expected": 2.848729656381948e-09, "mode": "abs", "tol": 1e-16 },
+          { "method": "parameter", "args": [0], "expected": 1.0000356727695128, "mode": "rel", "tol": 1e-11 },
+          { "method": "parameter", "args": [1], "expected": 2.999982027256304, "mode": "rel", "tol": 1e-11 },
+          { "method": "status", "expected": "Success" }
+        ]
+      },
+      "sobol": {
+        "options": {"dimension": 2, "n": 10, "skip": 0},
+        "assertions": [
+          { "index": 6, "expected": 0.375, "mode": "equal", "source": "Test_Sobol point 4 (row 3, dim 0); same case as fixtures/toolbox/sampling.json's sobol_dimension2_first10" },
+          { "index": 13, "expected": 0.625, "mode": "equal", "source": "Test_Sobol point 7 (row 6, dim 1); same case as fixtures/toolbox/sampling.json's sobol_dimension2_first10" }
+        ]
+      },
+      "stratify": {
+        "options": {"lower": 100.0, "upper": 200.0, "bins": 100},
+        "assertions": [
+          { "index": 2, "expected": 100.5, "mode": "abs", "tol": 1e-9, "source": "Test_XValues true_midpoint[0]; same case as fixtures/toolbox/sampling.json's stratify_xvalues_linear" },
+          { "index": 398, "expected": 199.5, "mode": "abs", "tol": 1e-9, "source": "Test_XValues true_midpoint[99] (last bin); same case as fixtures/toolbox/sampling.json's stratify_xvalues_linear" }
+        ]
+      }
+    }
+  ]
+}

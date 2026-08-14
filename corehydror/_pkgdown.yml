@@ -177,3 +177,66 @@ reference:
       - yeo_johnson
       - plotting_positions
       - latin_hypercube
+  - title: Correlation and goodness of fit
+    desc: >
+      Correlation coefficients and the `GoodnessOfFit` metrics (continuous and binary
+      classification), plus the information criteria and model-weight verbs used to rank
+      candidate fits.
+    contents:
+      - correlation
+      - goodness_of_fit
+      - classification_metrics
+      - gof_test
+      - gof_rmse
+      - aic
+      - aic_weights
+  - title: Statistics
+    desc: >
+      Sample moments, L-moments, ranks and percentiles, running (online) statistics and
+      covariance, autocorrelation and cross-correlation, and the discrete Fourier transform.
+    contents:
+      - summary_statistics
+      - product_moments
+      - l_moments
+      - ranks
+      - percentile
+      - running_statistics
+      - running_covariance
+      - autocorrelation
+      - cross_correlation
+      - dft
+      - dft_real
+  - title: Interpolation and regression
+    desc: >
+      Histogram binning, one- and two-dimensional interpolation with optional axis transforms,
+      and ordinary least squares regression.
+    contents:
+      - histogram
+      - interpolate
+      - interpolate_2d
+      - linear_regression
+      - predict.corehydro_lm
+  - title: Sampling utilities
+    desc: >
+      Quasi-random Sobol sequences, deterministic stratification of an interval, and joint
+      exceedance probabilities under a dependency structure.
+    contents:
+      - sobol_sequence
+      - stratify
+      - joint_probability
+  - title: Links and trends
+    desc: >
+      The Numerics link-function layer (identity, log, logit, and friends) and the trend models
+      used by nonstationary distributions and models.
+    contents:
+      - link_function
+      - link
+      - link_names
+      - trend_predict
+      - trend_names
+  - title: Optimizers
+    desc: >
+      The six ported Numerics optimizers (differential evolution, BFGS, Powell, MLSL,
+      Nelder-Mead, Brent) over a user-written R objective.
+    contents:
+      - optim_minimize

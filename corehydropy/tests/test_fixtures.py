@@ -1723,6 +1723,38 @@ def _run_optimizer_case(case):
             raise KeyError(f"unknown optimizer fixture assertion method: {a['method']}")
 
 
+# toolbox_cross_language [one case nests "optimizer" (shaped like an "optimizer"-kind
+# construct/assertions), "sobol" and "stratify" (each shaped like a "toolbox"-kind
+# group-"sampling" case's options/assertions)]: fixtures/toolbox/toolbox_cross_language.json's
+# single fixture proves all three reproduce identically across R/Python/C++/C# in one
+# guarantee. Reuses _optimizer_spec_json/_optimizer_fixture_objective and
+# _core.toolbox_run/_toolbox_select verbatim -- see _run_optimizer_case/_run_toolbox_case above.
+def _run_toolbox_cross_language_case(case):
+    opt = case["optimizer"]
+    construct = dict(opt["construct"])
+    objective_name = construct.pop("objective", "DeJong")
+    r = _core.optim_run(_optimizer_spec_json(construct), _optimizer_fixture_objective(objective_name))
+    for a in opt["assertions"]:
+        if a["method"] == "value":
+            _check(r["value"], a)
+        elif a["method"] == "parameter":
+            _check(r["parameters"][a["args"][0]], a)
+        elif a["method"] == "status":
+            assert r["status"] == a["expected"]
+        else:
+            raise KeyError(f"unknown toolbox_cross_language optimizer assertion method: {a['method']}")
+
+    for sub in ("sobol", "stratify"):
+        block = case[sub]
+        options_dict = dict(block.get("options", {}))
+        if sub == "sobol":
+            options_dict["path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+        options = json.dumps(options_dict)
+        for a in block["assertions"]:
+            r = _core.toolbox_run("sampling", sub, [], options)
+            _check(_toolbox_select(r, a, "sampling"), a)
+
+
 def _load_cases():
     out = []
     for fx in sorted(_fixtures_dir().rglob("*.json")):
@@ -1754,6 +1786,7 @@ def _load_cases():
             "goodness_of_fit",
             "toolbox",
             "optimizer",
+            "toolbox_cross_language",
         ):
             continue
         for case in spec["cases"]:
@@ -1780,6 +1813,10 @@ def test_fixture_case(kind, target, datasets, case):
 
     if kind == "optimizer":
         _run_optimizer_case(case)
+        return
+
+    if kind == "toolbox_cross_language":
+        _run_toolbox_cross_language_case(case)
         return
 
     if kind == "model_estimation":

@@ -1613,6 +1613,47 @@ test_that("oracle fixtures validate", {
       }
       next
     }
+    if (identical(spec$kind, "toolbox_cross_language")) {
+      # fixtures/toolbox/toolbox_cross_language.json's one case nests "optimizer" (shaped like an
+      # "optimizer"-kind construct/assertions), "sobol" and "stratify" (each shaped like a
+      # "toolbox"-kind group-"sampling" case's options/assertions) under one case name, so the
+      # single fixture proves all three reproduce identically across languages in one guarantee.
+      # Reuses optimizer_spec_json/optimizer_fixture_objective and ch_toolbox_run_/toolbox_select
+      # verbatim -- see the "optimizer" and "toolbox" blocks above.
+      ns <- asNamespace("corehydror")
+      for (case in spec$cases) {
+        opt <- case$optimizer
+        construct <- opt$construct
+        objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
+        construct$objective <- NULL
+        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                              optimizer_fixture_objective(objective_name))
+        for (a in opt$assertions) {
+          if (identical(a$method, "value")) {
+            check_assertion(r$value, a)
+          } else if (identical(a$method, "parameter")) {
+            check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "status")) {
+            expect_identical(r$status, a$expected)
+          } else {
+            stop(sprintf("unknown toolbox_cross_language optimizer assertion method: %s", a$method))
+          }
+        }
+        for (sub in c("sobol", "stratify")) {
+          block <- case[[sub]]
+          opts_list <- if (is.null(block$options)) list() else block$options
+          if (identical(sub, "sobol")) {
+            opts_list$path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+          }
+          opts <- if (length(opts_list) == 0L) "{}" else ns$to_spec_json(opts_list)
+          for (a in block$assertions) {
+            r <- ns$ch_toolbox_run_("sampling", sub, list(), opts)
+            check_assertion(toolbox_select(r, a, "sampling"), a)
+          }
+        }
+      }
+      next
+    }
     if (identical(spec$kind, "goodness_of_fit")) {
       datasets <- spec$datasets
       for (case in spec$cases) {

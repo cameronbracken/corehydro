@@ -1673,6 +1673,61 @@ static void run_optimizer_kind(const json& spec) {
     }
 }
 
+// --- toolbox_cross_language path (Task 9) -----------------------------------------------
+//
+// fixtures/toolbox/toolbox_cross_language.json's one case nests three sub-blocks -- "optimizer"
+// (shaped exactly like an "optimizer"-kind case's construct/assertions), "sobol" and "stratify"
+// (each shaped exactly like a "toolbox"-kind group-"sampling" case's options/assertions) -- under
+// one case name, because the fixture's whole job is proving all three reproduce identically
+// across languages in ONE guarantee rather than three separate files. Reuses
+// optimizer_fixture_objective (above) and tbx::run_toolbox/toolbox_select (below) verbatim; no
+// new evaluation logic, just the nesting.
+static void run_toolbox_cross_language_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+
+        // optimizer sub-block
+        {
+            json construct = c["optimizer"]["construct"];
+            std::string objective_name = construct.value("objective", "DeJong");
+            construct.erase("objective");
+            tbx::OptimResult r =
+                tbx::run_optimizer(construct.dump(), optimizer_fixture_objective(objective_name));
+            for (const auto& as : c["optimizer"]["assertions"]) {
+                std::string method = as["method"].get<std::string>();
+                std::string where = "toolbox_cross_language/" + name + "/optimizer/" + method;
+                if (method == "value") {
+                    check_value(r.value, as, where);
+                } else if (method == "parameter") {
+                    std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
+                    check_value(r.parameters.at(i), as, where);
+                } else if (method == "status") {
+                    if (r.status == as["expected"].get<std::string>())
+                        chtest::report_pass();
+                    else
+                        chtest::report_fail(__FILE__, __LINE__,
+                                            where + ": expected status " +
+                                                as["expected"].get<std::string>() + ", got " + r.status);
+                } else {
+                    throw std::runtime_error(
+                        "unknown toolbox_cross_language optimizer assertion method: " + method);
+                }
+            }
+        }
+        // sobol / stratify sub-blocks: group "sampling", no positional data, options only.
+        for (const char* sub : {"sobol", "stratify"}) {
+            json options = c[sub].value("options", json::object());
+            if (std::string(sub) == "sobol") options["path"] = g_sobol_path;
+            std::string options_str = options.dump();
+            for (const auto& as : c[sub]["assertions"]) {
+                std::string where = "toolbox_cross_language/" + name + "/" + sub;
+                auto r = tbx::run_toolbox("sampling", sub, {}, options_str);
+                check_value(toolbox_select(r, as, "sampling"), as, where);
+            }
+        }
+    }
+}
+
 // --- multivariate_distribution path -----------------------------------------------------
 //
 // The only partly delegated path. run_mvdist covers the verbs this phase exposes -- see
@@ -3476,6 +3531,8 @@ int main(int argc, char** argv) {
             run_toolbox_kind(spec);
         } else if (kind == "optimizer") {
             run_optimizer_kind(spec);
+        } else if (kind == "toolbox_cross_language") {
+            run_toolbox_cross_language_kind(spec);
         } else if (kind == "univariate_distribution") {
             if (spec.value("target", "") == "GeneralizedExtremeValue")
                 run_gev(spec);

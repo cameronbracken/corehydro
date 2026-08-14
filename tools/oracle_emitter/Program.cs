@@ -3954,6 +3954,14 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
 // Selects a value the way the fixture runners' client-side "select" logic does, generalized
 // to a FLAT array with a known {rows, cols} shape (numbers.support.toolbox_runner.hpp's `dims`):
 // "length" -> flat.Length, "rows"/"columns" -> the shape, else index/label into flat[index].
+// KNOWN LIMITATION (Task 9 review): unlike the C++/R/Python `toolbox_select` helpers, this
+// function has no `names` array to look an assertion's `label` key up against -- every caller
+// builds its flat array by hand from a positional (matrix-shaped) C# result with no name per
+// element, so `label` is not meaningfully answerable here and silently falls through to
+// `ToolboxSelectIndex`'s `"index"`-or-0 behavior. Recorded rather than "fixed" because no
+// fixture pairs `label` with a matrix-shaped (`ToolboxSelectFlat`) result today -- see
+// CHANGELOG.md's v0.6.0 entry -- and a real fix would mean threading a names array through
+// every one of this function's call sites for a combination nothing currently exercises.
 static double ToolboxSelectFlat(JsonElement asrt, double[] flat, int rows, int cols)
 {
     string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
@@ -4551,6 +4559,120 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 };
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- toolbox_cross_language branch (Task 9) --------------------------------------------
+    // The one fixture whose job is proving R and Python agree bit for bit: one seeded
+    // DifferentialEvolution run over a built-in objective, plus one Sobol block and one
+    // stratification, all reached through the SAME grammar the "optimizer"/"toolbox" branches
+    // above already use (OptimizerTestFunction/ToolboxDispatch) -- just nested three ways under
+    // one case instead of one kind per file, since the case's whole point is asserting all three
+    // together as a single cross-language guarantee. --dump supported for curation.
+    if (kindStr == "toolbox_cross_language")
+    {
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+
+            // --- optimizer sub-block (mirrors the "optimizer" kind branch above) -----------
+            var optBlock = c.GetProperty("optimizer");
+            var construct = optBlock.GetProperty("construct");
+            string method = construct.GetProperty("method").GetString()!;
+            string objectiveName = construct.TryGetProperty("objective", out var objEl)
+                ? objEl.GetString()! : "DeJong";
+            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
+            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
+                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] upper = construct.TryGetProperty("upper", out var upperEl)
+                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] initial = construct.TryGetProperty("initial", out var initialEl)
+                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
+            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+
+            Optimizer optimizer = method switch
+            {
+                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
+                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
+                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
+                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
+                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
+                _ => throw new Exception($"unknown optimizer method: {method}")
+            };
+            if (seed.HasValue)
+            {
+                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
+                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
+            }
+            if (maximize) optimizer.Maximize(); else optimizer.Minimize();
+            double[] parameters = optimizer.BestParameterSet.Values;
+            double optValue = maximize ? -optimizer.BestParameterSet.Fitness : optimizer.BestParameterSet.Fitness;
+            string status = optimizer.Status.ToString();
+
+            foreach (var asrt in optBlock.GetProperty("assertions").EnumerateArray())
+            {
+                string am = asrt.GetProperty("method").GetString()!;
+                string where = $"toolbox_cross_language/{caseName}/optimizer/{am}";
+                if (dump)
+                {
+                    var dumpArgs = asrt.TryGetProperty("args", out var aEl)
+                        ? aEl.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+                    DumpLine("toolbox_cross_language/optimizer", caseName, am, dumpArgs, () => am switch
+                    {
+                        "value" => (object)optValue,
+                        "parameter" => (object)parameters[asrt.GetProperty("args")[0].GetInt32()],
+                        "status" => (object)status,
+                        _ => throw new Exception(
+                            $"unknown toolbox_cross_language optimizer assertion method: {am}")
+                    });
+                    continue;
+                }
+                if (am == "status")
+                {
+                    string expected = asrt.GetProperty("expected").GetString()!;
+                    if (status == expected) pass++;
+                    else { fail++; failures.Add($"{where}: expected {expected} got {status}"); }
+                    continue;
+                }
+                double actual = am switch
+                {
+                    "value" => optValue,
+                    "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    _ => throw new Exception(
+                        $"unknown toolbox_cross_language optimizer assertion method: {am}")
+                };
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+
+            // --- sobol / stratify sub-blocks, both routed through the same ToolboxDispatch the
+            // "toolbox" kind branch above uses (group "sampling"; no positional data, options
+            // only) ------------------------------------------------------------------------
+            foreach (var (subKey, methodName) in new[] { ("sobol", "sobol"), ("stratify", "stratify") })
+            {
+                var block = c.GetProperty(subKey);
+                JsonElement options = block.TryGetProperty("options", out var oEl) ? oEl : default;
+                var data = new List<double[]>();
+                foreach (var asrt in block.GetProperty("assertions").EnumerateArray())
+                {
+                    string where = $"toolbox_cross_language/{caseName}/{subKey}";
+                    if (dump)
+                    {
+                        DumpLine($"toolbox_cross_language/{subKey}", caseName, methodName,
+                            Array.Empty<JsonElement>(),
+                            () => (object)ToolboxDispatch("sampling", methodName, data, options, asrt));
+                        continue;
+                    }
+                    double actual;
+                    try { actual = ToolboxDispatch("sampling", methodName, data, options, asrt); }
+                    catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
+                    if (Compare(actual, asrt)) pass++;
+                    else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+                }
             }
         }
         continue;
