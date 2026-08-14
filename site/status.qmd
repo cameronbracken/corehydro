@@ -9,7 +9,7 @@ What is currently implemented, by source library for both the shared C++ core li
 under the hood (or expose only through the analysis functions) but that has no public
 wrapper of its own yet. Every "Ported" row is validated by test suites which have also been ported and compared to the original C# libraries.
 
-Status as of v0.1.0.
+Status as of v0.6.0.
 
 ## Numerics
 
@@ -23,15 +23,17 @@ general-purpose math, machine learning, and data-container layers are out of sco
 | `Distributions` (multivariate) | Ported | Internal | Dirichlet, Multinomial, BivariateEmpirical, MultivariateNormal (Genz MVNDST), MultivariateStudentT |
 | `Distributions.Copulas` (7 bivariate + estimation) | Ported | Internal | drives `bivariate_analysis` and `coincident_frequency_analysis` |
 | `Sampling.MCMC` (8 samplers + R-hat / ESS) | Ported | Public | `mcmc_sample()` exposes 7 (Gibbs needs a model-specific proposal); all drive the Bayesian analyses |
-| `Sampling` (Latin hypercube, Sobol) | Ported | Public / Internal | `latin_hypercube()` public; Sobol internal |
+| `Sampling` (Latin hypercube, Sobol, Stratify) | Ported | Public | `latin_hypercube()`, `sobol_sequence()`, `stratify()` |
 | `Sampling.Bootstrap` | Ported (non-pivotal) | Public | `bootstrap_analysis()`; the covariance-aware pivotal workflow is a documented omission |
-| `Data.Statistics` | Partial | Public / Internal | MGBT, Box-Cox, Yeo-Johnson, plotting positions public; descriptive stats / correlation / goodness-of-fit internal; t / Mann-Whitney / KS tests, single Grubbs-Beck, and Jenks breaks not ported |
-| `Data` (TimeSeries container) | Not ported | -- | a thin adapter exists for the time-series models; The additional functionality (interpolation, file I/O, USGS download) may be implemented later |
-| `Mathematics` (linear algebra, special functions, root finding) | Ported (as needed) | Internal | everything the distribution / estimation layers require |
-| `Mathematics.Optimization` | Partial | Internal | DE, Nelder-Mead, Brent, BFGS, Powell, MLSL ported (the estimators' needs); PSO, SCE-UA, simulated annealing, augmented Lagrange, multi-start not ported |
+| `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation, autocorrelation, goodness of fit, histogram binning, and joint probability all public; t / Mann-Whitney / KS tests, single Grubbs-Beck, and Jenks breaks not ported |
+| `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z) |
+| `Data.Regression` | Ported | Public | `linear_regression()` -- ordinary least squares, returning a `corehydro_lm` / `LinearRegressionResult` with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict` |
+| `Data` (TimeSeries container) | Not ported | -- | a thin adapter exists for the time-series models; The additional functionality (file I/O, USGS download) may be implemented later |
+| `Mathematics` (linear algebra, special functions, root finding) | Ported (as needed) | Internal | everything the distribution / estimation layers require; general optimization is a separate row below, now public |
+| `Mathematics.Optimization` | Partial | Public | `optim_minimize()` / `optim_maximize()` expose DE, Nelder-Mead, Brent, BFGS, Powell, MLSL (the estimators' needs); PSO, SCE-UA, simulated annealing, augmented Lagrange, multi-start not ported |
 | `Mathematics.Integration` | Not ported | -- | except the Genz MVNDST integrator inside MultivariateNormal |
 | `MachineLearning` (K-Means, random forest, KNN, decision trees, GMM, GLM) | Not ported | -- | Planned for future release |
-| `Functions` (link functions) | Ported | Internal | the seven standard links, used by the GMM / Bulletin 17C track |
+| `Functions` (link functions) | Ported | Public | `link_function()` / `link()` / `link_inverse()` / `link_derivative()` / `link_names()` expose the seven standard links; the five BestFit-specific links (ASinH, SES, LogSES, LogASinH, Centered) are used internally by the GMM / Bulletin 17C track |
 | `Random Numbers` (Mersenne Twister) | Ported (bit-exact) | Internal | the foundation of cross-language reproducibility |
 
 : {tbl-colwidths="[30,14,14,42]"}

@@ -14,8 +14,9 @@
 //
 // Stateless by construction: one call builds whatever it needs, evaluates once, and drops it.
 //
-// The seven groups (correlation, gof, statistics, spectra, histogram, interpolation, regression)
-// each live in their own header under numerics/support/toolbox/, holding that group's
+// The eleven groups (correlation, gof, statistics, spectra, histogram, interpolation, regression,
+// sampling, probability, link, trend) each live in their own header under numerics/support/toolbox/,
+// holding that group's
 // detail::run_<group> function and any helper used only by it. Shared types and helpers are in
 // toolbox/common.hpp. This file includes all group headers and the run_toolbox dispatch table.
 #pragma once

@@ -26,7 +26,7 @@ package-facing additions and fixes.
   stratification, and joint exceedance probability.
 * `link_function()`, `link()`, `link_inverse()`, `link_derivative()`, `link_names()`,
   `trend_predict()`, `trend_parameters()`, `trend_names()` -- the Numerics link functions and the
-  ten BestFit trend models.
+  eleven BestFit trend models.
 * `optim_minimize()`, `optim_maximize()` -- the six ported optimizers (Differential Evolution,
   BFGS, Powell, MLSL, Nelder-Mead, Brent) over a user-written R objective.
 * Two new worked examples: model evaluation (ranking candidate distributions with

@@ -42,11 +42,12 @@ and distribution layers already established, now covering the last major slice o
   deterministic interval stratification, and joint exceedance probability under independence,
   positive/negative dependency, or an explicit correlation.
 - **`link_function()`, `link()`, `link_inverse()`, `link_derivative()`, `link_names()`,
-  `trend_predict()`, `trend_parameters()`, `trend_names()`** -- the Numerics link-function layer
-  (identity, log, logit, probit, complementary-log-log, Fisher-z, Yeo-Johnson) and evaluation of
-  the ten BestFit trend models. Python's `link_function()` takes `lambda_` rather than `lambda`
-  (a reserved word), the one deliberate naming difference from R, matching the existing
-  `corehydropy.stats` precedent.
+  `trend_predict()`, `trend_parameters()`, `trend_names()`** -- twelve link types (the seven
+  standard Numerics links -- identity, log, logit, probit, complementary-log-log, Fisher-z,
+  Yeo-Johnson -- plus the five BestFit-specific links -- ASinH, SES, log-SES, log-ASinH, Centered)
+  and evaluation of the eleven BestFit trend models. Python's `link_function()` takes `lambda_`
+  rather than `lambda` (a reserved word), the one deliberate naming difference from R, matching
+  the existing `corehydropy.stats` precedent.
 - **`optim_minimize()`, `optim_maximize()`** -- the six ported optimizers (Differential Evolution,
   BFGS, Powell, MLSL, Nelder-Mead, Brent) over a user-written R or Python objective, the same
   optimizers the estimation layer already used internally, now public. A seeded `"de"`/`"mlsl"`
@@ -70,9 +71,8 @@ and distribution layers already established, now covering the last major slice o
   verb (the `TimeSeries` overloads remain a documented severance; see the header's own comment).
   Its sibling `Correlation.cs`'s matrix overloads (`Pearson(double[,])`/`Spearman(double[,])`,
   column-pairwise correlation matrices over an `[n, p]` table) were a real but previously
-  unrecorded severance -- no caller has needed them yet -- now written up in
-  `numerics/data/correlation.hpp`'s own file comment and `upstream/CLAUDE.md`, alongside the
-  Autocorrelation port.
+  unrecorded severance -- no caller has needed them yet -- now written up in `upstream/CLAUDE.md`,
+  alongside the Autocorrelation port.
 - **`linear_regression()`'s `vcov()` was unscaled.** The C++ runner's `covariance()` correctly
   returns the raw `(X'X)^-1` term (matching the C# `LinearRegression.Covariance`), but the R and
   Python wrappers passed it straight through instead of multiplying by `sigma^2` the way the fit
@@ -90,9 +90,12 @@ and distribution layers already established, now covering the last major slice o
   validation, matching the R twin's existing behavior.
 - `classification_metrics()` had an invented threshold argument neither R, Python, nor the C#
   source has; dropped, and both label vectors are documented as already-binary.
-- `histogram()` rejected too few or too many explicit bins inconsistently between languages, and a
-  toolbox dispatch error from the C# emitter leaked its internal message instead of naming the
-  method; both now validate and report symmetrically.
+- `histogram()` rejected a single-point sample even though the C# `Histogram(data)` constructor
+  accepts one (widening `upper_bound_ == lower_bound_` to `[x, x+1]`), an invented minimum that
+  was never in the C# source; that check is dropped, keeping only the empty-input rejection, and
+  a non-positive explicit `bins` now rejects with a named error instead of silently falling back
+  to the Rice rule. A toolbox dispatch error from the C# emitter also leaked its internal message
+  instead of naming the method; both languages now validate and report symmetrically.
 - The joint-probability runner threw for one half of the `dependency = "correlation"` no-matrix
   case while silently returning `NaN` for the other; both now fall through to `NaN`, matching the
   C# source, and the R/Python wrappers reject the combination symmetrically instead of leaking the
@@ -100,16 +103,18 @@ and distribution layers already established, now covering the last major slice o
   rows.
 - `running_covariance()`'s resume state was not array-wrapped, so a single-variable accumulator
   failed to round-trip through a second call.
-
-### Known limitation
-
-- The dotnet oracle emitter's `ToolboxSelectFlat` helper (used for groups whose C# result is a
-  positional flattened array -- Sobol, Stratify, Histogram bins, linear regression's
-  coefficient/covariance/residual matrices) has no `names` array to look an assertion's `label`
-  key up against, unlike the C++/R/Python `toolbox_select` helpers, which honor it. Recorded
-  rather than fixed: no fixture pairs `label` with one of those flattened-matrix groups today, so
-  the gap is latent. See `ToolboxSelectFlat`'s header comment in `tools/oracle_emitter/Program.cs`
-  and `fixtures/README.md`'s `toolbox` section.
+- **Two latent emitter-vs-runner divergences around `label`/dims selects, found in this branch's
+  final review.** The dotnet oracle emitter's `ToolboxSelectFlat` helper (used for groups whose C#
+  result is a positional flattened array -- Sobol, Stratify, Histogram bins, linear regression's
+  coefficient/covariance/residual matrices) had no `names` array to look an assertion's `label` key
+  up against, unlike the C++/R/Python `toolbox_select` helpers, which honor it; it now throws on
+  `label` instead of silently falling through to index 0. Symmetrically, the groups whose C++
+  `ToolboxResult` never sets `dims` at all (`interpolation.linear`/`bilinear`,
+  `regression.residuals`/`predict`, `statistics.ranks`/`percentile`, every `gof` method) now throw
+  on `select: "rows"`/`"columns"` instead of answering a fabricated or unrelated value. No fixture
+  paired either combination with one of those groups, so both were latent; see
+  `ToolboxSelectFlat`'s and `ToolboxSelectFlatNoDims`'s header comments in
+  `tools/oracle_emitter/Program.cs` and `fixtures/README.md`'s `toolbox` section.
 
 ### Documentation
 

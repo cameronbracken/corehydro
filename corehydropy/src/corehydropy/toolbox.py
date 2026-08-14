@@ -1097,7 +1097,17 @@ class Link:
 
 
 def link_function(type: str, *, inner: "Link | None" = None, **parameters) -> Link:
-    """Construct a :class:`Link`. See :class:`Link` for the arguments."""
+    """Construct a :class:`Link`. See :class:`Link` for the arguments.
+
+    Examples
+    --------
+    >>> from corehydropy import link_function, link, link_inverse
+    >>> l = link_function("Log")
+    >>> link(l, [1, 10, 100])
+    array([0.        , 2.30258509, 4.60517019])
+    >>> link_inverse(l, [0, 1, 2])
+    array([1.        , 2.71828183, 7.3890561 ])
+    """
     return Link(type, inner=inner, **parameters)
 
 
@@ -1148,6 +1158,13 @@ def link_inverse(l: Link, eta) -> np.ndarray:
     Returns
     -------
     numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import link_function, link_inverse
+    >>> l = link_function("Logit")
+    >>> link_inverse(l, [-2.19722458, 0.0, 2.19722458])
+    array([0.1, 0.5, 0.9])
     """
     return _link_eval(l, "inverse_link", eta)
 
@@ -1165,6 +1182,13 @@ def link_derivative(l: Link, x) -> np.ndarray:
     Returns
     -------
     numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import link_function, link_derivative
+    >>> l = link_function("Log")
+    >>> link_derivative(l, [1, 10, 100])
+    array([1.  , 0.1 , 0.01])
     """
     return _link_eval(l, "d_link", x)
 
@@ -1175,6 +1199,12 @@ def link_names() -> list[str]:
     Calls through to the C++ ``link`` toolbox group's own ``"names"`` method -- the same table
     ``build_link`` builds a link from (``link_builder_table()`` in ``link.hpp``) -- so this list
     can't drift from what :func:`link_function` actually accepts.
+
+    Examples
+    --------
+    >>> from corehydropy import link_names
+    >>> link_names()
+    ['Identity', 'Log', 'Logit', 'Probit', 'ComplementaryLogLog', 'FisherZ', 'YeoJohnson', 'ASinH', 'SES', 'LogSES', 'LogASinH', 'Centered']
     """
     return list(_toolbox_run("link", "names")["names"])
 
@@ -1279,5 +1309,11 @@ def trend_names() -> list[str]:
     :func:`corehydropy.models.trend` and ``build_spec_trend`` (``model_spec.hpp``) validate
     ``type`` against (``trend_model_type_table()``) -- so this list can't drift from what
     :func:`corehydropy.models.trend` actually accepts.
+
+    Examples
+    --------
+    >>> from corehydropy import trend_names
+    >>> trend_names()
+    ['Constant', 'Cubic', 'Exponential', 'Linear', 'Logistic', 'Power', 'Quadratic', 'Reciprocal', 'Sinusoidal', 'StepFunction', 'GeneralLinear']
     """
     return list(_toolbox_run("trend", "names")["names"])

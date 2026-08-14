@@ -1,6 +1,6 @@
 // corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
-// Holds the `link` group's `link`/`inverse_link`/`d_link` dispatch arm over the thirteen-name
+// Holds the `link` group's `link`/`inverse_link`/`d_link` dispatch arm over the twelve-name
 // spec grammar `{"type": ..., "parameters"?: {...}, "inner"?: {...}}`. `type` names either the
 // seven-member Numerics `LinkFunctionType` enum (numerics/functions/link_function_type.hpp) or
 // one of the five BestFit-specific link types (models/link_functions/); the Numerics factory is
