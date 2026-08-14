@@ -516,6 +516,13 @@ extern "C" SEXP _corehydror_ch_toolbox_run_(SEXP group, SEXP method, SEXP data, 
     return cpp11::as_sexp(ch_toolbox_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(group), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<list>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json)));
   END_CPP11
 }
+// toolbox.cpp
+list ch_optim_run_(std::string spec_json, function objective);
+extern "C" SEXP _corehydror_ch_optim_run_(SEXP spec_json, SEXP objective) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_optim_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<function>>(objective)));
+  END_CPP11
+}
 
 extern "C" {
 static const R_CallMethodDef CallEntries[] = {
@@ -585,6 +592,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_mvn_mvndst_seq_",               (DL_FUNC) &_corehydror_ch_mvn_mvndst_seq_,               10},
     {"_corehydror_ch_mvn_val_",                      (DL_FUNC) &_corehydror_ch_mvn_val_,                       4},
     {"_corehydror_ch_mvt_val_",                      (DL_FUNC) &_corehydror_ch_mvt_val_,                       5},
+    {"_corehydror_ch_optim_run_",                    (DL_FUNC) &_corehydror_ch_optim_run_,                     2},
     {"_corehydror_ch_plotting_positions_",           (DL_FUNC) &_corehydror_ch_plotting_positions_,            2},
     {"_corehydror_ch_plotting_positions_alpha_",     (DL_FUNC) &_corehydror_ch_plotting_positions_alpha_,      2},
     {"_corehydror_ch_threshold_diagnostics_",        (DL_FUNC) &_corehydror_ch_threshold_diagnostics_,         6},

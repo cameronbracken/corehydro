@@ -5,10 +5,12 @@
 // Core headers are vendored under src/corehydro_core/include (a symlink into core/; regenerate real files with tools/materialize_core.py).
 #include <cpp11.hpp>
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "corehydro/numerics/support/toolbox_runner.hpp"
+#include "corehydro/numerics/support/optimizer_runner.hpp"
 
 using namespace cpp11;
 namespace tb = corehydro::numerics::support;
@@ -36,4 +38,41 @@ list ch_toolbox_run_(std::string group, std::string method, list data, std::stri
         vecs.emplace_back(col.begin(), col.end());
     }
     return pack(tb::run_toolbox(group, method, vecs, options_json));
+}
+
+// Runs one of the six ported optimizers (R/optim.R) against an R objective function. `objective`
+// is called with a single numeric vector argument and must return a single number -- a
+// non-numeric or wrong-length return raises inside the `doubles v(out)` conversion below, which
+// cpp11 turns into an R error that travels back out through optimizer_runner.hpp's guard and is
+// rethrown (see that header's GuardedObjective for why an R error crossing this boundary cannot
+// be allowed to just propagate through Optimizer::minimize()'s own catch-all unguarded).
+[[cpp11::register]]
+list ch_optim_run_(std::string spec_json, function objective) {
+    tb::OptimResult r = tb::run_optimizer(spec_json, [&](const std::vector<double>& p) -> double {
+        writable::doubles par(static_cast<R_xlen_t>(p.size()));
+        for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
+        sexp out = objective(par);
+        doubles v(out);
+        if (v.size() != 1)
+            throw std::runtime_error(
+                "the objective must return a single number; got a value of length " +
+                std::to_string(static_cast<long long>(v.size())));
+        return v[0];
+    });
+    writable::doubles params(static_cast<R_xlen_t>(r.parameters.size()));
+    for (std::size_t i = 0; i < r.parameters.size(); ++i)
+        params[static_cast<R_xlen_t>(i)] = r.parameters[i];
+    writable::doubles hess(static_cast<R_xlen_t>(r.hessian.size()));
+    for (std::size_t i = 0; i < r.hessian.size(); ++i)
+        hess[static_cast<R_xlen_t>(i)] = r.hessian[i];
+    writable::integers hdims(static_cast<R_xlen_t>(r.hessian_dims.size()));
+    for (std::size_t i = 0; i < r.hessian_dims.size(); ++i)
+        hdims[static_cast<R_xlen_t>(i)] = r.hessian_dims[i];
+    return writable::list({"parameters"_nm = params,
+                           "value"_nm = writable::doubles({r.value}),
+                           "iterations"_nm = writable::integers({r.iterations}),
+                           "function_evaluations"_nm = writable::integers({r.function_evaluations}),
+                           "status"_nm = writable::strings({r.status}),
+                           "hessian"_nm = hess,
+                           "hessian_dims"_nm = hdims});
 }

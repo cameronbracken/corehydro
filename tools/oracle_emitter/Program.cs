@@ -798,6 +798,29 @@ static double NumericalDerivativeNormalLoglik(double[] x)
     return n.LogLikelihood(NumericalDerivativeNormalSample());
 }
 
+// Task 8 (the optimizer runner): a handful of Test_Numerics/Mathematics/Optimization/
+// TestFunctions.cs formulas, inlined here (that project is not referenced by this emitter --
+// see the NumericalDerivativeQuadratic/NormalLoglik precedent above for the same reason) so
+// fixtures/toolbox/optimizers.json's `construct.objective` names can be driven against the REAL
+// C# optimizer classes. MUST mirror core/tests/optimization_test_functions.hpp exactly.
+static double OptimizerTestFX(double x) => (x + 3d) * Math.Pow(x - 1d, 2d);
+static double OptimizerTestFXYZ(double[] p) =>
+    Math.Pow(4d * p[0] - 0.5d, 2d) + Math.Pow(3d * p[1] - 0.6d, 2d) + Math.Pow(2d * p[2] - 0.7d, 2d);
+static double OptimizerTestDeJong(double[] p) => p.Sum(v => v * v);
+static double OptimizerTestBooth(double[] p) =>
+    Math.Pow(p[0] + 2d * p[1] - 7d, 2d) + Math.Pow(2d * p[0] + p[1] - 5d, 2d);
+static double OptimizerTestMcCormick(double[] p) =>
+    Math.Sin(p[0] + p[1]) + Math.Pow(p[0] - p[1], 2d) - 1.5d * p[0] + 2.5d * p[1] + 1d;
+static Func<double[], double> OptimizerTestFunction(string name) => name switch
+{
+    "FXYZ" => OptimizerTestFXYZ,
+    "DeJong" => OptimizerTestDeJong,
+    "Booth" => OptimizerTestBooth,
+    "McCormick" => OptimizerTestMcCormick,
+    "FX" => p => OptimizerTestFX(p[0]),
+    _ => throw new Exception($"unknown optimizer fixture objective: {name}")
+};
+
 // numerical_derivative fixture args convention -- MUST mirror
 // numerical_derivative_parse()/gradient_element()/hessian_element() in
 // core/tests/test_fixtures.cpp exactly.
@@ -4453,6 +4476,79 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 double actual;
                 try { actual = ToolboxDispatch(group, method, data, options, asrt); }
                 catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- optimizer branch (Task 8) --------------------------------------------------------
+    // Runs the SIX real C# optimizers (all deriving from the real Optimizer base -- unlike this
+    // port's NelderMead/BrentSearch, which are deliberately standalone; see optimizer.hpp's file
+    // header) against the built-in objectives fixtures/toolbox/optimizers.json names by
+    // `construct.objective` (OptimizerTestFunction() above). Mirrors optimizer_runner.hpp's
+    // grammar: construct carries method/objective/lower/upper/initial/maximize/seed; assertions
+    // carry value/parameter/status. "value" un-applies the real Optimizer's FunctionScale sign
+    // convention (Fitness = FunctionScale * raw, FunctionScale = -1 under Maximize()) back to the
+    // raw objective value, matching what the C++/R/Python runner reports.
+    if (kindStr == "optimizer")
+    {
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            var construct = c.GetProperty("construct");
+            string method = construct.GetProperty("method").GetString()!;
+            string objectiveName = construct.TryGetProperty("objective", out var objEl)
+                ? objEl.GetString()! : "DeJong";
+            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
+            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
+                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] upper = construct.TryGetProperty("upper", out var upperEl)
+                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] initial = construct.TryGetProperty("initial", out var initialEl)
+                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
+            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+
+            Optimizer optimizer = method switch
+            {
+                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
+                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
+                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
+                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
+                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
+                _ => throw new Exception($"unknown optimizer method: {method}")
+            };
+            if (seed.HasValue)
+            {
+                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
+                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
+            }
+
+            if (maximize) optimizer.Maximize(); else optimizer.Minimize();
+            double[] parameters = optimizer.BestParameterSet.Values;
+            double value = maximize ? -optimizer.BestParameterSet.Fitness : optimizer.BestParameterSet.Fitness;
+            string status = optimizer.Status.ToString();
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string am = asrt.GetProperty("method").GetString()!;
+                string where = $"optimizer/{caseName}/{am}";
+                if (am == "status")
+                {
+                    string expected = asrt.GetProperty("expected").GetString()!;
+                    if (status == expected) pass++;
+                    else { fail++; failures.Add($"{where}: expected {expected} got {status}"); }
+                    continue;
+                }
+                double actual = am switch
+                {
+                    "value" => value,
+                    "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
+                };
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
             }

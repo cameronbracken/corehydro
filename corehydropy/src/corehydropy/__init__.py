@@ -51,6 +51,7 @@ from .toolbox import (
     trend_parameters,
     trend_predict,
 )
+from .optim import OptimResult, optim_maximize, optim_minimize
 from .gof import (
     aic,
     aic_weights,
@@ -177,6 +178,9 @@ __all__ = [
     "trend_predict",
     "trend_parameters",
     "trend_names",
+    "OptimResult",
+    "optim_minimize",
+    "optim_maximize",
     "goodness_of_fit",
     "classification_metrics",
     "gof_test",

@@ -1478,7 +1478,45 @@ _ROUTED_SPECIAL_FUNCTION_TARGETS = (
     | set(_HISTOGRAM_BINS_COLUMN)
     | {"Bilinear.log_floor_value"}
     | {"Probability.hpcm_joint"}
+    | {"DifferentialEvolution.best_value"}
 )
+
+
+# special_function/DifferentialEvolution.best_value (Task 8): reuses
+# fixtures/special_functions/differential_evolution.json (already pinned C++-only) rather than
+# duplicating it -- routed through _core.optim_run so the callback path itself is exercised. args
+# convention: [fn_id, direction, D, lower(D), upper(D), index] -- see
+# core/tests/test_fixtures.cpp's differential_evolution_best_value() for the authoritative
+# description. fn_id 0 = "quadratic" (sum_i (x_i - i)^2, 0-based i), 1 = "normal_loglik" (Normal
+# log-likelihood of {9,10,11,12,13} at mean=p[0], sd=p[1]) -- NATIVE Python closures reproducing
+# the same two P3.3 numerical_derivative fixture functions, so this case exercises the real Python
+# callback path. `value` un-applies OptimResult's raw-sign convention back to the C#
+# BestParameterSet.Fitness this fixture's literals were curated against (see
+# differential_evolution_best_value()'s own comment for why).
+def _run_special_function_differential_evolution_case(args_raw):
+    a = [_num(v) for v in args_raw]
+    fn_id, direction, D = int(a[0]), int(a[1]), int(a[2])
+    lower = a[3 : 3 + D]
+    upper = a[3 + D : 3 + 2 * D]
+    index = int(a[3 + 2 * D])
+    sample = [9.0, 10.0, 11.0, 12.0, 13.0]
+
+    if fn_id == 0:
+        def objective(p):
+            return sum((v - i) ** 2 for i, v in enumerate(p))
+    else:
+        def objective(p):
+            mu, sigma = p[0], p[1]
+            return sum(
+                -0.5 * ((x - mu) / sigma) ** 2 - math.log(math.sqrt(2 * math.pi) * sigma)
+                for x in sample
+            )
+
+    spec = json.dumps({"method": "de", "lower": lower, "upper": upper, "maximize": direction == 1})
+    r = _core.optim_run(spec, objective)
+    if index == D:
+        return -r["value"] if direction == 1 else r["value"]
+    return r["parameters"][index]
 
 
 # special_function/Probability.hpcm_joint (Task 6): the same routing pattern, through the new
@@ -1574,6 +1612,9 @@ def _run_special_function_case(target, args_raw):
     if target == "Probability.hpcm_joint":
         return _run_special_function_probability_hpcm_joint_case(args_raw)
 
+    if target == "DifferentialEvolution.best_value":
+        return _run_special_function_differential_evolution_case(args_raw)
+
     raise KeyError(f"unrouted special_function target: {target}")
 
 
@@ -1625,6 +1666,60 @@ def _run_toolbox_case(group, case, datasets):
         _check(_toolbox_select(r, a, group), a)
 
 
+# optimizer [construct carries method/lower/upper/initial/maximize/seed/control; assertions carry
+# value/parameter/status]: the six ported optimizers (Task 8), run through _core.optim_run against
+# a NATIVE Python closure -- not _core.toolbox_run -- because an optimizer's input is a live
+# function, not serializable data. Mirrors run_optimizer_kind in core/tests/test_fixtures.cpp.
+def _optimizer_spec_json(construct):
+    spec = {"method": construct["method"]}
+    for key in ("lower", "upper", "initial"):
+        if key in construct:
+            spec[key] = construct[key]
+    if "maximize" in construct:
+        spec["maximize"] = bool(construct["maximize"])
+    if "seed" in construct:
+        spec["seed"] = int(construct["seed"])
+    if construct.get("control"):
+        spec["control"] = construct["control"]
+    return json.dumps(spec)
+
+
+# The handful of TestFunctions.cs objectives fixtures/toolbox/optimizers.json names by string --
+# NATIVE Python closures reproducing the same formulas as
+# core/tests/optimization_test_functions.hpp, so every optimizer fixture case exercises the real
+# Python callback path (corehydro::numerics::support::GuardedObjective exists to protect exactly
+# this call).
+def _optimizer_fixture_objective(name):
+    if name == "FXYZ":
+        return lambda p: (4 * p[0] - 0.5) ** 2 + (3 * p[1] - 0.6) ** 2 + (2 * p[2] - 0.7) ** 2
+    if name == "DeJong":
+        return lambda p: sum(v ** 2 for v in p)
+    if name == "Booth":
+        return lambda p: (p[0] + 2 * p[1] - 7) ** 2 + (2 * p[0] + p[1] - 5) ** 2
+    if name == "McCormick":
+        return lambda p: (
+            math.sin(p[0] + p[1]) + (p[0] - p[1]) ** 2 - 1.5 * p[0] + 2.5 * p[1] + 1.0
+        )
+    if name == "FX":
+        return lambda p: (p[0] + 3.0) * (p[0] - 1.0) ** 2
+    raise KeyError(f"unknown optimizer fixture objective: {name}")
+
+
+def _run_optimizer_case(case):
+    construct = dict(case["construct"])
+    objective_name = construct.pop("objective", "DeJong")
+    r = _core.optim_run(_optimizer_spec_json(construct), _optimizer_fixture_objective(objective_name))
+    for a in case["assertions"]:
+        if a["method"] == "value":
+            _check(r["value"], a)
+        elif a["method"] == "parameter":
+            _check(r["parameters"][a["args"][0]], a)
+        elif a["method"] == "status":
+            assert r["status"] == a["expected"]
+        else:
+            raise KeyError(f"unknown optimizer fixture assertion method: {a['method']}")
+
+
 def _load_cases():
     out = []
     for fx in sorted(_fixtures_dir().rglob("*.json")):
@@ -1655,6 +1750,7 @@ def _load_cases():
             "data_utility",
             "goodness_of_fit",
             "toolbox",
+            "optimizer",
         ):
             continue
         for case in spec["cases"]:
@@ -1677,6 +1773,10 @@ def test_fixture_case(kind, target, datasets, case):
 
     if kind == "toolbox":
         _run_toolbox_case(target, case, datasets)
+        return
+
+    if kind == "optimizer":
+        _run_optimizer_case(case)
         return
 
     if kind == "model_estimation":

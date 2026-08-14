@@ -291,3 +291,7 @@ ch_latin_hypercube_ <- function(sample_size, dimension, seed, median) {
 ch_toolbox_run_ <- function(group, method, data, options_json) {
   .Call(`_corehydror_ch_toolbox_run_`, group, method, data, options_json)
 }
+
+ch_optim_run_ <- function(spec_json, objective) {
+  .Call(`_corehydror_ch_optim_run_`, spec_json, objective)
+}

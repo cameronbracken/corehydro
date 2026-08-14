@@ -57,6 +57,7 @@
 #include "corehydro/numerics/data/plotting_positions.hpp"
 #include "corehydro/numerics/data/yeo_johnson.hpp"
 #include "corehydro/numerics/support/toolbox_runner.hpp"
+#include "corehydro/numerics/support/optimizer_runner.hpp"
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
@@ -87,7 +88,6 @@
 #include "corehydro/numerics/math/linalg/lu_decomposition.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
-#include "corehydro/numerics/math/optimization/differential_evolution.hpp"
 #include "corehydro/numerics/math/special/beta.hpp"
 #include "corehydro/numerics/math/special/bessel.hpp"
 #include "corehydro/numerics/math/special/erf.hpp"
@@ -110,6 +110,7 @@
 #include "corehydro/numerics/tools.hpp"
 #include "corehydro/numerics/utilities/extension_methods.hpp"
 #include "check.hpp"
+#include "optimization_test_functions.hpp"
 #include "third_party/json.hpp"
 
 using json = nlohmann::json;
@@ -237,7 +238,6 @@ namespace bfsamp = corehydro::numerics::sampling;
 namespace bfutil = corehydro::numerics::utilities;
 namespace bffourier = corehydro::numerics::math::fourier;
 namespace bfdiff = corehydro::numerics::math::differentiation;
-namespace bfopt = corehydro::numerics::math::optimization;
 
 // Correlation fixture args are [x..., y...] concatenated and split at the midpoint
 // (equal-length samples) -- see fixtures/special_functions/correlation.json / README.md.
@@ -459,6 +459,16 @@ static double numerical_derivative_hessian_element(const bfdiff::ScalarFunction&
 // ReportFailure (irrelevant here: whether hitting Max*Reached throws-then-is-swallowed or
 // never throws at all, BestParameterSet ends up identical either way -- see optimizer.hpp's
 // file header for the full analysis).
+//
+// Task 8 (the optimizer runner) routes this dispatch through tbx::run_optimizer rather than
+// constructing DifferentialEvolution directly, so this fixture -- and its pinned oracle values --
+// now also exercises optimizer_runner.hpp's own dispatch/spec-parsing path, the same one the R and
+// Python glue use. `index == D` (the fitness case) needs one adjustment: OptimResult::value is
+// deliberately un-scaled back to the RAW objective's own sign convention (see
+// optimizer_runner.hpp's fill_optimizer_result), whereas this fixture's pinned literals were
+// curated against C#'s `BestParameterSet.Fitness`, which is the INTERNAL function_scale-scaled
+// value (negative of the raw value under Maximize()). Re-applying that scale here keeps the
+// already-pinned oracle values unchanged rather than re-curating them.
 static double differential_evolution_best_value(const std::vector<double>& a) {
     int fn_id = static_cast<int>(a[0]);
     int direction = static_cast<int>(a[1]);
@@ -467,16 +477,16 @@ static double differential_evolution_best_value(const std::vector<double>& a) {
     std::vector<double> upper(a.begin() + 3 + D, a.begin() + 3 + 2 * D);
     int index = static_cast<int>(a[static_cast<std::size_t>(3 + 2 * D)]);
 
-    bfopt::DifferentialEvolution::Objective f =
-        fn_id == 0 ? bfopt::DifferentialEvolution::Objective(numerical_derivative_quadratic)
-                   : bfopt::DifferentialEvolution::Objective(numerical_derivative_normal_loglik);
-    bfopt::DifferentialEvolution de(f, D, lower, upper);
-    if (direction == 0)
-        de.minimize();
-    else
-        de.maximize();
-    return index == D ? de.best_parameter_set().fitness
-                       : de.best_parameter_set().values[static_cast<std::size_t>(index)];
+    tbx::Objective f = fn_id == 0 ? tbx::Objective(numerical_derivative_quadratic)
+                                  : tbx::Objective(numerical_derivative_normal_loglik);
+    json spec;
+    spec["method"] = "de";
+    spec["lower"] = lower;
+    spec["upper"] = upper;
+    spec["maximize"] = (direction == 1);
+    tbx::OptimResult r = tbx::run_optimizer(spec.dump(), f);
+    if (index == D) return direction == 1 ? -r.value : r.value;
+    return r.parameters.at(static_cast<std::size_t>(index));
 }
 
 // Histogram fixture args convention (fixtures/special_functions/histogram.json): args =
@@ -1608,6 +1618,57 @@ static void run_toolbox_kind(const json& spec) {
             std::string where = "toolbox/" + group + "/" + name;
             auto r = tbx::run_toolbox(group, as["method"].get<std::string>(), data, options_str);
             check_value(toolbox_select(r, as, group), as, where);
+        }
+    }
+}
+
+// --- optimizer path (Task 8) -------------------------------------------------------------
+//
+// fixtures/toolbox/optimizers.json cases name a built-in objective by the same name TestFunctions.cs
+// uses (DeJong/FXYZ/Booth/McCormick/FX/...); this table maps that name to the real C++ function in
+// core/tests/optimization_test_functions.hpp -- the C++ analogue of the native closures the R and
+// Python fixture runners write for the same names, so every fixture case exercises the real
+// host-language callback path optimizer_runner.hpp exists to protect. `construct` is passed
+// straight through to tbx::run_optimizer as the spec JSON (minus the "objective" key, which is not
+// part of the runner's own grammar -- see optimizer_runner.hpp's file header on why no objective
+// registry lives there).
+static tbx::Objective optimizer_fixture_objective(const std::string& name) {
+    if (name == "FXYZ") return tbx::Objective(test_functions::fxyz);
+    if (name == "DeJong") return tbx::Objective(test_functions::de_jong);
+    if (name == "Booth") return tbx::Objective(test_functions::booth);
+    if (name == "McCormick") return tbx::Objective(test_functions::mccormick);
+    if (name == "FX")
+        return tbx::Objective(
+            [](const std::vector<double>& v) { return test_functions::fx(v[0]); });
+    throw std::runtime_error("unknown optimizer fixture objective: " + name);
+}
+
+static void run_optimizer_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+        json construct = c["construct"];
+        std::string objective_name = construct.value("objective", "DeJong");
+        construct.erase("objective");
+        tbx::OptimResult r =
+            tbx::run_optimizer(construct.dump(), optimizer_fixture_objective(objective_name));
+        for (const auto& as : c["assertions"]) {
+            std::string method = as["method"].get<std::string>();
+            std::string where = "optimizer/" + name + "/" + method;
+            if (method == "value") {
+                check_value(r.value, as, where);
+            } else if (method == "parameter") {
+                std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
+                check_value(r.parameters.at(i), as, where);
+            } else if (method == "status") {
+                if (r.status == as["expected"].get<std::string>())
+                    chtest::report_pass();
+                else
+                    chtest::report_fail(__FILE__, __LINE__,
+                                        where + ": expected status " +
+                                            as["expected"].get<std::string>() + ", got " + r.status);
+            } else {
+                throw std::runtime_error("unknown optimizer fixture assertion method: " + method);
+            }
         }
     }
 }
@@ -3413,6 +3474,8 @@ int main(int argc, char** argv) {
             run_data_utility(spec);
         } else if (kind == "toolbox") {
             run_toolbox_kind(spec);
+        } else if (kind == "optimizer") {
+            run_optimizer_kind(spec);
         } else if (kind == "univariate_distribution") {
             if (spec.value("target", "") == "GeneralizedExtremeValue")
                 run_gev(spec);

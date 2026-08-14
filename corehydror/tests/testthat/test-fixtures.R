@@ -237,7 +237,7 @@ kRoutedSpecialFunctionTargets <- c(
   names(kCorrelationSpecialFunctionMethod), names(kRunningStatisticsSpecialFunctionIndex),
   names(kRunningCovarianceSpecialFunctionBlock), names(kFourierToolboxMethod),
   "Statistics.percentile", names(kHistogramStatisticsIndex), names(kHistogramBinsColumn),
-  "Bilinear.log_floor_value", "Probability.hpcm_joint"
+  "Bilinear.log_floor_value", "Probability.hpcm_joint", "DifferentialEvolution.best_value"
 )
 
 # special_function/Probability.hpcm_joint (Task 6): the same routing pattern, through the new
@@ -247,6 +247,42 @@ kRoutedSpecialFunctionTargets <- c(
 # ind_0..ind_(n-1), corr(n*n flattened row-major)], n inferred from the argument count).
 # Probability.hpcm_conditional_at stays unrouted: it needs the conditionalProbabilities
 # out-value, which the "probability" toolbox group's "joint" method does not expose.
+# special_function/DifferentialEvolution.best_value (Task 8): reuses
+# fixtures/special_functions/differential_evolution.json (already pinned C++-only) rather than
+# duplicating it -- routed through ch_optim_run_ so the callback path itself is exercised.
+# args convention: [fn_id, direction, D, lower(D), upper(D), index] -- see
+# core/tests/test_fixtures.cpp's differential_evolution_best_value() for the authoritative
+# description. fn_id 0 = "quadratic" (sum_i (x_i - i)^2, 0-based i), 1 = "normal_loglik" (Normal
+# log-likelihood of {9,10,11,12,13} at mean=p[1], sd=p[2]) -- NATIVE R closures reproducing the
+# same two P3.3 numerical_derivative fixture functions, so this case exercises the real R
+# callback path. `value` un-applies OptimResult's raw-sign convention back to the C#
+# BestParameterSet.Fitness this fixture's literals were curated against (see
+# differential_evolution_best_value()'s own comment for why).
+run_special_function_differential_evolution_case <- function(args_raw) {
+  ns <- asNamespace("corehydror")
+  a <- vapply(args_raw, parse_num, numeric(1))
+  fn_id <- as.integer(a[1])
+  direction <- as.integer(a[2])
+  D <- as.integer(a[3])
+  lower <- a[4:(3 + D)]
+  upper <- a[(4 + D):(3 + 2 * D)]
+  index <- as.integer(a[4 + 2 * D])
+  sample <- c(9, 10, 11, 12, 13)
+  objective <- if (fn_id == 0) {
+    function(p) sum((p - (seq_along(p) - 1))^2)
+  } else {
+    function(p) sum(dnorm(sample, mean = p[1], sd = p[2], log = TRUE))
+  }
+  spec <- ns$to_spec_json(list(method = "de", lower = ns$spec_array(lower),
+                               upper = ns$spec_array(upper), maximize = (direction == 1)))
+  r <- ns$ch_optim_run_(spec, objective)
+  if (index == D) {
+    if (direction == 1) -r$value else r$value
+  } else {
+    r$parameters[[index + 1L]]
+  }
+}
+
 run_special_function_probability_hpcm_joint_case <- function(args_raw) {
   ns <- asNamespace("corehydror")
   args <- vapply(args_raw, parse_num, numeric(1))
@@ -347,7 +383,45 @@ run_special_function_case <- function(target, args_raw) {
   if (identical(target, "Probability.hpcm_joint")) {
     return(run_special_function_probability_hpcm_joint_case(args_raw))
   }
+  if (identical(target, "DifferentialEvolution.best_value")) {
+    return(run_special_function_differential_evolution_case(args_raw))
+  }
   stop(sprintf("unrouted special_function target: %s", target))
+}
+
+# optimizer [construct carries method/lower/upper/initial/maximize/seed/control; assertions carry
+# value/parameter/status]: the six ported optimizers (Task 8), run through ch_optim_run_ against a
+# NATIVE R closure -- not ch_toolbox_run_ -- because an optimizer's input is a live function, not
+# serializable data. Mirrors run_optimizer_kind in core/tests/test_fixtures.cpp. `construct` was
+# parsed with simplifyVector = FALSE, so a JSON array leaf is an R list of scalars; re-flattened
+# here (rather than round-tripped through jsonlite::toJSON) so a length-1 array (e.g. "brent"'s
+# single-element lower/upper) survives as a JSON array, not an auto-unboxed scalar.
+optimizer_spec_json <- function(ns, construct) {
+  num_vec <- function(x) if (is.null(x)) NULL else ns$spec_array(vapply(x, as.double, numeric(1)))
+  ns$to_spec_json(list(
+    method = construct$method,
+    lower = num_vec(construct$lower), upper = num_vec(construct$upper),
+    initial = num_vec(construct$initial),
+    maximize = if (is.null(construct$maximize)) NULL else isTRUE(construct$maximize),
+    seed = if (is.null(construct$seed)) NULL else as.integer(construct$seed),
+    control = if (is.null(construct$control) || length(construct$control) == 0L) NULL
+              else construct$control
+  ))
+}
+
+# The handful of TestFunctions.cs objectives fixtures/toolbox/optimizers.json names by string --
+# NATIVE R closures reproducing the same formulas as core/tests/optimization_test_functions.hpp,
+# so every optimizer fixture case exercises the real R callback path
+# (corehydro::numerics::support::GuardedObjective exists to protect exactly this call).
+optimizer_fixture_objective <- function(name) {
+  switch(name,
+    FXYZ = function(p) (4 * p[1] - 0.5)^2 + (3 * p[2] - 0.6)^2 + (2 * p[3] - 0.7)^2,
+    DeJong = function(p) sum(p^2),
+    Booth = function(p) (p[1] + 2 * p[2] - 7)^2 + (2 * p[1] + p[2] - 5)^2,
+    McCormick = function(p) sin(p[1] + p[2]) + (p[1] - p[2])^2 - 1.5 * p[1] + 2.5 * p[2] + 1,
+    FX = function(p) (p[1] + 3) * (p[1] - 1)^2,
+    stop(sprintf("unknown optimizer fixture objective: %s", name))
+  )
 }
 
 # toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
@@ -1511,6 +1585,28 @@ test_that("oracle fixtures validate", {
         for (a in case$assertions) {
           r <- ns$ch_toolbox_run_(spec$group, a$method, data, opts)
           check_assertion(toolbox_select(r, a, spec$group), a)
+        }
+      }
+      next
+    }
+    if (identical(spec$kind, "optimizer")) {
+      ns <- asNamespace("corehydror")
+      for (case in spec$cases) {
+        construct <- case$construct
+        objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
+        construct$objective <- NULL
+        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                              optimizer_fixture_objective(objective_name))
+        for (a in case$assertions) {
+          if (identical(a$method, "value")) {
+            check_assertion(r$value, a)
+          } else if (identical(a$method, "parameter")) {
+            check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "status")) {
+            expect_identical(r$status, a$expected)
+          } else {
+            stop(sprintf("unknown optimizer fixture assertion method: %s", a$method))
+          }
         }
       }
       next
