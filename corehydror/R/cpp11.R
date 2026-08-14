@@ -28,6 +28,10 @@ ch_bootstrap_run_ <- function(model, mu, sigma, sample_size, probabilities, data
   .Call(`_corehydror_ch_bootstrap_run_`, model, mu, sigma, sample_size, probabilities, dataset, replicates, seed, max_retries, run, ci_method, alpha)
 }
 
+ch_callback_math_ <- function(method, options_json, f) {
+  .Call(`_corehydror_ch_callback_math_`, method, options_json, f)
+}
+
 ch_cop_val_ <- function(type, params, method, args, marg_x_target, marg_x_params, marg_y_target, marg_y_params) {
   .Call(`_corehydror_ch_cop_val_`, type, params, method, args, marg_x_target, marg_x_params, marg_y_target, marg_y_params)
 }

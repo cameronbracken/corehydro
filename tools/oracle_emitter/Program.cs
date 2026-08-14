@@ -821,6 +821,29 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
     _ => throw new Exception($"unknown optimizer fixture objective: {name}")
 };
 
+// The callback surface, Task 1: the Test_Brent/Test_Differentiation formulas
+// fixtures/callback/math.json names by string, inlined here for the same reason as the optimizer
+// catalog above (Test_Numerics is not referenced by this emitter). These are the C# delegates the
+// REAL Brent/NumericalDerivative are driven with, the counterpart of the native closures the
+// C++/R/Python fixture runners write for the same names -- so every case exercises a real
+// host-language callback in each of the four runners. NOTE the names here are deliberately NOT the
+// optimizer catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), unrelated to
+// OptimizerTestFXYZ above.
+static Func<double, double>? CallbackScalarFunction(string name) => name switch
+{
+    "Root_Quadratic" => x => Math.Pow(x, 2) - 2,
+    "Root_Cubic" => x => x * x * x - x - 1d,
+    "Diff_FX" => x => Math.Pow(x, 3.0),
+    _ => null
+};
+static Func<double[], double>? CallbackVectorFunction(string name) => name switch
+{
+    "Diff_FXY" => p => Math.Pow(p[0], 2) * Math.Pow(p[1], 3),
+    "Diff_FXYZ" => p => Math.Pow(p[0], 3.0) + Math.Pow(p[1], 4.0) + Math.Pow(p[2], 5.0),
+    "Diff_FH" => p => Math.Pow(p[0], 3.0) - 2 * p[0] * p[1] - Math.Pow(p[1], 6),
+    _ => null
+};
+
 // numerical_derivative fixture args convention -- MUST mirror
 // numerical_derivative_parse()/gradient_element()/hessian_element() in
 // core/tests/test_fixtures.cpp exactly.
@@ -4609,6 +4632,107 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
                     _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
                 };
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- callback branch (the callback surface, Task 1) -------------------------------------
+    // Drives the REAL C# Brent / NumericalDerivative against the delegates
+    // CallbackScalarFunction/CallbackVectorFunction above, mirroring callback/math.hpp's own
+    // dispatch: construct carries group/method/callback/options; assertions carry
+    // value (`args: [index]` into the flat result), dim (`args: [index]` into {rows, cols}), or
+    // status. The hessian result is flattened row-major, exactly as the C++ runner flattens it.
+    if (kindStr == "callback")
+    {
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            var construct = c.GetProperty("construct");
+            string group = construct.GetProperty("group").GetString()!;
+            if (group != "math") throw new Exception($"unknown callback fixture group: {group}");
+            string method = construct.GetProperty("method").GetString()!;
+            string callbackName = construct.GetProperty("callback").GetString()!;
+            var options = construct.TryGetProperty("options", out var optEl)
+                ? optEl : default;
+            double Opt(string key, double dflt) =>
+                options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+                    ? ParseNum(v) : dflt;
+            double[] OptVector(string key)
+            {
+                if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty(key, out var v))
+                    throw new Exception($"callback/{method} requires the option '{key}'");
+                return v.EnumerateArray().Select(ParseNum).ToArray();
+            }
+
+            double[] values;
+            int[] dims;
+            if (method == "root_find")
+            {
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                values = [Numerics.Mathematics.RootFinding.Brent.Solve(
+                    f, Opt("lower", 0d), Opt("upper", 0d), Opt("tolerance", 1E-8),
+                    (int)Opt("max_iterations", 1000))];
+                dims = [];
+            }
+            else if (method == "derivative")
+            {
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                values = [NumericalDerivative.Derivative(f, Opt("point", 0d), Opt("step_size", -1d))];
+                dims = [];
+            }
+            else if (method == "gradient")
+            {
+                var f = CallbackVectorFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a vector function");
+                values = NumericalDerivative.Gradient(f, OptVector("point"));
+                dims = [values.Length];
+            }
+            else if (method == "hessian")
+            {
+                var f = CallbackVectorFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a vector function");
+                double[,] h = NumericalDerivative.Hessian(f, OptVector("point"));
+                int n = h.GetLength(0), m = h.GetLength(1);
+                values = new double[n * m];
+                for (int i = 0; i < n; i++)
+                    for (int j = 0; j < m; j++) values[i * m + j] = h[i, j];
+                dims = [n, m];
+            }
+            else
+            {
+                throw new Exception($"unknown callback fixture method: {method}");
+            }
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string am = asrt.GetProperty("method").GetString()!;
+                string where = $"callback/{caseName}/{am}";
+                int index = asrt.TryGetProperty("args", out var argsEl) ? argsEl[0].GetInt32() : 0;
+                if (am == "status")
+                {
+                    string expected = asrt.GetProperty("expected").GetString()!;
+                    if (expected == "Success") pass++;
+                    else { fail++; failures.Add($"{where}: expected {expected} got Success"); }
+                    continue;
+                }
+                double actual = am switch
+                {
+                    "value" => values[index],
+                    "dim" => dims[index],
+                    _ => throw new Exception($"unknown callback fixture assertion method: {am}")
+                };
+                if (dump)
+                {
+                    var dumpArgs = asrt.TryGetProperty("args", out var aEl)
+                        ? aEl.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+                    DumpLine("callback", caseName, am, dumpArgs, () => (object)actual);
+                    continue;
+                }
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
             }

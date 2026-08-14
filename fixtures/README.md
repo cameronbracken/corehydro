@@ -1735,6 +1735,41 @@ Assertion `method` is `"value"` (the objective's own value at the optimum, in it
 convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
 or `"status"` (the exact `OptimizationStatus` name).
 
+### `callback`
+
+The ported routines whose input is a live host-language function rather than serializable data,
+run through the shared callback runner (`numerics/support/callback_runner.hpp`) and its exception
+guard. `construct` names a `group` (only `"math"` so far -- `"mcmc"`, `"bootstrap"` and `"gmm"`
+follow), a `method`, a `callback` (a NAMED built-in each of the four runners writes itself as a
+native closure: a C++ lambda, an R closure, a Python lambda, a C# delegate), and an `options`
+object passed through verbatim as the runner's options JSON. The catalog names are documented in
+each fixture's own `callbacks` block; they are deliberately NOT the `optimizer` kind's names
+(`Diff_FXYZ` is `Test_Differentiation.FXYZ`, unrelated to the optimizer catalog's `FXYZ`), so the
+two can never be confused. Processed by all four runners; `--dump` is supported.
+
+```jsonc
+{
+  "kind": "callback",
+  "callbacks": { "Diff_FH": "f(x, y) = x^3 - 2xy - y^6  [Test_Differentiation.FH]" },
+  "cases": [
+    {
+      "name": "hessian_mixed_partials",
+      "construct": {
+        "group": "math", "method": "hessian", "callback": "Diff_FH",
+        "options": { "point": [1.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 6.0, "mode": "abs", "tol": 1e-3 },
+        { "method": "dim", "args": [0], "expected": 2, "mode": "abs", "tol": 0 }
+      ]
+    }
+  ]
+}
+```
+
+Assertion `method` is `"value"` (`args: [index]` into the flat result -- a matrix is flattened
+row-major), `"dim"` (`args: [index]` into `{rows, cols}`), or `"status"`.
+
 ### `toolbox_cross_language`
 
 One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose

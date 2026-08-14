@@ -1723,6 +1723,50 @@ def _run_optimizer_case(case):
             raise KeyError(f"unknown optimizer fixture assertion method: {a['method']}")
 
 
+# callback [construct carries group/method/callback/options; assertions carry value/dim/status]:
+# the ported routines whose input is a live function, run through _core.callback_math against a
+# NATIVE Python closure. Mirrors run_callback_kind in core/tests/test_fixtures.cpp. NOTE these
+# catalog names are NOT the optimizer catalog's above: `Diff_FXYZ` is Test_Differentiation.FXYZ
+# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`.
+def _callback_fixture_function(name):
+    if name == "Root_Quadratic":
+        return lambda x: x ** 2 - 2.0
+    if name == "Root_Cubic":
+        return lambda x: x ** 3 - x - 1.0
+    if name == "Diff_FX":
+        return lambda x: x ** 3
+    if name == "Diff_FXY":
+        return lambda p: p[0] ** 2 * p[1] ** 3
+    if name == "Diff_FXYZ":
+        return lambda p: p[0] ** 3 + p[1] ** 4 + p[2] ** 5
+    if name == "Diff_FH":
+        return lambda p: p[0] ** 3 - 2.0 * p[0] * p[1] - p[1] ** 6
+    raise KeyError(f"unknown callback fixture callback: {name}")
+
+
+def _run_callback_case(case):
+    construct = case["construct"]
+    # Only the "math" group has Python glue so far; the mcmc/bootstrap/gmm groups arrive with
+    # their own entry points in later tasks.
+    if construct["group"] != "math":
+        raise KeyError(f"unknown callback fixture group: {construct['group']}")
+    r = _core.callback_math(
+        construct["method"],
+        json.dumps(construct.get("options", {})),
+        _callback_fixture_function(construct["callback"]),
+    )
+    for a in case["assertions"]:
+        index = a["args"][0] if "args" in a else 0
+        if a["method"] == "value":
+            _check(r["values"][index], a)
+        elif a["method"] == "dim":
+            _check(float(r["dims"][index]), a)
+        elif a["method"] == "status":
+            assert r["status"] == a["expected"]
+        else:
+            raise KeyError(f"unknown callback fixture assertion method: {a['method']}")
+
+
 # toolbox_cross_language [one case nests "optimizer" (shaped like an "optimizer"-kind
 # construct/assertions), "sobol" and "stratify" (each shaped like a "toolbox"-kind
 # group-"sampling" case's options/assertions)]: fixtures/toolbox/toolbox_cross_language.json's
@@ -1786,6 +1830,7 @@ def _load_cases():
             "goodness_of_fit",
             "toolbox",
             "optimizer",
+            "callback",
             "toolbox_cross_language",
         ):
             continue
@@ -1813,6 +1858,10 @@ def test_fixture_case(kind, target, datasets, case):
 
     if kind == "optimizer":
         _run_optimizer_case(case)
+        return
+
+    if kind == "callback":
+        _run_callback_case(case)
         return
 
     if kind == "toolbox_cross_language":

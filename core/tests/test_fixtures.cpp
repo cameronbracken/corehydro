@@ -57,6 +57,7 @@
 #include "corehydro/numerics/data/plotting_positions.hpp"
 #include "corehydro/numerics/data/yeo_johnson.hpp"
 #include "corehydro/numerics/support/toolbox_runner.hpp"
+#include "corehydro/numerics/support/callback_runner.hpp"
 #include "corehydro/numerics/support/optimizer_runner.hpp"
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
@@ -1668,6 +1669,73 @@ static void run_optimizer_kind(const json& spec) {
                                             as["expected"].get<std::string>() + ", got " + r.status);
             } else {
                 throw std::runtime_error("unknown optimizer fixture assertion method: " + method);
+            }
+        }
+    }
+}
+
+// --- callback path (callback surface, Task 1) --------------------------------------------
+//
+// fixtures/callback/*.json cases name a built-in callback by the same name the fixture's own
+// `callbacks` block documents; this table maps that name to a real C++ lambda -- the C++ analogue
+// of the native closures the R and Python fixture runners (and the dotnet emitter's delegates)
+// write for the same names, so every case exercises the real host-language callback path
+// callback_runner.hpp exists to protect. NOTE these names are NOT the optimizer catalog's above:
+// `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), unrelated to the optimizer
+// catalog's `FXYZ`; the `Diff_`/`Root_` prefixes exist so the two catalogs can never be confused.
+static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs) {
+    if (name == "Root_Quadratic") {
+        cbs.scalar = [](double x) { return x * x - 2.0; };
+    } else if (name == "Root_Cubic") {
+        cbs.scalar = [](double x) { return x * x * x - x - 1.0; };
+    } else if (name == "Diff_FX") {
+        cbs.scalar = [](double x) { return std::pow(x, 3.0); };
+    } else if (name == "Diff_FXY") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return std::pow(p[0], 2.0) * std::pow(p[1], 3.0);
+        };
+    } else if (name == "Diff_FXYZ") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return std::pow(p[0], 3.0) + std::pow(p[1], 4.0) + std::pow(p[2], 5.0);
+        };
+    } else if (name == "Diff_FH") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return std::pow(p[0], 3.0) - 2.0 * p[0] * p[1] - std::pow(p[1], 6.0);
+        };
+    } else {
+        throw std::runtime_error("unknown callback fixture callback: " + name);
+    }
+}
+
+static void run_callback_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+        const json& construct = c["construct"];
+        tbx::CallbackSet cbs;
+        callback_fixture_set(construct["callback"].get<std::string>(), cbs);
+        json options = construct.contains("options") ? construct["options"] : json::object();
+        tbx::CallbackResult r =
+            tbx::run_callback(construct["group"].get<std::string>(),
+                              construct["method"].get<std::string>(), options.dump(), cbs);
+        for (const auto& as : c["assertions"]) {
+            std::string method = as["method"].get<std::string>();
+            std::string where = "callback/" + name + "/" + method;
+            std::size_t i = as.contains("args")
+                                ? static_cast<std::size_t>(as["args"][0].get<int>())
+                                : std::size_t{0};
+            if (method == "value") {
+                check_value(r.values.at(i), as, where);
+            } else if (method == "dim") {
+                check_value(static_cast<double>(r.dims.at(i)), as, where);
+            } else if (method == "status") {
+                if (r.status == as["expected"].get<std::string>())
+                    chtest::report_pass();
+                else
+                    chtest::report_fail(__FILE__, __LINE__,
+                                        where + ": expected status " +
+                                            as["expected"].get<std::string>() + ", got " + r.status);
+            } else {
+                throw std::runtime_error("unknown callback fixture assertion method: " + method);
             }
         }
     }
@@ -3531,6 +3599,8 @@ int main(int argc, char** argv) {
             run_toolbox_kind(spec);
         } else if (kind == "optimizer") {
             run_optimizer_kind(spec);
+        } else if (kind == "callback") {
+            run_callback_kind(spec);
         } else if (kind == "toolbox_cross_language") {
             run_toolbox_cross_language_kind(spec);
         } else if (kind == "univariate_distribution") {

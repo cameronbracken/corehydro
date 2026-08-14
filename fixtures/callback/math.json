@@ -1,0 +1,109 @@
+{
+  "kind": "callback",
+  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs}",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python lambda, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. NOTE the catalog names here are NOT the `optimizer`-kind catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), not the unrelated TestFunctions.FXYZ the optimizer fixtures use. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal, transcribed verbatim -- never a value computed by this repo's own C++.",
+  "callbacks": {
+    "Root_Quadratic": "f(x) = x^2 - 2  [Mathematics/Root Finding/TestFunctions.Quadratic]",
+    "Root_Cubic": "f(x) = x^3 - x - 1  [Mathematics/Root Finding/TestFunctions.Cubic]",
+    "Diff_FX": "f(x) = x^3  [Test_Differentiation.FX]",
+    "Diff_FXY": "f(x, y) = x^2 * y^3  [Test_Differentiation.FXY]",
+    "Diff_FXYZ": "f(x, y, z) = x^3 + y^4 + z^5  [Test_Differentiation.FXYZ]",
+    "Diff_FH": "f(x, y) = x^3 - 2xy - y^6  [Test_Differentiation.FH]"
+  },
+  "cases": [
+    {
+      "name": "root_find_quadratic",
+      "construct": {
+        "group": "math",
+        "method": "root_find",
+        "callback": "Root_Quadratic",
+        "options": { "lower": 0.0, "upper": 4.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.4142135623730951, "mode": "abs", "tol": 1e-5, "source": "Test_Brent.Test_Quadratic (trueX = Math.Sqrt(2))" }
+      ]
+    },
+    {
+      "name": "root_find_cubic",
+      "construct": {
+        "group": "math",
+        "method": "root_find",
+        "callback": "Root_Cubic",
+        "options": { "lower": -1.0, "upper": 5.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.32472, "mode": "abs", "tol": 1e-5, "source": "Test_Brent.Test_Cubic" }
+      ]
+    },
+    {
+      "name": "derivative_x_cubed",
+      "construct": {
+        "group": "math",
+        "method": "derivative",
+        "callback": "Diff_FX",
+        "options": { "point": 2.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 12.0, "mode": "abs", "tol": 1e-6, "source": "Test_Differentiation.Test_Derivative_MultipleFunctions" }
+      ]
+    },
+    {
+      "name": "gradient_two_variables",
+      "construct": {
+        "group": "math",
+        "method": "gradient",
+        "callback": "Diff_FXY",
+        "options": { "point": [2.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 32.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_TwoVariables" },
+        { "method": "value", "args": [1], "expected": 48.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_TwoVariables" }
+      ]
+    },
+    {
+      "name": "gradient_three_variables",
+      "construct": {
+        "group": "math",
+        "method": "gradient",
+        "callback": "Diff_FXYZ",
+        "options": { "point": [2.0, 2.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 12.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_ThreeVariables" },
+        { "method": "value", "args": [1], "expected": 32.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_ThreeVariables" },
+        { "method": "value", "args": [2], "expected": 80.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_ThreeVariables" }
+      ]
+    },
+    {
+      "name": "hessian_mixed_partials",
+      "construct": {
+        "group": "math",
+        "method": "hessian",
+        "callback": "Diff_FH",
+        "options": { "point": [1.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 6.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "value", "args": [1], "expected": -2.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "value", "args": [2], "expected": -2.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "value", "args": [3], "expected": -480.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "dim", "args": [0], "expected": 2, "mode": "abs", "tol": 0, "source": "Test_Differentiation.Test_Hessian_MixedPartials (a 2x2 Hessian)" },
+        { "method": "dim", "args": [1], "expected": 2, "mode": "abs", "tol": 0, "source": "Test_Differentiation.Test_Hessian_MixedPartials (a 2x2 Hessian)" }
+      ]
+    },
+    {
+      "name": "hessian_diagonal",
+      "construct": {
+        "group": "math",
+        "method": "hessian",
+        "callback": "Diff_FXYZ",
+        "options": { "point": [2.0, 2.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 12.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" },
+        { "method": "value", "args": [4], "expected": 48.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" },
+        { "method": "value", "args": [8], "expected": 160.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" }
+      ]
+    }
+  ]
+}

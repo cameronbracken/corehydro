@@ -240,3 +240,10 @@ reference:
       Nelder-Mead, Brent) over a user-written R objective.
     contents:
       - optim_minimize
+  - title: Root finding and differentiation
+    desc: >
+      The ported Numerics Brent root finder and NumericalDerivative routines over a
+      user-written R function.
+    contents:
+      - root_find
+      - derivative

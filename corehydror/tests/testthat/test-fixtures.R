@@ -426,6 +426,33 @@ optimizer_fixture_objective <- function(name) {
   )
 }
 
+# callback [construct carries group/method/callback/options; assertions carry value/dim/status]:
+# the ported routines whose input is a live function, run through ch_callback_math_ against a
+# NATIVE R closure. Mirrors run_callback_kind in core/tests/test_fixtures.cpp. NOTE these catalog
+# names are NOT the optimizer catalog's above: `Diff_FXYZ` is Test_Differentiation.FXYZ
+# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`.
+callback_fixture_function <- function(name) {
+  switch(name,
+    Root_Quadratic = function(x) x^2 - 2,
+    Root_Cubic = function(x) x^3 - x - 1,
+    Diff_FX = function(x) x^3,
+    Diff_FXY = function(p) p[1]^2 * p[2]^3,
+    Diff_FXYZ = function(p) p[1]^3 + p[2]^4 + p[3]^5,
+    Diff_FH = function(p) p[1]^3 - 2 * p[1] * p[2] - p[2]^6,
+    stop(sprintf("unknown callback fixture callback: %s", name))
+  )
+}
+
+# `construct$options` was parsed with simplifyVector = FALSE, so a JSON array leaf is an R list of
+# scalars; re-flattened here so a length-1 array survives as a JSON array, not an auto-unboxed
+# scalar.
+callback_options_json <- function(ns, options) {
+  if (is.null(options) || length(options) == 0L) return("{}")
+  ns$to_spec_json(lapply(options, function(v) {
+    if (is.list(v)) ns$spec_array(vapply(v, as.double, numeric(1))) else as.double(v)
+  }))
+}
+
 # toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
 # utility group runs through ch_toolbox_run_. Mirrors run_toolbox_kind in
 # core/tests/test_fixtures.cpp.
@@ -1608,6 +1635,33 @@ test_that("oracle fixtures validate", {
             expect_identical(r$status, a$expected)
           } else {
             stop(sprintf("unknown optimizer fixture assertion method: %s", a$method))
+          }
+        }
+      }
+      next
+    }
+    if (identical(spec$kind, "callback")) {
+      ns <- asNamespace("corehydror")
+      for (case in spec$cases) {
+        construct <- case$construct
+        # Only the "math" group has R glue so far; the mcmc/bootstrap/gmm groups arrive with
+        # their own entry points in later tasks.
+        if (!identical(construct$group, "math")) {
+          stop(sprintf("unknown callback fixture group: %s", construct$group))
+        }
+        r <- ns$ch_callback_math_(construct$method,
+                                  callback_options_json(ns, construct$options),
+                                  callback_fixture_function(construct$callback))
+        for (a in case$assertions) {
+          idx <- if (is.null(a$args)) 1L else a$args[[1]] + 1L
+          if (identical(a$method, "value")) {
+            check_assertion(r$values[[idx]], a)
+          } else if (identical(a$method, "dim")) {
+            check_assertion(as.double(r$dims[[idx]]), a)
+          } else if (identical(a$method, "status")) {
+            expect_identical(r$status, a$expected)
+          } else {
+            stop(sprintf("unknown callback fixture assertion method: %s", a$method))
           }
         }
       }

@@ -52,6 +52,7 @@ from .toolbox import (
     trend_predict,
 )
 from .optim import OptimResult, optim_maximize, optim_minimize
+from .callback import derivative, gradient, hessian, root_find
 from .gof import (
     aic,
     aic_weights,
@@ -181,6 +182,10 @@ __all__ = [
     "OptimResult",
     "optim_minimize",
     "optim_maximize",
+    "root_find",
+    "derivative",
+    "gradient",
+    "hessian",
     "goodness_of_fit",
     "classification_metrics",
     "gof_test",

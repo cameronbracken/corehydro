@@ -54,6 +54,13 @@ extern "C" SEXP _corehydror_ch_bootstrap_run_(SEXP model, SEXP mu, SEXP sigma, S
     return cpp11::as_sexp(ch_bootstrap_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(model), cpp11::as_cpp<cpp11::decay_t<double>>(mu), cpp11::as_cpp<cpp11::decay_t<double>>(sigma), cpp11::as_cpp<cpp11::decay_t<int>>(sample_size), cpp11::as_cpp<cpp11::decay_t<doubles>>(probabilities), cpp11::as_cpp<cpp11::decay_t<doubles>>(dataset), cpp11::as_cpp<cpp11::decay_t<int>>(replicates), cpp11::as_cpp<cpp11::decay_t<int>>(seed), cpp11::as_cpp<cpp11::decay_t<int>>(max_retries), cpp11::as_cpp<cpp11::decay_t<std::string>>(run), cpp11::as_cpp<cpp11::decay_t<std::string>>(ci_method), cpp11::as_cpp<cpp11::decay_t<double>>(alpha)));
   END_CPP11
 }
+// callback.cpp
+list ch_callback_math_(std::string method, std::string options_json, function f);
+extern "C" SEXP _corehydror_ch_callback_math_(SEXP method, SEXP options_json, SEXP f) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_callback_math_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(f)));
+  END_CPP11
+}
 // copula.cpp
 double ch_cop_val_(std::string type, doubles params, std::string method, doubles args, std::string marg_x_target, doubles marg_x_params, std::string marg_y_target, doubles marg_y_params);
 extern "C" SEXP _corehydror_ch_cop_val_(SEXP type, SEXP params, SEXP method, SEXP args, SEXP marg_x_target, SEXP marg_x_params, SEXP marg_y_target, SEXP marg_y_params) {
@@ -538,6 +545,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_box_cox_lambda_",               (DL_FUNC) &_corehydror_ch_box_cox_lambda_,                1},
     {"_corehydror_ch_bve_cdf_",                      (DL_FUNC) &_corehydror_ch_bve_cdf_,                       7},
     {"_corehydror_ch_bve_cdf_after_set_parameters_", (DL_FUNC) &_corehydror_ch_bve_cdf_after_set_parameters_, 11},
+    {"_corehydror_ch_callback_math_",                (DL_FUNC) &_corehydror_ch_callback_math_,                 3},
     {"_corehydror_ch_cop_val_",                      (DL_FUNC) &_corehydror_ch_cop_val_,                       8},
     {"_corehydror_ch_copula_run_",                   (DL_FUNC) &_corehydror_ch_copula_run_,                    3},
     {"_corehydror_ch_cr_dependency_change_",         (DL_FUNC) &_corehydror_ch_cr_dependency_change_,         10},
