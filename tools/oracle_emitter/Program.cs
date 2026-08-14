@@ -3952,23 +3952,50 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
 }
 
 // Selects a value the way the fixture runners' client-side "select" logic does, generalized
-// to a FLAT array with a known {rows, cols} shape (numbers.support.toolbox_runner.hpp's `dims`):
-// "length" -> flat.Length, "rows"/"columns" -> the shape, else index/label into flat[index].
-// KNOWN LIMITATION (Task 9 review): unlike the C++/R/Python `toolbox_select` helpers, this
-// function has no `names` array to look an assertion's `label` key up against -- every caller
-// builds its flat array by hand from a positional (matrix-shaped) C# result with no name per
-// element, so `label` is not meaningfully answerable here and silently falls through to
-// `ToolboxSelectIndex`'s `"index"`-or-0 behavior. Recorded rather than "fixed" because no
-// fixture pairs `label` with a matrix-shaped (`ToolboxSelectFlat`) result today -- see
-// CHANGELOG.md's v0.6.0 entry -- and a real fix would mean threading a names array through
-// every one of this function's call sites for a combination nothing currently exercises.
+// to a FLAT array with a known {rows, cols} shape (numerics.support.toolbox_runner.hpp's `dims`):
+// "length" -> flat.Length, "rows"/"columns" -> the shape, else index into flat[index]. `label` is
+// not answerable here -- unlike the C++/R/Python `toolbox_select` helpers, this function has no
+// `names` array to look an assertion's `label` key up against, because every caller builds its
+// flat array by hand from a positional (matrix-shaped) C# result. Two callers (sampling.stratify,
+// regression.prediction_intervals) DO carry real names alongside their dims in the C++ result, so
+// a `label` there is a real gap rather than a nonsensical request -- but threading a names array
+// through every call site for a combination no fixture exercises is not worth doing blind, so this
+// throws instead of silently falling through to `ToolboxSelectIndex`'s `"index"`-or-0 default,
+// which used to read index 0 in the emitter while the C++/R/Python runners honored `label`
+// correctly. Was a documented known limitation (CHANGELOG.md's v0.6.0 entry); now closed by making
+// the mismatch loud instead of silent.
 static double ToolboxSelectFlat(JsonElement asrt, double[] flat, int rows, int cols)
 {
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+        throw new Exception(
+            $"toolbox select by label '{lbl.GetString()}' is not supported for a flat matrix " +
+            "result (no names array); use index/rows/columns instead");
     string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
         ? s.GetString()! : "value";
     if (select == "length") return flat.Length;
     if (select == "rows") return rows;
     if (select == "columns") return cols;
+    return flat[ToolboxSelectIndex(asrt)];
+}
+
+// Same selection grammar as ToolboxSelectFlat, for a method whose C++ ToolboxResult carries NO
+// `dims` at all (numerics/support/toolbox/interpolation.hpp's `linear`/`bilinear` and
+// numerics/support/toolbox/regression.hpp's `residuals`/`predict` never set `r.dims`): `select:
+// "rows"`/`"columns"` throws here, matching what the C++/R/Python `toolbox_select` helpers do
+// when `r.dims` is empty, instead of answering a fabricated `(1, flat.Length)` shape the way
+// routing these through `ToolboxSelectFlat` used to (a `select: "rows"` on `interpolation.linear`
+// silently returned `1`).
+static double ToolboxSelectFlatNoDims(JsonElement asrt, double[] flat)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+        throw new Exception(
+            $"toolbox select by label '{lbl.GetString()}' is not supported for a flat " +
+            "result (no names array); use index instead");
+    string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
+        ? s.GetString()! : "value";
+    if (select == "length") return flat.Length;
+    if (select == "rows" || select == "columns")
+        throw new Exception($"toolbox select '{select}' has no dims for this method");
     return flat[ToolboxSelectIndex(asrt)];
 }
 
@@ -4046,7 +4073,7 @@ static double InterpolationDispatch(string method, List<double[]> data, JsonElem
         };
         bool extrapolate = OptBool(options, "extrapolate", false);
         var values = xout.Select(v => extrapolate ? interp.Extrapolate(v) : interp.Interpolate(v)).ToArray();
-        return ToolboxSelectFlat(asrt, values, 1, values.Length);
+        return ToolboxSelectFlatNoDims(asrt, values);
     }
     if (method == "bilinear")
     {
@@ -4063,7 +4090,7 @@ static double InterpolationDispatch(string method, List<double[]> data, JsonElem
         };
         var values = new double[x1out.Length];
         for (int i = 0; i < x1out.Length; i++) values[i] = interp.Interpolate(x1out[i], x2out[i]);
-        return ToolboxSelectFlat(asrt, values, 1, values.Length);
+        return ToolboxSelectFlatNoDims(asrt, values);
     }
     throw new Exception($"unknown interpolation method: {method}");
 }
@@ -4109,7 +4136,7 @@ static double RegressionDispatch(string method, List<double[]> data, JsonElement
             for (int j = 0; j < m; j++) flatCov[i * m + j] = lm.Covariance[i, j];
         return ToolboxSelectFlat(asrt, flatCov, m, m);
     }
-    if (method == "residuals") return ToolboxSelectFlat(asrt, lm.Residuals, 1, lm.Residuals.Length);
+    if (method == "residuals") return ToolboxSelectFlatNoDims(asrt, lm.Residuals);
     if (method == "predict" || method == "prediction_intervals")
     {
         double[] newFlat = data[2];
@@ -4121,7 +4148,7 @@ static double RegressionDispatch(string method, List<double[]> data, JsonElement
         if (method == "predict")
         {
             var values = lm.Predict(xp);
-            return ToolboxSelectFlat(asrt, values, 1, values.Length);
+            return ToolboxSelectFlatNoDims(asrt, values);
         }
         double alpha = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("alpha", out var a)
             ? a.GetDouble() : 0.1;
@@ -4188,7 +4215,12 @@ static double StatisticsDispatch(string method, List<double[]> data, JsonElement
         return ToolboxSelectNamed(asrt, new[] { "mean", "sd", "skewness", "kurtosis" }, Statistics.ProductMoments(x));
     if (method == "l_moments")
         return ToolboxSelectNamed(asrt, new[] { "l1", "l2", "t3", "t4" }, Statistics.LinearMoments(x));
-    if (method == "ranks") return Statistics.RanksInPlace(x)[ToolboxSelectIndex(asrt)];
+    if (method == "ranks")
+    {
+        RejectDimsSelect(asrt, "statistics.ranks");
+        return Statistics.RanksInPlace(x)[ToolboxSelectIndex(asrt)];
+    }
+    if (method == "percentile") RejectDimsSelect(asrt, "statistics.percentile");
     throw new Exception($"statistics method '{method}' has no dumped oracle case wired in the emitter");
 }
 
@@ -4199,6 +4231,22 @@ static int ToolboxSelectIndex(JsonElement asrt)
     if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("index", out var idx))
         return idx.GetInt32();
     return 0;
+}
+
+// Throws if an assertion asks for `select: "rows"` or `"columns"` against a method whose C++
+// ToolboxResult never sets `r.dims` (every `gof` method; `statistics.ranks`/`percentile`),
+// matching what the C++/R/Python `toolbox_select` helpers do when `r.dims` is empty. These
+// methods route through ToolboxSelectIndex/ToolboxSelectNamed, neither of which reads `select`
+// at all, so without this guard a `rows`/`columns` request would silently fall through to the
+// index-0 (or named) value instead of failing the way it should.
+static void RejectDimsSelect(JsonElement asrt, string context)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s))
+    {
+        string select = s.GetString()!;
+        if (select == "rows" || select == "columns")
+            throw new Exception($"toolbox select '{select}' has no dims for {context}");
+    }
 }
 
 static double ToolboxSelectNamed(JsonElement asrt, string[] names, double[] values)
@@ -4220,6 +4268,10 @@ static double ToolboxSelectNamed(JsonElement asrt, string[] names, double[] valu
 // Pearson method, so "pearson" dispatches to the real Correlation.Pearson the C++ port mirrors).
 static double GofDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
+    // No `gof` method ever sets `r.dims` in C++ -- one guard up front covers all of them (the
+    // scalar arms below don't consult `asrt` at all, so without this a `select: "rows"`/"columns"`
+    // would silently return the computed metric instead of failing).
+    RejectDimsSelect(asrt, "gof." + method);
     double[] o = data.Count > 0 ? data[0] : Array.Empty<double>();
     double[] m = data.Count > 1 ? data[1] : Array.Empty<double>();
     int GetInt(string key) => options.GetProperty(key).GetInt32();

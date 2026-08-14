@@ -1675,18 +1675,19 @@ Each assertion may also carry `index` (0-based, default 0, selects `values[index
 `"length"` (`len(values)`), `"rows"` / `"columns"` (out of `dims`, for a group whose method
 returns a flattened matrix).
 
-**Known limitation (Task 9 review):** the dotnet emitter's `ToolboxSelectFlat` helper -- the
-hand-rolled reproduction of `run_toolbox`'s selection logic used by the groups whose C# result is
-a positional flattened array rather than a named vector (Sobol, Stratify, Histogram bins, linear
-regression's coefficient/covariance/residual matrices, ...) -- has no `names` array to look
-`label` up against, so a `label` key on one of those groups' assertions is silently ignored and
-falls through to `"index"`-or-0, where the C++/R/Python `toolbox_select` helpers honor it
-correctly. Recorded rather than fixed: no fixture pairs `label` with one of those flattened-matrix
-groups today (`label` is only ever used against a named-vector group, e.g. `gof`'s
-`metrics`/`classification`, which the emitter dispatches through `ToolboxSelectNamed` instead), so
-a real fix would mean threading a names array through every `ToolboxSelectFlat` call site for a
-combination nothing currently exercises. See `ToolboxSelectFlat`'s own header comment in
-`tools/oracle_emitter/Program.cs`.
+Two latent emitter-vs-runner divergences around `label`/dims selects (found in the v0.6.0 final
+review) are fixed rather than merely recorded: the dotnet emitter's `ToolboxSelectFlat` helper --
+the hand-rolled reproduction of `run_toolbox`'s selection logic used by the groups whose C# result
+is a positional flattened array rather than a named vector (Sobol, Stratify, Histogram bins,
+linear regression's coefficient/covariance/residual matrices, ...) -- has no `names` array to look
+`label` up against, so it now throws on a `label` key instead of silently falling through to
+`"index"`-or-0 the way the C++/R/Python `toolbox_select` helpers never would. Symmetrically, the
+groups whose C++ `ToolboxResult` never sets `dims` at all (`interpolation.linear`/`bilinear`,
+`regression.residuals`/`predict`, `statistics.ranks`/`percentile`, every `gof` method) now throw on
+`select: "rows"`/`"columns"` instead of answering a fabricated or unrelated value, matching the
+C++/R/Python helpers' behavior when `r.dims` is empty. No fixture pairs either combination with one
+of those groups today, so neither change altered any existing case. See `ToolboxSelectFlat`'s and
+`ToolboxSelectFlatNoDims`'s header comments in `tools/oracle_emitter/Program.cs`.
 
 ### `optimizer`
 
