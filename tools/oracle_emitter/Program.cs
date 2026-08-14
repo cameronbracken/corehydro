@@ -4715,6 +4715,14 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 int index = asrt.TryGetProperty("args", out var argsEl) ? argsEl[0].GetInt32() : 0;
                 if (am == "status")
                 {
+                    // TODO: this arm hardcodes "Success" because neither Brent nor
+                    // NumericalDerivative reports a status, so the math group's C++ runner always
+                    // sets "Success" and there is nothing here to read it from. It is a real
+                    // assertion ONLY for that group. The first fixture asserting any other status
+                    // -- an MCMC group reporting a convergence status, say -- must replace this
+                    // with a status actually read off the driven C# object (group-aware, the way
+                    // the optimizer kind reads OptimizationStatus), or the new fixture will pass
+                    // falsely against a hardcoded literal.
                     string expected = asrt.GetProperty("expected").GetString()!;
                     if (expected == "Success") pass++;
                     else { fail++; failures.Add($"{where}: expected {expected} got Success"); }

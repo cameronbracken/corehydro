@@ -16,9 +16,13 @@ callback_check_fn <- function(f) {
   }
 }
 
+# Rejects NA/NaN AND +/-Inf, and says so naming `x`. The finite half is not pedantry: a
+# non-finite point reaches the shared spec serializer, which rejects it with "spec values must be
+# finite" -- an error from three layers down that names neither the argument nor the verb. Kept
+# character for character in step with corehydropy's _check_point.
 callback_check_point <- function(x) {
-  if (!is.numeric(x) || length(x) == 0L || anyNA(x)) {
-    stop("`x` must be a non-empty numeric vector with no missing values", call. = FALSE)
+  if (!is.numeric(x) || length(x) == 0L || !all(is.finite(x))) {
+    stop("`x` must be a non-empty numeric vector of finite values", call. = FALSE)
   }
 }
 
@@ -70,11 +74,15 @@ root_find <- function(f, lower, upper, tolerance = 1e-8, max_iterations = 1000L)
 #'   below zero, selects the adaptive step `eps^(1/2) * (1 + |x|)`.
 #' @return `derivative()` returns a single number, `gradient()` a numeric vector the length of
 #'   `x`, and `hessian()` a square symmetric matrix.
+#' @note `gradient()` and `hessian()` share their names with functions in \pkg{numDeriv} and
+#'   \pkg{pracma}, so whichever of those packages is attached last masks this one (and its
+#'   arguments differ). The examples below qualify every call with `corehydror::` so it is
+#'   unambiguous which function is being called.
 #' @examples
-#' derivative(function(x) x^3, 2)
+#' corehydror::derivative(function(x) x^3, 2)
 #' rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
-#' gradient(rosenbrock, c(1, 1))
-#' hessian(rosenbrock, c(1, 1))
+#' corehydror::gradient(rosenbrock, c(1, 1))
+#' corehydror::hessian(rosenbrock, c(1, 1))
 #' @export
 derivative <- function(f, x, step_size = -1) {
   callback_check_fn(f)

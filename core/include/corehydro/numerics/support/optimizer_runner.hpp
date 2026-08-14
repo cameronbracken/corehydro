@@ -203,8 +203,8 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 // time on top of the ported one, and every other optimizer's convergence test
 // (Optimizer::check_convergence, NelderMead's own) compares raw fitness values, so getting the
 // sign wrong anywhere in a hand-rolled negation would silently break convergence detection.
-// Calling the class's own maximize() needs no such care. See GuardedObjective::sentinel() for the
-// one place this decision has an observable consequence: which infinity is "worst" for the
+// Calling the class's own maximize() needs no such care. See make_guarded_objective() above for
+// the one place this decision has an observable consequence: which infinity is "worst" for the
 // aborted-objective path.
 inline OptimResult run_optimizer(const std::string& spec_json, const Objective& objective) {
     JsonValue spec = corehydro::models::spec::parse_json(spec_json);

@@ -45,9 +45,12 @@ struct CallbackSet {
         vector_matrix;
 };
 
-// Flat result surface every binding and every fixture assertion reads. `dims` is empty for a
-// plain vector, or {rows, cols} row-major for a matrix. `names` labels `values` where a group has
-// something to say (parameter names, statistic names); otherwise empty.
+// Flat result surface every binding and every fixture assertion reads. `dims` takes one of three
+// shapes: EMPTY when the group has no shape to report (a scalar result, or a plain vector whose
+// length is `values.size()` -- math/root_find and math/derivative); {n} for a vector the group
+// wants shaped explicitly (math/gradient); {rows, cols} for a matrix, with `values` flattened
+// row-major (math/hessian). `names` labels `values` where a group has something to say (parameter
+// names, statistic names); otherwise empty.
 struct CallbackResult {
     std::vector<double> values;
     std::vector<std::string> names;

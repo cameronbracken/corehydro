@@ -44,3 +44,17 @@ test_that("the R-side argument checks fire before the core is reached", {
   expect_error(root_find(function(x) x, lower = c(0, 1), upper = 2))
   expect_error(gradient(function(p) sum(p), "not numeric"))
 })
+
+test_that("a non-finite point is rejected by name, the same way Python rejects it", {
+  # Without the finite check this failed three layers down in the spec serializer with
+  # "spec values must be finite", naming neither `x` nor the verb. The Python twin
+  # (corehydropy/tests/test_callback.py) asserts the identical message.
+  f <- function(p) sum(p^2)
+  expect_error(gradient(f, c(1, Inf)), "`x` must be a non-empty numeric vector of finite values")
+  expect_error(hessian(f, c(1, -Inf)), "`x` must be a non-empty numeric vector of finite values")
+  expect_error(gradient(f, c(1, NA_real_)), "`x` must be a non-empty numeric vector of finite values")
+  expect_error(gradient(f, c(1, NaN)), "`x` must be a non-empty numeric vector of finite values")
+  expect_error(gradient(f, numeric(0)), "`x` must be a non-empty numeric vector of finite values")
+  # derivative()'s scalar point already had the finite check; it stays.
+  expect_error(derivative(function(x) x^3, Inf), "single finite number")
+})

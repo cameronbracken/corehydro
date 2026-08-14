@@ -1768,7 +1768,11 @@ two can never be confused. Processed by all four runners; `--dump` is supported.
 ```
 
 Assertion `method` is `"value"` (`args: [index]` into the flat result -- a matrix is flattened
-row-major), `"dim"` (`args: [index]` into `{rows, cols}`), or `"status"`.
+row-major), `"dim"` (`args: [index]` into the result's `dims`), or `"status"`. `dims` takes one of
+three shapes: empty when the group reports no shape (a scalar result, or a plain vector whose
+length is the number of values -- `math/root_find`, `math/derivative`), `{n}` for an explicitly
+shaped vector (`math/gradient`), and `{rows, cols}` for a row-major matrix (`math/hessian`). A
+`"dim"` assertion on a method whose `dims` is empty is therefore an error, not a zero.
 
 ### `toolbox_cross_language`
 

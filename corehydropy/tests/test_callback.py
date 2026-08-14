@@ -67,6 +67,20 @@ def test_a_callback_returning_a_non_scalar_is_rejected():
         ch.gradient(lambda p: [1.0, 2.0], [1.0, 1.0])
 
 
+@pytest.mark.parametrize(
+    "point", [[1.0, math.inf], [1.0, -math.inf], [1.0, math.nan], []], ids=["inf", "-inf", "nan", "empty"]
+)
+def test_a_non_finite_point_is_rejected_by_name(point):
+    # The R twin (corehydror/tests/testthat/test-callback.R) asserts the identical message; R used
+    # to let a non-finite point through to the spec serializer, which failed with an error naming
+    # neither `x` nor the verb.
+    expected = r"`x` must be a non-empty numeric vector of finite values"
+    with pytest.raises(ValueError, match=expected):
+        ch.gradient(lambda p: sum(v**2 for v in p), point)
+    with pytest.raises(ValueError, match=expected):
+        ch.hessian(lambda p: sum(v**2 for v in p), point)
+
+
 def test_argument_checks_fire_before_the_core_is_reached():
     with pytest.raises(TypeError):
         ch.root_find("not a function", lower=0, upper=2)

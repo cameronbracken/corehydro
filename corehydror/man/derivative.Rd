@@ -31,9 +31,15 @@ below zero, selects the adaptive step \verb{eps^(1/2) * (1 + |x|)}.}
 \code{gradient()} and \code{hessian()} take the gradient and the Hessian matrix of a function of a
 parameter vector. All three are the ported Numerics \code{NumericalDerivative} routines.
 }
+\note{
+\code{gradient()} and \code{hessian()} share their names with functions in \pkg{numDeriv} and
+\pkg{pracma}, so whichever of those packages is attached last masks this one (and its
+arguments differ). The examples below qualify every call with \verb{corehydror::} so it is
+unambiguous which function is being called.
+}
 \examples{
-derivative(function(x) x^3, 2)
+corehydror::derivative(function(x) x^3, 2)
 rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
-gradient(rosenbrock, c(1, 1))
-hessian(rosenbrock, c(1, 1))
+corehydror::gradient(rosenbrock, c(1, 1))
+corehydror::hessian(rosenbrock, c(1, 1))
 }

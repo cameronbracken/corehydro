@@ -1,3 +1,5 @@
+#include <exception>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -39,6 +41,64 @@ int main() {
         CHECK_EQ(g.call_count(), 0);  // no call completed
         CHECK_TRUE(g.aborted());
         CHECK_THROWS_MSG(g.rethrow_if_aborted(), "host language error");
+    }
+
+    // Two guards SHARING an abort state abort as one. This is the case a group with more than one
+    // live callback needs (bootstrap's four delegates; the Gibbs proposal beside the
+    // log-likelihood): a throw inside one must stop the ported algorithm from re-entering the host
+    // through the other while an unwind is already pending.
+    {
+        auto state = sup::make_abort_state();
+        int likelihood_entries = 0, proposal_entries = 0;
+        sup::GuardedCall<double, const std::vector<double>&> likelihood(
+            [&likelihood_entries](const std::vector<double>&) -> double {
+                ++likelihood_entries;
+                throw HostError();
+            },
+            -std::numeric_limits<double>::infinity(), state);
+        sup::GuardedCall<std::vector<double>, const std::vector<double>&> proposal(
+            [&proposal_entries](const std::vector<double>& p) {
+                ++proposal_entries;
+                return p;
+            },
+            std::vector<double>{}, state);
+
+        CHECK_TRUE(likelihood({1.0}) == -std::numeric_limits<double>::infinity());
+        CHECK_EQ(likelihood_entries, 1);
+        // The OTHER guard is now short-circuited: its sentinel comes back and its host function
+        // is never entered.
+        CHECK_TRUE(proposal({1.0, 2.0}).empty());
+        CHECK_EQ(proposal_entries, 0);
+        CHECK_EQ(proposal.call_count(), 0);
+        CHECK_TRUE(proposal.aborted());
+        // And either guard rethrows the one stored exception.
+        CHECK_THROWS_MSG(proposal.rethrow_if_aborted(), "host language error");
+        CHECK_THROWS_MSG(likelihood.rethrow_if_aborted(), "host language error");
+
+        // A later latch never overwrites the first: the first exception is the cause, and this is
+        // what makes the message the user sees deterministic when several callbacks are live.
+        state->latch(std::make_exception_ptr(std::runtime_error("a later error")));
+        CHECK_THROWS_MSG(likelihood.rethrow_if_aborted(), "host language error");
+    }
+
+    // A standalone guard is unaffected by another standalone guard's abort -- the private-state
+    // default that the math group and the optimizer surface rely on.
+    {
+        int entries = 0;
+        sup::GuardedCall<double, const std::vector<double>&> a(
+            [](const std::vector<double>&) -> double { throw HostError(); }, -1.0);
+        sup::GuardedCall<double, const std::vector<double>&> b(
+            [&entries](const std::vector<double>& p) {
+                ++entries;
+                return p[0];
+            },
+            -1.0);
+        CHECK_EQ(a({1.0}), -1.0);
+        CHECK_TRUE(a.aborted());
+        CHECK_EQ(b({7.0}), 7.0);
+        CHECK_EQ(entries, 1);
+        CHECK_TRUE(!b.aborted());
+        b.rethrow_if_aborted();  // nothing to rethrow
     }
 
     // A vector-returning guard (the shape the Gibbs proposal and bootstrap resample need).

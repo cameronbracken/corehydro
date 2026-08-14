@@ -28,9 +28,12 @@ def _check_fn(f: object) -> None:
 
 
 def _check_point(x: object) -> np.ndarray:
+    # Rejects NaN AND +/-inf, naming `x`. Kept character for character in step with corehydror's
+    # callback_check_point, so the same bad point is refused with the same message in both
+    # languages rather than failing deeper in one of them.
     point = np.asarray(x, dtype=float).ravel()
     if point.size == 0 or not np.all(np.isfinite(point)):
-        raise ValueError("`x` must be a non-empty numeric vector with no missing values")
+        raise ValueError("`x` must be a non-empty numeric vector of finite values")
     return point
 
 
