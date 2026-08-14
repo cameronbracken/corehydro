@@ -444,6 +444,40 @@ def test_link_function_rejects_an_unknown_type():
         link_function("Nope")
 
 
+def test_link_function_matches_type_case_insensitively_and_normalizes_it():
+    l = link_function("log")
+    assert l.type == "Log"
+    l2 = link_function("YEOJOHNSON", lambda_=0.5)
+    assert l2.type == "YeoJohnson"
+
+
+def test_link_function_accepts_lambda_as_a_literal_keyword():
+    # `lambda` is a reserved word in Python, so `link_function("YeoJohnson", lambda=0.5)` is a
+    # SyntaxError; `lambda_` is the documented spelling (matching stats.box_cox/yeo_johnson).
+    # Regression test: the original shipped test only exercised `**{"lambda": 0.5}`, which hid
+    # that literal keyword syntax was uncallable.
+    l = link_function("YeoJohnson", lambda_=0.5)
+    assert l.parameters == {"lambda": 0.5}
+    eta = link(l, 2.0)
+    back = link_inverse(l, eta)
+    assert back[0] == pytest.approx(2.0, abs=1e-10)
+
+
+def test_link_function_still_accepts_lambda_via_dict_unpacking():
+    l = link_function("YeoJohnson", **{"lambda": 0.5})
+    assert l.parameters == {"lambda": 0.5}
+
+
+def test_link_function_rejects_both_lambda_spellings_together():
+    with pytest.raises(ValueError, match="lambda"):
+        link_function("YeoJohnson", lambda_=0.5, **{"lambda": 0.5})
+
+
+def test_link_function_inner_is_keyword_only():
+    with pytest.raises(TypeError):
+        link_function("Log", link_function("Identity"))  # noqa: no positional `inner`
+
+
 def test_link_function_centered_requires_inner():
     with pytest.raises(ValueError, match="inner"):
         link_function("Centered", mu0=0.0)
@@ -474,6 +508,16 @@ def test_link_names_lists_twelve_types():
     names = link_names()
     assert len(names) == 12
     assert "Centered" in names and "YeoJohnson" in names
+
+
+def test_link_names_and_link_function_cannot_drift_every_listed_type_constructs():
+    extra = {
+        "YeoJohnson": {"lambda_": 0.5}, "SES": {"a": 1.0},
+        "Centered": {"inner": link_function("Identity")},
+    }
+    for type_ in link_names():
+        l = link_function(type_, **extra.get(type_, {}))
+        assert l.type == type_
 
 
 def test_link_repr():
@@ -514,3 +558,9 @@ def test_trend_names_lists_eleven_types():
     names = trend_names()
     assert len(names) == 11
     assert "GeneralLinear" in names
+
+
+def test_trend_names_and_trend_cannot_drift_every_listed_type_constructs():
+    for type_ in trend_names():
+        tr = trend("location", type_)
+        assert tr.type == type_

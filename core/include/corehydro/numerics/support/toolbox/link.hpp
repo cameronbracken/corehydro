@@ -19,9 +19,11 @@
 // second YeoJohnson implementation to expose here).
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "corehydro/models/link_functions/asinh_link.hpp"
@@ -37,62 +39,120 @@
 
 namespace corehydro::numerics::support::detail {
 
-// String -> LinkFunctionType, the link-group analog of models::spec::parse_trend_model_type.
-// No such helper exists on LinkFunctionFactory itself (it dispatches on the enum, not a name),
-// so this is new.
-inline numerics::functions::LinkFunctionType parse_link_function_type(const std::string& name) {
-    using LT = numerics::functions::LinkFunctionType;
-    if (name == "Identity") return LT::Identity;
-    if (name == "Log") return LT::Log;
-    if (name == "Logit") return LT::Logit;
-    if (name == "Probit") return LT::Probit;
-    if (name == "ComplementaryLogLog") return LT::ComplementaryLogLog;
-    if (name == "YeoJohnson") return LT::YeoJohnson;
-    if (name == "FisherZ") return LT::FisherZ;
-    throw std::runtime_error("unknown link type: " + name);
+// Forward declaration: the Centered entry in link_builder_table() below recurses into
+// build_link() for its "inner" spec.
+inline std::unique_ptr<numerics::functions::ILinkFunction> build_link(const JsonValue& spec);
+
+// `parameters` is a named object (not a positional array) because the six parameterized links
+// take different argument lists and a positional array would be unreadable at the call site.
+inline double link_param(const JsonValue& spec, const char* key, double dflt) {
+    const JsonValue* p = spec.contains("parameters") ? &spec.at("parameters") : nullptr;
+    return p && p->contains(key) ? p->at(key).as_double() : dflt;
 }
 
-// Builds a link from the options spec. `parameters` is a named object because the six
-// parameterized links take different arguments and a positional array would be unreadable at
-// the call site. Every constructor argument and default below is read off the real header
-// (numerics/functions/yeo_johnson_link.hpp, models/link_functions/*.hpp) rather than guessed:
-// notably CenteredLink takes a THIRD constructor argument, `scale` (default 1.0, the C#
-// `CenteredLink.Scale` property), that a first draft of this spec omitted -- it is included
-// here as `opt("scale", 1.0)` so a spec can actually reach a non-default Centered scale.
+using LinkBuilderFn = std::function<std::unique_ptr<numerics::functions::ILinkFunction>(const JsonValue&)>;
+
+// The ONE place the twelve accepted link type names are listed -- build_link() and the "names"
+// toolbox method (run_link, below) both read this table, so a name can't drift between what a
+// spec is allowed to say and what `link_names()` (R/Python) advertises. Every constructor
+// argument and default below is read off the real header (numerics/functions/
+// yeo_johnson_link.hpp, models/link_functions/*.hpp) rather than guessed: notably CenteredLink
+// takes a THIRD constructor argument, `scale` (default 1.0, the C# `CenteredLink.Scale`
+// property), that a first draft of this spec omitted -- it is included here as
+// `link_param(spec, "scale", 1.0)` so a spec can actually reach a non-default Centered scale.
+//
+// Twelve names, not thirteen: the seven Numerics links (Identity, Log, Logit, Probit,
+// ComplementaryLogLog, YeoJohnson, FisherZ) plus the five link-specific BestFit types (ASinH,
+// SES, LogSES, LogASinH, Centered) -- YeoJohnson counted once even though both factories can
+// name it (see the file header above).
+inline const std::vector<std::pair<std::string, LinkBuilderFn>>& link_builder_table() {
+    using LT = numerics::functions::LinkFunctionType;
+    static const std::vector<std::pair<std::string, LinkBuilderFn>> table = {
+        {"Identity",
+         [](const JsonValue&) { return numerics::functions::LinkFunctionFactory::create(LT::Identity); }},
+        {"Log",
+         [](const JsonValue&) { return numerics::functions::LinkFunctionFactory::create(LT::Log); }},
+        {"Logit",
+         [](const JsonValue&) { return numerics::functions::LinkFunctionFactory::create(LT::Logit); }},
+        {"Probit",
+         [](const JsonValue&) { return numerics::functions::LinkFunctionFactory::create(LT::Probit); }},
+        {"ComplementaryLogLog",
+         [](const JsonValue&) {
+             return numerics::functions::LinkFunctionFactory::create(LT::ComplementaryLogLog);
+         }},
+        {"FisherZ",
+         [](const JsonValue&) { return numerics::functions::LinkFunctionFactory::create(LT::FisherZ); }},
+        {"YeoJohnson",
+         [](const JsonValue& spec) {
+             return std::make_unique<numerics::functions::YeoJohnsonLink>(
+                 link_param(spec, "lambda", 1.0));
+         }},
+        {"ASinH",
+         [](const JsonValue& spec) {
+             return std::make_unique<models::link_functions::ASinHLink>(
+                 link_param(spec, "gamma0", 0.0), link_param(spec, "scale", 1.0),
+                 link_param(spec, "epsilon", 0.0), link_param(spec, "delta", 1.0));
+         }},
+        {"SES",
+         [](const JsonValue& spec) {
+             return std::make_unique<models::link_functions::SESLink>(link_param(spec, "a", 1.0));
+         }},
+        {"LogSES",
+         [](const JsonValue& spec) {
+             return std::make_unique<models::link_functions::LogSESLink>(
+                 link_param(spec, "sigma0", 1.0), link_param(spec, "a", 1.0),
+                 link_param(spec, "lambda", 0.2));
+         }},
+        {"LogASinH",
+         [](const JsonValue& spec) {
+             return std::make_unique<models::link_functions::LogASinHLink>(
+                 link_param(spec, "sigma0", 1.0), link_param(spec, "log_scale", 1.0),
+                 link_param(spec, "epsilon", 0.0), link_param(spec, "delta", 1.0));
+         }},
+        {"Centered",
+         [](const JsonValue& spec) {
+             if (!spec.contains("inner"))
+                 throw std::runtime_error("link type 'Centered' needs an 'inner' link spec");
+             return std::make_unique<models::link_functions::CenteredLink>(
+                 build_link(spec.at("inner")), link_param(spec, "mu0", 0.0),
+                 link_param(spec, "scale", 1.0));
+         }},
+    };
+    return table;
+}
+
+// Builds a link from the options spec, looking its `type` up in link_builder_table() -- the
+// single source of truth this dispatch shares with the "names" toolbox method below.
 inline std::unique_ptr<numerics::functions::ILinkFunction> build_link(const JsonValue& spec) {
     const std::string& type = spec.at("type").as_string();
-    const JsonValue* p = spec.contains("parameters") ? &spec.at("parameters") : nullptr;
-    auto opt = [&](const char* key, double dflt) {
-        return p && p->contains(key) ? p->at(key).as_double() : dflt;
-    };
-    if (type == "Identity" || type == "Log" || type == "Logit" || type == "Probit" ||
-        type == "ComplementaryLogLog" || type == "FisherZ")
-        return numerics::functions::LinkFunctionFactory::create(parse_link_function_type(type));
-    if (type == "YeoJohnson")
-        return std::make_unique<numerics::functions::YeoJohnsonLink>(opt("lambda", 1.0));
-    if (type == "ASinH")
-        return std::make_unique<models::link_functions::ASinHLink>(
-            opt("gamma0", 0.0), opt("scale", 1.0), opt("epsilon", 0.0), opt("delta", 1.0));
-    if (type == "SES")
-        return std::make_unique<models::link_functions::SESLink>(opt("a", 1.0));
-    if (type == "LogSES")
-        return std::make_unique<models::link_functions::LogSESLink>(
-            opt("sigma0", 1.0), opt("a", 1.0), opt("lambda", 0.2));
-    if (type == "LogASinH")
-        return std::make_unique<models::link_functions::LogASinHLink>(
-            opt("sigma0", 1.0), opt("log_scale", 1.0), opt("epsilon", 0.0), opt("delta", 1.0));
-    if (type == "Centered") {
-        if (!spec.contains("inner"))
-            throw std::runtime_error("link type 'Centered' needs an 'inner' link spec");
-        return std::make_unique<models::link_functions::CenteredLink>(
-            build_link(spec.at("inner")), opt("mu0", 0.0), opt("scale", 1.0));
-    }
+    for (const auto& [name, builder] : link_builder_table())
+        if (name == type) return builder(spec);
     throw std::runtime_error("unknown link type: " + type);
+}
+
+// The twelve link type names build_link() accepts, in table order. R's link_names() and
+// Python's link_names() both call through to this via the "names" toolbox method rather than
+// holding their own literal, so a type added here is automatically visible to both.
+inline const std::vector<std::string>& link_type_names() {
+    static const std::vector<std::string> names = [] {
+        std::vector<std::string> out;
+        for (const auto& [name, builder] : link_builder_table()) {
+            (void)builder;
+            out.push_back(name);
+        }
+        return out;
+    }();
+    return names;
 }
 
 inline ToolboxResult run_link(const std::string& method,
                               const std::vector<std::vector<double>>& data,
                               const JsonValue& options) {
+    if (method == "names") {
+        ToolboxResult r;
+        r.names = link_type_names();
+        return r;
+    }
     if (!options.contains("link"))
         throw std::runtime_error("toolbox group 'link' needs a 'link' spec in its options");
     std::unique_ptr<numerics::functions::ILinkFunction> l = build_link(options.at("link"));

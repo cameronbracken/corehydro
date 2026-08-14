@@ -417,6 +417,13 @@ test_that("link_function() rejects an unknown type, naming it", {
   expect_error(link_function("Nope"), "Nope")
 })
 
+test_that("link_function() matches `type` case-insensitively and normalizes it", {
+  l <- link_function("log")
+  expect_identical(l$type, "Log")
+  l2 <- link_function("YEOJOHNSON", lambda = 0.5)
+  expect_identical(l2$type, "YeoJohnson")
+})
+
 test_that("link_function('Centered') requires `inner`", {
   expect_error(link_function("Centered", mu0 = 0), "inner")
 })
@@ -442,6 +449,19 @@ test_that("link_names() lists twelve types", {
   names <- link_names()
   expect_length(names, 12L)
   expect_true("Centered" %in% names && "YeoJohnson" %in% names)
+})
+
+test_that("link_names() and link_function() cannot drift: every listed type constructs", {
+  for (type in link_names()) {
+    params <- switch(type,
+      YeoJohnson = list(lambda = 0.5), ASinH = list(), SES = list(a = 1.0),
+      LogSES = list(), LogASinH = list(),
+      Centered = list(inner = link_function("Identity")),
+      list()
+    )
+    l <- do.call(link_function, c(list(type = type), params))
+    expect_identical(l$type, type, info = type)
+  }
 })
 
 test_that("print.corehydro_link() reports the type", {
@@ -480,4 +500,11 @@ test_that("trend_names() lists eleven types", {
   names <- trend_names()
   expect_length(names, 11L)
   expect_true("GeneralLinear" %in% names)
+})
+
+test_that("trend_names() and trend() cannot drift: every listed type constructs", {
+  for (type in trend_names()) {
+    tr <- trend("location", type)
+    expect_identical(tr$type, type, info = type)
+  }
 })

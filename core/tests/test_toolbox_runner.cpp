@@ -342,6 +342,17 @@ int main() {
         CHECK_TRUE(std::isfinite(d.values[0]));
     }
 
+    // "names" is the single source of truth link_names() (R/Python) calls through to: exactly
+    // the twelve types accepted above, and every one of them round-tripped in link_cases.
+    auto link_type_list = tb::run_toolbox("link", "names", {}, "{}");
+    CHECK_EQ(link_type_list.names.size(), std::size_t{12});
+    for (const LinkCase& lc : link_cases) {
+        bool found = false;
+        for (const std::string& n : link_type_list.names)
+            if (n == lc.name) found = true;
+        CHECK_TRUE(found);
+    }
+
     // A missing "link" spec names the group; an unknown link type names the type; an unknown
     // method names the method.
     CHECK_THROWS_MSG(tb::run_toolbox("link", "link", {{1.0}}, "{}"), "link");
@@ -388,6 +399,14 @@ int main() {
                               "{\"trend\":{\"type\":\"GeneralLinear\",\"values\":[7.0]}}");
     CHECK_NEAR(gl.values[0], 7.0, 1e-12);
     CHECK_NEAR(gl.values[1], 7.0, 1e-12);
+
+    // "names" is the single source of truth trend_names() (R/Python) calls through to.
+    auto trend_type_list = tb::run_toolbox("trend", "names", {}, "{}");
+    CHECK_EQ(trend_type_list.names.size(), std::size_t{11});
+    bool has_general_linear = false;
+    for (const std::string& n : trend_type_list.names)
+        if (n == "GeneralLinear") has_general_linear = true;
+    CHECK_TRUE(has_general_linear);
 
     // A missing "trend" spec, an unknown trend type, and an unknown method all name the thing
     // that's wrong.

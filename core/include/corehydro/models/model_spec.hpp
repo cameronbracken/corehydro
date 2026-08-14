@@ -105,20 +105,42 @@
 
 namespace corehydro::models::spec {
 
-inline trend_functions::TrendModelType parse_trend_model_type(const std::string& name) {
+// The ONE place the eleven accepted trend type names are listed -- parse_trend_model_type()
+// and trend_model_type_names() (below) both read this table, so a name can't drift between
+// what a spec is allowed to say and what `trend_names()` (R/Python) advertises.
+inline const std::vector<std::pair<std::string, trend_functions::TrendModelType>>&
+trend_model_type_table() {
     using TT = trend_functions::TrendModelType;
-    if (name == "Constant") return TT::Constant;
-    if (name == "Cubic") return TT::Cubic;
-    if (name == "Exponential") return TT::Exponential;
-    if (name == "Linear") return TT::Linear;
-    if (name == "Logistic") return TT::Logistic;
-    if (name == "Power") return TT::Power;
-    if (name == "Quadratic") return TT::Quadratic;
-    if (name == "Reciprocal") return TT::Reciprocal;
-    if (name == "Sinusoidal") return TT::Sinusoidal;
-    if (name == "StepFunction") return TT::StepFunction;
-    if (name == "GeneralLinear") return TT::GeneralLinear;
+    static const std::vector<std::pair<std::string, TT>> table = {
+        {"Constant", TT::Constant},         {"Cubic", TT::Cubic},
+        {"Exponential", TT::Exponential},   {"Linear", TT::Linear},
+        {"Logistic", TT::Logistic},         {"Power", TT::Power},
+        {"Quadratic", TT::Quadratic},       {"Reciprocal", TT::Reciprocal},
+        {"Sinusoidal", TT::Sinusoidal},     {"StepFunction", TT::StepFunction},
+        {"GeneralLinear", TT::GeneralLinear},
+    };
+    return table;
+}
+
+inline trend_functions::TrendModelType parse_trend_model_type(const std::string& name) {
+    for (const auto& [n, t] : trend_model_type_table())
+        if (n == name) return t;
     throw std::runtime_error("unknown trend model type: " + name);
+}
+
+// The eleven trend type names build_spec_trend()/parse_trend_model_type() accept, in table
+// order. R's trend_names() and Python's trend_names() both call through to this via the
+// toolbox "trend"/"names" method rather than holding their own literal.
+inline const std::vector<std::string>& trend_model_type_names() {
+    static const std::vector<std::string> names = [] {
+        std::vector<std::string> out;
+        for (const auto& [n, t] : trend_model_type_table()) {
+            (void)t;
+            out.push_back(n);
+        }
+        return out;
+    }();
+    return names;
 }
 
 // Builds a STANDALONE trend model from a `{"type": ..., "start_index"?: ..., "values"?: [...]}`

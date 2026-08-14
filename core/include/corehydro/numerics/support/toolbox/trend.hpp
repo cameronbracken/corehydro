@@ -25,6 +25,11 @@ namespace corehydro::numerics::support::detail {
 inline ToolboxResult run_trend(const std::string& method,
                                const std::vector<std::vector<double>>& data,
                                const JsonValue& options) {
+    if (method == "names") {
+        ToolboxResult r;
+        r.names = models::spec::trend_model_type_names();
+        return r;
+    }
     if (!options.contains("trend"))
         throw std::runtime_error("toolbox group 'trend' needs a 'trend' spec in its options");
     std::unique_ptr<models::trend_functions::ITrendModel> t =

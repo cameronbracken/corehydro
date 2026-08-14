@@ -1024,12 +1024,6 @@ def joint_probability(p, dependency: str = "independent", indicators=None, corre
 # ``trends=`` argument) already names -- these verbs consume that existing object rather than a
 # second constructor. Mirrors corehydror's R/toolbox.R verb for verb.
 
-LINK_TYPES = (
-    "Identity", "Log", "Logit", "Probit", "ComplementaryLogLog", "FisherZ",
-    "YeoJohnson", "ASinH", "SES", "LogSES", "LogASinH", "Centered",
-)
-
-
 class Link:
     """A link function spec, mirroring the seven Numerics link functions and the five
     RMC.BestFit-specific ones (the BestFit factory's own YeoJohnson case routes to the Numerics
@@ -1039,14 +1033,20 @@ class Link:
     Parameters
     ----------
     type : str
-        One of :func:`link_names`.
+        One of :func:`link_names`, matched case-insensitively.
     inner : Link, optional
         A :class:`Link` wrapped by ``"Centered"``; ignored (and rejected) for every other type.
+        Keyword-only.
     **parameters
-        Named construction parameters: ``lambda`` for ``"YeoJohnson"``; ``gamma0``, ``scale``,
+        Named construction parameters: ``lambda_`` for ``"YeoJohnson"``; ``gamma0``, ``scale``,
         ``epsilon``, ``delta`` for ``"ASinH"``; ``a`` for ``"SES"``; ``sigma0``, ``a``,
-        ``lambda`` for ``"LogSES"``; ``sigma0``, ``log_scale``, ``epsilon``, ``delta`` for
-        ``"LogASinH"``; ``mu0``, ``scale`` for ``"Centered"``.
+        ``lambda_`` for ``"LogSES"``; ``sigma0``, ``log_scale``, ``epsilon``, ``delta`` for
+        ``"LogASinH"``; ``mu0``, ``scale`` for ``"Centered"``. ``lambda_`` is spelled with a
+        trailing underscore because ``lambda`` is a reserved word in Python (matching the
+        precedent set by :func:`corehydropy.stats.box_cox`/:func:`corehydropy.stats.yeo_johnson`,
+        which take ``lambda_`` for the same reason); R spells the same construction parameter
+        ``lambda`` (no collision there). A literal ``lambda=...`` keyword is a ``SyntaxError``
+        before this class ever sees it, but ``**{"lambda": ...}`` still works if written that way.
 
     Examples
     --------
@@ -1054,12 +1054,14 @@ class Link:
     >>> l = link_function("Log")
     >>> link(l, [1, 10, 100])
     array([0.        , 2.30258509, 4.60517019])
+    >>> yj = link_function("YeoJohnson", lambda_=0.5)
     """
 
-    def __init__(self, type: str, inner: "Link | None" = None, **parameters) -> None:
-        match = [t for t in LINK_TYPES if t.lower() == str(type).lower()]
+    def __init__(self, type: str, *, inner: "Link | None" = None, **parameters) -> None:
+        known = link_names()
+        match = [t for t in known if t.lower() == str(type).lower()]
         if not match:
-            raise ValueError(f"unknown link type '{type}'; expected one of {', '.join(LINK_TYPES)}")
+            raise ValueError(f"unknown link type '{type}'; expected one of {', '.join(known)}")
         self.type = match[0]
         if self.type == "Centered" and inner is None:
             raise ValueError("link type 'Centered' needs an `inner` link")
@@ -1067,6 +1069,15 @@ class Link:
             raise ValueError(f"`inner` is only used for type 'Centered'; got type '{self.type}'")
         if inner is not None and not isinstance(inner, Link):
             raise TypeError("`inner` must be a Link; create one with link_function()")
+        # `lambda` is a reserved word in Python, so the documented spelling is `lambda_`
+        # (matching stats.py's box_cox/yeo_johnson); fold it onto the "lambda" spec key the C++
+        # grammar expects. `**{"lambda": ...}` still works undocumented, so both must not be
+        # given together.
+        if "lambda_" in parameters:
+            if "lambda" in parameters:
+                raise ValueError("pass either `lambda_` or `lambda`, not both")
+            parameters = dict(parameters)
+            parameters["lambda"] = parameters.pop("lambda_")
         self.parameters = {k: float(v) for k, v in parameters.items()} if parameters else None
         self.inner = inner
 
@@ -1085,9 +1096,9 @@ class Link:
         return f"<Link {self.type}>"
 
 
-def link_function(type: str, inner: "Link | None" = None, **parameters) -> Link:
+def link_function(type: str, *, inner: "Link | None" = None, **parameters) -> Link:
     """Construct a :class:`Link`. See :class:`Link` for the arguments."""
-    return Link(type, inner, **parameters)
+    return Link(type, inner=inner, **parameters)
 
 
 def _link_eval(l: Link, method: str, v) -> np.ndarray:
@@ -1159,8 +1170,13 @@ def link_derivative(l: Link, x) -> np.ndarray:
 
 
 def link_names() -> list[str]:
-    """List the twelve link types :func:`link_function` accepts."""
-    return list(LINK_TYPES)
+    """List the twelve link types :func:`link_function` accepts.
+
+    Calls through to the C++ ``link`` toolbox group's own ``"names"`` method -- the same table
+    ``build_link`` builds a link from (``link_builder_table()`` in ``link.hpp``) -- so this list
+    can't drift from what :func:`link_function` actually accepts.
+    """
+    return list(_toolbox_run("link", "names")["names"])
 
 
 def _trend_index(idx, what: str = "index") -> list[int]:
@@ -1257,8 +1273,11 @@ def trend_parameters(tr) -> dict:
 
 
 def trend_names() -> list[str]:
-    """List the eleven trend types :func:`corehydropy.models.trend` accepts."""
-    return [
-        "Constant", "Cubic", "Exponential", "Linear", "Logistic", "Power",
-        "Quadratic", "Reciprocal", "Sinusoidal", "StepFunction", "GeneralLinear",
-    ]
+    """List the eleven trend types :func:`corehydropy.models.trend` accepts.
+
+    Calls through to the C++ ``trend`` toolbox group's own ``"names"`` method -- the same table
+    :func:`corehydropy.models.trend` and ``build_spec_trend`` (``model_spec.hpp``) validate
+    ``type`` against (``trend_model_type_table()``) -- so this list can't drift from what
+    :func:`corehydropy.models.trend` actually accepts.
+    """
+    return list(_toolbox_run("trend", "names")["names"])

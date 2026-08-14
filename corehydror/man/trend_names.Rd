@@ -10,7 +10,10 @@ trend_names()
 a character vector of the eleven \code{type} names \code{\link[=trend]{trend()}} accepts.
 }
 \description{
-Available trend model types
+Calls through to the C++ \code{trend} toolbox group's own \code{"names"} method -- the same table
+\code{\link[=trend]{trend()}} and \code{build_spec_trend()} (\code{model_spec.hpp}) validate \code{type} against
+(\code{trend_model_type_table()}) -- so this list can't drift from what \code{\link[=trend]{trend()}} actually
+accepts.
 }
 \examples{
 trend_names()

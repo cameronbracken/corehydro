@@ -576,21 +576,22 @@ joint_probability <- function(p, dependency = c("independent", "positive", "nega
 # trend(), the model-attachment spec builder in R/model.R, already names -- these verbs consume
 # that existing object rather than a second constructor.
 
-kLinkTypes <- c("Identity", "Log", "Logit", "Probit", "ComplementaryLogLog", "FisherZ",
-                "YeoJohnson", "ASinH", "SES", "LogSES", "LogASinH", "Centered")
-
 #' Construct a link function
 #'
 #' Mirrors the seven Numerics link functions and the five RMC.BestFit-specific ones (the
 #' BestFit factory's own YeoJohnson case routes to the Numerics class -- see
 #' `best_fit_link_function_factory.hpp` -- so there is one `"YeoJohnson"`, not two). Six of the
-#' twelve take construction parameters, passed through `...` by name.
+#' twelve take construction parameters, passed through `...` by name. `type` is matched
+#' case-insensitively (as [trend()] already does) and normalized to its canonical spelling
+#' before being sent to the C++ layer.
 #'
-#' @param type one of `link_names()`.
+#' @param type one of `link_names()`, matched case-insensitively.
 #' @param ... named construction parameters for the parameterized links: `lambda` for
 #'   `"YeoJohnson"`; `gamma0`, `scale`, `epsilon`, `delta` for `"ASinH"`; `a` for `"SES"`;
 #'   `sigma0`, `a`, `lambda` for `"LogSES"`; `sigma0`, `log_scale`, `epsilon`, `delta` for
-#'   `"LogASinH"`; `mu0`, `scale` for `"Centered"`.
+#'   `"LogASinH"`; `mu0`, `scale` for `"Centered"`. R spells the Yeo-Johnson/LogSES exponent
+#'   `lambda`; Python spells it `lambda_`, because `lambda` is a reserved word there (see
+#'   `corehydropy.toolbox.Link`).
 #' @param inner a `corehydro_link` wrapped by `"Centered"`, ignored for every other type.
 #' @return a `corehydro_link` spec list.
 #' @examples
@@ -599,10 +600,13 @@ kLinkTypes <- c("Identity", "Log", "Logit", "Probit", "ComplementaryLogLog", "Fi
 #' link_inverse(l, c(0, 1, 2))
 #' @export
 link_function <- function(type, ..., inner = NULL) {
-  if (!type %in% kLinkTypes) {
+  known <- link_names()
+  hit <- match(tolower(type), tolower(known))
+  if (is.na(hit)) {
     stop(sprintf("unknown link type \"%s\". Available: %s", type,
-                 paste(kLinkTypes, collapse = ", ")), call. = FALSE)
+                 paste(known, collapse = ", ")), call. = FALSE)
   }
+  type <- known[hit]
   params <- list(...)
   if (identical(type, "Centered") && is.null(inner)) {
     stop("link type \"Centered\" needs an `inner` link", call. = FALSE)
@@ -639,11 +643,15 @@ link_derivative <- function(l, x) link_eval(l, "d_link", x)
 
 #' Available link function types
 #'
+#' Calls through to the C++ `link` toolbox group's own `"names"` method -- the same table
+#' `link_function()` builds a link from (`link_builder_table()` in `link.hpp`) -- so this list
+#' can't drift from what `link_function()` actually accepts.
+#'
 #' @return a character vector of the twelve `type` names [link_function()] accepts.
 #' @examples
 #' link_names()
 #' @export
-link_names <- function() kLinkTypes
+link_names <- function() toolbox_run("link", "names")$names
 
 link_eval <- function(l, method, v) {
   if (!inherits(l, "corehydro_link")) {
@@ -727,14 +735,16 @@ trend_parameters <- function(tr) {
 
 #' Available trend model types
 #'
+#' Calls through to the C++ `trend` toolbox group's own `"names"` method -- the same table
+#' [trend()] and `build_spec_trend()` (`model_spec.hpp`) validate `type` against
+#' (`trend_model_type_table()`) -- so this list can't drift from what [trend()] actually
+#' accepts.
+#'
 #' @return a character vector of the eleven `type` names [trend()] accepts.
 #' @examples
 #' trend_names()
 #' @export
-trend_names <- function() {
-  c("Constant", "Cubic", "Exponential", "Linear", "Logistic", "Power",
-    "Quadratic", "Reciprocal", "Sinusoidal", "StepFunction", "GeneralLinear")
-}
+trend_names <- function() toolbox_run("trend", "names")$names
 
 # Internal: strip the class and drop the model-attachment-only `parameter` field so
 # to_spec_json() emits the plain {"type", "start_index"?, "values"?} object build_spec_trend()

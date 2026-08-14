@@ -10,7 +10,9 @@ link_names()
 a character vector of the twelve \code{type} names \code{\link[=link_function]{link_function()}} accepts.
 }
 \description{
-Available link function types
+Calls through to the C++ \code{link} toolbox group's own \code{"names"} method -- the same table
+\code{link_function()} builds a link from (\code{link_builder_table()} in \code{link.hpp}) -- so this list
+can't drift from what \code{link_function()} actually accepts.
 }
 \examples{
 link_names()
