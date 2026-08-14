@@ -35,6 +35,15 @@ __all__ = [
     "sobol_sequence",
     "stratify",
     "joint_probability",
+    "Link",
+    "link_function",
+    "link",
+    "link_inverse",
+    "link_derivative",
+    "link_names",
+    "trend_predict",
+    "trend_parameters",
+    "trend_names",
 ]
 
 
@@ -1006,3 +1015,250 @@ def joint_probability(p, dependency: str = "independent", indicators=None, corre
             data.append(corr.ravel())
     r = _toolbox_run("probability", "joint", data, {"dependency": dependency})
     return float(r["values"][0])
+
+
+# The "link" and "trend" toolbox groups (Task 7). "link" mirrors the seven Numerics link
+# functions (numerics/functions/) plus the five BestFit-specific ones (models/link_functions/);
+# "trend" evaluates the eleven TrendModelType trend models (models/trend_functions/) that
+# :class:`corehydropy.models.Trend` (the spec builder for :func:`model_univariate`'s
+# ``trends=`` argument) already names -- these verbs consume that existing object rather than a
+# second constructor. Mirrors corehydror's R/toolbox.R verb for verb.
+
+LINK_TYPES = (
+    "Identity", "Log", "Logit", "Probit", "ComplementaryLogLog", "FisherZ",
+    "YeoJohnson", "ASinH", "SES", "LogSES", "LogASinH", "Centered",
+)
+
+
+class Link:
+    """A link function spec, mirroring the seven Numerics link functions and the five
+    RMC.BestFit-specific ones (the BestFit factory's own YeoJohnson case routes to the Numerics
+    class -- see ``best_fit_link_function_factory.hpp`` -- so there is one ``"YeoJohnson"``, not
+    two). Six of the twelve take construction parameters, passed by keyword.
+
+    Parameters
+    ----------
+    type : str
+        One of :func:`link_names`.
+    inner : Link, optional
+        A :class:`Link` wrapped by ``"Centered"``; ignored (and rejected) for every other type.
+    **parameters
+        Named construction parameters: ``lambda`` for ``"YeoJohnson"``; ``gamma0``, ``scale``,
+        ``epsilon``, ``delta`` for ``"ASinH"``; ``a`` for ``"SES"``; ``sigma0``, ``a``,
+        ``lambda`` for ``"LogSES"``; ``sigma0``, ``log_scale``, ``epsilon``, ``delta`` for
+        ``"LogASinH"``; ``mu0``, ``scale`` for ``"Centered"``.
+
+    Examples
+    --------
+    >>> from corehydropy import link_function, link
+    >>> l = link_function("Log")
+    >>> link(l, [1, 10, 100])
+    array([0.        , 2.30258509, 4.60517019])
+    """
+
+    def __init__(self, type: str, inner: "Link | None" = None, **parameters) -> None:
+        match = [t for t in LINK_TYPES if t.lower() == str(type).lower()]
+        if not match:
+            raise ValueError(f"unknown link type '{type}'; expected one of {', '.join(LINK_TYPES)}")
+        self.type = match[0]
+        if self.type == "Centered" and inner is None:
+            raise ValueError("link type 'Centered' needs an `inner` link")
+        if self.type != "Centered" and inner is not None:
+            raise ValueError(f"`inner` is only used for type 'Centered'; got type '{self.type}'")
+        if inner is not None and not isinstance(inner, Link):
+            raise TypeError("`inner` must be a Link; create one with link_function()")
+        self.parameters = {k: float(v) for k, v in parameters.items()} if parameters else None
+        self.inner = inner
+
+    def _to_spec(self) -> dict:
+        # Omit "parameters"/"inner" entirely rather than emitting `null` -- unlike
+        # to_spec_json() on the R side, json.dumps() has no NULL-key-dropping rule, and
+        # build_link's `spec.contains("parameters")` would otherwise see a present-but-null key.
+        spec: dict = {"type": self.type}
+        if self.parameters is not None:
+            spec["parameters"] = self.parameters
+        if self.inner is not None:
+            spec["inner"] = self.inner._to_spec()
+        return spec
+
+    def __repr__(self) -> str:
+        return f"<Link {self.type}>"
+
+
+def link_function(type: str, inner: "Link | None" = None, **parameters) -> Link:
+    """Construct a :class:`Link`. See :class:`Link` for the arguments."""
+    return Link(type, inner, **parameters)
+
+
+def _link_eval(l: Link, method: str, v) -> np.ndarray:
+    if not isinstance(l, Link):
+        raise TypeError("`l` must be a Link; create one with link_function()")
+    arr = np.asarray(v, dtype=float).ravel()
+    if arr.size == 0:
+        raise ValueError("input must be a non-empty numeric array")
+    r = _toolbox_run("link", method, [arr], {"link": l._to_spec()})
+    return np.asarray(r["values"], dtype=float)
+
+
+def link(l: Link, x) -> np.ndarray:
+    """Evaluate a link function: real-space to link-space.
+
+    Parameters
+    ----------
+    l : Link
+        From :func:`link_function`.
+    x : array_like
+        Values on the data scale.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import link_function, link
+    >>> l = link_function("Logit")
+    >>> link(l, [0.1, 0.5, 0.9])
+    array([-2.19722458,  0.        ,  2.19722458])
+    """
+    return _link_eval(l, "link", x)
+
+
+def link_inverse(l: Link, eta) -> np.ndarray:
+    """Evaluate the inverse of a link function: link-space back to real-space.
+
+    Parameters
+    ----------
+    l : Link
+        From :func:`link_function`.
+    eta : array_like
+        Values on the linear-predictor scale.
+
+    Returns
+    -------
+    numpy.ndarray
+    """
+    return _link_eval(l, "inverse_link", eta)
+
+
+def link_derivative(l: Link, x) -> np.ndarray:
+    """Evaluate a link function's derivative with respect to ``x``.
+
+    Parameters
+    ----------
+    l : Link
+        From :func:`link_function`.
+    x : array_like
+        Values on the data scale.
+
+    Returns
+    -------
+    numpy.ndarray
+    """
+    return _link_eval(l, "d_link", x)
+
+
+def link_names() -> list[str]:
+    """List the twelve link types :func:`link_function` accepts."""
+    return list(LINK_TYPES)
+
+
+def _trend_index(idx, what: str = "index") -> list[int]:
+    """Internal: user-facing trend evaluation indices are 1-based (matching Trend/ModelParameter
+    in models.py); the spec and the C++ take 0-based. Unlike ``_mv_indices`` in mvdist.py, there
+    is no upper bound (a trend's time index is not a fixed dimension count) and no
+    no-duplicate check (predicting the same point twice is not an error)."""
+    arr = np.atleast_1d(np.asarray(idx))
+    if arr.size == 0:
+        raise ValueError(f"`{what}` must be a non-empty numeric array")
+    farr = arr.astype(float)
+    if np.any(np.isnan(farr)):
+        raise ValueError(f"`{what}` must be a non-empty numeric array")
+    if np.any(farr != np.trunc(farr)):
+        raise ValueError(f"`{what}` must be whole numbers; got {farr[farr != np.trunc(farr)]}")
+    return (farr.astype(int) - 1).tolist()
+
+
+def _trend_spec(tr) -> dict:
+    """Internal: the plain {"type", "start_index"?, "values"?} object build_spec_trend() wants
+    (numerics/support/toolbox/trend.hpp) -- drops Trend's model-attachment-only `parameter`
+    field."""
+    from .models import Trend
+
+    if not isinstance(tr, Trend):
+        raise TypeError("`tr` must be a Trend; create one with trend()")
+    # Omit "start_index"/"values" entirely when unset rather than emitting `null` -- see the
+    # matching note on Link._to_spec above; build_spec_trend's `spec.contains("start_index")`
+    # would otherwise see a present-but-null key and fail trying to read it as a number.
+    spec: dict = {"type": tr.type}
+    if tr.start_index is not None:
+        spec["start_index"] = tr.start_index
+    if tr.values is not None:
+        spec["values"] = tr.values
+    return spec
+
+
+def trend_predict(tr, index) -> np.ndarray:
+    """Evaluate a trend model.
+
+    Builds the trend model named by ``tr`` (a :class:`corehydropy.models.Trend`) from its own
+    class defaults, then evaluates it at ``index``. ``tr.parameter`` (which distribution
+    parameter the trend attaches to) is not used here -- this evaluates the trend model on its
+    own, the same way the model-attachment path's type dispatch does before it further
+    data-drives the parameter values from a live model's distribution and data (this function
+    has no such model to consult, so a ``tr`` with no explicit ``values`` predicts from the
+    trend's own zero-valued class defaults).
+
+    Parameters
+    ----------
+    tr : corehydropy.models.Trend
+        From :func:`corehydropy.models.trend`.
+    index : array_like
+        1-based time indices to evaluate at.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import trend, trend_predict
+    >>> tr = trend("location", "Linear", start_index=0, values=[10, 2])
+    >>> trend_predict(tr, [1, 2, 3, 4, 5])
+    array([10., 12., 14., 16., 18.])
+    """
+    idx = _trend_index(index, "index")
+    r = _toolbox_run("trend", "predict", [np.asarray(idx, dtype=float)], {"trend": _trend_spec(tr)})
+    return np.asarray(r["values"], dtype=float)
+
+
+def trend_parameters(tr) -> dict:
+    """The trend's own model-parameter values, by name.
+
+    Parameters
+    ----------
+    tr : corehydropy.models.Trend
+        From :func:`corehydropy.models.trend`.
+
+    Returns
+    -------
+    dict
+        The trend's model-parameter values (see :func:`corehydropy.models.model_parameter`) at
+        their class defaults, adjusted by any explicit ``values`` on ``tr``.
+
+    Examples
+    --------
+    >>> from corehydropy import trend, trend_parameters
+    >>> trend_parameters(trend("location", "Linear", values=[10, 2]))
+    {'(α)': 10.0, '(β)': 2.0}
+    """
+    r = _toolbox_run("trend", "parameters", [], {"trend": _trend_spec(tr)})
+    return dict(zip(r["names"], r["values"]))
+
+
+def trend_names() -> list[str]:
+    """List the eleven trend types :func:`corehydropy.models.trend` accepts."""
+    return [
+        "Constant", "Cubic", "Exponential", "Linear", "Logistic", "Power",
+        "Quadratic", "Reciprocal", "Sinusoidal", "StepFunction", "GeneralLinear",
+    ]

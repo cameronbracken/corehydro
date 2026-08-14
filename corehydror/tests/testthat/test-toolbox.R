@@ -372,3 +372,112 @@ test_that("joint_probability() rejects dependency = 'correlation' missing just t
     "correlation"
   )
 })
+
+# The "link" and "trend" toolbox groups (Task 7). The oracle-pinned values (from
+# Test_LinkFunctions.cs and friends, and the ten Test_*TrendTests.cs files) are validated
+# cross-language by fixtures/toolbox/{link_functions,trend_functions}.json; these tests exercise
+# the R-facing API (construction, round-trips, argument checks) instead of re-pinning literals.
+
+test_that("link_function() round-trips for every type", {
+  cases <- list(
+    list(type = "Identity", params = list()),
+    list(type = "Log", params = list()),
+    list(type = "Logit", params = list()),
+    list(type = "Probit", params = list()),
+    list(type = "ComplementaryLogLog", params = list()),
+    list(type = "FisherZ", params = list()),
+    list(type = "YeoJohnson", params = list(lambda = 0.5)),
+    list(type = "ASinH", params = list(gamma0 = 0.5, scale = 0.3)),
+    list(type = "SES", params = list(a = 1.0)),
+    list(type = "LogSES", params = list(sigma0 = 7.5)),
+    list(type = "LogASinH", params = list(sigma0 = 10.0, log_scale = 0.25))
+  )
+  domain <- c(Log = 2.0, Logit = 0.3, Probit = 0.4, ComplementaryLogLog = 0.4,
+              FisherZ = 0.3, LogSES = 2.0, LogASinH = 15.0)
+  for (case in cases) {
+    l <- do.call(link_function, c(list(type = case$type), case$params))
+    x <- if (case$type %in% names(domain)) domain[[case$type]] else 1.0
+    eta <- link(l, x)
+    back <- link_inverse(l, eta)
+    expect_equal(back, x, tolerance = 1e-10, info = case$type)
+    d <- link_derivative(l, x)
+    expect_true(is.finite(d), info = case$type)
+  }
+})
+
+test_that("link_function('Centered') round-trips with a non-Identity inner", {
+  inner <- link_function("ASinH", gamma0 = 0, scale = 1)
+  l <- link_function("Centered", mu0 = 100, scale = 20, inner = inner)
+  eta <- link(l, 120)
+  back <- link_inverse(l, eta)
+  expect_equal(back, 120, tolerance = 1e-8)
+})
+
+test_that("link_function() rejects an unknown type, naming it", {
+  expect_error(link_function("Nope"), "Nope")
+})
+
+test_that("link_function('Centered') requires `inner`", {
+  expect_error(link_function("Centered", mu0 = 0), "inner")
+})
+
+test_that("link_function() rejects `inner` on a non-Centered type", {
+  expect_error(link_function("Log", inner = link_function("Identity")), "inner")
+})
+
+test_that("link_function() requires `inner` to be a corehydro_link", {
+  expect_error(link_function("Centered", mu0 = 0, inner = "not a link"), "corehydro_link")
+})
+
+test_that("link() rejects a non-corehydro_link object", {
+  expect_error(link("not a link", 1), "corehydro_link")
+})
+
+test_that("link() rejects empty input", {
+  l <- link_function("Identity")
+  expect_error(link(l, numeric(0)), "numeric")
+})
+
+test_that("link_names() lists twelve types", {
+  names <- link_names()
+  expect_length(names, 12L)
+  expect_true("Centered" %in% names && "YeoJohnson" %in% names)
+})
+
+test_that("print.corehydro_link() reports the type", {
+  expect_output(print(link_function("Log")), "Log")
+})
+
+test_that("trend_predict() matches the transcribed Linear trend oracle", {
+  tr <- trend("location", "Linear", start_index = 1950, values = c(100, 0.5))
+  out <- trend_predict(tr, c(1951, 1961, 1941))
+  expect_equal(out, c(100, 105, 95), tolerance = 1e-10)
+})
+
+test_that("trend_predict() with no explicit values uses the zero-valued class default", {
+  tr <- trend("location", "Constant")
+  out <- trend_predict(tr, c(1, 2, 3))
+  expect_equal(out, c(0, 0, 0))
+})
+
+test_that("trend_parameters() returns named values", {
+  tr <- trend("location", "Linear", values = c(10, 2))
+  params <- trend_parameters(tr)
+  expect_equal(unname(params), c(10, 2))
+  expect_length(params, 2L)
+})
+
+test_that("trend_predict() rejects a non-corehydro_trend object", {
+  expect_error(trend_predict("not a trend", 1), "corehydro_trend")
+})
+
+test_that("trend_predict() rejects fractional indices", {
+  tr <- trend("location", "Constant")
+  expect_error(trend_predict(tr, 1.5), "whole numbers")
+})
+
+test_that("trend_names() lists eleven types", {
+  names <- trend_names()
+  expect_length(names, 11L)
+  expect_true("GeneralLinear" %in% names)
+})

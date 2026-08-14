@@ -21,6 +21,15 @@ using Numerics.Mathematics.Optimization;
 using Numerics.Mathematics.SpecialFunctions;
 using Numerics.Sampling;
 using Numerics.Sampling.MCMC;
+// Task 7: the link and trend function layers. Numerics.Functions holds the seven standard
+// links (Identity/Log/Logit/Probit/ComplementaryLogLog/YeoJohnson/FisherZ, LinkFunctionFactory,
+// LinkFunctionType); the five link-specific BestFit types and the eleven trend types are already
+// compiled in via the `$(BF)/Models/**/*.cs` glob in OracleEmitter.csproj (Models/LinkFunctions/
+// and Models/TrendFunctions/ are both under Models/), so only their namespaces are new here.
+using Numerics.Functions;
+using RMC.BestFit.Models.LinkFunctions;
+using RMC.BestFit.Models.TrendFunctions;
+using RMC.BestFit.Models.TrendFunctions.Support;
 // Task T12: the real RMC.BestFit estimation path (subset-compiled -- see OracleEmitter.csproj).
 // `RMC.BestFit.Models` holds the DataFrame series/data types (ExactSeries/ExactData/etc.) AND
 // DataFrame + the UnivariateDistribution model; `RMC.BestFit.Estimation` holds MaximumLikelihood /
@@ -3726,6 +3735,10 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return SamplingDispatch(method, data, options, asrt);
         case "probability":
             return ProbabilityDispatch(method, data, options, asrt);
+        case "link":
+            return LinkDispatch(method, data, options, asrt);
+        case "trend":
+            return TrendDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -3803,6 +3816,116 @@ static double ProbabilityDispatch(string method, List<double[]> data, JsonElemen
         for (int j = 0; j < n; j++)
             corr[i, j] = flat[i * n + j];
     return Probability.JointProbability(p, indicators, corr, type);
+}
+
+// Mirrors numerics/support/toolbox/link.hpp's build_link against the real Numerics
+// LinkFunctionFactory and the real RMC.BestFit link classes -- every constructor argument order
+// and default matches the C++ port (verified against the same headers), so this is a faithful
+// C# mirror rather than an independent re-derivation.
+static double OptD(JsonElement? parameters, string key, double fallback)
+{
+    if (parameters is JsonElement p && p.ValueKind == JsonValueKind.Object && p.TryGetProperty(key, out var v))
+        return v.GetDouble();
+    return fallback;
+}
+
+static ILinkFunction BuildLink(JsonElement spec)
+{
+    string type = spec.GetProperty("type").GetString()!;
+    JsonElement? parameters = spec.TryGetProperty("parameters", out var p) && p.ValueKind == JsonValueKind.Object
+        ? p : (JsonElement?)null;
+    double Opt(string key, double dflt) => OptD(parameters, key, dflt);
+
+    switch (type)
+    {
+        case "Identity": return LinkFunctionFactory.Create(LinkFunctionType.Identity);
+        case "Log": return LinkFunctionFactory.Create(LinkFunctionType.Log);
+        case "Logit": return LinkFunctionFactory.Create(LinkFunctionType.Logit);
+        case "Probit": return LinkFunctionFactory.Create(LinkFunctionType.Probit);
+        case "ComplementaryLogLog": return LinkFunctionFactory.Create(LinkFunctionType.ComplementaryLogLog);
+        case "FisherZ": return LinkFunctionFactory.Create(LinkFunctionType.FisherZ);
+        case "YeoJohnson": return new YeoJohnsonLink(Opt("lambda", 1.0));
+        case "ASinH":
+            return new ASinHLink(Opt("gamma0", 0.0), Opt("scale", 1.0), Opt("epsilon", 0.0), Opt("delta", 1.0));
+        case "SES": return new SESLink(Opt("a", 1.0));
+        case "LogSES": return new LogSESLink(Opt("sigma0", 1.0), Opt("a", 1.0), Opt("lambda", 0.2));
+        case "LogASinH":
+            return new LogASinHLink(Opt("sigma0", 1.0), Opt("log_scale", 1.0), Opt("epsilon", 0.0), Opt("delta", 1.0));
+        case "Centered":
+            if (!spec.TryGetProperty("inner", out var innerSpec))
+                throw new Exception("link type 'Centered' needs an 'inner' link spec");
+            return new CenteredLink(BuildLink(innerSpec), Opt("mu0", 0.0), Opt("scale", 1.0));
+        default:
+            throw new Exception($"unknown link type: {type}");
+    }
+}
+
+static double LinkDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    ILinkFunction link = BuildLink(options.GetProperty("link"));
+    double[] x = data[0];
+    var values = method switch
+    {
+        "link" => x.Select(link.Link).ToArray(),
+        "inverse_link" => x.Select(link.InverseLink).ToArray(),
+        "d_link" => x.Select(link.DLink).ToArray(),
+        _ => throw new Exception($"unknown link method: {method}")
+    };
+    return ToolboxSelectFlat(asrt, values, values.Length, 1);
+}
+
+// Mirrors numerics/support/toolbox/trend.hpp's run_trend: builds the type's own class-defaulted
+// trend (RMC.BestFit's own SetTrendModel type -> instance switch, mirrored in
+// trend_model_factory.hpp -- GeneralLinear falls through to ConstantTrend, matching upstream),
+// then applies StartIndex/SetParameterValues from the spec exactly as build_spec_trend does.
+static ITrendModel BuildTrend(JsonElement spec)
+{
+    string type = spec.GetProperty("type").GetString()!;
+    ITrendModel t = type switch
+    {
+        "Constant" => new ConstantTrend(),
+        "Cubic" => new CubicTrend(),
+        "Exponential" => new ExponentialTrend(),
+        "Linear" => new LinearTrend(),
+        "Logistic" => new LogisticTrend(),
+        "Power" => new PowerTrend(),
+        "Quadratic" => new QuadraticTrend(),
+        "Reciprocal" => new ReciprocalTrend(),
+        "Sinusoidal" => new SinusoidalTrend(),
+        "StepFunction" => new StepFunction(),
+        "GeneralLinear" => new ConstantTrend(),
+        _ => throw new Exception($"unknown trend model type: {type}")
+    };
+    if (spec.TryGetProperty("start_index", out var si)) t.StartIndex = si.GetInt32();
+    if (spec.TryGetProperty("values", out var vs))
+        t.SetParameterValues(vs.EnumerateArray().Select(e => e.GetDouble()).ToList());
+    return t;
+}
+
+static double TrendDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    ITrendModel t = BuildTrend(options.GetProperty("trend"));
+    if (method == "predict")
+    {
+        double[] values = data[0].Select(i => (double)t.Predict((int)i)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+    if (method == "parameters")
+    {
+        double[] values = t.Parameters.Select(mp => mp.Value).ToArray();
+        string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
+            ? s.GetString()! : "value";
+        if (select == "length") return values.Length;
+        if (asrt.TryGetProperty("label", out var lbl))
+        {
+            string label = lbl.GetString()!;
+            for (int i = 0; i < t.Parameters.Count; i++)
+                if (t.Parameters[i].Name == label) return t.Parameters[i].Value;
+            throw new Exception($"trend result has no label '{label}'");
+        }
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+    throw new Exception($"unknown trend method: {method}");
 }
 
 // Selects a value the way the fixture runners' client-side "select" logic does, generalized

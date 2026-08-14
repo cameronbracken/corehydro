@@ -304,5 +304,98 @@ int main() {
         tb::run_toolbox("probability", "joint", {{0.5, 0.5}}, "{\"dependency\":\"correlation\"}");
     CHECK_TRUE(std::isnan(jp_no_indicators.values[0]));
 
+    // --- link group ---------------------------------------------------------------------------
+    // Round-trip identity (inverse_link(link(x)) == x to 1e-12) and a finite derivative, for
+    // every one of the twelve link types the toolbox exposes (the seven Numerics links, with
+    // YeoJohnson counted once, plus the five BestFit-specific links) at a value inside its own
+    // domain. The upstream-pinned known-value oracles (Test_LinkFunctions.cs and friends) live
+    // in fixtures/toolbox/link_functions.json and are exercised cross-language by the generic
+    // fixture runner, not re-pinned here.
+    struct LinkCase {
+        const char* name;
+        const char* options;
+        double x;
+    };
+    const LinkCase link_cases[] = {
+        {"Identity", "{\"link\":{\"type\":\"Identity\"}}", 5.0},
+        {"Log", "{\"link\":{\"type\":\"Log\"}}", 2.0},
+        {"Logit", "{\"link\":{\"type\":\"Logit\"}}", 0.3},
+        {"Probit", "{\"link\":{\"type\":\"Probit\"}}", 0.4},
+        {"ComplementaryLogLog", "{\"link\":{\"type\":\"ComplementaryLogLog\"}}", 0.4},
+        {"FisherZ", "{\"link\":{\"type\":\"FisherZ\"}}", 0.3},
+        {"YeoJohnson", "{\"link\":{\"type\":\"YeoJohnson\",\"parameters\":{\"lambda\":0.5}}}", 2.0},
+        {"ASinH", "{\"link\":{\"type\":\"ASinH\",\"parameters\":{\"gamma0\":0.5,\"scale\":0.3}}}", 1.0},
+        {"SES", "{\"link\":{\"type\":\"SES\",\"parameters\":{\"a\":1.0}}}", 1.0},
+        {"LogSES", "{\"link\":{\"type\":\"LogSES\",\"parameters\":{\"sigma0\":7.5}}}", 2.0},
+        {"LogASinH", "{\"link\":{\"type\":\"LogASinH\",\"parameters\":{\"sigma0\":10.0,\"log_scale\":0.25}}}", 15.0},
+        {"Centered",
+         "{\"link\":{\"type\":\"Centered\",\"parameters\":{\"mu0\":100.0,\"scale\":20.0},"
+         "\"inner\":{\"type\":\"Identity\"}}}",
+         120.0},
+    };
+    for (const LinkCase& lc : link_cases) {
+        auto eta = tb::run_toolbox("link", "link", {{lc.x}}, lc.options);
+        CHECK_EQ(eta.values.size(), std::size_t{1});
+        auto back = tb::run_toolbox("link", "inverse_link", {{eta.values[0]}}, lc.options);
+        CHECK_NEAR(back.values[0], lc.x, 1e-12);
+        auto d = tb::run_toolbox("link", "d_link", {{lc.x}}, lc.options);
+        CHECK_TRUE(std::isfinite(d.values[0]));
+    }
+
+    // A missing "link" spec names the group; an unknown link type names the type; an unknown
+    // method names the method.
+    CHECK_THROWS_MSG(tb::run_toolbox("link", "link", {{1.0}}, "{}"), "link");
+    CHECK_THROWS_MSG(tb::run_toolbox("link", "link", {{1.0}}, "{\"link\":{\"type\":\"Nope\"}}"),
+                     "Nope");
+    CHECK_THROWS_MSG(
+        tb::run_toolbox("link", "nope", {{1.0}}, "{\"link\":{\"type\":\"Identity\"}}"), "nope");
+
+    // Centered without an "inner" spec names what is missing.
+    CHECK_THROWS_MSG(tb::run_toolbox("link", "link", {{1.0}},
+                                     "{\"link\":{\"type\":\"Centered\",\"parameters\":"
+                                     "{\"mu0\":0.0}}}"),
+                     "inner");
+
+    // --- trend group ---------------------------------------------------------------------------
+    // Every method builds a fresh trend from its type's own class defaults (all parameter
+    // values 0, i.e. predict() is well-defined even with no explicit "values"), then applies
+    // "start_index"/"values" from the spec. Upstream-pinned oracles (the ten
+    // Test_*TrendTests.cs files) live in fixtures/toolbox/trend_functions.json.
+    auto lin_trend = tb::run_toolbox(
+        "trend", "predict", {{1950.0, 1960.0, 1940.0}},
+        "{\"trend\":{\"type\":\"Linear\",\"start_index\":1950,\"values\":[100.0,0.5]}}");
+    CHECK_EQ(lin_trend.values.size(), std::size_t{3});
+    CHECK_NEAR(lin_trend.values[0], 100.0, 1e-10);
+    CHECK_NEAR(lin_trend.values[1], 105.0, 1e-10);
+    CHECK_NEAR(lin_trend.values[2], 95.0, 1e-10);
+
+    // A bare Constant trend (no explicit values) predicts its class-default 0 everywhere.
+    auto def = tb::run_toolbox("trend", "predict", {{0.0, 100.0}}, "{\"trend\":{\"type\":\"Constant\"}}");
+    CHECK_NEAR(def.values[0], 0.0, 1e-12);
+    CHECK_NEAR(def.values[1], 0.0, 1e-12);
+
+    // parameters(): names and values both come back, matching the C# ModelParameter naming
+    // ("(α)" == "(α)", ConstantTrendTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel).
+    auto params = tb::run_toolbox("trend", "parameters", {}, "{\"trend\":{\"type\":\"Constant\"}}");
+    CHECK_EQ(params.values.size(), std::size_t{1});
+    CHECK_EQ(params.names.size(), std::size_t{1});
+    CHECK_EQ(params.names[0], std::string("(\xCE\xB1)"));
+    CHECK_NEAR(params.values[0], 0.0, 1e-12);
+
+    // GeneralLinear falls through to ConstantTrend, mirroring the C# SetTrendModel if-chain
+    // (see trend_model_factory.hpp): a single explicit value predicts as a constant.
+    auto gl = tb::run_toolbox("trend", "predict", {{0.0, 50.0}},
+                              "{\"trend\":{\"type\":\"GeneralLinear\",\"values\":[7.0]}}");
+    CHECK_NEAR(gl.values[0], 7.0, 1e-12);
+    CHECK_NEAR(gl.values[1], 7.0, 1e-12);
+
+    // A missing "trend" spec, an unknown trend type, and an unknown method all name the thing
+    // that's wrong.
+    CHECK_THROWS_MSG(tb::run_toolbox("trend", "predict", {{0.0}}, "{}"), "trend");
+    CHECK_THROWS_MSG(
+        tb::run_toolbox("trend", "predict", {{0.0}}, "{\"trend\":{\"type\":\"Nope\"}}"), "Nope");
+    CHECK_THROWS_MSG(
+        tb::run_toolbox("trend", "nope", {{0.0}}, "{\"trend\":{\"type\":\"Constant\"}}"), "nope");
+
     return chtest::summary("toolbox_runner");
 }

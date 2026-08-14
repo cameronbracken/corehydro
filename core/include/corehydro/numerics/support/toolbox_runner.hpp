@@ -34,6 +34,8 @@
 #include "corehydro/numerics/support/toolbox/regression.hpp"
 #include "corehydro/numerics/support/toolbox/sampling.hpp"
 #include "corehydro/numerics/support/toolbox/probability.hpp"
+#include "corehydro/numerics/support/toolbox/link.hpp"
+#include "corehydro/numerics/support/toolbox/trend.hpp"
 
 namespace corehydro::numerics::support {
 
@@ -50,6 +52,8 @@ inline ToolboxResult run_toolbox(const std::string& group, const std::string& me
     if (group == "regression") return detail::run_regression(method, data, options);
     if (group == "sampling") return detail::run_sampling(method, data, options);
     if (group == "probability") return detail::run_probability(method, data, options);
+    if (group == "link") return detail::run_link(method, data, options);
+    if (group == "trend") return detail::run_trend(method, data, options);
     throw std::runtime_error("unknown toolbox group: " + group);
 }
 

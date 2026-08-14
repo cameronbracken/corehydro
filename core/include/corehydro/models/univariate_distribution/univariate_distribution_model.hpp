@@ -161,18 +161,9 @@
 #include "corehydro/models/support/model_parameter.hpp"
 #include "corehydro/models/support/simulatable.hpp"
 #include "corehydro/models/support/validation_result.hpp"
-#include "corehydro/models/trend_functions/constant_trend.hpp"
-#include "corehydro/models/trend_functions/cubic_trend.hpp"
-#include "corehydro/models/trend_functions/exponential_trend.hpp"
-#include "corehydro/models/trend_functions/linear_trend.hpp"
-#include "corehydro/models/trend_functions/logistic_trend.hpp"
-#include "corehydro/models/trend_functions/power_trend.hpp"
-#include "corehydro/models/trend_functions/quadratic_trend.hpp"
-#include "corehydro/models/trend_functions/reciprocal_trend.hpp"
-#include "corehydro/models/trend_functions/sinusoidal_trend.hpp"
-#include "corehydro/models/trend_functions/step_function.hpp"
 #include "corehydro/models/trend_functions/support/i_trend_model.hpp"
 #include "corehydro/models/trend_functions/support/trend_model_type.hpp"
+#include "corehydro/models/trend_functions/trend_model_factory.hpp"
 #include "corehydro/models/univariate_distribution/base/univariate_distribution_model_base.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
@@ -1153,30 +1144,12 @@ class UnivariateDistributionModel : public UnivariateDistributionModelBase,
 
     // The C# SetTrendModel construction chain (line 817): default ConstantTrend, then the
     // type if-chain. GeneralLinear has no branch upstream and falls through to
-    // ConstantTrend, mirrored by the default case.
+    // ConstantTrend, mirrored by the default case. The type -> concrete-class switch itself
+    // is hoisted to trend_functions::make_trend_model (trend_model_factory.hpp), shared with
+    // models::spec::build_spec_trend (model_spec.hpp), so there is one such switch rather than
+    // two; this method is now a thin instance-method forwarder kept for its call sites below.
     static std::unique_ptr<ITrendModel> make_trend_model(TrendModelType type) {
-        switch (type) {
-            case TrendModelType::Cubic:
-                return std::make_unique<trend_functions::CubicTrend>();
-            case TrendModelType::Exponential:
-                return std::make_unique<trend_functions::ExponentialTrend>();
-            case TrendModelType::Linear:
-                return std::make_unique<trend_functions::LinearTrend>();
-            case TrendModelType::Logistic:
-                return std::make_unique<trend_functions::LogisticTrend>();
-            case TrendModelType::Power:
-                return std::make_unique<trend_functions::PowerTrend>();
-            case TrendModelType::Quadratic:
-                return std::make_unique<trend_functions::QuadraticTrend>();
-            case TrendModelType::Reciprocal:
-                return std::make_unique<trend_functions::ReciprocalTrend>();
-            case TrendModelType::Sinusoidal:
-                return std::make_unique<trend_functions::SinusoidalTrend>();
-            case TrendModelType::StepFunction:
-                return std::make_unique<trend_functions::StepFunction>();
-            default:
-                return std::make_unique<trend_functions::ConstantTrend>();
-        }
+        return trend_functions::make_trend_model(type);
     }
 
     // C# `NonstationaryPointwiseLogLikelihood` (line 1716) and

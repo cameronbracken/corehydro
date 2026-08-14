@@ -569,3 +569,176 @@ joint_probability <- function(p, dependency = c("independent", "positive", "nega
   }
   toolbox_run("probability", "joint", data, list(dependency = dependency))$values[[1]]
 }
+
+# The "link" and "trend" toolbox groups (Task 7). "link" mirrors the seven Numerics link
+# functions (numerics/functions/) plus the five BestFit-specific ones (models/link_functions/);
+# "trend" evaluates the eleven TrendModelType trend models (models/trend_functions/) that
+# trend(), the model-attachment spec builder in R/model.R, already names -- these verbs consume
+# that existing object rather than a second constructor.
+
+kLinkTypes <- c("Identity", "Log", "Logit", "Probit", "ComplementaryLogLog", "FisherZ",
+                "YeoJohnson", "ASinH", "SES", "LogSES", "LogASinH", "Centered")
+
+#' Construct a link function
+#'
+#' Mirrors the seven Numerics link functions and the five RMC.BestFit-specific ones (the
+#' BestFit factory's own YeoJohnson case routes to the Numerics class -- see
+#' `best_fit_link_function_factory.hpp` -- so there is one `"YeoJohnson"`, not two). Six of the
+#' twelve take construction parameters, passed through `...` by name.
+#'
+#' @param type one of `link_names()`.
+#' @param ... named construction parameters for the parameterized links: `lambda` for
+#'   `"YeoJohnson"`; `gamma0`, `scale`, `epsilon`, `delta` for `"ASinH"`; `a` for `"SES"`;
+#'   `sigma0`, `a`, `lambda` for `"LogSES"`; `sigma0`, `log_scale`, `epsilon`, `delta` for
+#'   `"LogASinH"`; `mu0`, `scale` for `"Centered"`.
+#' @param inner a `corehydro_link` wrapped by `"Centered"`, ignored for every other type.
+#' @return a `corehydro_link` spec list.
+#' @examples
+#' l <- link_function("Log")
+#' link(l, c(1, 10, 100))
+#' link_inverse(l, c(0, 1, 2))
+#' @export
+link_function <- function(type, ..., inner = NULL) {
+  if (!type %in% kLinkTypes) {
+    stop(sprintf("unknown link type \"%s\". Available: %s", type,
+                 paste(kLinkTypes, collapse = ", ")), call. = FALSE)
+  }
+  params <- list(...)
+  if (identical(type, "Centered") && is.null(inner)) {
+    stop("link type \"Centered\" needs an `inner` link", call. = FALSE)
+  }
+  if (!identical(type, "Centered") && !is.null(inner)) {
+    stop(sprintf("`inner` is only used for type \"Centered\"; got type \"%s\"", type),
+         call. = FALSE)
+  }
+  if (!is.null(inner) && !inherits(inner, "corehydro_link")) {
+    stop("`inner` must be a corehydro_link object; create one with link_function()", call. = FALSE)
+  }
+  structure(list(type = type, parameters = if (length(params) == 0L) NULL else params,
+                 inner = inner), class = "corehydro_link")
+}
+
+#' Evaluate a link function
+#'
+#' @param l a `corehydro_link` from [link_function()].
+#' @param x,eta numeric vectors on the data and linear-predictor scales.
+#' @return a numeric vector the same length as the input.
+#' @examples
+#' l <- link_function("Logit")
+#' link(l, c(0.1, 0.5, 0.9))
+#' @export
+link <- function(l, x) link_eval(l, "link", x)
+
+#' @rdname link
+#' @export
+link_inverse <- function(l, eta) link_eval(l, "inverse_link", eta)
+
+#' @rdname link
+#' @export
+link_derivative <- function(l, x) link_eval(l, "d_link", x)
+
+#' Available link function types
+#'
+#' @return a character vector of the twelve `type` names [link_function()] accepts.
+#' @examples
+#' link_names()
+#' @export
+link_names <- function() kLinkTypes
+
+link_eval <- function(l, method, v) {
+  if (!inherits(l, "corehydro_link")) {
+    stop("`l` must be a corehydro_link object; create one with link_function()", call. = FALSE)
+  }
+  if (!is.numeric(v) || length(v) == 0L) {
+    stop("input must be a non-empty numeric vector", call. = FALSE)
+  }
+  toolbox_run("link", method, list(v), list(link = unclass_link(l)))$values
+}
+
+# Internal: strip the class so to_spec_json() emits a plain nested object.
+unclass_link <- function(l) {
+  spec <- list(type = l$type, parameters = l$parameters)
+  if (!is.null(l$inner)) spec$inner <- unclass_link(l$inner)
+  spec
+}
+
+#' @export
+print.corehydro_link <- function(x, ...) {
+  cat(sprintf("<corehydro_link> %s\n", x$type))
+  invisible(x)
+}
+
+# Internal: user-facing trend indices are 1-based, matching trend()'s own `start_index` doc
+# (which is already 0-based and passed straight through -- see trend()); the time index this
+# converts is instead the point at which the trend is EVALUATED, so it gets the same 1-based ->
+# 0-based treatment mv_indices() gives dimension indices in R/mvdist.R, minus mv_indices's
+# upper-bound and no-duplicate checks (a trend's time index is not bounded to a fixed dimension
+# count and repeating one to predict the same point twice is not an error).
+trend_index <- function(idx, what = "index") {
+  if (!is.numeric(idx) || length(idx) == 0L || anyNA(idx)) {
+    stop(sprintf("`%s` must be a non-empty numeric vector", what), call. = FALSE)
+  }
+  if (any(idx != trunc(idx))) {
+    stop(sprintf("`%s` must be whole numbers; got %s", what,
+                 paste(idx[idx != trunc(idx)], collapse = ", ")), call. = FALSE)
+  }
+  as.integer(idx) - 1L
+}
+
+#' Evaluate a trend model
+#'
+#' Builds the trend model named by `tr` (a [trend()] object) from its own class defaults, then
+#' evaluates it at `index`. `tr`'s `parameter` field (which distribution parameter the trend
+#' attaches to) is not used here -- this verb evaluates the trend model on its own, the same way
+#' `set_trend_model()`'s type dispatch does before it further data-drives the parameter values
+#' from a live model's distribution and data (this verb has no such model to consult, so a
+#' `tr` with no explicit `values` predicts from the trend's own zero-valued class defaults).
+#'
+#' @param tr a `corehydro_trend` object from [trend()].
+#' @param index a 1-based numeric vector of time indices to evaluate at.
+#' @return a numeric vector, the same length as `index`.
+#' @examples
+#' tr <- trend("location", "Linear", start_index = 0, values = c(10, 2))
+#' trend_predict(tr, 1:5)
+#' @export
+trend_predict <- function(tr, index) {
+  if (!inherits(tr, "corehydro_trend")) {
+    stop("`tr` must be a corehydro_trend object; create one with trend()", call. = FALSE)
+  }
+  idx <- trend_index(index, "index")
+  toolbox_run("trend", "predict", list(idx), list(trend = unclass_trend(tr)))$values
+}
+
+#' @rdname trend_predict
+#'
+#' @return `trend_parameters()` returns a named numeric vector, the trend's own model-parameter
+#'   values (see [model_parameter()]) at their class defaults, adjusted by any explicit `values`
+#'   on `tr`.
+#' @examples
+#' trend_parameters(trend("location", "Linear", values = c(10, 2)))
+#' @export
+trend_parameters <- function(tr) {
+  if (!inherits(tr, "corehydro_trend")) {
+    stop("`tr` must be a corehydro_trend object; create one with trend()", call. = FALSE)
+  }
+  r <- toolbox_run("trend", "parameters", list(), list(trend = unclass_trend(tr)))
+  stats::setNames(r$values, r$names)
+}
+
+#' Available trend model types
+#'
+#' @return a character vector of the eleven `type` names [trend()] accepts.
+#' @examples
+#' trend_names()
+#' @export
+trend_names <- function() {
+  c("Constant", "Cubic", "Exponential", "Linear", "Logistic", "Power",
+    "Quadratic", "Reciprocal", "Sinusoidal", "StepFunction", "GeneralLinear")
+}
+
+# Internal: strip the class and drop the model-attachment-only `parameter` field so
+# to_spec_json() emits the plain {"type", "start_index"?, "values"?} object build_spec_trend()
+# wants (numerics/support/toolbox/trend.hpp).
+unclass_trend <- function(tr) {
+  list(type = tr$type, start_index = tr$start_index, values = tr$values)
+}

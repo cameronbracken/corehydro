@@ -15,6 +15,11 @@ from corehydropy import (
     interpolate_2d,
     joint_probability,
     l_moments,
+    link,
+    link_derivative,
+    link_function,
+    link_inverse,
+    link_names,
     linear_regression,
     percentile,
     product_moments,
@@ -24,7 +29,11 @@ from corehydropy import (
     sobol_sequence,
     stratify,
     summary_statistics,
+    trend_names,
+    trend_parameters,
+    trend_predict,
 )
+from corehydropy.models import trend
 
 
 def test_chunked_running_statistics_matches_a_single_call_over_the_concatenated_data():
@@ -385,3 +394,123 @@ def test_joint_probability_rejects_correlation_dependency_missing_both_arguments
 def test_joint_probability_rejects_correlation_dependency_missing_just_the_matrix():
     with pytest.raises(ValueError, match="correlation"):
         joint_probability([0.5, 0.5], dependency="correlation", indicators=[1, 1])
+
+
+# The "link" and "trend" toolbox groups (Task 7). The oracle-pinned values (from
+# Test_LinkFunctions.cs and friends, and the ten Test_*TrendTests.cs files) are validated
+# cross-language by fixtures/toolbox/{link_functions,trend_functions}.json; these tests exercise
+# the Python-facing API (construction, round-trips, argument checks) instead of re-pinning
+# literals.
+
+
+def test_link_function_round_trips_for_every_type():
+    cases = [
+        ("Identity", {}),
+        ("Log", {}),
+        ("Logit", {}),
+        ("Probit", {}),
+        ("ComplementaryLogLog", {}),
+        ("FisherZ", {}),
+        ("YeoJohnson", {"lambda": 0.5}),
+        ("ASinH", {"gamma0": 0.5, "scale": 0.3}),
+        ("SES", {"a": 1.0}),
+        ("LogSES", {"sigma0": 7.5}),
+        ("LogASinH", {"sigma0": 10.0, "log_scale": 0.25}),
+    ]
+    domain = {
+        "Log": 2.0, "Logit": 0.3, "Probit": 0.4, "ComplementaryLogLog": 0.4,
+        "FisherZ": 0.3, "LogSES": 2.0, "LogASinH": 15.0,
+    }
+    for type_, params in cases:
+        l = link_function(type_, **params)
+        x = domain.get(type_, 1.0)
+        eta = link(l, x)
+        back = link_inverse(l, eta)
+        assert back[0] == pytest.approx(x, abs=1e-10)
+        d = link_derivative(l, x)
+        assert np.isfinite(d[0])
+
+
+def test_link_function_centered_round_trips_with_a_non_identity_inner():
+    inner = link_function("ASinH", gamma0=0.0, scale=1.0)
+    l = link_function("Centered", mu0=100.0, scale=20.0, inner=inner)
+    eta = link(l, 120.0)
+    back = link_inverse(l, eta)
+    assert back[0] == pytest.approx(120.0, abs=1e-8)
+
+
+def test_link_function_rejects_an_unknown_type():
+    with pytest.raises(ValueError, match="Nope"):
+        link_function("Nope")
+
+
+def test_link_function_centered_requires_inner():
+    with pytest.raises(ValueError, match="inner"):
+        link_function("Centered", mu0=0.0)
+
+
+def test_link_function_rejects_inner_on_a_non_centered_type():
+    with pytest.raises(ValueError, match="inner"):
+        link_function("Log", inner=link_function("Identity"))
+
+
+def test_link_function_inner_must_be_a_link():
+    with pytest.raises(TypeError, match="Link"):
+        link_function("Centered", mu0=0.0, inner="not a link")
+
+
+def test_link_rejects_a_non_link_object():
+    with pytest.raises(TypeError, match="Link"):
+        link("not a link", 1.0)
+
+
+def test_link_rejects_empty_input():
+    l = link_function("Identity")
+    with pytest.raises(ValueError, match="non-empty"):
+        link(l, [])
+
+
+def test_link_names_lists_twelve_types():
+    names = link_names()
+    assert len(names) == 12
+    assert "Centered" in names and "YeoJohnson" in names
+
+
+def test_link_repr():
+    assert repr(link_function("Log")) == "<Link Log>"
+
+
+def test_trend_predict_matches_the_transcribed_linear_trend_oracle():
+    tr = trend("location", "Linear", start_index=1950, values=[100.0, 0.5])
+    out = trend_predict(tr, [1951, 1961, 1941])
+    np.testing.assert_allclose(out, [100.0, 105.0, 95.0], atol=1e-10)
+
+
+def test_trend_predict_with_no_explicit_values_uses_the_zero_valued_class_default():
+    tr = trend("location", "Constant")
+    out = trend_predict(tr, [1, 2, 3])
+    np.testing.assert_allclose(out, [0.0, 0.0, 0.0])
+
+
+def test_trend_parameters_returns_named_values():
+    tr = trend("location", "Linear", values=[10.0, 2.0])
+    params = trend_parameters(tr)
+    assert list(params.values()) == pytest.approx([10.0, 2.0])
+    assert len(params) == 2
+
+
+def test_trend_predict_rejects_a_non_trend_object():
+    with pytest.raises(TypeError, match="Trend"):
+        trend_predict("not a trend", [1])
+
+
+def test_trend_predict_rejects_fractional_indices():
+    tr = trend("location", "Constant")
+    with pytest.raises(ValueError, match="whole numbers"):
+        trend_predict(tr, [1.5])
+
+
+def test_trend_names_lists_eleven_types():
+    names = trend_names()
+    assert len(names) == 11
+    assert "GeneralLinear" in names
