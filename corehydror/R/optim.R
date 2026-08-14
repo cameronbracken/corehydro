@@ -27,10 +27,15 @@
 #'   `max_function_evaluations`, `report_failure`, and `compute_hessian` apply only to `"de"`,
 #'   `"bfgs"`, `"powell"`, and `"mlsl"` (the four methods that derive from the ported `Optimizer`
 #'   base); `"nelder_mead"` and `"brent"` accept only `max_iterations`, `absolute_tolerance`, and
-#'   `relative_tolerance`, and never compute a Hessian.
+#'   `relative_tolerance`, and never compute a Hessian. `compute_hessian` DEFAULTS TO `TRUE` for
+#'   those four methods (matching the ported C# `Optimizer` base), so a successful `"de"`/`"bfgs"`/
+#'   `"powell"`/`"mlsl"` run returns a Hessian, computed by extra objective evaluations, unless the
+#'   caller passes `control = list(compute_hessian = FALSE)` to skip it.
 #' @return a `corehydro_optim` list with `parameters`, `value` (the objective's own value at the
 #'   optimum, in its own sign convention -- not negated for `optim_maximize()`), `iterations`,
-#'   `function_evaluations`, `status`, and `hessian` when requested and supported.
+#'   `function_evaluations`, `status`, and `hessian` (populated by default for `"de"`/`"bfgs"`/
+#'   `"powell"`/`"mlsl"`; always `NULL` for `"nelder_mead"`/`"brent"`, or when `compute_hessian`
+#'   was turned off).
 #' @examples
 #' rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
 #' fit <- optim_minimize(rosenbrock, lower = c(-5, -5), upper = c(5, 5), seed = 42)
@@ -110,6 +115,18 @@ optim_run <- function(objective, lower, upper, initial, method, seed, control, m
                    paste(base_only, collapse = ", "), paste(kOptimBaseMethods, collapse = ", "),
                    method), call. = FALSE)
     }
+  }
+  # `population_size` is only ever applied in the "de" arm of the C++ runner (every other method
+  # silently ignores it); reject it here rather than let it look like it did something.
+  if (method != "de" && "population_size" %in% names(control)) {
+    stop(sprintf("control name \"population_size\" only applies to method \"de\"; got method \"%s\"",
+                 method), call. = FALSE)
+  }
+  # `initial` is only read by the "bfgs"/"powell"/"mlsl"/"nelder_mead" arms; "de" and "brent"
+  # never look at it, so a caller-supplied `initial` for either would silently do nothing.
+  if (!is.null(initial) && !method %in% kOptimNeedsInitial) {
+    stop(sprintf("`initial` only applies to method(s) %s; got method \"%s\"",
+                 paste(kOptimNeedsInitial, collapse = ", "), method), call. = FALSE)
   }
   spec <- to_spec_json(list(
     method = method, maximize = maximize,

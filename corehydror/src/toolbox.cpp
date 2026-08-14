@@ -41,18 +41,20 @@ list ch_toolbox_run_(std::string group, std::string method, list data, std::stri
 }
 
 // Runs one of the six ported optimizers (R/optim.R) against an R objective function. `objective`
-// is called with a single numeric vector argument and must return a single number -- a
-// non-numeric or wrong-length return raises inside the `doubles v(out)` conversion below, which
-// cpp11 turns into an R error that travels back out through optimizer_runner.hpp's guard and is
-// rethrown (see that header's GuardedObjective for why an R error crossing this boundary cannot
-// be allowed to just propagate through Optimizer::minimize()'s own catch-all unguarded).
+// is called with a single numeric vector argument and must return a single number -- `as_doubles`
+// below accepts either a double or an integer return (an all-integer objective like
+// `function(p) sum(p > 0)` is common); a non-numeric or wrong-length return raises inside that
+// conversion, which cpp11 turns into an R error that travels back out through
+// optimizer_runner.hpp's guard and is rethrown (see that header's GuardedObjective for why an R
+// error crossing this boundary cannot be allowed to just propagate through
+// Optimizer::minimize()'s own catch-all unguarded).
 [[cpp11::register]]
 list ch_optim_run_(std::string spec_json, function objective) {
     tb::OptimResult r = tb::run_optimizer(spec_json, [&](const std::vector<double>& p) -> double {
         writable::doubles par(static_cast<R_xlen_t>(p.size()));
         for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
         sexp out = objective(par);
-        doubles v(out);
+        doubles v = as_doubles(out);
         if (v.size() != 1)
             throw std::runtime_error(
                 "the objective must return a single number; got a value of length " +

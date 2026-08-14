@@ -104,7 +104,9 @@ class GuardedObjective {
     // Real (non-short-circuited) calls into the host objective. The only function-evaluation
     // count available for NelderMead/BrentSearch (see the file header); redundant with, but not
     // necessarily identical to, the four Optimizer-base classes' own function_evaluations()
-    // (which also counts internal Hessian-differentiation probes this counter does not see).
+    // (incremented only inside Optimizer::evaluate(), so -- like this counter -- it does NOT
+    // include the post-success Hessian-differentiation probes, which call the objective function
+    // directly and bypass evaluate() entirely).
     int function_evaluations() const { return function_evaluations_; }
 
    private:
@@ -261,8 +263,13 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
             if (control.contains("population_size"))
                 de.population_size = control.at("population_size").as_int();
         }
-        if (maximize) de.maximize(); else de.minimize();
-        if (guarded.aborted()) guarded.rethrow_if_aborted();
+        try {
+            if (maximize) de.maximize(); else de.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
         detail::fill_optimizer_result(result, de, maximize);
     } else if (method == "bfgs") {
         int D = static_cast<int>(initial.size());
@@ -271,8 +278,13 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
             detail::apply_common_controls(bfgs, control);
             detail::apply_optimizer_controls(bfgs, control);
         }
-        if (maximize) bfgs.maximize(); else bfgs.minimize();
-        if (guarded.aborted()) guarded.rethrow_if_aborted();
+        try {
+            if (maximize) bfgs.maximize(); else bfgs.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
         detail::fill_optimizer_result(result, bfgs, maximize);
     } else if (method == "powell") {
         int D = static_cast<int>(initial.size());
@@ -281,8 +293,13 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
             detail::apply_common_controls(powell, control);
             detail::apply_optimizer_controls(powell, control);
         }
-        if (maximize) powell.maximize(); else powell.minimize();
-        if (guarded.aborted()) guarded.rethrow_if_aborted();
+        try {
+            if (maximize) powell.maximize(); else powell.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
         detail::fill_optimizer_result(result, powell, maximize);
     } else if (method == "mlsl") {
         int D = static_cast<int>(initial.size());
@@ -292,8 +309,13 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
             detail::apply_common_controls(mlsl, control);
             detail::apply_optimizer_controls(mlsl, control);
         }
-        if (maximize) mlsl.maximize(); else mlsl.minimize();
-        if (guarded.aborted()) guarded.rethrow_if_aborted();
+        try {
+            if (maximize) mlsl.maximize(); else mlsl.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
         detail::fill_optimizer_result(result, mlsl, maximize);
     } else if (method == "nelder_mead") {
         int D = static_cast<int>(initial.size());
@@ -302,8 +324,13 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
                 "optimizer 'nelder_mead' needs 'initial', 'lower' and 'upper' of the same length");
         opt::NelderMead nm(adapted, D, initial, lower, upper);
         if (has_control) detail::apply_common_controls(nm, control);
-        if (maximize) nm.maximize(); else nm.minimize();
-        if (guarded.aborted()) guarded.rethrow_if_aborted();
+        try {
+            if (maximize) nm.maximize(); else nm.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
         // NelderMead exposes no fitness/iterations/status accessor at all (see the file header) --
         // it is deliberately left as the standalone Phase 0 class, not extended with a
         // Hessian/status surface no current caller needs. `value` is recovered with one extra,
@@ -330,8 +357,13 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
         opt::BrentSearch brent(
             [&guarded](double x) { return guarded(std::vector<double>{x}); }, lower[0], upper[0]);
         if (has_control) detail::apply_common_controls(brent, control);
-        if (maximize) brent.maximize(); else brent.minimize();
-        if (guarded.aborted()) guarded.rethrow_if_aborted();
+        try {
+            if (maximize) brent.maximize(); else brent.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
         // BrentSearch exposes best_parameter() + best_fitness() (added in a prior task for
         // Powell's LineMinimization) but no iterations()/status (see the file header) -- iterations
         // left at OptimResult's default (0), status always "Success", matching NelderMead's

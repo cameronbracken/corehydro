@@ -53,9 +53,11 @@ class OptimResult:
     function_evaluations : int
     status : str
     hessian : numpy.ndarray or None
-        The numerically differentiated Hessian at the optimum, when requested (``compute_hessian``
-        in ``control``) and supported (``"de"``, ``"bfgs"``, ``"powell"``, ``"mlsl"`` only --
-        ``"nelder_mead"`` and ``"brent"`` never compute one).
+        The numerically differentiated Hessian at the optimum. Computed BY DEFAULT for
+        ``"de"``, ``"bfgs"``, ``"powell"``, and ``"mlsl"`` (matching the ported C# ``Optimizer``
+        base), by extra objective evaluations -- pass ``control={"compute_hessian": False}`` to
+        skip it and those evaluations. Always ``None`` for ``"nelder_mead"`` and ``"brent"``,
+        which never compute one.
     """
 
     __slots__ = ("parameters", "value", "iterations", "function_evaluations", "status", "hessian")
@@ -117,6 +119,18 @@ def _optim_run(objective, lower, upper, initial, method: str, seed, control: dic
                 f"control name(s) {sorted(base_only)} only apply to method(s) "
                 f"{sorted(_BASE_METHODS)}; got method {method!r}"
             )
+    # `population_size` is only ever applied in the "de" arm of the C++ runner (every other
+    # method silently ignores it); reject it here rather than let it look like it did something.
+    if method != "de" and "population_size" in control:
+        raise ValueError(
+            f"control name 'population_size' only applies to method 'de'; got method {method!r}"
+        )
+    # `initial` is only read by the "bfgs"/"powell"/"mlsl"/"nelder_mead" arms; "de" and "brent"
+    # never look at it, so a caller-supplied `initial` for either would silently do nothing.
+    if initial is not None and method not in _NEEDS_INITIAL:
+        raise ValueError(
+            f"`initial` only applies to method(s) {sorted(_NEEDS_INITIAL)}; got method {method!r}"
+        )
 
     spec: dict = {"method": method, "maximize": bool(maximize)}
     spec["lower"] = lower_a.tolist()
@@ -181,7 +195,10 @@ def optim_minimize(objective, lower=None, upper=None, initial=None, method: str 
         only to ``"de"``, ``"bfgs"``, ``"powell"``, and ``"mlsl"`` (the four methods that derive
         from the ported ``Optimizer`` base); ``"nelder_mead"`` and ``"brent"`` accept only
         ``max_iterations``, ``absolute_tolerance``, and ``relative_tolerance``, and never compute
-        a Hessian.
+        a Hessian. ``compute_hessian`` DEFAULTS TO ``True`` for those four methods (matching the
+        ported C# ``Optimizer`` base), so a successful ``"de"``/``"bfgs"``/``"powell"``/``"mlsl"``
+        run returns a Hessian, computed by extra objective evaluations, unless
+        ``control={"compute_hessian": False}`` turns it off.
 
     Returns
     -------

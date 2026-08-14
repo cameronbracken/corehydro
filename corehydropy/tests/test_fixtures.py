@@ -1490,7 +1490,10 @@ _ROUTED_SPECIAL_FUNCTION_TARGETS = (
 # description. fn_id 0 = "quadratic" (sum_i (x_i - i)^2, 0-based i), 1 = "normal_loglik" (Normal
 # log-likelihood of {9,10,11,12,13} at mean=p[0], sd=p[1]) -- NATIVE Python closures reproducing
 # the same two P3.3 numerical_derivative fixture functions, so this case exercises the real Python
-# callback path. `value` un-applies OptimResult's raw-sign convention back to the C#
+# callback path. The log-density is written out explicitly (not scipy.stats.norm.logpdf) so a
+# chaotic DE search sees the SAME density implementation in both languages -- corehydror's
+# test-fixtures.R mirrors this exact formula rather than calling dnorm(log = TRUE). `value`
+# un-applies OptimResult's raw-sign convention back to the C#
 # BestParameterSet.Fitness this fixture's literals were curated against (see
 # differential_evolution_best_value()'s own comment for why).
 def _run_special_function_differential_evolution_case(args_raw):

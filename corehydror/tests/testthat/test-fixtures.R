@@ -271,7 +271,9 @@ run_special_function_differential_evolution_case <- function(args_raw) {
   objective <- if (fn_id == 0) {
     function(p) sum((p - (seq_along(p) - 1))^2)
   } else {
-    function(p) sum(dnorm(sample, mean = p[1], sd = p[2], log = TRUE))
+    # Explicit Normal log-density formula (not dnorm(log = TRUE)) so a chaotic DE search sees the
+    # SAME density implementation R and Python -- see corehydropy's test_fixtures.py mirror.
+    function(p) sum(-0.5 * ((sample - p[1]) / p[2])^2 - log(sqrt(2 * pi) * p[2]))
   }
   spec <- ns$to_spec_json(list(method = "de", lower = ns$spec_array(lower),
                                upper = ns$spec_array(upper), maximize = (direction == 1)))
