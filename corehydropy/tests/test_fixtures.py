@@ -1758,7 +1758,7 @@ def _run_toolbox_cross_language_case(case):
 def _load_cases():
     out = []
     for fx in sorted(_fixtures_dir().rglob("*.json")):
-        spec = json.loads(fx.read_text())
+        spec = json.loads(fx.read_text(encoding="utf-8"))
         kind = spec.get("kind")
         if kind == "special_function":
             # Only the targets in _ROUTED_SPECIAL_FUNCTION_TARGETS are exposed to Python (see

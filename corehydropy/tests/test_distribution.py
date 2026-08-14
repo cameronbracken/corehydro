@@ -62,7 +62,7 @@ def test_distribution_names():
 
 def test_public_methods_reproduce_fixture_oracles():
     spec = json.loads(
-        (_fixtures_dir() / "distributions" / "univariate" / "gumbel.json").read_text()
+        (_fixtures_dir() / "distributions" / "univariate" / "gumbel.json").read_text(encoding="utf-8")
     )
     for case in spec["cases"]:
         if "params" not in case["construct"]:

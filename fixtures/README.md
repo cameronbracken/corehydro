@@ -19,6 +19,13 @@ Each package vendors this directory as a subtree symlink
 is one copy in git. Builds dereference the symlink into the shipped tarball/sdist
 (`R CMD build` for R; `tools/materialize_core.py` for Python).
 
+**These files are UTF-8 and some of them need to be.** A few assertions select a value by
+`label`, and a label can be a ported C# parameter name that carries a subscript or a Greek
+letter (`trend_functions.json` asserts against `(mu-subscript-1)` as the real
+`SubscriptFormatter` output). Any reader must therefore decode UTF-8 explicitly rather than
+falling back to the platform codec: Python's `read_text()` defaults to cp1252 on Windows and
+raises `UnicodeDecodeError` on exactly those bytes, which is how this was found (CI, phase 4).
+
 ## Schema
 
 ### `univariate_distribution`
