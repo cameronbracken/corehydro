@@ -23,6 +23,24 @@ test_that("gradient and hessian differentiate a user-written R function", {
   expect_equal(hessian(quad, c(1, 2)), matrix(c(2, 1, 1, 4), 2, 2), tolerance = 1e-3)
 })
 
+test_that("quadrature integrates a user-written R function", {
+  # Closed forms only: the C#-pinned oracles live in fixtures/callback/math.json.
+  q <- quadrature(function(x) x^2, lower = 0, upper = 3)
+  expect_equal(as.numeric(q), 9, tolerance = 1e-10)
+  expect_equal(attr(q, "status"), "Success")
+  expect_gt(attr(q, "function_evaluations"), 0L)
+  expect_equal(as.numeric(quadrature(sin, lower = 0, upper = pi)), 2, tolerance = 1e-8)
+  expect_equal(as.numeric(quadrature(exp, lower = 0, upper = 1)), exp(1) - 1, tolerance = 1e-8)
+})
+
+test_that("quadrature reports the evaluation cap in its status instead of raising", {
+  # 1 / sqrt(x) is unbounded at 0, so the rule never converges and the cap stops it.
+  q <- quadrature(function(x) if (x <= 0) 0 else 1 / sqrt(x),
+                  lower = 0, upper = 1, max_function_evaluations = 1000L)
+  expect_equal(attr(q, "status"), "MaximumFunctionEvaluationsReached")
+  expect_gte(attr(q, "function_evaluations"), 1000L)
+})
+
 test_that("an error raised inside the callback reaches the caller unchanged", {
   # Every method, not just one: the guard's sentinel is a value each ported routine can itself
   # reject, so an unwrapped drive site would report the internal error instead of this one.
@@ -31,18 +49,29 @@ test_that("an error raised inside the callback reaches the caller unchanged", {
   expect_error(derivative(boom, 2), "my own error")
   expect_error(gradient(boom, c(1, 1)), "my own error")
   expect_error(hessian(boom, c(1, 1)), "my own error")
+  # Quadrature is the arm where the TRAILING rethrow carries the weight: the ported integrator
+  # neither throws nor converges on the guard's NaN sentinel, it just runs to the evaluation cap
+  # and reports a NaN result, which without the rethrow would look like an answer.
+  expect_error(quadrature(boom, lower = 0, upper = 3, max_function_evaluations = 5000L),
+               "my own error")
 })
 
 test_that("a callback returning a non-scalar is rejected", {
   expect_error(root_find(function(x) c(1, 2), lower = 0, upper = 2), "single number")
   expect_error(derivative(function(x) c(1, 2), 2), "single number")
   expect_error(gradient(function(p) c(1, 2), c(1, 1)), "single number")
+  expect_error(quadrature(function(x) c(1, 2), lower = 0, upper = 1), "single number")
 })
 
 test_that("the R-side argument checks fire before the core is reached", {
   expect_error(root_find("not a function", lower = 0, upper = 2))
   expect_error(root_find(function(x) x, lower = c(0, 1), upper = 2))
   expect_error(gradient(function(p) sum(p), "not numeric"))
+  expect_error(quadrature(function(x) x, lower = 1, upper = 0), "must be below")
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, absolute_tolerance = 0),
+               "between 1e-15 and 1")
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, relative_tolerance = 2),
+               "between 1e-15 and 1")
 })
 
 test_that("a non-finite point is rejected by name, the same way Python rejects it", {

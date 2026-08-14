@@ -1682,7 +1682,8 @@ static void run_optimizer_kind(const json& spec) {
 // write for the same names, so every case exercises the real host-language callback path
 // callback_runner.hpp exists to protect. NOTE these names are NOT the optimizer catalog's above:
 // `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), unrelated to the optimizer
-// catalog's `FXYZ`; the `Diff_`/`Root_` prefixes exist so the two catalogs can never be confused.
+// catalog's `FXYZ`; the `Diff_`/`Root_`/`Quad_` prefixes exist so the catalogs can never be
+// confused (`Diff_FX` and `Quad_FX3` are both x^3, from two different upstream test files).
 static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs) {
     if (name == "Root_Quadratic") {
         cbs.scalar = [](double x) { return x * x - 2.0; };
@@ -1702,6 +1703,16 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
         cbs.vector_scalar = [](const std::vector<double>& p) {
             return std::pow(p[0], 3.0) - 2.0 * p[0] * p[1] - std::pow(p[1], 6.0);
         };
+    } else if (name == "Quad_FX3") {
+        cbs.scalar = [](double x) { return std::pow(x, 3.0); };
+    } else if (name == "Quad_Cosine") {
+        cbs.scalar = [](double x) { return std::cos(x); };
+    } else if (name == "Quad_Sine") {
+        cbs.scalar = [](double x) { return std::sin(x); };
+    } else if (name == "Quad_FXX") {
+        cbs.scalar = [](double x) { return 0.5 + 24.0 * x + 3.0 * x * x; };
+    } else if (name == "Quad_FXXX") {
+        cbs.scalar = [](double x) { return 0.5 + 24.0 * x + 3.0 * x * x + 8.0 * x * x * x; };
     } else {
         throw std::runtime_error("unknown callback fixture callback: " + name);
     }

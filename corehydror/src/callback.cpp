@@ -61,12 +61,12 @@ list pack(const sup::CallbackResult& r) {
 }  // namespace
 
 // Runs one method of the callback runner's "math" group against an R function. The scalar methods
-// (root_find, derivative) call `f` with one number; the vector methods (gradient, hessian) call it
-// with the whole point. Either way `f` must return a single number.
+// (root_find, derivative, quadrature) call `f` with one number; the vector methods (gradient,
+// hessian) call it with the whole point. Either way `f` must return a single number.
 [[cpp11::register]]
 list ch_callback_math_(std::string method, std::string options_json, function f) {
     sup::CallbackSet cbs;
-    if (method == "root_find" || method == "derivative")
+    if (method == "root_find" || method == "derivative" || method == "quadrature")
         cbs.scalar = as_scalar_fn(f);
     else
         cbs.vector_scalar = as_vector_scalar_fn(f);

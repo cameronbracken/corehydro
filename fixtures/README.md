@@ -1744,8 +1744,10 @@ follow), a `method`, a `callback` (a NAMED built-in each of the four runners wri
 native closure: a C++ lambda, an R closure, a Python lambda, a C# delegate), and an `options`
 object passed through verbatim as the runner's options JSON. The catalog names are documented in
 each fixture's own `callbacks` block; they are deliberately NOT the `optimizer` kind's names
-(`Diff_FXYZ` is `Test_Differentiation.FXYZ`, unrelated to the optimizer catalog's `FXYZ`), so the
-two can never be confused. Processed by all four runners; `--dump` is supported.
+(`Diff_FXYZ` is `Test_Differentiation.FXYZ`, unrelated to the optimizer catalog's `FXYZ`), and the
+`Root_`/`Diff_`/`Quad_` prefixes keep two upstream test files' identically named functions apart
+(`Diff_FX` and `Quad_FX3` are both `x^3`), so nothing can be confused. Processed by all four
+runners; `--dump` is supported.
 
 ```jsonc
 {
@@ -1773,6 +1775,12 @@ three shapes: empty when the group reports no shape (a scalar result, or a plain
 length is the number of values -- `math/root_find`, `math/derivative`), `{n}` for an explicitly
 shaped vector (`math/gradient`), and `{rows, cols}` for a row-major matrix (`math/hessian`). A
 `"dim"` assertion on a method whose `dims` is empty is therefore an error, not a zero.
+
+A `"status"` assertion is only as strong as the driven class: `math/quadrature` reports the ported
+`IntegrationStatus` read off `AdaptiveGaussKronrod`, so its status is a real oracle, while
+`root_find`/`derivative`/`gradient`/`hessian` sit on static C# methods with no status object and
+report `"Success"` unconditionally in every runner. `math/quadrature` also returns two values,
+`{integral, function_evaluations}`, so `"value"` with `args: [1]` pins the evaluation counter.
 
 ### `toolbox_cross_language`
 

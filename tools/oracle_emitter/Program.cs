@@ -828,12 +828,18 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
 // C++/R/Python fixture runners write for the same names -- so every case exercises a real
 // host-language callback in each of the four runners. NOTE the names here are deliberately NOT the
 // optimizer catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), unrelated to
-// OptimizerTestFXYZ above.
+// OptimizerTestFXYZ above. `Quad_*` are Mathematics/Integration/Integrands.*; `Diff_FX` and
+// `Quad_FX3` are both x^3, from two different upstream test files -- hence the prefixes.
 static Func<double, double>? CallbackScalarFunction(string name) => name switch
 {
     "Root_Quadratic" => x => Math.Pow(x, 2) - 2,
     "Root_Cubic" => x => x * x * x - x - 1d,
     "Diff_FX" => x => Math.Pow(x, 3.0),
+    "Quad_FX3" => x => Math.Pow(x, 3d),
+    "Quad_Cosine" => x => Math.Cos(x),
+    "Quad_Sine" => x => Math.Sin(x),
+    "Quad_FXX" => x => 0.5 + 24 * x + 3 * x * x,
+    "Quad_FXXX" => x => 0.5 + 24 * x + 3 * x * x + 8 * x * x * x,
     _ => null
 };
 static Func<double[], double>? CallbackVectorFunction(string name) => name switch
@@ -4669,6 +4675,11 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
 
             double[] values;
             int[] dims;
+            // Only quadrature has a C# class with a status to read (AdaptiveGaussKronrod over the
+            // Integrator base). Brent and NumericalDerivative are static methods with none, so
+            // their arms leave this at the "Success" the C++ runner unconditionally reports for
+            // them -- see the status assertion below.
+            string statusName = "Success";
             if (method == "root_find")
             {
                 var f = CallbackScalarFunction(callbackName)
@@ -4703,6 +4714,28 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     for (int j = 0; j < m; j++) values[i * m + j] = h[i, j];
                 dims = [n, m];
             }
+            else if (method == "quadrature")
+            {
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                var agk = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod(
+                    f, Opt("lower", 0d), Opt("upper", 0d));
+                // Written only when the fixture carries the key, exactly as callback/math.hpp
+                // does, so an absent key exercises the C# class's OWN default.
+                if (options.ValueKind == JsonValueKind.Object)
+                {
+                    if (options.TryGetProperty("absolute_tolerance", out var at))
+                        agk.AbsoluteTolerance = ParseNum(at);
+                    if (options.TryGetProperty("relative_tolerance", out var rt))
+                        agk.RelativeTolerance = ParseNum(rt);
+                    if (options.TryGetProperty("max_function_evaluations", out var mfe))
+                        agk.MaxFunctionEvaluations = (int)ParseNum(mfe);
+                }
+                agk.Integrate();
+                values = [agk.Result, agk.FunctionEvaluations];
+                dims = [];
+                statusName = agk.Status.ToString();
+            }
             else
             {
                 throw new Exception($"unknown callback fixture method: {method}");
@@ -4715,17 +4748,18 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 int index = asrt.TryGetProperty("args", out var argsEl) ? argsEl[0].GetInt32() : 0;
                 if (am == "status")
                 {
-                    // TODO: this arm hardcodes "Success" because neither Brent nor
-                    // NumericalDerivative reports a status, so the math group's C++ runner always
-                    // sets "Success" and there is nothing here to read it from. It is a real
-                    // assertion ONLY for that group. The first fixture asserting any other status
-                    // -- an MCMC group reporting a convergence status, say -- must replace this
-                    // with a status actually read off the driven C# object (group-aware, the way
-                    // the optimizer kind reads OptimizationStatus), or the new fixture will pass
-                    // falsely against a hardcoded literal.
+                    // `statusName` is read off the driven C# object for every method whose class
+                    // has one (today: quadrature's AdaptiveGaussKronrod.Status, an
+                    // IntegrationStatus whose member names match the C++ status_name strings). For
+                    // root_find/derivative/gradient/hessian it stays "Success", which is not a
+                    // hardcoded oracle but the honest report that Brent and NumericalDerivative
+                    // are static methods with no status object -- exactly what the C++ runner
+                    // reports for them. A later group with a real status must set `statusName` in
+                    // its own arm the same way the quadrature arm does.
                     string expected = asrt.GetProperty("expected").GetString()!;
-                    if (expected == "Success") pass++;
-                    else { fail++; failures.Add($"{where}: expected {expected} got Success"); }
+                    if (dump) { DumpLine("callback", caseName, am, Array.Empty<JsonElement>(), () => (object)statusName); continue; }
+                    if (expected == statusName) pass++;
+                    else { fail++; failures.Add($"{where}: expected {expected} got {statusName}"); }
                     continue;
                 }
                 double actual = am switch

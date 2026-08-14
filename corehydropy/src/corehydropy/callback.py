@@ -19,7 +19,34 @@ import numpy as np
 
 from . import _core
 
-__all__ = ["root_find", "derivative", "gradient", "hessian"]
+__all__ = ["root_find", "quadrature", "QuadratureResult", "derivative", "gradient", "hessian"]
+
+
+class QuadratureResult(float):
+    """The value :func:`quadrature` returns: the integral, with the run's report attached.
+
+    A ``float`` subclass, so it is the integral wherever a number is wanted and carries the two
+    extra fields where they are wanted. This mirrors ``corehydror``'s ``quadrature()``, which
+    returns the integral with ``status`` and ``function_evaluations`` as R attributes.
+
+    Attributes
+    ----------
+    status : str
+        One of ``"Success"``, ``"MaximumFunctionEvaluationsReached"``,
+        ``"MaximumIterationsReached"``, ``"Failure"`` or ``"None"`` -- the ported Numerics
+        ``IntegrationStatus``.
+    function_evaluations : int
+        The number of times ``f`` was called.
+    """
+
+    status: str
+    function_evaluations: int
+
+    def __new__(cls, value: float, status: str, function_evaluations: int) -> "QuadratureResult":
+        self = super().__new__(cls, value)
+        self.status = status
+        self.function_evaluations = int(function_evaluations)
+        return self
 
 
 def _check_fn(f: object) -> None:
@@ -89,6 +116,73 @@ def root_find(
         "max_iterations": int(max_iterations),
     }
     return float(_core.callback_math("root_find", json.dumps(options), f)["values"][0])
+
+
+def quadrature(
+    f: Callable[[float], float],
+    lower: float,
+    upper: float,
+    absolute_tolerance: float = 1e-8,
+    relative_tolerance: float = 1e-8,
+    max_function_evaluations: int = 10000000,
+) -> QuadratureResult:
+    """Integrate a user-written function over a finite interval.
+
+    Computes the definite integral of ``f`` over ``[lower, upper]`` with the ported Numerics
+    adaptive Gauss-Kronrod rule (10-point Gauss, 21-point Kronrod), which subdivides the interval
+    until the two nested estimates agree to the requested tolerance.
+
+    Named ``quadrature`` rather than ``integrate`` to stay in step with ``corehydror``, where the
+    latter would mask ``stats::integrate``.
+
+    Parameters
+    ----------
+    f : callable
+        A function taking one number and returning one number.
+    lower, upper : float
+        The limits of integration. ``upper`` must be above ``lower``; neither may be infinite.
+    absolute_tolerance, relative_tolerance : float, optional
+        The convergence tolerances on the difference between the Gauss and Kronrod estimates.
+        Each must lie between 1e-15 and 1.
+    max_function_evaluations : int, optional
+        The cap on evaluations of ``f``. Reaching it stops the subdivision and is reported in the
+        status rather than raising.
+
+    Returns
+    -------
+    QuadratureResult
+        The integral, a ``float`` carrying ``status`` and ``function_evaluations``.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> round(ch.quadrature(lambda x: x**2, 0, 3), 10)
+    9.0
+    >>> ch.quadrature(lambda x: x**2, 0, 3).status
+    'Success'
+    """
+    _check_fn(f)
+    lower = float(lower)
+    upper = float(upper)
+    if not np.isfinite(lower) or not np.isfinite(upper):
+        raise ValueError("`lower` and `upper` must each be a single finite number")
+    if lower >= upper:
+        raise ValueError("`lower` must be below `upper`")
+    if not 1e-15 <= float(absolute_tolerance) <= 1:
+        raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
+    if not 1e-15 <= float(relative_tolerance) <= 1:
+        raise ValueError("`relative_tolerance` must be a single number between 1e-15 and 1")
+    if int(max_function_evaluations) < 1:
+        raise ValueError("`max_function_evaluations` must be a single positive integer")
+    options = {
+        "lower": lower,
+        "upper": upper,
+        "absolute_tolerance": float(absolute_tolerance),
+        "relative_tolerance": float(relative_tolerance),
+        "max_function_evaluations": int(max_function_evaluations),
+    }
+    res = _core.callback_math("quadrature", json.dumps(options), f)
+    return QuadratureResult(res["values"][0], res["status"], res["values"][1])
 
 
 def derivative(f: Callable[[float], float], x: float, step_size: float = -1.0) -> float:

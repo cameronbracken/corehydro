@@ -43,6 +43,36 @@ def test_gradient_and_hessian_differentiate_a_python_function():
     assert quad == pytest.approx(np.array([[2.0, 1.0], [1.0, 4.0]]), abs=1e-3)
 
 
+def test_quadrature_integrates_a_python_function():
+    # Closed forms only: the C#-pinned oracles live in fixtures/callback/math.json.
+    q = ch.quadrature(lambda x: x**2, 0, 3)
+    assert q == pytest.approx(9.0, abs=1e-10)
+    assert q.status == "Success"
+    assert q.function_evaluations > 0
+    # The result IS a float, so it composes with anything expecting one.
+    assert isinstance(q, float)
+    assert ch.quadrature(math.sin, 0, math.pi) == pytest.approx(2.0, abs=1e-8)
+    assert ch.quadrature(math.exp, 0, 1) == pytest.approx(math.e - 1, abs=1e-8)
+
+
+def test_quadrature_reports_the_evaluation_cap_in_its_status():
+    # 1 / sqrt(x) is unbounded at 0, so the rule never converges and the cap stops it.
+    q = ch.quadrature(
+        lambda x: 0.0 if x <= 0 else 1.0 / math.sqrt(x), 0, 1, max_function_evaluations=1000
+    )
+    assert q.status == "MaximumFunctionEvaluationsReached"
+    assert q.function_evaluations >= 1000
+
+
+def test_quadrature_matches_the_r_verb_argument_checks():
+    with pytest.raises(ValueError):
+        ch.quadrature(lambda x: x, 1, 0)
+    with pytest.raises(ValueError, match="between 1e-15 and 1"):
+        ch.quadrature(lambda x: x, 0, 1, absolute_tolerance=0.0)
+    with pytest.raises(ValueError, match="between 1e-15 and 1"):
+        ch.quadrature(lambda x: x, 0, 1, relative_tolerance=2.0)
+
+
 @pytest.mark.parametrize(
     "call",
     [
@@ -50,8 +80,12 @@ def test_gradient_and_hessian_differentiate_a_python_function():
         lambda f: ch.derivative(f, 2.0),
         lambda f: ch.gradient(f, [1.0, 1.0]),
         lambda f: ch.hessian(f, [1.0, 1.0]),
+        # Quadrature is the arm where the TRAILING rethrow carries the weight: the ported
+        # integrator neither throws nor converges on the guard's NaN sentinel, it just runs to
+        # the evaluation cap and reports a NaN result, which would otherwise look like an answer.
+        lambda f: ch.quadrature(f, 0, 3, max_function_evaluations=5000),
     ],
-    ids=["root_find", "derivative", "gradient", "hessian"],
+    ids=["root_find", "derivative", "gradient", "hessian", "quadrature"],
 )
 def test_an_error_inside_the_callback_reaches_the_caller(call):
     # Every method, not just one: the guard's sentinel is a value each ported routine can itself
@@ -65,6 +99,8 @@ def test_a_callback_returning_a_non_scalar_is_rejected():
         ch.root_find(lambda x: [1.0, 2.0], lower=0, upper=2)
     with pytest.raises(Exception, match="single number"):
         ch.gradient(lambda p: [1.0, 2.0], [1.0, 1.0])
+    with pytest.raises(Exception, match="single number"):
+        ch.quadrature(lambda x: [1.0, 2.0], 0, 1)
 
 
 @pytest.mark.parametrize(

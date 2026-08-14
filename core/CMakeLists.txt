@@ -99,6 +99,7 @@ set(BF_TESTS
   test_copula_clone
   test_multivariate_normal_api
   test_brent_search
+  test_adaptive_gauss_kronrod
   test_optimizer_runner
   test_callback_runner
 )

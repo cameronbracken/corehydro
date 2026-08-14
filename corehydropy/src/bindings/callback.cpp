@@ -60,13 +60,14 @@ py::dict pack(const sup::CallbackResult& r) {
 
 void register_callback(py::module_& m) {
     // Runs one method of the callback runner's "math" group against a Python function. The scalar
-    // methods (root_find, derivative) call `f` with one number; the vector methods (gradient,
-    // hessian) call it with the whole point as a list. Either way `f` must return a single number.
+    // methods (root_find, derivative, quadrature) call `f` with one number; the vector methods
+    // (gradient, hessian) call it with the whole point as a list. Either way `f` must return a
+    // single number.
     m.def(
         "callback_math",
         [](const std::string& method, const std::string& options_json, py::function f) {
             sup::CallbackSet cbs;
-            if (method == "root_find" || method == "derivative")
+            if (method == "root_find" || method == "derivative" || method == "quadrature")
                 cbs.scalar = as_scalar_fn(f);
             else
                 cbs.vector_scalar = as_vector_scalar_fn(f);

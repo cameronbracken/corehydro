@@ -270,12 +270,14 @@ quartodoc:
         - OptimResult
         - optim_minimize
         - optim_maximize
-    - title: Root finding and differentiation
+    - title: Root finding, integration and differentiation
       desc: >-
-        The ported Numerics Brent root finder and NumericalDerivative routines over a
-        user-written Python function.
+        The ported Numerics Brent root finder, adaptive Gauss-Kronrod integrator and
+        NumericalDerivative routines over a user-written Python function.
       contents:
         - root_find
+        - quadrature
+        - QuadratureResult
         - derivative
         - gradient
         - hessian

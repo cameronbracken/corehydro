@@ -1,6 +1,6 @@
 {
   "kind": "callback",
-  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs}",
+  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs, Integration/Test_AdaptiveGaussKronrod.cs}",
   "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python lambda, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. NOTE the catalog names here are NOT the `optimizer`-kind catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), not the unrelated TestFunctions.FXYZ the optimizer fixtures use. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal, transcribed verbatim -- never a value computed by this repo's own C++.",
   "callbacks": {
     "Root_Quadratic": "f(x) = x^2 - 2  [Mathematics/Root Finding/TestFunctions.Quadratic]",
@@ -8,7 +8,12 @@
     "Diff_FX": "f(x) = x^3  [Test_Differentiation.FX]",
     "Diff_FXY": "f(x, y) = x^2 * y^3  [Test_Differentiation.FXY]",
     "Diff_FXYZ": "f(x, y, z) = x^3 + y^4 + z^5  [Test_Differentiation.FXYZ]",
-    "Diff_FH": "f(x, y) = x^3 - 2xy - y^6  [Test_Differentiation.FH]"
+    "Diff_FH": "f(x, y) = x^3 - 2xy - y^6  [Test_Differentiation.FH]",
+    "Quad_FX3": "f(x) = x^3  [Mathematics/Integration/Integrands.FX3]",
+    "Quad_Cosine": "f(x) = cos(x)  [Mathematics/Integration/Integrands.Cosine]",
+    "Quad_Sine": "f(x) = sin(x)  [Mathematics/Integration/Integrands.Sine]",
+    "Quad_FXX": "f(x) = 0.5 + 24x + 3x^2  [Mathematics/Integration/Integrands.FXX]",
+    "Quad_FXXX": "f(x) = 0.5 + 24x + 3x^2 + 8x^3  [Mathematics/Integration/Integrands.FXXX]"
   },
   "cases": [
     {
@@ -89,6 +94,68 @@
         { "method": "value", "args": [3], "expected": -480.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
         { "method": "dim", "args": [0], "expected": 2, "mode": "abs", "tol": 0, "source": "Test_Differentiation.Test_Hessian_MixedPartials (a 2x2 Hessian)" },
         { "method": "dim", "args": [1], "expected": 2, "mode": "abs", "tol": 0, "source": "Test_Differentiation.Test_Hessian_MixedPartials (a 2x2 Hessian)" }
+      ]
+    },
+    {
+      "name": "quadrature_x_cubed",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "lower": 0.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_FX3 (trueResult = 0.25d)" },
+        { "method": "value", "args": [1], "expected": 21, "mode": "abs", "tol": 0, "source": "Test_AdaptiveGaussKronrod.Test_FX3, FunctionEvaluations read off the driven C# AdaptiveGaussKronrod: the G10K21 rule is exact for a cubic, so the whole-interval evaluation (1 centre + 10 symmetric pairs) converges with no subdivision" },
+        { "method": "status", "expected": "Success", "source": "Test_AdaptiveGaussKronrod.Test_FX3, Status read off the driven C# AdaptiveGaussKronrod after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_cosine",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_Cosine",
+        "options": { "lower": -1.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.6829419, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_Cosine (trueResult = 1.6829419d)" }
+      ]
+    },
+    {
+      "name": "quadrature_sine",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_Sine",
+        "options": { "lower": 0.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.459697694131, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_Sine (trueResult = 0.459697694131d)" }
+      ]
+    },
+    {
+      "name": "quadrature_second_order_polynomial",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FXX",
+        "options": { "lower": 0.0, "upper": 2.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 57.0, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_FXX (trueResult = 57)" }
+      ]
+    },
+    {
+      "name": "quadrature_third_order_polynomial",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FXXX",
+        "options": { "lower": 0.0, "upper": 2.0, "absolute_tolerance": 1e-10, "relative_tolerance": 1e-10 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 89.0, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_FXXX (trueResult = 89); the two tolerance keys are set here so the options grammar's optional tolerances are exercised against the real C# AbsoluteTolerance/RelativeTolerance setters, not just their defaults" }
       ]
     },
     {

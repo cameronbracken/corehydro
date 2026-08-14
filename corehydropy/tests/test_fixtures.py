@@ -1727,7 +1727,8 @@ def _run_optimizer_case(case):
 # the ported routines whose input is a live function, run through _core.callback_math against a
 # NATIVE Python closure. Mirrors run_callback_kind in core/tests/test_fixtures.cpp. NOTE these
 # catalog names are NOT the optimizer catalog's above: `Diff_FXYZ` is Test_Differentiation.FXYZ
-# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`.
+# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`. `Diff_FX` and `Quad_FX3` are both
+# x^3, from two different upstream test files -- hence the prefixes.
 def _callback_fixture_function(name):
     if name == "Root_Quadratic":
         return lambda x: x ** 2 - 2.0
@@ -1741,6 +1742,16 @@ def _callback_fixture_function(name):
         return lambda p: p[0] ** 3 + p[1] ** 4 + p[2] ** 5
     if name == "Diff_FH":
         return lambda p: p[0] ** 3 - 2.0 * p[0] * p[1] - p[1] ** 6
+    if name == "Quad_FX3":
+        return lambda x: x ** 3
+    if name == "Quad_Cosine":
+        return math.cos
+    if name == "Quad_Sine":
+        return math.sin
+    if name == "Quad_FXX":
+        return lambda x: 0.5 + 24.0 * x + 3.0 * x ** 2
+    if name == "Quad_FXXX":
+        return lambda x: 0.5 + 24.0 * x + 3.0 * x ** 2 + 8.0 * x ** 3
     raise KeyError(f"unknown callback fixture callback: {name}")
 
 

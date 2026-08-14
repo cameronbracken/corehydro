@@ -430,7 +430,8 @@ optimizer_fixture_objective <- function(name) {
 # the ported routines whose input is a live function, run through ch_callback_math_ against a
 # NATIVE R closure. Mirrors run_callback_kind in core/tests/test_fixtures.cpp. NOTE these catalog
 # names are NOT the optimizer catalog's above: `Diff_FXYZ` is Test_Differentiation.FXYZ
-# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`.
+# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`. `Diff_FX` and `Quad_FX3` are both
+# x^3, from two different upstream test files -- hence the prefixes.
 callback_fixture_function <- function(name) {
   switch(name,
     Root_Quadratic = function(x) x^2 - 2,
@@ -439,6 +440,11 @@ callback_fixture_function <- function(name) {
     Diff_FXY = function(p) p[1]^2 * p[2]^3,
     Diff_FXYZ = function(p) p[1]^3 + p[2]^4 + p[3]^5,
     Diff_FH = function(p) p[1]^3 - 2 * p[1] * p[2] - p[2]^6,
+    Quad_FX3 = function(x) x^3,
+    Quad_Cosine = function(x) cos(x),
+    Quad_Sine = function(x) sin(x),
+    Quad_FXX = function(x) 0.5 + 24 * x + 3 * x^2,
+    Quad_FXXX = function(x) 0.5 + 24 * x + 3 * x^2 + 8 * x^3,
     stop(sprintf("unknown callback fixture callback: %s", name))
   )
 }

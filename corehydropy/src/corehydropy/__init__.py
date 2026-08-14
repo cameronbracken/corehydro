@@ -52,7 +52,14 @@ from .toolbox import (
     trend_predict,
 )
 from .optim import OptimResult, optim_maximize, optim_minimize
-from .callback import derivative, gradient, hessian, root_find
+from .callback import (
+    QuadratureResult,
+    derivative,
+    gradient,
+    hessian,
+    quadrature,
+    root_find,
+)
 from .gof import (
     aic,
     aic_weights,
@@ -183,6 +190,8 @@ __all__ = [
     "optim_minimize",
     "optim_maximize",
     "root_find",
+    "quadrature",
+    "QuadratureResult",
     "derivative",
     "gradient",
     "hessian",

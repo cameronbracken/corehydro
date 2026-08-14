@@ -1,3 +1,4 @@
+#include <cmath>
 #include <exception>
 #include <limits>
 #include <stdexcept>
@@ -157,6 +158,41 @@ int main() {
         CHECK_NEAR(r.values.at(3), 4.0, 1e-3);
     }
 
+    {
+        // The integral of x^2 over [0, 3] is 9, exactly (the G10K21 rule is exact for a
+        // quadratic on the first evaluation).
+        sup::CallbackSet cbs;
+        cbs.scalar = [](double x) { return x * x; };
+        sup::CallbackResult r =
+            sup::run_callback("math", "quadrature", R"({"lower": 0.0, "upper": 3.0})", cbs);
+        CHECK_NEAR(r.values.at(0), 9.0, 1e-10);
+        CHECK_EQ(r.names.at(0), std::string("integral"));
+        CHECK_EQ(r.names.at(1), std::string("function_evaluations"));
+        CHECK_EQ(r.status, std::string("Success"));
+        CHECK_TRUE(r.values.at(1) > 0.0);  // function evaluations were counted
+    }
+    {
+        // sin(x) over [0, 1] = 1 - cos(1), and the tolerances are settable.
+        sup::CallbackSet cbs;
+        cbs.scalar = [](double x) { return std::sin(x); };
+        sup::CallbackResult r = sup::run_callback(
+            "math", "quadrature",
+            R"({"lower": 0.0, "upper": 1.0, "absolute_tolerance": 1e-12, "relative_tolerance": 1e-12})",
+            cbs);
+        CHECK_NEAR(r.values.at(0), 1.0 - std::cos(1.0), 1e-12);
+    }
+    {
+        // A cap low enough to be hit reports the status the ported Integrator base defines
+        // rather than "Success". 1/sqrt(x) is unbounded at 0, so the rule never converges.
+        sup::CallbackSet cbs;
+        cbs.scalar = [](double x) { return x <= 0.0 ? 0.0 : 1.0 / std::sqrt(x); };
+        sup::CallbackResult r = sup::run_callback(
+            "math", "quadrature",
+            R"({"lower": 0.0, "upper": 1.0, "max_function_evaluations": 1000})", cbs);
+        CHECK_EQ(r.status, std::string("MaximumFunctionEvaluationsReached"));
+        CHECK_TRUE(r.values.at(1) >= 1000.0);
+    }
+
     // A host exception inside the callback survives the ported algorithm and reaches the caller,
     // on EVERY method -- not just one. The guard's sentinel is a value each ported routine can
     // itself reject (NaN drives Brent to its "failed to find root" throw; -inf trips
@@ -170,6 +206,11 @@ int main() {
             "host language error");
         CHECK_THROWS_MSG(sup::run_callback("math", "derivative", R"({"point": 2.0})", cbs),
                          "host language error");
+        CHECK_THROWS_MSG(
+            sup::run_callback("math", "quadrature",
+                              R"({"lower": 0.0, "upper": 3.0, "max_function_evaluations": 5000})",
+                              cbs),
+            "host language error");
     }
     {
         sup::CallbackSet cbs;

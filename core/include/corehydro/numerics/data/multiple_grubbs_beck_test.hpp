@@ -13,11 +13,11 @@
 //   apply here). Its C# ArgumentException on non-positive values maps to
 //   std::invalid_argument.
 // - GGBCRITP configures an AdaptiveGaussKronrod with MaxDepth = 25 and
-//   ReportFailure = false, returning NaN when Status == Failure. The C++
-//   integration::integrate port has no status object and only "fails" by an exception
-//   propagating out of the integrand, so the equivalent here is a try/catch that
-//   returns NaN. All other Integrator settings are the C# defaults, which
-//   integration::integrate already hard-codes.
+//   ReportFailure = false, returning NaN when Status == Failure. That reads across
+//   member for member now that the integrator is a complete port over the Integrator
+//   base; before it was, this file drove the minimal port's free `integrate` under a
+//   try/catch instead. The two are equivalent -- a failed run leaves Result at the NaN
+//   ClearResults set -- but the C# form is what the port carries.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -166,14 +166,14 @@ class MultipleGrubbsBeckTest {
         // The original FORTRAN source code utilized a globally adaptive Gauss-Kronrod
         // integration method. The number of low outliers computed by this method is
         // consistent with the results from the FORTRAN code.
-        // (C#: MaxDepth = 25, ReportFailure = false -> Result, or NaN on failure.)
-        try {
-            return math::integration::integrate(
-                [&](double pzr) { return fggb(pzr, n, r, eta); }, 1e-16, 1.0 - 1e-16,
-                /*abs_tol=*/1e-8, /*rel_tol=*/1e-8, /*max_depth=*/25);
-        } catch (...) {
-            return std::numeric_limits<double>::quiet_NaN();
-        }
+        math::integration::AdaptiveGaussKronrod sr(
+            [&](double pzr) { return fggb(pzr, n, r, eta); }, 1e-16, 1.0 - 1e-16);
+        sr.max_depth = 25;
+        sr.report_failure = false;
+        sr.integrate();
+        return sr.status() != math::integration::IntegrationStatus::Failure
+                   ? sr.result()
+                   : std::numeric_limits<double>::quiet_NaN();
     }
 
     /// Auxiliary routine used in ggbcritp.
