@@ -439,20 +439,6 @@ extern "C" SEXP _corehydror_ch_mvt_val_(SEXP method, SEXP df, SEXP location, SEX
     return cpp11::as_sexp(ch_mvt_val_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<double>>(df), cpp11::as_cpp<cpp11::decay_t<doubles>>(location), cpp11::as_cpp<cpp11::decay_t<doubles>>(scale_flat), cpp11::as_cpp<cpp11::decay_t<doubles>>(args)));
   END_CPP11
 }
-// sobol.cpp
-doubles_matrix<by_column> ch_sobol_generate_(int dimension, int n_steps, std::string path);
-extern "C" SEXP _corehydror_ch_sobol_generate_(SEXP dimension, SEXP n_steps, SEXP path) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_sobol_generate_(cpp11::as_cpp<cpp11::decay_t<int>>(dimension), cpp11::as_cpp<cpp11::decay_t<int>>(n_steps), cpp11::as_cpp<cpp11::decay_t<std::string>>(path)));
-  END_CPP11
-}
-// sobol.cpp
-doubles ch_sobol_skip_to_(int dimension, int index, std::string path);
-extern "C" SEXP _corehydror_ch_sobol_skip_to_(SEXP dimension, SEXP index, SEXP path) {
-  BEGIN_CPP11
-    return cpp11::as_sexp(ch_sobol_skip_to_(cpp11::as_cpp<cpp11::decay_t<int>>(dimension), cpp11::as_cpp<cpp11::decay_t<int>>(index), cpp11::as_cpp<cpp11::decay_t<std::string>>(path)));
-  END_CPP11
-}
 // stats.cpp
 int ch_mgbt_test_(doubles x);
 extern "C" SEXP _corehydror_ch_mgbt_test_(SEXP x) {
@@ -521,6 +507,20 @@ doubles ch_latin_hypercube_(int sample_size, int dimension, int seed, bool media
 extern "C" SEXP _corehydror_ch_latin_hypercube_(SEXP sample_size, SEXP dimension, SEXP seed, SEXP median) {
   BEGIN_CPP11
     return cpp11::as_sexp(ch_latin_hypercube_(cpp11::as_cpp<cpp11::decay_t<int>>(sample_size), cpp11::as_cpp<cpp11::decay_t<int>>(dimension), cpp11::as_cpp<cpp11::decay_t<int>>(seed), cpp11::as_cpp<cpp11::decay_t<bool>>(median)));
+  END_CPP11
+}
+// toolbox.cpp
+list ch_toolbox_run_(std::string group, std::string method, list data, std::string options_json);
+extern "C" SEXP _corehydror_ch_toolbox_run_(SEXP group, SEXP method, SEXP data, SEXP options_json) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_toolbox_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(group), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<list>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json)));
+  END_CPP11
+}
+// toolbox.cpp
+list ch_optim_run_(std::string spec_json, function objective);
+extern "C" SEXP _corehydror_ch_optim_run_(SEXP spec_json, SEXP objective) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_optim_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<function>>(objective)));
   END_CPP11
 }
 
@@ -592,11 +592,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_mvn_mvndst_seq_",               (DL_FUNC) &_corehydror_ch_mvn_mvndst_seq_,               10},
     {"_corehydror_ch_mvn_val_",                      (DL_FUNC) &_corehydror_ch_mvn_val_,                       4},
     {"_corehydror_ch_mvt_val_",                      (DL_FUNC) &_corehydror_ch_mvt_val_,                       5},
+    {"_corehydror_ch_optim_run_",                    (DL_FUNC) &_corehydror_ch_optim_run_,                     2},
     {"_corehydror_ch_plotting_positions_",           (DL_FUNC) &_corehydror_ch_plotting_positions_,            2},
     {"_corehydror_ch_plotting_positions_alpha_",     (DL_FUNC) &_corehydror_ch_plotting_positions_alpha_,      2},
-    {"_corehydror_ch_sobol_generate_",               (DL_FUNC) &_corehydror_ch_sobol_generate_,                3},
-    {"_corehydror_ch_sobol_skip_to_",                (DL_FUNC) &_corehydror_ch_sobol_skip_to_,                 3},
     {"_corehydror_ch_threshold_diagnostics_",        (DL_FUNC) &_corehydror_ch_threshold_diagnostics_,         6},
+    {"_corehydror_ch_toolbox_run_",                  (DL_FUNC) &_corehydror_ch_toolbox_run_,                   4},
     {"_corehydror_ch_yeo_johnson_",                  (DL_FUNC) &_corehydror_ch_yeo_johnson_,                   2},
     {"_corehydror_ch_yeo_johnson_inverse_",          (DL_FUNC) &_corehydror_ch_yeo_johnson_inverse_,           2},
     {"_corehydror_ch_yeo_johnson_lambda_",           (DL_FUNC) &_corehydror_ch_yeo_johnson_lambda_,            1},

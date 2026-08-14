@@ -1,0 +1,180 @@
+{
+ "kind": "toolbox",
+ "group": "link",
+ "source": "Numerics/Functions/Link Functions/*.cs; RMC.BestFit/Models/LinkFunctions/*.cs",
+ "reference": "Numerics @ 2a0357a, RMC-BestFit @ c2e6192. Every case's numeric literals are transcribed verbatim from the upstream test files (not computed by this port's own C++): the seven Numerics links from Test_LinkFunctions.cs, Test_FisherZLink.cs (Link_KnownValues/InverseLink_KnownValues/DLink_FiniteDifferenceConsistency), and Test_YeoJohnsonLink.cs (Link_LambdaZero_UsesPositiveLogBranch/Link_LambdaTwo_UsesNegativeLogBranch/Link_LambdaOne_IsIdentity); the five BestFit-specific links from ASinHLinkTests.cs (Test_SymmetricCase_ReducesToSimpleAsinh), SESLinkTests.cs (Test_InverseLink_AtZero_ReturnsZero), LogSESLinkTests.cs (Test_InverseLink_AtZero_ReturnsSigma0), LogASinHLinkTests.cs (SymmetricBaseline_ReducesToCenteredLogLink), and CenteredLinkTests.cs (Test_Link_IdentityInner_KnownValues/Test_InverseLink_IdentityInner_KnownValues/Test_DLink_IdentityInner_KnownValue). The twelve `type` names this file exercises are every one the toolbox `link` group's `build_link` recognizes (numerics/support/toolbox/link.hpp): the seven Numerics LinkFunctionType members plus the five link-specific BestFit types (YeoJohnson counted once).",
+ "cases": [
+  {
+   "name": "identity_link",
+   "data": [[-100.0, 0.0, 1.5, 100.0]],
+   "options": {"link": {"type": "Identity"}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": -100.0, "mode": "equal", "source": "Test_IdentityLink_Link"},
+    {"method": "link", "index": 2, "expected": 1.5, "mode": "equal", "source": "Test_IdentityLink_Link"},
+    {"method": "d_link", "index": 1, "expected": 1.0, "mode": "equal", "source": "Test_IdentityLink_DLink"}
+   ]
+  },
+  {
+   "name": "log_link",
+   "data": [[1.0, 2.0, 10.0]],
+   "options": {"link": {"type": "Log"}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-12, "source": "Test_LogLink_Link"},
+    {"method": "d_link", "index": 0, "expected": 1.0, "mode": "abs", "tol": 1e-12, "source": "Test_LogLink_DLink"},
+    {"method": "d_link", "index": 1, "expected": 0.5, "mode": "abs", "tol": 1e-12, "source": "Test_LogLink_DLink"},
+    {"method": "d_link", "index": 2, "expected": 0.1, "mode": "abs", "tol": 1e-12, "source": "Test_LogLink_DLink"}
+   ]
+  },
+  {
+   "name": "log_link_inverse",
+   "data": [[0.0]],
+   "options": {"link": {"type": "Log"}},
+   "assertions": [
+    {"method": "inverse_link", "index": 0, "expected": 1.0, "mode": "abs", "tol": 1e-12, "source": "Test_LogLink_InverseLink"}
+   ]
+  },
+  {
+   "name": "logit_link",
+   "data": [[0.5, 0.1]],
+   "options": {"link": {"type": "Logit"}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-12, "source": "Test_LogitLink_Link"},
+    {"method": "d_link", "index": 0, "expected": 4.0, "mode": "abs", "tol": 1e-12, "source": "Test_LogitLink_DLink"},
+    {"method": "d_link", "index": 1, "expected": 11.111111111111112, "mode": "abs", "tol": 1e-10, "source": "Test_LogitLink_DLink (1/(0.1*0.9))"}
+   ]
+  },
+  {
+   "name": "logit_link_inverse",
+   "data": [[0.0]],
+   "options": {"link": {"type": "Logit"}},
+   "assertions": [
+    {"method": "inverse_link", "index": 0, "expected": 0.5, "mode": "abs", "tol": 1e-12, "source": "Test_LogitLink_InverseLink"}
+   ]
+  },
+  {
+   "name": "probit_link",
+   "data": [[0.5, 0.975]],
+   "options": {"link": {"type": "Probit"}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-10, "source": "Test_ProbitLink_Link"},
+    {"method": "link", "index": 1, "expected": 1.95996, "mode": "abs", "tol": 1e-4, "source": "Test_ProbitLink_Link"}
+   ]
+  },
+  {
+   "name": "probit_link_inverse",
+   "data": [[0.0]],
+   "options": {"link": {"type": "Probit"}},
+   "assertions": [
+    {"method": "inverse_link", "index": 0, "expected": 0.5, "mode": "abs", "tol": 1e-10, "source": "Test_ProbitLink_InverseLink"}
+   ]
+  },
+  {
+   "name": "complementary_log_log_link",
+   "data": [[0.6321205588285577, 0.5]],
+   "options": {"link": {"type": "ComplementaryLogLog"}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-10, "source": "Test_CLogLog_Link_KnownValues (h(1-1/e)=0)"},
+    {"method": "link", "index": 1, "expected": -0.36651292058166435, "mode": "abs", "tol": 1e-10, "source": "Test_CLogLog_Link_KnownValues (log(log(2)))"}
+   ]
+  },
+  {
+   "name": "complementary_log_log_link_inverse",
+   "data": [[0.0]],
+   "options": {"link": {"type": "ComplementaryLogLog"}},
+   "assertions": [
+    {"method": "inverse_link", "index": 0, "expected": 0.6321205588285577, "mode": "abs", "tol": 1e-10, "source": "Test_CLogLog_InverseLink_KnownValues (1-1/e)"}
+   ]
+  },
+  {
+   "name": "fisher_z_link",
+   "data": [[0.0, 0.5, 0.25, 0.5493061443340549]],
+   "options": {"link": {"type": "FisherZ"}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-12, "source": "Link_KnownValues"},
+    {"method": "link", "index": 1, "expected": 0.5493061443340549, "mode": "abs", "tol": 1e-12, "source": "Link_KnownValues (0.5*log(3))"},
+    {"method": "d_link", "index": 2, "expected": 1.0666666666666667, "mode": "abs", "tol": 1e-12, "source": "DLink_FiniteDifferenceConsistency (1/(1-x^2) at x=0.25)"},
+    {"method": "inverse_link", "index": 3, "expected": 0.5, "mode": "abs", "tol": 1e-12, "source": "InverseLink_KnownValues"}
+   ]
+  },
+  {
+   "name": "yeo_johnson_link_identity",
+   "data": [[5.0]],
+   "options": {"link": {"type": "YeoJohnson", "parameters": {"lambda": 1.0}}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 5.0, "mode": "abs", "tol": 1e-10, "source": "Link_LambdaOne_IsIdentity"},
+    {"method": "d_link", "index": 0, "expected": 1.0, "mode": "abs", "tol": 1e-10, "source": "Link_LambdaOne_IsIdentity"}
+   ]
+  },
+  {
+   "name": "yeo_johnson_link_lambda_zero",
+   "data": [[2.0, 1.0986122886681098]],
+   "options": {"link": {"type": "YeoJohnson", "parameters": {"lambda": 0.0}}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 1.0986122886681098, "mode": "abs", "tol": 1e-12, "source": "Link_LambdaZero_UsesPositiveLogBranch (log(3))"},
+    {"method": "d_link", "index": 0, "expected": 0.3333333333333333, "mode": "abs", "tol": 1e-12, "source": "Link_LambdaZero_UsesPositiveLogBranch"},
+    {"method": "inverse_link", "index": 1, "expected": 2.0, "mode": "abs", "tol": 1e-12, "source": "Link_LambdaZero_UsesPositiveLogBranch"}
+   ]
+  },
+  {
+   "name": "yeo_johnson_link_lambda_two",
+   "data": [[-2.0, -1.0986122886681098]],
+   "options": {"link": {"type": "YeoJohnson", "parameters": {"lambda": 2.0}}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": -1.0986122886681098, "mode": "abs", "tol": 1e-12, "source": "Link_LambdaTwo_UsesNegativeLogBranch (-log(3))"},
+    {"method": "d_link", "index": 0, "expected": 0.3333333333333333, "mode": "abs", "tol": 1e-12, "source": "Link_LambdaTwo_UsesNegativeLogBranch"},
+    {"method": "inverse_link", "index": 1, "expected": -2.0, "mode": "abs", "tol": 1e-12, "source": "Link_LambdaTwo_UsesNegativeLogBranch"}
+   ]
+  },
+  {
+   "name": "asinh_link",
+   "data": [[0.5, 0.0]],
+   "options": {"link": {"type": "ASinH", "parameters": {"gamma0": 0.5, "scale": 0.3, "epsilon": 0.0, "delta": 1.0}}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-15, "source": "Test_SymmetricCase_ReducesToSimpleAsinh"},
+    {"method": "inverse_link", "index": 1, "expected": 0.5, "mode": "abs", "tol": 1e-15, "source": "Test_SymmetricCase_ReducesToSimpleAsinh"},
+    {"method": "d_link", "index": 0, "expected": 3.3333333333333335, "mode": "abs", "tol": 1e-12, "source": "Test_SymmetricCase_ReducesToSimpleAsinh (1/scale)"}
+   ]
+  },
+  {
+   "name": "ses_link",
+   "data": [[0.0]],
+   "options": {"link": {"type": "SES", "parameters": {"a": 1.0}}},
+   "assertions": [
+    {"method": "inverse_link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-15, "source": "Test_InverseLink_AtZero_ReturnsZero"}
+   ]
+  },
+  {
+   "name": "log_ses_link",
+   "data": [[0.0]],
+   "options": {"link": {"type": "LogSES", "parameters": {"sigma0": 7.5}}},
+   "assertions": [
+    {"method": "inverse_link", "index": 0, "expected": 7.5, "mode": "abs", "tol": 1e-10, "source": "Test_InverseLink_AtZero_ReturnsSigma0"}
+   ]
+  },
+  {
+   "name": "log_asinh_link",
+   "data": [[10.0, 0.0, 15.0]],
+   "options": {"link": {"type": "LogASinH", "parameters": {"sigma0": 10.0, "log_scale": 0.25}}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-15, "source": "SymmetricBaseline_ReducesToCenteredLogLink"},
+    {"method": "inverse_link", "index": 1, "expected": 10.0, "mode": "abs", "tol": 1e-12, "source": "SymmetricBaseline_ReducesToCenteredLogLink"},
+    {"method": "link", "index": 2, "expected": 1.6218604324326575, "mode": "abs", "tol": 1e-12, "source": "SymmetricBaseline_ReducesToCenteredLogLink (log(15/10)/0.25)"}
+   ]
+  },
+  {
+   "name": "centered_link_identity_inner",
+   "data": [[100.0, 120.0, 60.0, 0.0, 1.0, -2.0, 200.0]],
+   "options": {"link": {"type": "Centered", "parameters": {"mu0": 100.0, "scale": 20.0}, "inner": {"type": "Identity"}}},
+   "assertions": [
+    {"method": "link", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-12, "source": "Test_Link_IdentityInner_KnownValues"},
+    {"method": "link", "index": 1, "expected": 1.0, "mode": "abs", "tol": 1e-12, "source": "Test_Link_IdentityInner_KnownValues"},
+    {"method": "link", "index": 2, "expected": -2.0, "mode": "abs", "tol": 1e-12, "source": "Test_Link_IdentityInner_KnownValues"},
+    {"method": "inverse_link", "index": 3, "expected": 100.0, "mode": "abs", "tol": 1e-12, "source": "Test_InverseLink_IdentityInner_KnownValues"},
+    {"method": "inverse_link", "index": 4, "expected": 120.0, "mode": "abs", "tol": 1e-12, "source": "Test_InverseLink_IdentityInner_KnownValues"},
+    {"method": "inverse_link", "index": 5, "expected": 60.0, "mode": "abs", "tol": 1e-12, "source": "Test_InverseLink_IdentityInner_KnownValues"},
+    {"method": "d_link", "index": 0, "expected": 0.05, "mode": "abs", "tol": 1e-12, "source": "Test_DLink_IdentityInner_KnownValue"},
+    {"method": "d_link", "index": 6, "expected": 0.05, "mode": "abs", "tol": 1e-12, "source": "Test_DLink_IdentityInner_KnownValue"}
+   ]
+  }
+ ]
+}

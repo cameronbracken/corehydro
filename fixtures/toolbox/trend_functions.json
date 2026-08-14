@@ -1,0 +1,143 @@
+{
+ "kind": "toolbox",
+ "group": "trend",
+ "source": "RMC-BestFit/src/RMC.BestFit/Models/TrendFunctions/*.cs",
+ "reference": "RMC-BestFit @ c2e6192. Every numeric literal is transcribed verbatim from the upstream Test_*TrendTests.cs files under RMC.BestFit.Tests/Univariate/TrendFunctions (not computed by this port's own C++). `values` in each case's `options.trend` is the explicit parameter vector the toolbox `trend` group's build_spec_trend applies with ITrendModel::set_parameter_values, in the same order the transcribed test sets model.Parameters[i].Value; `start_index` matches the transcribed StartIndex. The GeneralLinear case instead pins the documented type-only-dispatch fallthrough to ConstantTrend (trend_model_factory.hpp; mirrors the C# SetTrendModel if-chain, which has no GeneralLinear branch) rather than a GeneralLinearFunctionTests.cs literal, since GeneralLinearFunction itself needs a covariate matrix this grammar does not carry.",
+ "cases": [
+  {
+   "name": "constant_predict",
+   "data": [[0.0, 100.0, -50.0]],
+   "options": {"trend": {"type": "Constant", "values": [50.0]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 50.0, "mode": "equal", "source": "ConstantTrendTests.Test_Predict_ReturnsConstantValue"},
+    {"method": "predict", "index": 1, "expected": 50.0, "mode": "equal", "source": "ConstantTrendTests.Test_Predict_ReturnsConstantValue"},
+    {"method": "predict", "index": 2, "expected": 50.0, "mode": "equal", "source": "ConstantTrendTests.Test_Predict_ReturnsConstantValue"}
+   ]
+  },
+  {
+   "name": "constant_parameters",
+   "data": [],
+   "options": {"trend": {"type": "Constant"}},
+   "assertions": [
+    {"method": "parameters", "select": "length", "expected": 1, "mode": "equal", "source": "ConstantTrendTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"},
+    {"method": "parameters", "label": "(α)", "expected": 0.0, "mode": "equal", "source": "ConstantTrendTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel (name \"(α)\"; default value 0)"}
+   ]
+  },
+  {
+   "name": "linear_predict",
+   "data": [[1950.0, 1960.0, 1940.0]],
+   "options": {"trend": {"type": "Linear", "start_index": 1950, "values": [100.0, 0.5]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 100.0, "mode": "abs", "tol": 1e-10, "source": "LinearTrendTests.Test_Predict_AtStartIndex_ReturnsIntercept"},
+    {"method": "predict", "index": 1, "expected": 105.0, "mode": "abs", "tol": 1e-10, "source": "LinearTrendTests.Test_Predict_AfterStartIndex_ReturnsCorrectValue"},
+    {"method": "predict", "index": 2, "expected": 95.0, "mode": "abs", "tol": 1e-10, "source": "LinearTrendTests.Test_Predict_BeforeStartIndex_ReturnsCorrectValue"}
+   ]
+  },
+  {
+   "name": "quadratic_predict",
+   "data": [[5.0]],
+   "options": {"trend": {"type": "Quadratic", "start_index": 0, "values": [10.0, 2.0, 0.5]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 32.5, "mode": "abs", "tol": 1e-10, "source": "QuadraticTrendTests.Test_Predict_FullQuadratic"}
+   ]
+  },
+  {
+   "name": "cubic_predict",
+   "data": [[2.0]],
+   "options": {"trend": {"type": "Cubic", "start_index": 0, "values": [1.0, 2.0, 3.0, 4.0]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 49.0, "mode": "abs", "tol": 1e-10, "source": "CubicTrendTests.Test_Predict_FullCubic"}
+   ]
+  },
+  {
+   "name": "cubic_parameters",
+   "data": [],
+   "options": {"trend": {"type": "Cubic"}},
+   "assertions": [
+    {"method": "parameters", "label": "(α)", "expected": 0.0, "mode": "equal", "source": "CubicTrendTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"},
+    {"method": "parameters", "label": "(β)", "expected": 0.0, "mode": "equal", "source": "CubicTrendTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"},
+    {"method": "parameters", "label": "(γ)", "expected": 0.0, "mode": "equal", "source": "CubicTrendTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"},
+    {"method": "parameters", "label": "(δ)", "expected": 0.0, "mode": "equal", "source": "CubicTrendTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"}
+   ]
+  },
+  {
+   "name": "exponential_predict",
+   "data": [[10.0]],
+   "options": {"trend": {"type": "Exponential", "start_index": 0, "values": [100.0, -0.1]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 36.78794411714423, "mode": "abs", "tol": 1e-8, "source": "ExponentialTrendTests.Test_Predict_ExponentialDecay (100*exp(-1))"}
+   ]
+  },
+  {
+   "name": "logistic_predict",
+   "data": [[0.0]],
+   "options": {"trend": {"type": "Logistic", "start_index": 0, "values": [100.0, 0.1]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 50.0, "mode": "abs", "tol": 1e-10, "source": "LogisticTrendTests.Test_Predict_AtStartIndex_ReturnsHalfAlpha"}
+   ]
+  },
+  {
+   "name": "power_predict",
+   "data": [[0.0, 1.0, 2.0, 3.0, 10.0]],
+   "options": {"trend": {"type": "Power", "start_index": 0, "values": [1.0, 2.0]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 0.0, "mode": "abs", "tol": 1e-10, "source": "PowerTrendTests.Test_Predict_SquareLaw"},
+    {"method": "predict", "index": 1, "expected": 1.0, "mode": "abs", "tol": 1e-10, "source": "PowerTrendTests.Test_Predict_SquareLaw"},
+    {"method": "predict", "index": 2, "expected": 4.0, "mode": "abs", "tol": 1e-10, "source": "PowerTrendTests.Test_Predict_SquareLaw"},
+    {"method": "predict", "index": 3, "expected": 9.0, "mode": "abs", "tol": 1e-10, "source": "PowerTrendTests.Test_Predict_SquareLaw"},
+    {"method": "predict", "index": 4, "expected": 100.0, "mode": "abs", "tol": 1e-10, "source": "PowerTrendTests.Test_Predict_SquareLaw"}
+   ]
+  },
+  {
+   "name": "reciprocal_predict",
+   "data": [[0.0, 10.0, 90.0]],
+   "options": {"trend": {"type": "Reciprocal", "start_index": 0, "values": [10.0, 1.0]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 0.1, "mode": "abs", "tol": 1e-10, "source": "ReciprocalTrendTests.Test_Predict_DecreasingTrend"},
+    {"method": "predict", "index": 1, "expected": 0.05, "mode": "abs", "tol": 1e-10, "source": "ReciprocalTrendTests.Test_Predict_DecreasingTrend (1/20)"},
+    {"method": "predict", "index": 2, "expected": 0.01, "mode": "abs", "tol": 1e-10, "source": "ReciprocalTrendTests.Test_Predict_DecreasingTrend"}
+   ]
+  },
+  {
+   "name": "sinusoidal_predict",
+   "data": [[0.0, 1.0, 2.0, 3.0]],
+   "options": {"trend": {"type": "Sinusoidal", "start_index": 0, "values": [50.0, 10.0, 0.25, 0.0]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 50.0, "mode": "abs", "tol": 1e-9, "source": "SinusoidalTrendTests.Test_Predict_WithMeanLevel"},
+    {"method": "predict", "index": 1, "expected": 60.0, "mode": "abs", "tol": 1e-9, "source": "SinusoidalTrendTests.Test_Predict_WithMeanLevel"},
+    {"method": "predict", "index": 2, "expected": 50.0, "mode": "abs", "tol": 1e-9, "source": "SinusoidalTrendTests.Test_Predict_WithMeanLevel"},
+    {"method": "predict", "index": 3, "expected": 40.0, "mode": "abs", "tol": 1e-9, "source": "SinusoidalTrendTests.Test_Predict_WithMeanLevel"}
+   ]
+  },
+  {
+   "name": "step_function_predict",
+   "data": [[1900.0, 1949.0, 1950.0, 1951.0]],
+   "options": {"trend": {"type": "StepFunction", "start_index": 1900, "values": [50.0, 100.0, 1950.0]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 50.0, "mode": "abs", "tol": 1e-10, "source": "StepFunctionTests.Test_Predict_BeforeChangePoint_ReturnsMu1"},
+    {"method": "predict", "index": 1, "expected": 50.0, "mode": "abs", "tol": 1e-10, "source": "StepFunctionTests.Test_Predict_BeforeChangePoint_ReturnsMu1"},
+    {"method": "predict", "index": 2, "expected": 50.0, "mode": "abs", "tol": 1e-10, "source": "StepFunctionTests.Test_Predict_BeforeChangePoint_ReturnsMu1 (at change point, ≤)"},
+    {"method": "predict", "index": 3, "expected": 100.0, "mode": "abs", "tol": 1e-10, "source": "StepFunctionTests.Test_Predict_AfterChangePoint_ReturnsMu2"}
+   ]
+  },
+  {
+   "name": "step_function_parameters",
+   "data": [],
+   "options": {"trend": {"type": "StepFunction"}},
+   "assertions": [
+    {"method": "parameters", "label": "(μ₁)", "expected": 0.0, "mode": "equal", "source": "StepFunctionTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"},
+    {"method": "parameters", "label": "(μ₂)", "expected": 0.0, "mode": "equal", "source": "StepFunctionTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"},
+    {"method": "parameters", "label": "(tₛ)", "expected": 0.0, "mode": "equal", "source": "StepFunctionTests.Test_Constructor_EmptyConstructor_CreatesDefaultModel"}
+   ]
+  },
+  {
+   "name": "general_linear_falls_through_to_constant",
+   "data": [[0.0, 50.0]],
+   "options": {"trend": {"type": "GeneralLinear", "values": [7.0]}},
+   "assertions": [
+    {"method": "predict", "index": 0, "expected": 7.0, "mode": "abs", "tol": 1e-12, "source": "trend_model_factory.hpp's documented GeneralLinear -> ConstantTrend fallthrough (mirrors the C# SetTrendModel if-chain, which has no GeneralLinear branch)"},
+    {"method": "predict", "index": 1, "expected": 7.0, "mode": "abs", "tol": 1e-12, "source": "trend_model_factory.hpp's documented GeneralLinear -> ConstantTrend fallthrough"}
+   ]
+  }
+ ]
+}

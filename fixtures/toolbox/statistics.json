@@ -1,0 +1,677 @@
+{
+ "kind": "toolbox",
+ "group": "statistics",
+ "source": "Numerics/Data/Statistics/Statistics.cs (ProductMoments ~line 300, LinearMoments ~line 380, RanksInPlace(double[]) ~line 470); literals scraped verbatim from Test_Statistics.cs's Test_ComputeProductMoments, Test_ComputeLinearMoments, and Test_RanksInPlace.",
+ "reference": "Numerics @ 2a0357a. product_moments and ranks share the fixtures/special_functions/percentile.json 69-value sample (Test_Statistics.cs's _sample1); l_moments uses its own 31-value annual-flow sample (Test_ComputeLinearMoments's `data`). product_moments/l_moments/ranks are exercised internally by many distribution L-moment/MOM fits but were never pinned as standalone Statistics targets before this file (percentile.json already pins Statistics.percentile) -- this file is that pin, routed through the 'statistics' toolbox group (numerics/support/toolbox_runner.hpp's run_statistics arm) rather than a bespoke special_function entry, per this phase's toolbox-group convention. The product_moments_sample1 case's mean/standard_deviation/skewness/kurtosis are byte-identical to fixtures/special_functions/running_statistics.json's mean/standard_deviation/skewness/kurtosis over the same 69-value sample; that is a legitimate cross-implementation check, not a duplicated oracle -- the two files pin different C# statics (Statistics.ProductMoments here, RunningStatistics's incremental properties there) that happen to agree on this sample.",
+ "datasets": {
+  "sample1": [
+   122.0,
+   244.0,
+   214.0,
+   173.0,
+   229.0,
+   156.0,
+   212.0,
+   263.0,
+   146.0,
+   183.0,
+   161.0,
+   205.0,
+   135.0,
+   331.0,
+   225.0,
+   174.0,
+   98.8,
+   149.0,
+   238.0,
+   262.0,
+   132.0,
+   235.0,
+   216.0,
+   240.0,
+   230.0,
+   192.0,
+   195.0,
+   172.0,
+   173.0,
+   172.0,
+   153.0,
+   142.0,
+   317.0,
+   161.0,
+   201.0,
+   204.0,
+   194.0,
+   164.0,
+   183.0,
+   161.0,
+   167.0,
+   179.0,
+   185.0,
+   117.0,
+   192.0,
+   337.0,
+   125.0,
+   166.0,
+   99.1,
+   202.0,
+   230.0,
+   158.0,
+   262.0,
+   154.0,
+   164.0,
+   182.0,
+   164.0,
+   183.0,
+   171.0,
+   250.0,
+   184.0,
+   205.0,
+   237.0,
+   177.0,
+   239.0,
+   187.0,
+   180.0,
+   173.0,
+   174.0
+  ],
+  "lmom_flow_sample": [
+   1953.0,
+   1939.0,
+   1677.0,
+   1692.0,
+   2051.0,
+   2371.0,
+   2022.0,
+   1521.0,
+   1448.0,
+   1825.0,
+   1363.0,
+   1760.0,
+   1672.0,
+   1603.0,
+   1244.0,
+   1521.0,
+   1783.0,
+   1560.0,
+   1357.0,
+   1673.0,
+   1625.0,
+   1425.0,
+   1688.0,
+   1577.0,
+   1736.0,
+   1640.0,
+   1584.0,
+   1293.0,
+   1277.0,
+   1742.0,
+   1491.0
+  ]
+ },
+ "cases": [
+  {
+   "name": "product_moments_sample1",
+   "data": [
+    "sample1"
+   ],
+   "assertions": [
+    {
+     "method": "product_moments",
+     "label": "mean",
+     "expected": 191.317391304348,
+     "mode": "abs",
+     "tol": 1e-10
+    },
+    {
+     "method": "product_moments",
+     "label": "sd",
+     "expected": 47.9616113541118,
+     "mode": "abs",
+     "tol": 1e-10
+    },
+    {
+     "method": "product_moments",
+     "label": "skewness",
+     "expected": 0.8605451107461,
+     "mode": "abs",
+     "tol": 1e-10
+    },
+    {
+     "method": "product_moments",
+     "label": "kurtosis",
+     "expected": 1.3434868130194,
+     "mode": "abs",
+     "tol": 1e-10
+    }
+   ]
+  },
+  {
+   "name": "l_moments_flow_sample",
+   "data": [
+    "lmom_flow_sample"
+   ],
+   "assertions": [
+    {
+     "method": "l_moments",
+     "label": "l1",
+     "expected": 1648.8064516,
+     "mode": "abs",
+     "tol": 1e-07
+    },
+    {
+     "method": "l_moments",
+     "label": "l2",
+     "expected": 138.2365591,
+     "mode": "abs",
+     "tol": 1e-07
+    },
+    {
+     "method": "l_moments",
+     "label": "t3",
+     "expected": 0.1033903,
+     "mode": "abs",
+     "tol": 1e-07
+    },
+    {
+     "method": "l_moments",
+     "label": "t4",
+     "expected": 0.1940943,
+     "mode": "abs",
+     "tol": 1e-07
+    }
+   ]
+  },
+  {
+   "name": "ranks_sample1_with_ties",
+   "data": [
+    "sample1"
+   ],
+   "assertions": [
+    {
+     "method": "ranks",
+     "index": 0,
+     "expected": 4.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 1,
+     "expected": 62.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 2,
+     "expected": 51.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 3,
+     "expected": 27.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 4,
+     "expected": 54.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 5,
+     "expected": 13.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 6,
+     "expected": 50.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 7,
+     "expected": 66.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 8,
+     "expected": 9.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 9,
+     "expected": 36.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 10,
+     "expected": 16.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 11,
+     "expected": 48.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 12,
+     "expected": 7.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 13,
+     "expected": 68.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 14,
+     "expected": 53.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 15,
+     "expected": 29.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 16,
+     "expected": 1.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 17,
+     "expected": 10.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 18,
+     "expected": 59.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 19,
+     "expected": 64.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 20,
+     "expected": 6.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 21,
+     "expected": 57.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 22,
+     "expected": 52.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 23,
+     "expected": 61.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 24,
+     "expected": 55.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 25,
+     "expected": 41.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 26,
+     "expected": 44.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 27,
+     "expected": 24.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 28,
+     "expected": 27.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 29,
+     "expected": 24.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 30,
+     "expected": 11.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 31,
+     "expected": 8.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 32,
+     "expected": 67.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 33,
+     "expected": 16.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 34,
+     "expected": 45.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 35,
+     "expected": 47.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 36,
+     "expected": 43.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 37,
+     "expected": 19.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 38,
+     "expected": 36.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 39,
+     "expected": 16.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 40,
+     "expected": 22.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 41,
+     "expected": 32.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 42,
+     "expected": 39.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 43,
+     "expected": 3.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 44,
+     "expected": 41.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 45,
+     "expected": 69.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 46,
+     "expected": 5.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 47,
+     "expected": 21.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 48,
+     "expected": 2.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 49,
+     "expected": 46.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 50,
+     "expected": 55.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 51,
+     "expected": 14.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 52,
+     "expected": 64.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 53,
+     "expected": 12.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 54,
+     "expected": 19.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 55,
+     "expected": 34.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 56,
+     "expected": 19.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 57,
+     "expected": 36.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 58,
+     "expected": 23.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 59,
+     "expected": 63.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 60,
+     "expected": 38.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 61,
+     "expected": 48.5,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 62,
+     "expected": 58.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 63,
+     "expected": 31.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 64,
+     "expected": 60.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 65,
+     "expected": 40.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 66,
+     "expected": 33.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 67,
+     "expected": 27.0,
+     "mode": "abs",
+     "tol": 1e-09
+    },
+    {
+     "method": "ranks",
+     "index": 68,
+     "expected": 29.5,
+     "mode": "abs",
+     "tol": 1e-09
+    }
+   ]
+  }
+ ]
+}

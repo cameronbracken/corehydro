@@ -21,6 +21,15 @@ using Numerics.Mathematics.Optimization;
 using Numerics.Mathematics.SpecialFunctions;
 using Numerics.Sampling;
 using Numerics.Sampling.MCMC;
+// Task 7: the link and trend function layers. Numerics.Functions holds the seven standard
+// links (Identity/Log/Logit/Probit/ComplementaryLogLog/YeoJohnson/FisherZ, LinkFunctionFactory,
+// LinkFunctionType); the five link-specific BestFit types and the eleven trend types are already
+// compiled in via the `$(BF)/Models/**/*.cs` glob in OracleEmitter.csproj (Models/LinkFunctions/
+// and Models/TrendFunctions/ are both under Models/), so only their namespaces are new here.
+using Numerics.Functions;
+using RMC.BestFit.Models.LinkFunctions;
+using RMC.BestFit.Models.TrendFunctions;
+using RMC.BestFit.Models.TrendFunctions.Support;
 // Task T12: the real RMC.BestFit estimation path (subset-compiled -- see OracleEmitter.csproj).
 // `RMC.BestFit.Models` holds the DataFrame series/data types (ExactSeries/ExactData/etc.) AND
 // DataFrame + the UnivariateDistribution model; `RMC.BestFit.Estimation` holds MaximumLikelihood /
@@ -788,6 +797,29 @@ static double NumericalDerivativeNormalLoglik(double[] x)
     var n = new Normal(x[0], x[1]);
     return n.LogLikelihood(NumericalDerivativeNormalSample());
 }
+
+// Task 8 (the optimizer runner): a handful of Test_Numerics/Mathematics/Optimization/
+// TestFunctions.cs formulas, inlined here (that project is not referenced by this emitter --
+// see the NumericalDerivativeQuadratic/NormalLoglik precedent above for the same reason) so
+// fixtures/toolbox/optimizers.json's `construct.objective` names can be driven against the REAL
+// C# optimizer classes. MUST mirror core/tests/optimization_test_functions.hpp exactly.
+static double OptimizerTestFX(double x) => (x + 3d) * Math.Pow(x - 1d, 2d);
+static double OptimizerTestFXYZ(double[] p) =>
+    Math.Pow(4d * p[0] - 0.5d, 2d) + Math.Pow(3d * p[1] - 0.6d, 2d) + Math.Pow(2d * p[2] - 0.7d, 2d);
+static double OptimizerTestDeJong(double[] p) => p.Sum(v => v * v);
+static double OptimizerTestBooth(double[] p) =>
+    Math.Pow(p[0] + 2d * p[1] - 7d, 2d) + Math.Pow(2d * p[0] + p[1] - 5d, 2d);
+static double OptimizerTestMcCormick(double[] p) =>
+    Math.Sin(p[0] + p[1]) + Math.Pow(p[0] - p[1], 2d) - 1.5d * p[0] + 2.5d * p[1] + 1d;
+static Func<double[], double> OptimizerTestFunction(string name) => name switch
+{
+    "FXYZ" => OptimizerTestFXYZ,
+    "DeJong" => OptimizerTestDeJong,
+    "Booth" => OptimizerTestBooth,
+    "McCormick" => OptimizerTestMcCormick,
+    "FX" => p => OptimizerTestFX(p[0]),
+    _ => throw new Exception($"unknown optimizer fixture objective: {name}")
+};
 
 // numerical_derivative fixture args convention -- MUST mirror
 // numerical_derivative_parse()/gradient_element()/hessian_element() in
@@ -3689,6 +3721,634 @@ static double DispatchAnalysis(AnalysisData r, string m, JsonElement[] a)
     }
 }
 
+// One arm per toolbox group. Later tasks extend this switch; the shape never changes. `options`
+// carries whatever scalars/enum names/flags a group needs (mirrors toolbox_runner.hpp's
+// options_json contract); correlation ignores it today but a group that needs it (e.g. goodness
+// of fit's k/n/log_likelihood/threshold/distribution spec) does not have to change the signature.
+// `asrt` is the fixture assertion driving this call: most methods return one scalar and ignore
+// it, but a method that returns a named/ordered set (gof's "metrics"/"classification") or a bare
+// array (gof's "aic_weights"/"rmse_weights") reads its `index`/`label` to pick one value, exactly
+// as run_toolbox_kind's client-side select does in the C++/R/Python fixture runners.
+static double ToolboxDispatch(string group, string method, List<double[]> data, JsonElement options,
+                              JsonElement asrt)
+{
+    switch (group)
+    {
+        case "correlation":
+            return method switch
+            {
+                "pearson"  => Correlation.Pearson(data[0], data[1]),
+                "spearman" => Correlation.Spearman(data[0], data[1]),
+                "kendall"  => Correlation.KendallsTau(data[0], data[1]),
+                _ => throw new Exception($"unknown correlation method: {method}")
+            };
+        case "gof":
+            return GofDispatch(method, data, options, asrt);
+        case "spectra":
+            return SpectraDispatch(method, data, options, asrt);
+        case "statistics":
+            return StatisticsDispatch(method, data, options, asrt);
+        case "histogram":
+            return HistogramToolboxDispatch(method, data, options, asrt);
+        case "interpolation":
+            return InterpolationDispatch(method, data, options, asrt);
+        case "regression":
+            return RegressionDispatch(method, data, options, asrt);
+        case "sampling":
+            return SamplingDispatch(method, data, options, asrt);
+        case "probability":
+            return ProbabilityDispatch(method, data, options, asrt);
+        case "link":
+            return LinkDispatch(method, data, options, asrt);
+        case "trend":
+            return TrendDispatch(method, data, options, asrt);
+        default:
+            throw new Exception($"unknown toolbox group: {group}");
+    }
+}
+
+// Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor
+// takes no path (the direction numbers are a compiled resource -- see sobol.hpp's own
+// divergence note), so a "path" key in options, if present, is simply not read here.
+static double SamplingDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "sobol")
+    {
+        int dimension = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("dimension", out var d)
+            ? d.GetInt32() : 1;
+        int n = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("n", out var nEl)
+            ? nEl.GetInt32() : 1;
+        int skip = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("skip", out var sk)
+            ? sk.GetInt32() : 0;
+        var sobol = new SobolSequence(dimension);
+        if (skip > 0) sobol.SkipTo(skip);
+        var flat = new List<double>();
+        for (int i = 0; i < n; i++) flat.AddRange(sobol.NextDouble());
+        return ToolboxSelectFlat(asrt, flat.ToArray(), n, dimension);
+    }
+    if (method == "stratify")
+    {
+        double lower = options.GetProperty("lower").GetDouble();
+        double upper = options.GetProperty("upper").GetDouble();
+        int bins = options.GetProperty("bins").GetInt32();
+        bool probability = OptBool(options, "probability", false);
+        bool logarithmic = OptBool(options, "logarithmic", false);
+        var stratOptions = new StratificationOptions(lower, upper, bins, probability);
+        var strat = Stratify.XValues(stratOptions, logarithmic);
+        var flat = new List<double>();
+        foreach (var b in strat)
+        {
+            flat.Add(b.LowerBound);
+            flat.Add(b.UpperBound);
+            flat.Add(b.Midpoint);
+            flat.Add(b.Weight);
+        }
+        return ToolboxSelectFlat(asrt, flat.ToArray(), strat.Count, 4);
+    }
+    throw new Exception($"unknown sampling method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/probability.hpp's run_probability arm against the real
+// Numerics.Data.Statistics.Probability.
+static double ProbabilityDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method != "joint") throw new Exception($"unknown probability method: {method}");
+    double[] p = data[0];
+    string dep = OptString(options, "dependency", "independent");
+    var type = dep switch
+    {
+        "independent" => Probability.DependencyType.Independent,
+        "positive" => Probability.DependencyType.PerfectlyPositive,
+        "negative" => Probability.DependencyType.PerfectlyNegative,
+        "correlation" => Probability.DependencyType.CorrelationMatrix,
+        _ => throw new Exception($"unknown dependency '{dep}'; expected independent, positive, negative, or correlation")
+    };
+    if (data.Count < 2)
+    {
+        if (type == Probability.DependencyType.CorrelationMatrix)
+            throw new Exception("dependency 'correlation' needs an indicator vector and a correlation matrix");
+        return Probability.JointProbability(p, type);
+    }
+    var indicators = data[1].Select(v => (int)v).ToArray();
+    if (data.Count < 3) return Probability.JointProbability(p, indicators, null, type);
+    int n = p.Length;
+    double[] flat = data[2];
+    if (flat.Length != n * n) throw new Exception($"the correlation matrix must be {n} by {n}");
+    var corr = new double[n, n];
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            corr[i, j] = flat[i * n + j];
+    return Probability.JointProbability(p, indicators, corr, type);
+}
+
+// Mirrors numerics/support/toolbox/link.hpp's build_link against the real Numerics
+// LinkFunctionFactory and the real RMC.BestFit link classes -- every constructor argument order
+// and default matches the C++ port (verified against the same headers), so this is a faithful
+// C# mirror rather than an independent re-derivation.
+static double OptD(JsonElement? parameters, string key, double fallback)
+{
+    if (parameters is JsonElement p && p.ValueKind == JsonValueKind.Object && p.TryGetProperty(key, out var v))
+        return v.GetDouble();
+    return fallback;
+}
+
+static ILinkFunction BuildLink(JsonElement spec)
+{
+    string type = spec.GetProperty("type").GetString()!;
+    JsonElement? parameters = spec.TryGetProperty("parameters", out var p) && p.ValueKind == JsonValueKind.Object
+        ? p : (JsonElement?)null;
+    double Opt(string key, double dflt) => OptD(parameters, key, dflt);
+
+    switch (type)
+    {
+        case "Identity": return LinkFunctionFactory.Create(LinkFunctionType.Identity);
+        case "Log": return LinkFunctionFactory.Create(LinkFunctionType.Log);
+        case "Logit": return LinkFunctionFactory.Create(LinkFunctionType.Logit);
+        case "Probit": return LinkFunctionFactory.Create(LinkFunctionType.Probit);
+        case "ComplementaryLogLog": return LinkFunctionFactory.Create(LinkFunctionType.ComplementaryLogLog);
+        case "FisherZ": return LinkFunctionFactory.Create(LinkFunctionType.FisherZ);
+        case "YeoJohnson": return new YeoJohnsonLink(Opt("lambda", 1.0));
+        case "ASinH":
+            return new ASinHLink(Opt("gamma0", 0.0), Opt("scale", 1.0), Opt("epsilon", 0.0), Opt("delta", 1.0));
+        case "SES": return new SESLink(Opt("a", 1.0));
+        case "LogSES": return new LogSESLink(Opt("sigma0", 1.0), Opt("a", 1.0), Opt("lambda", 0.2));
+        case "LogASinH":
+            return new LogASinHLink(Opt("sigma0", 1.0), Opt("log_scale", 1.0), Opt("epsilon", 0.0), Opt("delta", 1.0));
+        case "Centered":
+            if (!spec.TryGetProperty("inner", out var innerSpec))
+                throw new Exception("link type 'Centered' needs an 'inner' link spec");
+            return new CenteredLink(BuildLink(innerSpec), Opt("mu0", 0.0), Opt("scale", 1.0));
+        default:
+            throw new Exception($"unknown link type: {type}");
+    }
+}
+
+static double LinkDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    ILinkFunction link = BuildLink(options.GetProperty("link"));
+    double[] x = data[0];
+    var values = method switch
+    {
+        "link" => x.Select(link.Link).ToArray(),
+        "inverse_link" => x.Select(link.InverseLink).ToArray(),
+        "d_link" => x.Select(link.DLink).ToArray(),
+        _ => throw new Exception($"unknown link method: {method}")
+    };
+    return ToolboxSelectFlat(asrt, values, values.Length, 1);
+}
+
+// Mirrors numerics/support/toolbox/trend.hpp's run_trend: builds the type's own class-defaulted
+// trend (RMC.BestFit's own SetTrendModel type -> instance switch, mirrored in
+// trend_model_factory.hpp -- GeneralLinear falls through to ConstantTrend, matching upstream),
+// then applies StartIndex/SetParameterValues from the spec exactly as build_spec_trend does.
+static ITrendModel BuildTrend(JsonElement spec)
+{
+    string type = spec.GetProperty("type").GetString()!;
+    ITrendModel t = type switch
+    {
+        "Constant" => new ConstantTrend(),
+        "Cubic" => new CubicTrend(),
+        "Exponential" => new ExponentialTrend(),
+        "Linear" => new LinearTrend(),
+        "Logistic" => new LogisticTrend(),
+        "Power" => new PowerTrend(),
+        "Quadratic" => new QuadraticTrend(),
+        "Reciprocal" => new ReciprocalTrend(),
+        "Sinusoidal" => new SinusoidalTrend(),
+        "StepFunction" => new StepFunction(),
+        "GeneralLinear" => new ConstantTrend(),
+        _ => throw new Exception($"unknown trend model type: {type}")
+    };
+    if (spec.TryGetProperty("start_index", out var si)) t.StartIndex = si.GetInt32();
+    if (spec.TryGetProperty("values", out var vs))
+        t.SetParameterValues(vs.EnumerateArray().Select(e => e.GetDouble()).ToList());
+    return t;
+}
+
+static double TrendDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    ITrendModel t = BuildTrend(options.GetProperty("trend"));
+    if (method == "predict")
+    {
+        double[] values = data[0].Select(i => (double)t.Predict((int)i)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+    if (method == "parameters")
+    {
+        double[] values = t.Parameters.Select(mp => mp.Value).ToArray();
+        string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
+            ? s.GetString()! : "value";
+        if (select == "length") return values.Length;
+        if (asrt.TryGetProperty("label", out var lbl))
+        {
+            string label = lbl.GetString()!;
+            for (int i = 0; i < t.Parameters.Count; i++)
+                if (t.Parameters[i].Name == label) return t.Parameters[i].Value;
+            throw new Exception($"trend result has no label '{label}'");
+        }
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+    throw new Exception($"unknown trend method: {method}");
+}
+
+// Selects a value the way the fixture runners' client-side "select" logic does, generalized
+// to a FLAT array with a known {rows, cols} shape (numerics.support.toolbox_runner.hpp's `dims`):
+// "length" -> flat.Length, "rows"/"columns" -> the shape, else index into flat[index]. `label` is
+// not answerable here -- unlike the C++/R/Python `toolbox_select` helpers, this function has no
+// `names` array to look an assertion's `label` key up against, because every caller builds its
+// flat array by hand from a positional (matrix-shaped) C# result. Two callers (sampling.stratify,
+// regression.prediction_intervals) DO carry real names alongside their dims in the C++ result, so
+// a `label` there is a real gap rather than a nonsensical request -- but threading a names array
+// through every call site for a combination no fixture exercises is not worth doing blind, so this
+// throws instead of silently falling through to `ToolboxSelectIndex`'s `"index"`-or-0 default,
+// which used to read index 0 in the emitter while the C++/R/Python runners honored `label`
+// correctly. Was a documented known limitation (CHANGELOG.md's v0.6.0 entry); now closed by making
+// the mismatch loud instead of silent.
+static double ToolboxSelectFlat(JsonElement asrt, double[] flat, int rows, int cols)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+        throw new Exception(
+            $"toolbox select by label '{lbl.GetString()}' is not supported for a flat matrix " +
+            "result (no names array); use index/rows/columns instead");
+    string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
+        ? s.GetString()! : "value";
+    if (select == "length") return flat.Length;
+    if (select == "rows") return rows;
+    if (select == "columns") return cols;
+    return flat[ToolboxSelectIndex(asrt)];
+}
+
+// Same selection grammar as ToolboxSelectFlat, for a method whose C++ ToolboxResult carries NO
+// `dims` at all (numerics/support/toolbox/interpolation.hpp's `linear`/`bilinear` and
+// numerics/support/toolbox/regression.hpp's `residuals`/`predict` never set `r.dims`): `select:
+// "rows"`/`"columns"` throws here, matching what the C++/R/Python `toolbox_select` helpers do
+// when `r.dims` is empty, instead of answering a fabricated `(1, flat.Length)` shape the way
+// routing these through `ToolboxSelectFlat` used to (a `select: "rows"` on `interpolation.linear`
+// silently returned `1`).
+static double ToolboxSelectFlatNoDims(JsonElement asrt, double[] flat)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+        throw new Exception(
+            $"toolbox select by label '{lbl.GetString()}' is not supported for a flat " +
+            "result (no names array); use index instead");
+    string select = asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s)
+        ? s.GetString()! : "value";
+    if (select == "length") return flat.Length;
+    if (select == "rows" || select == "columns")
+        throw new Exception($"toolbox select '{select}' has no dims for this method");
+    return flat[ToolboxSelectIndex(asrt)];
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_histogram arm. bins == 0 (the default)
+// selects the Rice-Rule constructor `Histogram(data)`; bins > 0 selects `Histogram(data, bins)`
+// -- there is no lower/upper-bound overload to expose. "bins" flattens {lower, upper, midpoint,
+// frequency} row-major (dims = {NumberOfBins, 4}); "statistics" returns the named
+// {mean, median, mode, sd, lower, upper, bin_width, bins} set.
+static double HistogramToolboxDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] x = data[0];
+    int bins = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("bins", out var b)
+        ? b.GetInt32() : 0;
+    var h = bins > 0 ? new Histogram(x, bins) : new Histogram(x);
+    if (method == "bins")
+    {
+        var flat = new List<double>();
+        for (int i = 0; i < h.NumberOfBins; i++)
+        {
+            var bin = h[i];
+            flat.Add(bin.LowerBound);
+            flat.Add(bin.UpperBound);
+            flat.Add(bin.Midpoint);
+            flat.Add(bin.Frequency);
+        }
+        return ToolboxSelectFlat(asrt, flat.ToArray(), h.NumberOfBins, 4);
+    }
+    if (method == "statistics")
+    {
+        var names = new[] { "mean", "median", "mode", "sd", "lower", "upper", "bin_width", "bins" };
+        var values = new[]
+        {
+            h.Mean, h.Median, h.Mode, h.StandardDeviation, h.LowerBound, h.UpperBound,
+            h.BinWidth, (double)h.NumberOfBins
+        };
+        return ToolboxSelectNamed(asrt, names, values);
+    }
+    throw new Exception($"unknown histogram method: {method}");
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_interpolation arm: Linear's separate
+// Extrapolate() surface (vs. the clamp-to-end-knot Interpolate()) and Bilinear's three
+// independent transforms.
+static Numerics.Data.Transform ParseInterpolationTransform(string s) => s switch
+{
+    "none" => Numerics.Data.Transform.None,
+    "log" => Numerics.Data.Transform.Logarithmic,
+    "normal_z" => Numerics.Data.Transform.NormalZ,
+    _ => throw new Exception($"unknown transform '{s}'; expected none, log, or normal_z")
+};
+
+static Numerics.Data.SortOrder ParseSortOrder(string s) => s switch
+{
+    "ascending" => Numerics.Data.SortOrder.Ascending,
+    "descending" => Numerics.Data.SortOrder.Descending,
+    _ => throw new Exception($"unknown sort order '{s}'; expected ascending or descending")
+};
+
+static string OptString(JsonElement options, string key, string fallback) =>
+    options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetString()! : fallback;
+
+static bool OptBool(JsonElement options, string key, bool fallback) =>
+    options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetBoolean() : fallback;
+
+static double InterpolationDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    var order = ParseSortOrder(OptString(options, "sort_order", "ascending"));
+    if (method == "linear")
+    {
+        double[] x = data[0], y = data[1], xout = data[2];
+        var interp = new Linear(x, y, order)
+        {
+            XTransform = ParseInterpolationTransform(OptString(options, "x_transform", "none")),
+            YTransform = ParseInterpolationTransform(OptString(options, "y_transform", "none"))
+        };
+        bool extrapolate = OptBool(options, "extrapolate", false);
+        var values = xout.Select(v => extrapolate ? interp.Extrapolate(v) : interp.Interpolate(v)).ToArray();
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    if (method == "bilinear")
+    {
+        double[] x1 = data[0], x2 = data[1], flat = data[2], x1out = data[3], x2out = data[4];
+        var y = new double[x1.Length, x2.Length];
+        for (int i = 0; i < x1.Length; i++)
+            for (int j = 0; j < x2.Length; j++)
+                y[i, j] = flat[i * x2.Length + j];
+        var interp = new Bilinear(x1, x2, y, order)
+        {
+            X1Transform = ParseInterpolationTransform(OptString(options, "x1_transform", "none")),
+            X2Transform = ParseInterpolationTransform(OptString(options, "x2_transform", "none")),
+            YTransform = ParseInterpolationTransform(OptString(options, "y_transform", "none"))
+        };
+        var values = new double[x1out.Length];
+        for (int i = 0; i < x1out.Length; i++) values[i] = interp.Interpolate(x1out[i], x2out[i]);
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    throw new Exception($"unknown interpolation method: {method}");
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_regression arm against the real
+// Numerics.Data.LinearRegression: predictors cross as one flattened row-major vector plus
+// `rows`/`columns` options (the binding layer has no matrix type common to R and Python), so the
+// Matrix here is filled element-by-element from that flat array rather than built via a
+// (rows, cols, flat) constructor overload, which LinearAlgebra.Matrix does not have.
+static double RegressionDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    int GetInt(string key, int fallback) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetInt32() : fallback;
+    double[] flat = data[0];
+    double[] y = data[1];
+    int rows = GetInt("rows", y.Length);
+    int cols = GetInt("columns", 1);
+    bool intercept = OptBool(options, "intercept", true);
+    var x = new Matrix(rows, cols);
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < cols; j++)
+            x[i, j] = flat[i * cols + j];
+    var lm = new LinearRegression(x, new Vector(y), intercept);
+
+    if (method == "fit")
+    {
+        var names = new List<string>();
+        var values = new List<double>();
+        for (int i = 0; i < lm.Parameters.Count; i++) { names.Add($"beta_{i + 1}"); values.Add(lm.Parameters[i]); }
+        for (int i = 0; i < lm.ParameterStandardErrors.Count; i++) { names.Add($"se_{i + 1}"); values.Add(lm.ParameterStandardErrors[i]); }
+        names.Add("r_squared"); values.Add(lm.RSquared);
+        names.Add("adj_r_squared"); values.Add(lm.AdjRSquared);
+        names.Add("sigma"); values.Add(lm.StandardError);
+        names.Add("df"); values.Add(lm.DegreesOfFreedom);
+        names.Add("n"); values.Add(lm.SampleSize);
+        return ToolboxSelectNamed(asrt, names.ToArray(), values.ToArray());
+    }
+    if (method == "covariance")
+    {
+        int m = lm.Covariance.NumberOfRows;
+        var flatCov = new double[m * m];
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < m; j++) flatCov[i * m + j] = lm.Covariance[i, j];
+        return ToolboxSelectFlat(asrt, flatCov, m, m);
+    }
+    if (method == "residuals") return ToolboxSelectFlatNoDims(asrt, lm.Residuals);
+    if (method == "predict" || method == "prediction_intervals")
+    {
+        double[] newFlat = data[2];
+        int predictRows = options.GetProperty("predict_rows").GetInt32();
+        var xp = new Matrix(predictRows, cols);
+        for (int i = 0; i < predictRows; i++)
+            for (int j = 0; j < cols; j++)
+                xp[i, j] = newFlat[i * cols + j];
+        if (method == "predict")
+        {
+            var values = lm.Predict(xp);
+            return ToolboxSelectFlatNoDims(asrt, values);
+        }
+        double alpha = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("alpha", out var a)
+            ? a.GetDouble() : 0.1;
+        var pi = lm.PredictionIntervals(xp, alpha);
+        int piRows = pi.GetLength(0);
+        var flatPi = new double[piRows * 3];
+        for (int i = 0; i < piRows; i++)
+            for (int j = 0; j < 3; j++) flatPi[i * 3 + j] = pi[i, j];
+        return ToolboxSelectFlat(asrt, flatPi, piRows, 3);
+    }
+    throw new Exception($"unknown regression method: {method}");
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_spectra arm for the two methods
+// fixtures/toolbox/autocorrelation.json pins: "autocorrelation" (covariance and partial types --
+// the correlation type is already cross-checked against Fourier.Autocorrelation by
+// fixtures/special_functions/fourier.json's Fourier.autocorrelation_at) and
+// "autocorrelation_ci". cross_correlation/dft/dft_real reuse the values already pinned by
+// Fourier.correlation_at/fft_at/real_fft_at in fourier.json, so they are not re-dispatched here.
+// "autocorrelation" flattens the {lag, value} pairs row-major (dims = {n, 2}, matching the C++
+// port), so asrt.index selects a FLAT position -- fixture cases use index = 2*lag + 1 to read the
+// value column. correlation_confidence_interval's C++ names are {"lower","upper"}, matching
+// Autocorrelation.CorrelationConfidenceInterval's {lo, hi} order.
+static double SpectraDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "autocorrelation")
+    {
+        double[] x = data[0];
+        int lagMax = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("lag_max", out var lm)
+            ? lm.GetInt32() : -1;
+        string typeName = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("type", out var t)
+            ? t.GetString()! : "correlation";
+        var type = typeName switch
+        {
+            "covariance" => Autocorrelation.Type.Covariance,
+            "partial" => Autocorrelation.Type.Partial,
+            "correlation" => Autocorrelation.Type.Correlation,
+            _ => throw new Exception($"unknown spectra.autocorrelation type: {typeName}")
+        };
+        var acf = Autocorrelation.Function(x, lagMax, type);
+        if (acf is null) throw new Exception("spectra.autocorrelation: series too short for the requested lag");
+        int flatIndex = ToolboxSelectIndex(asrt);
+        return acf[flatIndex / 2, flatIndex % 2];
+    }
+    if (method == "autocorrelation_ci")
+    {
+        int sampleSize = options.GetProperty("sample_size").GetInt32();
+        double interval = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("confidence_level", out var cl)
+            ? cl.GetDouble() : 0.95;
+        var ci = Autocorrelation.CorrelationConfidenceInterval(sampleSize, interval);
+        return ToolboxSelectNamed(asrt, new[] { "lower", "upper" }, ci);
+    }
+    throw new Exception($"spectra method '{method}' has no dumped oracle case wired in the emitter");
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_statistics arm for the three methods
+// fixtures/toolbox/statistics.json pins (product_moments/l_moments/ranks -- the only statistics
+// methods with no existing special_function pin). summary/running/percentile/running_covariance
+// are exercised by the ctest/testthat/pytest suites directly, not by a dumped C# oracle here.
+static double StatisticsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] x = data[0];
+    if (method == "product_moments")
+        return ToolboxSelectNamed(asrt, new[] { "mean", "sd", "skewness", "kurtosis" }, Statistics.ProductMoments(x));
+    if (method == "l_moments")
+        return ToolboxSelectNamed(asrt, new[] { "l1", "l2", "t3", "t4" }, Statistics.LinearMoments(x));
+    if (method == "ranks")
+    {
+        RejectDimsSelect(asrt, "statistics.ranks");
+        return Statistics.RanksInPlace(x)[ToolboxSelectIndex(asrt)];
+    }
+    if (method == "percentile") RejectDimsSelect(asrt, "statistics.percentile");
+    throw new Exception($"statistics method '{method}' has no dumped oracle case wired in the emitter");
+}
+
+// Selects a single value out of an ordered/named result the way the fixture runners' select
+// logic does: `label` (by name) wins over `index` (by position, default 0).
+static int ToolboxSelectIndex(JsonElement asrt)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("index", out var idx))
+        return idx.GetInt32();
+    return 0;
+}
+
+// Throws if an assertion asks for `select: "rows"` or `"columns"` against a method whose C++
+// ToolboxResult never sets `r.dims` (every `gof` method; `statistics.ranks`/`percentile`),
+// matching what the C++/R/Python `toolbox_select` helpers do when `r.dims` is empty. These
+// methods route through ToolboxSelectIndex/ToolboxSelectNamed, neither of which reads `select`
+// at all, so without this guard a `rows`/`columns` request would silently fall through to the
+// index-0 (or named) value instead of failing the way it should.
+static void RejectDimsSelect(JsonElement asrt, string context)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("select", out var s))
+    {
+        string select = s.GetString()!;
+        if (select == "rows" || select == "columns")
+            throw new Exception($"toolbox select '{select}' has no dims for {context}");
+    }
+}
+
+static double ToolboxSelectNamed(JsonElement asrt, string[] names, double[] values)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+    {
+        string want = lbl.GetString()!;
+        int i = Array.IndexOf(names, want);
+        if (i < 0) throw new Exception($"unknown label: {want}");
+        return values[i];
+    }
+    return values[ToolboxSelectIndex(asrt)];
+}
+
+// Mirrors numerics/support/toolbox_runner.hpp's run_gof arm against the real
+// Numerics.Data.Statistics.GoodnessOfFit (verified method-for-method against
+// upstream/Numerics/Numerics/Data/Statistics/GoodnessOfFit.cs -- the C++ port's names are
+// lower_snake_case, the C# statics are PascalCase, and GoodnessOfFit itself has no standalone
+// Pearson method, so "pearson" dispatches to the real Correlation.Pearson the C++ port mirrors).
+static double GofDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    // No `gof` method ever sets `r.dims` in C++ -- one guard up front covers all of them (the
+    // scalar arms below don't consult `asrt` at all, so without this a `select: "rows"`/"columns"`
+    // would silently return the computed metric instead of failing).
+    RejectDimsSelect(asrt, "gof." + method);
+    double[] o = data.Count > 0 ? data[0] : Array.Empty<double>();
+    double[] m = data.Count > 1 ? data[1] : Array.Empty<double>();
+    int GetInt(string key) => options.GetProperty(key).GetInt32();
+    double GetDouble(string key) => options.GetProperty(key).GetDouble();
+    int GetK() => options.ValueKind == JsonValueKind.Object && options.TryGetProperty("k", out var kEl)
+        ? kEl.GetInt32() : 0;
+
+    if (method == "aic") return GoodnessOfFit.AIC(GetInt("k"), GetDouble("log_likelihood"));
+    if (method == "aicc") return GoodnessOfFit.AICc(GetInt("n"), GetInt("k"), GetDouble("log_likelihood"));
+    if (method == "bic") return GoodnessOfFit.BIC(GetInt("n"), GetInt("k"), GetDouble("log_likelihood"));
+    if (method == "aic_weights") return GoodnessOfFit.AICWeights(o)[ToolboxSelectIndex(asrt)];
+    if (method == "rmse_weights") return GoodnessOfFit.RMSEWeights(o)[ToolboxSelectIndex(asrt)];
+
+    if (method == "ks" || method == "ad" || method == "chi_squared" || method == "rmse_dist")
+    {
+        var obs = (double[])o.Clone();
+        Array.Sort(obs);
+        var model = BuildSpecDistribution(options.GetProperty("model"));
+        if (method == "ks") return GoodnessOfFit.KolmogorovSmirnov(obs, model);
+        if (method == "ad") return GoodnessOfFit.AndersonDarling(obs, model);
+        if (method == "chi_squared") return GoodnessOfFit.ChiSquared(obs, model);
+        return data.Count > 1 ? GoodnessOfFit.RMSE(obs, m, model) : GoodnessOfFit.RMSE(obs, model);
+    }
+
+    if (method == "classification")
+    {
+        // Two already-binary label vectors, compared elementwise -- no threshold, matching the
+        // real GoodnessOfFit classification statics exactly (ConfusionMatrix stays private).
+        var names = new[] { "accuracy", "precision", "recall", "f1", "specificity",
+                            "balanced_accuracy" };
+        var values = new[] {
+            GoodnessOfFit.Accuracy(o, m), GoodnessOfFit.Precision(o, m), GoodnessOfFit.Recall(o, m),
+            GoodnessOfFit.F1Score(o, m), GoodnessOfFit.Specificity(o, m),
+            GoodnessOfFit.BalancedAccuracy(o, m)
+        };
+        return ToolboxSelectNamed(asrt, names, values);
+    }
+
+    var allNames = new[] { "rmse", "mse", "mae", "mape", "smape", "nse", "log_nse", "kge", "kge_mod",
+                           "pbias", "rsr", "pearson", "r_squared", "d", "d_mod", "d_ref", "ve" };
+    if (method == "metrics")
+    {
+        var allValues = new[] {
+            GoodnessOfFit.RMSE(o, m, GetK()), GoodnessOfFit.MSE(o, m), GoodnessOfFit.MAE(o, m),
+            GoodnessOfFit.MAPE(o, m), GoodnessOfFit.sMAPE(o, m),
+            GoodnessOfFit.NashSutcliffeEfficiency(o, m), GoodnessOfFit.LogNashSutcliffeEfficiency(o, m),
+            GoodnessOfFit.KlingGuptaEfficiency(o, m), GoodnessOfFit.KlingGuptaEfficiencyMod(o, m),
+            GoodnessOfFit.PBIAS(o, m), GoodnessOfFit.RSR(o, m),
+            Correlation.Pearson(o, m), GoodnessOfFit.RSquared(o, m),
+            GoodnessOfFit.IndexOfAgreement(o, m), GoodnessOfFit.ModifiedIndexOfAgreement(o, m),
+            GoodnessOfFit.RefinedIndexOfAgreement(o, m), GoodnessOfFit.VolumetricEfficiency(o, m)
+        };
+        return ToolboxSelectNamed(asrt, allNames, allValues);
+    }
+    return method switch
+    {
+        "rmse" => GoodnessOfFit.RMSE(o, m, GetK()),
+        "mse" => GoodnessOfFit.MSE(o, m),
+        "mae" => GoodnessOfFit.MAE(o, m),
+        "mape" => GoodnessOfFit.MAPE(o, m),
+        "smape" => GoodnessOfFit.sMAPE(o, m),
+        "nse" => GoodnessOfFit.NashSutcliffeEfficiency(o, m),
+        "log_nse" => GoodnessOfFit.LogNashSutcliffeEfficiency(o, m),
+        "kge" => GoodnessOfFit.KlingGuptaEfficiency(o, m),
+        "kge_mod" => GoodnessOfFit.KlingGuptaEfficiencyMod(o, m),
+        "pbias" => GoodnessOfFit.PBIAS(o, m),
+        "rsr" => GoodnessOfFit.RSR(o, m),
+        "pearson" => Correlation.Pearson(o, m),
+        "r_squared" => GoodnessOfFit.RSquared(o, m),
+        "d" => GoodnessOfFit.IndexOfAgreement(o, m),
+        "d_mod" => GoodnessOfFit.ModifiedIndexOfAgreement(o, m),
+        "d_ref" => GoodnessOfFit.RefinedIndexOfAgreement(o, m),
+        "ve" => GoodnessOfFit.VolumetricEfficiency(o, m),
+        _ => throw new Exception($"unknown gof method: {method}")
+    };
+}
+
 // --dump: the sanctioned curation path (see fixtures/README.md and the Task 5 brief).
 // Author a fixture case with placeholder "expected" values, run
 // `verify_oracles.py --dump` (threads this flag through to `dotnet run -- --dump`), paste
@@ -3831,6 +4491,240 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 string where = $"gof/{caseName}";
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- toolbox branch ------------------------------------------------------------------
+    // Every Numerics utility group. Mirrors the GRAMMAR of numerics/support/toolbox_runner.hpp
+    // against the real C# statics; the dispatch below is this file's own transcription, so an
+    // oracle never runs the code under test. --dump supported for curation (see DumpLine()).
+    if (kindStr == "toolbox")
+    {
+        var tbSets = new Dictionary<string, double[]>();
+        if (root.TryGetProperty("datasets", out var tbDs))
+            foreach (var kv in tbDs.EnumerateObject())
+                tbSets[kv.Name] = kv.Value.EnumerateArray().Select(ParseNum).ToArray();
+
+        string group = root.GetProperty("group").GetString()!;
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            var data = new List<double[]>();
+            if (c.TryGetProperty("data", out var dataNode))
+                foreach (var d in dataNode.EnumerateArray())
+                    data.Add(d.ValueKind == JsonValueKind.String
+                        ? tbSets[d.GetString()!]
+                        : d.EnumerateArray().Select(ParseNum).ToArray());
+            JsonElement options = c.TryGetProperty("options", out var optionsEl) ? optionsEl : default;
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string method = asrt.GetProperty("method").GetString()!;
+                string where = $"toolbox/{group}/{caseName}/{method}";
+
+                if (dump)
+                {
+                    var dumpArgs = c.TryGetProperty("data", out var dn)
+                        ? dn.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+                    DumpLine($"toolbox/{group}", caseName, method, dumpArgs,
+                        () => (object)ToolboxDispatch(group, method, data, options, asrt));
+                    continue;
+                }
+
+                double actual;
+                try { actual = ToolboxDispatch(group, method, data, options, asrt); }
+                catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- optimizer branch (Task 8) --------------------------------------------------------
+    // Runs the SIX real C# optimizers (all deriving from the real Optimizer base -- unlike this
+    // port's NelderMead/BrentSearch, which are deliberately standalone; see optimizer.hpp's file
+    // header) against the built-in objectives fixtures/toolbox/optimizers.json names by
+    // `construct.objective` (OptimizerTestFunction() above). Mirrors optimizer_runner.hpp's
+    // grammar: construct carries method/objective/lower/upper/initial/maximize/seed; assertions
+    // carry value/parameter/status. "value" un-applies the real Optimizer's FunctionScale sign
+    // convention (Fitness = FunctionScale * raw, FunctionScale = -1 under Maximize()) back to the
+    // raw objective value, matching what the C++/R/Python runner reports.
+    if (kindStr == "optimizer")
+    {
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            var construct = c.GetProperty("construct");
+            string method = construct.GetProperty("method").GetString()!;
+            string objectiveName = construct.TryGetProperty("objective", out var objEl)
+                ? objEl.GetString()! : "DeJong";
+            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
+            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
+                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] upper = construct.TryGetProperty("upper", out var upperEl)
+                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] initial = construct.TryGetProperty("initial", out var initialEl)
+                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
+            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+
+            Optimizer optimizer = method switch
+            {
+                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
+                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
+                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
+                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
+                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
+                _ => throw new Exception($"unknown optimizer method: {method}")
+            };
+            if (seed.HasValue)
+            {
+                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
+                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
+            }
+
+            if (maximize) optimizer.Maximize(); else optimizer.Minimize();
+            double[] parameters = optimizer.BestParameterSet.Values;
+            double value = maximize ? -optimizer.BestParameterSet.Fitness : optimizer.BestParameterSet.Fitness;
+            string status = optimizer.Status.ToString();
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string am = asrt.GetProperty("method").GetString()!;
+                string where = $"optimizer/{caseName}/{am}";
+                if (am == "status")
+                {
+                    string expected = asrt.GetProperty("expected").GetString()!;
+                    if (status == expected) pass++;
+                    else { fail++; failures.Add($"{where}: expected {expected} got {status}"); }
+                    continue;
+                }
+                double actual = am switch
+                {
+                    "value" => value,
+                    "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
+                };
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- toolbox_cross_language branch (Task 9) --------------------------------------------
+    // The one fixture whose job is proving R and Python agree bit for bit: one seeded
+    // DifferentialEvolution run over a built-in objective, plus one Sobol block and one
+    // stratification, all reached through the SAME grammar the "optimizer"/"toolbox" branches
+    // above already use (OptimizerTestFunction/ToolboxDispatch) -- just nested three ways under
+    // one case instead of one kind per file, since the case's whole point is asserting all three
+    // together as a single cross-language guarantee. --dump supported for curation.
+    if (kindStr == "toolbox_cross_language")
+    {
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+
+            // --- optimizer sub-block (mirrors the "optimizer" kind branch above) -----------
+            var optBlock = c.GetProperty("optimizer");
+            var construct = optBlock.GetProperty("construct");
+            string method = construct.GetProperty("method").GetString()!;
+            string objectiveName = construct.TryGetProperty("objective", out var objEl)
+                ? objEl.GetString()! : "DeJong";
+            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
+            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
+                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] upper = construct.TryGetProperty("upper", out var upperEl)
+                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            double[] initial = construct.TryGetProperty("initial", out var initialEl)
+                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+            bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
+            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+
+            Optimizer optimizer = method switch
+            {
+                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
+                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
+                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
+                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
+                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
+                _ => throw new Exception($"unknown optimizer method: {method}")
+            };
+            if (seed.HasValue)
+            {
+                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
+                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
+            }
+            if (maximize) optimizer.Maximize(); else optimizer.Minimize();
+            double[] parameters = optimizer.BestParameterSet.Values;
+            double optValue = maximize ? -optimizer.BestParameterSet.Fitness : optimizer.BestParameterSet.Fitness;
+            string status = optimizer.Status.ToString();
+
+            foreach (var asrt in optBlock.GetProperty("assertions").EnumerateArray())
+            {
+                string am = asrt.GetProperty("method").GetString()!;
+                string where = $"toolbox_cross_language/{caseName}/optimizer/{am}";
+                if (dump)
+                {
+                    var dumpArgs = asrt.TryGetProperty("args", out var aEl)
+                        ? aEl.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+                    DumpLine("toolbox_cross_language/optimizer", caseName, am, dumpArgs, () => am switch
+                    {
+                        "value" => (object)optValue,
+                        "parameter" => (object)parameters[asrt.GetProperty("args")[0].GetInt32()],
+                        "status" => (object)status,
+                        _ => throw new Exception(
+                            $"unknown toolbox_cross_language optimizer assertion method: {am}")
+                    });
+                    continue;
+                }
+                if (am == "status")
+                {
+                    string expected = asrt.GetProperty("expected").GetString()!;
+                    if (status == expected) pass++;
+                    else { fail++; failures.Add($"{where}: expected {expected} got {status}"); }
+                    continue;
+                }
+                double actual = am switch
+                {
+                    "value" => optValue,
+                    "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    _ => throw new Exception(
+                        $"unknown toolbox_cross_language optimizer assertion method: {am}")
+                };
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+
+            // --- sobol / stratify sub-blocks, both routed through the same ToolboxDispatch the
+            // "toolbox" kind branch above uses (group "sampling"; no positional data, options
+            // only) ------------------------------------------------------------------------
+            foreach (var (subKey, methodName) in new[] { ("sobol", "sobol"), ("stratify", "stratify") })
+            {
+                var block = c.GetProperty(subKey);
+                JsonElement options = block.TryGetProperty("options", out var oEl) ? oEl : default;
+                var data = new List<double[]>();
+                foreach (var asrt in block.GetProperty("assertions").EnumerateArray())
+                {
+                    string where = $"toolbox_cross_language/{caseName}/{subKey}";
+                    if (dump)
+                    {
+                        DumpLine($"toolbox_cross_language/{subKey}", caseName, methodName,
+                            Array.Empty<JsonElement>(),
+                            () => (object)ToolboxDispatch("sampling", methodName, data, options, asrt));
+                        continue;
+                    }
+                    double actual;
+                    try { actual = ToolboxDispatch("sampling", methodName, data, options, asrt); }
+                    catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
+                    if (Compare(actual, asrt)) pass++;
+                    else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+                }
             }
         }
         continue;

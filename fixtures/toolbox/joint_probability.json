@@ -1,0 +1,63 @@
+{
+ "kind": "toolbox",
+ "group": "probability",
+ "source": "Numerics/Data/Statistics/Probability.cs",
+ "reference": "Numerics @ 2a0357a. Scraped verbatim from Test_Probability.cs's Test_JointABCD_Independent/PositivelyDependent/NegativelyDependent (the plain probabilities+DependencyType overload) and Test_JointABCD_Independent_PCM/PositivelyDependent_PCM/NegativelyDependent_PCM (the indicators+correlation-matrix overload, which -- with the default CorrelationMatrix dependency and a non-null matrix -- routes to JointProbabilityHPCM; see probability.hpp's file header). All six cases share the same four marginal probabilities [A, B, C, D] = [0.25, 0.35, 0.5, 0.5] from that test file. The negatively-dependent PCM case's tolerance (1e-5, not the upstream test's own default) matches the upstream test's own looser delta for that case (\"PCM is less precise than MVN\").",
+ "datasets": {
+  "abcd": [0.25, 0.35, 0.5, 0.5],
+  "abcd_indicators": [1, 1, 1, 1],
+  "corr_r0": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+  "corr_r0999": [1, 0.999, 0.999, 0.999, 0.999, 1, 0.999, 0.999, 0.999, 0.999, 1, 0.999, 0.999, 0.999, 0.999, 1],
+  "corr_rneg033": [1, -0.33, -0.33, -0.33, -0.33, 1, -0.33, -0.33, -0.33, -0.33, 1, -0.33, -0.33, -0.33, -0.33, 1]
+ },
+ "cases": [
+  {
+   "name": "independent",
+   "data": ["abcd"],
+   "options": {"dependency": "independent"},
+   "assertions": [
+    {"method": "joint", "expected": 0.021875, "mode": "abs", "tol": 1e-6, "source": "Test_JointABCD_Independent"}
+   ]
+  },
+  {
+   "name": "positively_dependent",
+   "data": ["abcd"],
+   "options": {"dependency": "positive"},
+   "assertions": [
+    {"method": "joint", "expected": 0.25, "mode": "abs", "tol": 1e-6, "source": "Test_JointABCD_PositivelyDependent"}
+   ]
+  },
+  {
+   "name": "negatively_dependent",
+   "data": ["abcd"],
+   "options": {"dependency": "negative"},
+   "assertions": [
+    {"method": "joint", "expected": 0.0, "mode": "abs", "tol": 1e-6, "source": "Test_JointABCD_NegativelyDependent"}
+   ]
+  },
+  {
+   "name": "independent_correlation_form",
+   "data": ["abcd", "abcd_indicators", "corr_r0"],
+   "options": {"dependency": "correlation"},
+   "assertions": [
+    {"method": "joint", "expected": 0.021875, "mode": "abs", "tol": 1e-6, "source": "Test_JointABCD_Independent_PCM (r = 0 correlation matrix routes JointProbability's indicator overload to JointProbabilityHPCM)"}
+   ]
+  },
+  {
+   "name": "positively_dependent_correlation_form",
+   "data": ["abcd", "abcd_indicators", "corr_r0999"],
+   "options": {"dependency": "correlation"},
+   "assertions": [
+    {"method": "joint", "expected": 0.25, "mode": "abs", "tol": 1e-6, "source": "Test_JointABCD_PositivelyDependent_PCM (r = 0.999)"}
+   ]
+  },
+  {
+   "name": "negatively_dependent_correlation_form",
+   "data": ["abcd", "abcd_indicators", "corr_rneg033"],
+   "options": {"dependency": "correlation"},
+   "assertions": [
+    {"method": "joint", "expected": 6.27974351606123e-14, "mode": "abs", "tol": 1e-5, "source": "Test_JointABCD_NegativelyDependent_PCM (r = -0.33); upstream's own delta for the PCM variant of this case is 1E-5, looser than the MVN variant's 1E-6 (\"PCM is less precise than MVN\")"}
+   ]
+  }
+ ]
+}

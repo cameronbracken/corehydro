@@ -102,6 +102,36 @@ dispatch_data_utility <- function(fn, args, data) {
   )
 }
 
+# goodness_of_fit [function, args, observed_dataset, modeled_dataset]: routes through
+# ch_toolbox_run_("gof", ...) (numerics/support/toolbox_runner.hpp), so this fixture kind and a
+# user's goodness_of_fit()/aic() call are the same code path. Mirrors dispatch_gof in
+# core/tests/test_fixtures.cpp.
+kGofFunctionMethod <- c(
+  MSE = "mse", MAE = "mae",
+  NashSutcliffeEfficiency = "nse",
+  KlingGuptaEfficiency = "kge", KlingGuptaEfficiencyMod = "kge_mod",
+  PBIAS = "pbias", RSR = "rsr",
+  IndexOfAgreement = "d", ModifiedIndexOfAgreement = "d_mod",
+  RefinedIndexOfAgreement = "d_ref", VolumetricEfficiency = "ve"
+)
+
+dispatch_goodness_of_fit <- function(fn, args, obs, mod) {
+  ns <- asNamespace("corehydror")
+  if (identical(fn, "AIC")) {
+    opts <- to_runner_json(list(k = as.integer(args[[1]]), log_likelihood = args[[2]]))
+    return(ns$ch_toolbox_run_("gof", "aic", list(), opts)$values[[1]])
+  }
+  if (fn %in% c("AICc", "BIC")) {
+    opts <- to_runner_json(list(n = as.integer(args[[1]]), k = as.integer(args[[2]]),
+                                log_likelihood = args[[3]]))
+    return(ns$ch_toolbox_run_("gof", if (identical(fn, "AICc")) "aicc" else "bic",
+                              list(), opts)$values[[1]])
+  }
+  method <- kGofFunctionMethod[[fn]]
+  if (is.null(method)) stop(sprintf("unknown goodness_of_fit function: %s", fn))
+  ns$ch_toolbox_run_("gof", method, list(obs, mod), "{}")$values[[1]]
+}
+
 # Threshold-selection diagnostics, split out of the switch above because both methods share one
 # glue call and differ only in which field the function name selects. args are
 # [u_min, u_max, n_thresholds, confidence_level, point_index]; `*PointCount` ignores the index and
@@ -129,6 +159,307 @@ dispatch_threshold_diagnostic <- function(fn, args, data) {
     stop(sprintf("unknown data_utility function: %s", fn))
   )
   as.double(r[[field]][[as.integer(args[[5]]) + 1L]])
+}
+
+# special_function/Correlation.* only: routes fixtures/special_functions/correlation.json's
+# three Correlation targets through ch_toolbox_run_ (numerics/support/toolbox_runner.hpp) rather
+# than adding bespoke glue, so the pinned pearson/spearman/kendalls_tau values become
+# cross-language checks. Every other special_function target stays C++-only and unrouted here,
+# as it was before this kind gained any R handling at all.
+kCorrelationSpecialFunctionMethod <- c(
+  "Correlation.pearson" = "pearson",
+  "Correlation.spearman" = "spearman",
+  "Correlation.kendalls_tau" = "kendall"
+)
+
+run_special_function_correlation_case <- function(target, args_raw) {
+  ns <- asNamespace("corehydror")
+  args <- vapply(args_raw, parse_num, numeric(1))
+  mid <- length(args) %/% 2L
+  x <- args[seq_len(mid)]
+  y <- args[(mid + 1L):length(args)]
+  method <- kCorrelationSpecialFunctionMethod[[target]]
+  ns$ch_toolbox_run_("correlation", method, list(x, y), "{}")$values[[1]]
+}
+
+# special_function/{RunningStatistics,RunningCovariance,Fourier,Statistics.percentile} (Task 3):
+# the same "route the pinned value through ch_toolbox_run_" pattern as Correlation.* above, one
+# subset per family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's
+# running_covariance_toolbox()/running_covariance_element(), the RunningStatistics.* table
+# entries, and the Fourier.{fft_at,real_fft_at,correlation_at} functions for the args
+# conventions and the reasoning for which targets route and which stay C++-only:
+# RunningStatistics's four population-normalized variants and its combined_*/clone_* cases have
+# no run_statistics()-reachable equivalent, and Fourier.autocorrelation_at deliberately stays off
+# this list because the toolbox "spectra.autocorrelation" method wraps the newer
+# data::Autocorrelation class, not Fourier::autocorrelation itself).
+kRunningStatisticsSpecialFunctionIndex <- c(
+  "RunningStatistics.count" = 0L, "RunningStatistics.minimum" = 1L,
+  "RunningStatistics.maximum" = 2L, "RunningStatistics.mean" = 3L,
+  "RunningStatistics.variance" = 4L, "RunningStatistics.standard_deviation" = 5L,
+  "RunningStatistics.coefficient_of_variation" = 6L, "RunningStatistics.skewness" = 7L,
+  "RunningStatistics.kurtosis" = 8L
+)
+
+kRunningCovarianceSpecialFunctionBlock <- c(
+  "RunningCovariance.mean_element" = 0L,
+  "RunningCovariance.covariance_element" = 1L,
+  "RunningCovariance.sample_covariance_element" = 2L,
+  "RunningCovariance.sample_correlation_element" = 3L,
+  "RunningCovariance.population_covariance_element" = 4L,
+  "RunningCovariance.population_correlation_element" = 5L
+)
+
+kFourierToolboxMethod <- c(
+  "Fourier.fft_at" = "dft",
+  "Fourier.real_fft_at" = "dft_real",
+  "Fourier.correlation_at" = "cross_correlation"
+)
+
+# special_function/{Histogram,Bilinear} (Task 4): the same routing pattern, one subset per
+# family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's Histogram.*
+# table entries and bilinear_log_floor_value() for the args conventions). Histogram.data_count/
+# get_bin_index_of have no toolbox-method equivalent (neither "statistics" nor "bins" exposes
+# them) and Histogram.adapt_* needs AddData(), which the toolbox arm's stateless construction
+# never calls, so those four stay unrouted -- the same "no run_toolbox-reachable equivalent"
+# reasoning as RunningStatistics's population_* variants. Search.* also stays unrouted: neither
+# "linear" nor "bilinear" returns a search index, only an interpolated y.
+kHistogramStatisticsIndex <- c(
+  "Histogram.mean" = 0L, "Histogram.median" = 1L, "Histogram.mode" = 2L,
+  "Histogram.standard_deviation" = 3L, "Histogram.lower_bound" = 4L, "Histogram.upper_bound" = 5L,
+  "Histogram.bin_width" = 6L, "Histogram.number_of_bins" = 7L
+)
+kHistogramBinsColumn <- c(
+  "Histogram.bin_lower_bound_at" = 0L, "Histogram.bin_upper_bound_at" = 1L,
+  "Histogram.bin_frequency_at" = 3L
+)
+
+kRoutedSpecialFunctionTargets <- c(
+  names(kCorrelationSpecialFunctionMethod), names(kRunningStatisticsSpecialFunctionIndex),
+  names(kRunningCovarianceSpecialFunctionBlock), names(kFourierToolboxMethod),
+  "Statistics.percentile", names(kHistogramStatisticsIndex), names(kHistogramBinsColumn),
+  "Bilinear.log_floor_value", "Probability.hpcm_joint", "DifferentialEvolution.best_value"
+)
+
+# special_function/Probability.hpcm_joint (Task 6): the same routing pattern, through the new
+# "probability" toolbox group's "joint" method (dependency = "correlation"). Mirrors
+# core/tests/test_fixtures.cpp's own routing exactly -- see that file's special_function_table()
+# entry for "Probability.hpcm_joint" for the args convention (args = [p_0..p_(n-1),
+# ind_0..ind_(n-1), corr(n*n flattened row-major)], n inferred from the argument count).
+# Probability.hpcm_conditional_at stays unrouted: it needs the conditionalProbabilities
+# out-value, which the "probability" toolbox group's "joint" method does not expose.
+# special_function/DifferentialEvolution.best_value (Task 8): reuses
+# fixtures/special_functions/differential_evolution.json (already pinned C++-only) rather than
+# duplicating it -- routed through ch_optim_run_ so the callback path itself is exercised.
+# args convention: [fn_id, direction, D, lower(D), upper(D), index] -- see
+# core/tests/test_fixtures.cpp's differential_evolution_best_value() for the authoritative
+# description. fn_id 0 = "quadratic" (sum_i (x_i - i)^2, 0-based i), 1 = "normal_loglik" (Normal
+# log-likelihood of {9,10,11,12,13} at mean=p[1], sd=p[2]) -- NATIVE R closures reproducing the
+# same two P3.3 numerical_derivative fixture functions, so this case exercises the real R
+# callback path. `value` un-applies OptimResult's raw-sign convention back to the C#
+# BestParameterSet.Fitness this fixture's literals were curated against (see
+# differential_evolution_best_value()'s own comment for why).
+run_special_function_differential_evolution_case <- function(args_raw) {
+  ns <- asNamespace("corehydror")
+  a <- vapply(args_raw, parse_num, numeric(1))
+  fn_id <- as.integer(a[1])
+  direction <- as.integer(a[2])
+  D <- as.integer(a[3])
+  lower <- a[4:(3 + D)]
+  upper <- a[(4 + D):(3 + 2 * D)]
+  index <- as.integer(a[4 + 2 * D])
+  sample <- c(9, 10, 11, 12, 13)
+  objective <- if (fn_id == 0) {
+    function(p) sum((p - (seq_along(p) - 1))^2)
+  } else {
+    # Explicit Normal log-density formula (not dnorm(log = TRUE)) so a chaotic DE search sees the
+    # SAME density implementation R and Python -- see corehydropy's test_fixtures.py mirror.
+    function(p) sum(-0.5 * ((sample - p[1]) / p[2])^2 - log(sqrt(2 * pi) * p[2]))
+  }
+  spec <- ns$to_spec_json(list(method = "de", lower = ns$spec_array(lower),
+                               upper = ns$spec_array(upper), maximize = (direction == 1)))
+  r <- ns$ch_optim_run_(spec, objective)
+  if (index == D) {
+    if (direction == 1) -r$value else r$value
+  } else {
+    r$parameters[[index + 1L]]
+  }
+}
+
+run_special_function_probability_hpcm_joint_case <- function(args_raw) {
+  ns <- asNamespace("corehydror")
+  args <- vapply(args_raw, parse_num, numeric(1))
+  n <- 0L
+  for (candidate in 1:20) {
+    if (2L * candidate + candidate * candidate == length(args)) { n <- candidate; break }
+  }
+  if (n == 0L) stop("cannot infer n for Probability.hpcm args")
+  p <- args[seq_len(n)]
+  ind <- args[(n + 1L):(2L * n)]
+  corr <- args[(2L * n + 1L):length(args)]
+  ns$ch_toolbox_run_("probability", "joint", list(p, ind, corr),
+                     '{"dependency":"correlation"}')$values[[1]]
+}
+
+# Histogram fixture args convention: args = [explicit_bins, data...] for the whole-histogram
+# scalar targets; the bin_*_at targets append one trailing 0-based bin-index probe. An empty R
+# list serializes to "[]", not "{}" (jsonlite's unnamed-list rule -- see to_runner_json's own
+# comment above), so explicit_bins == 0 returns the literal "{}" rather than to_runner_json(list()).
+histogram_toolbox_options <- function(explicit_bins) {
+  if (explicit_bins > 0) to_runner_json(list(bins = as.integer(explicit_bins))) else "{}"
+}
+
+run_special_function_case <- function(target, args_raw) {
+  ns <- asNamespace("corehydror")
+  args <- vapply(args_raw, parse_num, numeric(1))
+
+  if (target %in% names(kCorrelationSpecialFunctionMethod)) {
+    return(run_special_function_correlation_case(target, args_raw))
+  }
+  if (identical(target, "Statistics.percentile")) {
+    n <- length(args) - 2L
+    data <- args[seq_len(n)]
+    k <- args[[n + 1L]]
+    sorted <- args[[n + 2L]] != 0
+    opts <- if (sorted) '{"sorted":true}' else "{}"
+    return(ns$ch_toolbox_run_("statistics", "percentile", list(data, k), opts)$values[[1]])
+  }
+  if (target %in% names(kRunningStatisticsSpecialFunctionIndex)) {
+    r <- ns$ch_toolbox_run_("statistics", "summary", list(args), "{}")
+    return(r$values[[kRunningStatisticsSpecialFunctionIndex[[target]] + 1L]])
+  }
+  if (target %in% names(kRunningCovarianceSpecialFunctionBlock)) {
+    size <- as.integer(args[[1]])
+    num_pushes <- as.integer(args[[2]])
+    cols <- lapply(seq_len(size), function(j) {
+      vapply(seq_len(num_pushes), function(p) args[[2L + (p - 1L) * size + j]], numeric(1))
+    })
+    r <- ns$ch_toolbox_run_("statistics", "running_covariance", cols, "{}")
+    base <- 2L + num_pushes * size
+    i <- as.integer(args[[base + 1L]])
+    block <- kRunningCovarianceSpecialFunctionBlock[[target]]
+    if (block == 0L) return(r$values[[1L + i + 1L]])
+    j <- as.integer(args[[base + 2L]])
+    offset <- 1L + size + (block - 1L) * (size * size)
+    return(r$values[[offset + i * size + j + 1L]])
+  }
+  if (target %in% names(kFourierToolboxMethod)) {
+    if (identical(target, "Fourier.correlation_at")) {
+      n <- (length(args) - 1L) %/% 2L
+      data1 <- args[seq_len(n)]
+      data2 <- args[(n + 1L):(2L * n)]
+      index <- as.integer(args[[2L * n + 1L]])
+      r <- ns$ch_toolbox_run_("spectra", "cross_correlation", list(data1, data2), "{}")
+      return(r$values[[index + 1L]])
+    }
+    n <- length(args) - 2L
+    data <- args[seq_len(n)]
+    inverse <- args[[n + 1L]] != 0
+    index <- as.integer(args[[n + 2L]])
+    opts <- if (inverse) '{"inverse":true}' else "{}"
+    r <- ns$ch_toolbox_run_("spectra", kFourierToolboxMethod[[target]], list(data), opts)
+    return(r$values[[index + 1L]])
+  }
+  if (target %in% names(kHistogramStatisticsIndex)) {
+    explicit_bins <- as.integer(args[[1]])
+    data <- args[-1]
+    opts <- histogram_toolbox_options(explicit_bins)
+    r <- ns$ch_toolbox_run_("histogram", "statistics", list(data), opts)
+    return(r$values[[kHistogramStatisticsIndex[[target]] + 1L]])
+  }
+  if (target %in% names(kHistogramBinsColumn)) {
+    explicit_bins <- as.integer(args[[1]])
+    probe <- as.integer(args[[length(args)]])
+    data <- args[-c(1, length(args))]
+    opts <- histogram_toolbox_options(explicit_bins)
+    r <- ns$ch_toolbox_run_("histogram", "bins", list(data), opts)
+    return(r$values[[probe * 4L + kHistogramBinsColumn[[target]] + 1L]])
+  }
+  if (identical(target, "Bilinear.log_floor_value")) {
+    coords <- c(0, 1e-15, 1)
+    flat <- c(0, 0, 0, 1e-15, 1e-15, 1e-15, 1, 1, 1)
+    opts <- '{"x1_transform":"log","x2_transform":"log","y_transform":"log"}'
+    r <- ns$ch_toolbox_run_("interpolation", "bilinear",
+                            list(coords, coords, flat, args[1], args[2]), opts)
+    return(r$values[[1]])
+  }
+  if (identical(target, "Probability.hpcm_joint")) {
+    return(run_special_function_probability_hpcm_joint_case(args_raw))
+  }
+  if (identical(target, "DifferentialEvolution.best_value")) {
+    return(run_special_function_differential_evolution_case(args_raw))
+  }
+  stop(sprintf("unrouted special_function target: %s", target))
+}
+
+# optimizer [construct carries method/lower/upper/initial/maximize/seed/control; assertions carry
+# value/parameter/status]: the six ported optimizers (Task 8), run through ch_optim_run_ against a
+# NATIVE R closure -- not ch_toolbox_run_ -- because an optimizer's input is a live function, not
+# serializable data. Mirrors run_optimizer_kind in core/tests/test_fixtures.cpp. `construct` was
+# parsed with simplifyVector = FALSE, so a JSON array leaf is an R list of scalars; re-flattened
+# here (rather than round-tripped through jsonlite::toJSON) so a length-1 array (e.g. "brent"'s
+# single-element lower/upper) survives as a JSON array, not an auto-unboxed scalar.
+optimizer_spec_json <- function(ns, construct) {
+  num_vec <- function(x) if (is.null(x)) NULL else ns$spec_array(vapply(x, as.double, numeric(1)))
+  ns$to_spec_json(list(
+    method = construct$method,
+    lower = num_vec(construct$lower), upper = num_vec(construct$upper),
+    initial = num_vec(construct$initial),
+    maximize = if (is.null(construct$maximize)) NULL else isTRUE(construct$maximize),
+    seed = if (is.null(construct$seed)) NULL else as.integer(construct$seed),
+    control = if (is.null(construct$control) || length(construct$control) == 0L) NULL
+              else construct$control
+  ))
+}
+
+# The handful of TestFunctions.cs objectives fixtures/toolbox/optimizers.json names by string --
+# NATIVE R closures reproducing the same formulas as core/tests/optimization_test_functions.hpp,
+# so every optimizer fixture case exercises the real R callback path
+# (corehydro::numerics::support::GuardedObjective exists to protect exactly this call).
+optimizer_fixture_objective <- function(name) {
+  switch(name,
+    FXYZ = function(p) (4 * p[1] - 0.5)^2 + (3 * p[2] - 0.6)^2 + (2 * p[3] - 0.7)^2,
+    DeJong = function(p) sum(p^2),
+    Booth = function(p) (p[1] + 2 * p[2] - 7)^2 + (2 * p[1] + p[2] - 5)^2,
+    McCormick = function(p) sin(p[1] + p[2]) + (p[1] - p[2])^2 - 1.5 * p[1] + 2.5 * p[2] + 1,
+    FX = function(p) (p[1] + 3) * (p[1] - 1)^2,
+    stop(sprintf("unknown optimizer fixture objective: %s", name))
+  )
+}
+
+# toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
+# utility group runs through ch_toolbox_run_. Mirrors run_toolbox_kind in
+# core/tests/test_fixtures.cpp.
+toolbox_case_data <- function(case, datasets) {
+  if (is.null(case$data)) {
+    return(list())
+  }
+  lapply(case$data, function(d) {
+    if (is.character(d)) as.double(unlist(datasets[[d]])) else as.double(unlist(d))
+  })
+}
+
+toolbox_select <- function(r, a, group) {
+  select <- if (is.null(a$select)) "value" else a$select
+  if (identical(select, "length")) {
+    return(as.double(length(r$values)))
+  }
+  if (identical(select, "rows")) {
+    if (is.null(r$dims) || length(r$dims) < 1) {
+      stop(sprintf("toolbox select 'rows' has no dims (group '%s')", group))
+    }
+    return(as.double(r$dims[[1]]))
+  }
+  if (identical(select, "columns")) {
+    if (is.null(r$dims) || length(r$dims) < 2) {
+      stop(sprintf("toolbox select 'columns' has no dims (group '%s')", group))
+    }
+    return(as.double(r$dims[[2]]))
+  }
+  i <- if (!is.null(a$label)) match(a$label, r$names) else (if (is.null(a$index)) 0L else as.integer(a$index)) + 1L
+  if (is.na(i) || i > length(r$values)) {
+    stop("toolbox result selection out of range")
+  }
+  as.double(r$values[[i]])
 }
 
 check_assertion <- function(actual, a) {
@@ -1197,10 +1528,12 @@ test_that("oracle fixtures validate", {
   expect_gt(length(files), 0)
   for (f in files) {
     spec <- jsonlite::read_json(f, simplifyVector = FALSE)
-    # Only validate univariate_distribution, multivariate_distribution,
-    # bivariate_copula, mcmc_sampler, bootstrap, and model_estimation fixtures; skip other
-    # kinds (e.g. special_function) which are validated in C++ only and are not exposed to
-    # the R package.
+    # Only validate univariate_distribution, multivariate_distribution, bivariate_copula,
+    # mcmc_sampler, bootstrap, model_estimation, and toolbox fixtures, plus the
+    # special_function targets in kRoutedSpecialFunctionTargets (Correlation.*, the routable
+    # RunningStatistics.*/RunningCovariance.*/Fourier.* subsets, and Statistics.percentile --
+    # see run_special_function_case above); every other special_function kind stays validated
+    # in C++ only, not exposed to the R package.
     if (identical(spec$kind, "model_estimation")) {
       target <- spec$target
       datasets <- spec$datasets
@@ -1221,6 +1554,117 @@ test_that("oracle fixtures validate", {
       datasets <- spec$datasets
       for (case in spec$cases) {
         run_bootstrap_case(case$construct, case$assertions, datasets)
+      }
+      next
+    }
+    if (identical(spec$kind, "special_function")) {
+      file_target <- spec$target
+      for (case in spec$cases) {
+        target <- if (is.null(case$target)) file_target else case$target
+        if (!target %in% kRoutedSpecialFunctionTargets) next
+        actual <- run_special_function_case(target, case$args)
+        for (a in case$assertions) check_assertion(actual, a)
+      }
+      next
+    }
+    if (identical(spec$kind, "toolbox")) {
+      ns <- asNamespace("corehydror")
+      datasets <- spec$datasets
+      for (case in spec$cases) {
+        data <- toolbox_case_data(case, datasets)
+        opts_list <- if (is.null(case$options)) list() else case$options
+        # Only the "sobol" method reads a path (SobolSequence's constructor only touches it when
+        # dimension > 1); "stratify" never does, so this stays scoped to that one method rather
+        # than the whole "sampling" group.
+        if (identical(spec$group, "sampling") && identical(case$assertions[[1]]$method, "sobol")) {
+          # The Sobol direction-numbers file ships inside the package; path resolution is a
+          # wrapper concern (see numerics/support/toolbox/sampling.hpp's file header), so the
+          # fixture itself never carries a "path" key -- this harness injects its own resolved
+          # path, mirroring what sobol_sequence() does for a real caller.
+          opts_list$path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+        }
+        opts <- if (length(opts_list) == 0L) "{}" else ns$to_spec_json(opts_list)
+        for (a in case$assertions) {
+          r <- ns$ch_toolbox_run_(spec$group, a$method, data, opts)
+          check_assertion(toolbox_select(r, a, spec$group), a)
+        }
+      }
+      next
+    }
+    if (identical(spec$kind, "optimizer")) {
+      ns <- asNamespace("corehydror")
+      for (case in spec$cases) {
+        construct <- case$construct
+        objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
+        construct$objective <- NULL
+        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                              optimizer_fixture_objective(objective_name))
+        for (a in case$assertions) {
+          if (identical(a$method, "value")) {
+            check_assertion(r$value, a)
+          } else if (identical(a$method, "parameter")) {
+            check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "status")) {
+            expect_identical(r$status, a$expected)
+          } else {
+            stop(sprintf("unknown optimizer fixture assertion method: %s", a$method))
+          }
+        }
+      }
+      next
+    }
+    if (identical(spec$kind, "toolbox_cross_language")) {
+      # fixtures/toolbox/toolbox_cross_language.json's one case nests "optimizer" (shaped like an
+      # "optimizer"-kind construct/assertions), "sobol" and "stratify" (each shaped like a
+      # "toolbox"-kind group-"sampling" case's options/assertions) under one case name, so the
+      # single fixture proves all three reproduce identically across languages in one guarantee.
+      # Reuses optimizer_spec_json/optimizer_fixture_objective and ch_toolbox_run_/toolbox_select
+      # verbatim -- see the "optimizer" and "toolbox" blocks above.
+      ns <- asNamespace("corehydror")
+      for (case in spec$cases) {
+        opt <- case$optimizer
+        construct <- opt$construct
+        objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
+        construct$objective <- NULL
+        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                              optimizer_fixture_objective(objective_name))
+        for (a in opt$assertions) {
+          if (identical(a$method, "value")) {
+            check_assertion(r$value, a)
+          } else if (identical(a$method, "parameter")) {
+            check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "status")) {
+            expect_identical(r$status, a$expected)
+          } else {
+            stop(sprintf("unknown toolbox_cross_language optimizer assertion method: %s", a$method))
+          }
+        }
+        for (sub in c("sobol", "stratify")) {
+          block <- case[[sub]]
+          opts_list <- if (is.null(block$options)) list() else block$options
+          if (identical(sub, "sobol")) {
+            opts_list$path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+          }
+          opts <- if (length(opts_list) == 0L) "{}" else ns$to_spec_json(opts_list)
+          for (a in block$assertions) {
+            r <- ns$ch_toolbox_run_("sampling", sub, list(), opts)
+            check_assertion(toolbox_select(r, a, "sampling"), a)
+          }
+        }
+      }
+      next
+    }
+    if (identical(spec$kind, "goodness_of_fit")) {
+      datasets <- spec$datasets
+      for (case in spec$cases) {
+        fn <- case[["function"]]
+        args <- if (is.null(case$args)) list() else case$args
+        obs <- if (is.null(case$observed_dataset)) numeric() else
+          as.double(unlist(datasets[[case$observed_dataset]]))
+        mod <- if (is.null(case$modeled_dataset)) numeric() else
+          as.double(unlist(datasets[[case$modeled_dataset]]))
+        actual <- dispatch_goodness_of_fit(fn, args, obs, mod)
+        for (a in case$assertions) check_assertion(actual, a)
       }
       next
     }

@@ -1,0 +1,938 @@
+{
+ "kind": "toolbox",
+ "group": "spectra",
+ "source": "Numerics/Data/Statistics/Autocorrelation.cs; the 200-point series and the lag-0..23 covariance/lag-1..23 partial-autocorrelation literals are scraped verbatim from Test_Autocorrelation.cs's Test_Covariance and Test_Partial (both asserted there at 1e-4 tolerance against R's acf()).",
+ "reference": "Numerics @ 2a0357a. The correlation type is already cross-checked (against Fourier.Autocorrelation, not Autocorrelation.Function directly) by fixtures/special_functions/fourier.json's Fourier.autocorrelation_at, so this file pins only what that one does not: the covariance and partial types, and correlation_confidence_interval. Args convention: method 'autocorrelation' flattens the {lag, value} pairs row-major (dims = {n, 2}, matching numerics/support/toolbox_runner.hpp's run_spectra arm), so an assertion's index selects a FLAT position -- index = 2*lag + 1 reads the value column at that lag. Test_CorrelationConfidenceInterval (sizes {20,30,40,50,50,60} x intervals {0.90,0.95,0.99}) is a computed-comparison test with no fixed literals to transcribe (it asserts CorrelationConfidenceInterval against a freshly-computed Normal.StandardZ call, not a hardcoded number), and Numerics.Distributions.Normal.StandardZ is itself already oracle-pinned elsewhere in this repo's fixtures, so the confidence-interval expected values here were independently recomputed in Python (Python's stdlib statistics.NormalDist().inv_cdf) and confirmed reproducible against the real C# Autocorrelation.CorrelationConfidenceInterval by tools/verify_oracles.py, per corehydro CLAUDE.md rule 3. The duplicate size=50 case in the C# test is de-duplicated here (it is the same input run twice).",
+ "datasets": {
+  "sample": [
+   142.25,
+   141.23,
+   141.33,
+   140.82,
+   141.31,
+   140.58,
+   141.58,
+   142.15,
+   143.07,
+   142.85,
+   143.17,
+   142.54,
+   143.07,
+   142.26,
+   142.97,
+   143.86,
+   142.57,
+   142.19,
+   142.35,
+   142.63,
+   144.15,
+   144.73,
+   144.7,
+   144.97,
+   145.12,
+   144.78,
+   145.06,
+   143.94,
+   143.77,
+   144.8,
+   145.67,
+   145.44,
+   145.56,
+   145.61,
+   146.05,
+   145.74,
+   145.83,
+   143.88,
+   140.39,
+   139.34,
+   140.05,
+   137.93,
+   138.78,
+   139.59,
+   140.54,
+   141.31,
+   140.42,
+   140.18,
+   138.43,
+   138.97,
+   139.31,
+   139.26,
+   140.08,
+   141.1,
+   143.48,
+   143.28,
+   143.5,
+   143.12,
+   142.14,
+   142.54,
+   142.24,
+   142.16,
+   142.97,
+   143.69,
+   143.67,
+   144.65,
+   144.33,
+   144.82,
+   143.74,
+   144.9,
+   145.83,
+   146.97,
+   146.6,
+   146.55,
+   148.22,
+   148.37,
+   148.23,
+   148.73,
+   149.49,
+   149.09,
+   149.64,
+   148.42,
+   148.9,
+   149.97,
+   150.75,
+   150.88,
+   150.58,
+   150.64,
+   150.73,
+   149.75,
+   150.86,
+   150.7,
+   150.8,
+   151.38,
+   152.01,
+   152.58,
+   152.7,
+   152.95,
+   152.53,
+   151.5,
+   151.94,
+   151.46,
+   153.67,
+   153.88,
+   153.54,
+   153.74,
+   152.86,
+   151.56,
+   149.58,
+   150.93,
+   150.67,
+   150.5,
+   152.06,
+   153.14,
+   153.38,
+   152.55,
+   153.58,
+   151.08,
+   151.52,
+   150.24,
+   150.21,
+   148.13,
+   150.38,
+   150.9,
+   150.87,
+   152.18,
+   152.4,
+   152.38,
+   153.16,
+   152.29,
+   150.75,
+   152.37,
+   154.57,
+   154.99,
+   154.93,
+   154.23,
+   155.2,
+   154.89,
+   154.18,
+   153.12,
+   152.02,
+   150.19,
+   148.21,
+   145.93,
+   148.33,
+   145.18,
+   146.76,
+   147.28,
+   144.21,
+   145.94,
+   148.41,
+   147.43,
+   144.39,
+   146.5,
+   145.7,
+   142.72,
+   139.79,
+   145.5,
+   145.17,
+   144.6,
+   146.01,
+   147.34,
+   146.48,
+   147.85,
+   146.16,
+   144.37,
+   145.45,
+   147.65,
+   147.45,
+   148.2,
+   147.95,
+   146.48,
+   146.52,
+   146.24,
+   147.29,
+   148.55,
+   147.96,
+   148.31,
+   148.83,
+   153.41,
+   153.34,
+   152.71,
+   152.42,
+   150.81,
+   152.25,
+   152.91,
+   152.85,
+   152.6,
+   154.61,
+   153.81,
+   154.11,
+   155.03,
+   155.39,
+   155.6,
+   156.04,
+   156.93,
+   155.46,
+   156.27,
+   154.41,
+   154.98
+  ]
+ },
+ "cases": [
+  {
+   "name": "covariance_lags_0_23",
+   "data": [
+    "sample"
+   ],
+   "options": {
+    "type": "covariance"
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation",
+     "index": 1,
+     "expected": 22.105148,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 3,
+     "expected": 21.129089,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 5,
+     "expected": 20.268354,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 7,
+     "expected": 19.478147,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 9,
+     "expected": 18.595148,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 11,
+     "expected": 17.568448,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 13,
+     "expected": 16.893142,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 15,
+     "expected": 16.297683,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 17,
+     "expected": 15.644932,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 19,
+     "expected": 15.187918,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 21,
+     "expected": 14.655771,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 23,
+     "expected": 13.893153,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 25,
+     "expected": 13.017684,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 27,
+     "expected": 12.294179,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 29,
+     "expected": 11.298568,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 31,
+     "expected": 10.43392,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 33,
+     "expected": 9.836657,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 35,
+     "expected": 9.290689,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 37,
+     "expected": 8.714833,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 39,
+     "expected": 8.114298,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 41,
+     "expected": 7.537443,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 43,
+     "expected": 7.01491,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 45,
+     "expected": 6.621986,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 47,
+     "expected": 5.987118,
+     "mode": "abs",
+     "tol": 0.0001
+    }
+   ]
+  },
+  {
+   "name": "partial_lags_1_23",
+   "data": [
+    "sample"
+   ],
+   "options": {
+    "type": "partial"
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation",
+     "index": 1,
+     "expected": 0.955844726,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 3,
+     "expected": 0.037833688,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 5,
+     "expected": 0.020103563,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 7,
+     "expected": -0.063283074,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 9,
+     "expected": -0.101338145,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 11,
+     "expected": 0.148214184,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 13,
+     "expected": 0.042511772,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 15,
+     "expected": -0.023952331,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 17,
+     "expected": 0.07833128,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 19,
+     "expected": -0.075887833,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 21,
+     "expected": -0.117610117,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 23,
+     "expected": -0.085556279,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 25,
+     "expected": 0.03336607,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 27,
+     "expected": -0.118322713,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 29,
+     "expected": 0.051528628,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 31,
+     "expected": 0.089399743,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 33,
+     "expected": 0.0019337,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 35,
+     "expected": -0.005678822,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 37,
+     "expected": -0.104080153,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 39,
+     "expected": -0.032036409,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 41,
+     "expected": 0.083778031,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 43,
+     "expected": 0.078051358,
+     "mode": "abs",
+     "tol": 0.0001
+    },
+    {
+     "method": "autocorrelation",
+     "index": 45,
+     "expected": -0.120023159,
+     "mode": "abs",
+     "tol": 0.0001
+    }
+   ]
+  },
+  {
+   "name": "ci_n20_09",
+   "options": {
+    "sample_size": 20,
+    "confidence_level": 0.9
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.3678004522900572,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.36780045229005703,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n20_095",
+   "options": {
+    "sample_size": 20,
+    "confidence_level": 0.95
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.4382612702882906,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.4382612702882906,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n20_099",
+   "options": {
+    "sample_size": 20,
+    "confidence_level": 0.99
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.575972942117128,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.575972942117128,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n30_09",
+   "options": {
+    "sample_size": 30,
+    "confidence_level": 0.9
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.3003078117585029,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.3003078117585028,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n30_095",
+   "options": {
+    "sample_size": 30,
+    "confidence_level": 0.95
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.3578388287434313,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.3578388287434313,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n30_099",
+   "options": {
+    "sample_size": 30,
+    "confidence_level": 0.99
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.4702799379455181,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.4702799379455181,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n40_09",
+   "options": {
+    "sample_size": 40,
+    "confidence_level": 0.9
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.2600741939377787,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.2600741939377786,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n40_095",
+   "options": {
+    "sample_size": 40,
+    "confidence_level": 0.95
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.30989751615228067,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.30989751615228067,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n40_099",
+   "options": {
+    "sample_size": 40,
+    "confidence_level": 0.99
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.407274373150988,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.407274373150988,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n50_09",
+   "options": {
+    "sample_size": 50,
+    "confidence_level": 0.9
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.23261743073533472,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.23261743073533464,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n50_095",
+   "options": {
+    "sample_size": 50,
+    "confidence_level": 0.95
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.2771807648699355,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.2771807648699355,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n50_099",
+   "options": {
+    "sample_size": 50,
+    "confidence_level": 0.99
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.36427727354368983,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.36427727354368983,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n60_09",
+   "options": {
+    "sample_size": 60,
+    "confidence_level": 0.9
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.2123496901377306,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.21234969013773053,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n60_095",
+   "options": {
+    "sample_size": 60,
+    "confidence_level": 0.95
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.2530302623763319,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.2530302623763319,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  },
+  {
+   "name": "ci_n60_099",
+   "options": {
+    "sample_size": 60,
+    "confidence_level": 0.99
+   },
+   "assertions": [
+    {
+     "method": "autocorrelation_ci",
+     "label": "lower",
+     "expected": -0.3325381331772646,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    },
+    {
+     "method": "autocorrelation_ci",
+     "label": "upper",
+     "expected": 0.3325381331772646,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "curated: independently recomputed (standard normal quantile), verified by oracle gate"
+    }
+   ]
+  }
+ ]
+}

@@ -89,6 +89,7 @@
 #include "corehydro/models/time_series/transform_type.hpp"
 #include "corehydro/models/trend_functions/general_linear_function.hpp"
 #include "corehydro/models/trend_functions/support/trend_model_type.hpp"
+#include "corehydro/models/trend_functions/trend_model_factory.hpp"
 #include "corehydro/models/univariate_distribution/bulletin17c_distribution.hpp"
 #include "corehydro/models/univariate_distribution/competing_risks_model.hpp"
 #include "corehydro/models/univariate_distribution/mixture_model.hpp"
@@ -104,20 +105,60 @@
 
 namespace corehydro::models::spec {
 
-inline trend_functions::TrendModelType parse_trend_model_type(const std::string& name) {
+// The ONE place the eleven accepted trend type names are listed -- parse_trend_model_type()
+// and trend_model_type_names() (below) both read this table, so a name can't drift between
+// what a spec is allowed to say and what `trend_names()` (R/Python) advertises.
+inline const std::vector<std::pair<std::string, trend_functions::TrendModelType>>&
+trend_model_type_table() {
     using TT = trend_functions::TrendModelType;
-    if (name == "Constant") return TT::Constant;
-    if (name == "Cubic") return TT::Cubic;
-    if (name == "Exponential") return TT::Exponential;
-    if (name == "Linear") return TT::Linear;
-    if (name == "Logistic") return TT::Logistic;
-    if (name == "Power") return TT::Power;
-    if (name == "Quadratic") return TT::Quadratic;
-    if (name == "Reciprocal") return TT::Reciprocal;
-    if (name == "Sinusoidal") return TT::Sinusoidal;
-    if (name == "StepFunction") return TT::StepFunction;
-    if (name == "GeneralLinear") return TT::GeneralLinear;
+    static const std::vector<std::pair<std::string, TT>> table = {
+        {"Constant", TT::Constant},         {"Cubic", TT::Cubic},
+        {"Exponential", TT::Exponential},   {"Linear", TT::Linear},
+        {"Logistic", TT::Logistic},         {"Power", TT::Power},
+        {"Quadratic", TT::Quadratic},       {"Reciprocal", TT::Reciprocal},
+        {"Sinusoidal", TT::Sinusoidal},     {"StepFunction", TT::StepFunction},
+        {"GeneralLinear", TT::GeneralLinear},
+    };
+    return table;
+}
+
+inline trend_functions::TrendModelType parse_trend_model_type(const std::string& name) {
+    for (const auto& [n, t] : trend_model_type_table())
+        if (n == name) return t;
     throw std::runtime_error("unknown trend model type: " + name);
+}
+
+// The eleven trend type names build_spec_trend()/parse_trend_model_type() accept, in table
+// order. R's trend_names() and Python's trend_names() both call through to this via the
+// toolbox "trend"/"names" method rather than holding their own literal.
+inline const std::vector<std::string>& trend_model_type_names() {
+    static const std::vector<std::string> names = [] {
+        std::vector<std::string> out;
+        for (const auto& [n, t] : trend_model_type_table()) {
+            (void)t;
+            out.push_back(n);
+        }
+        return out;
+    }();
+    return names;
+}
+
+// Builds a STANDALONE trend model from a `{"type": ..., "start_index"?: ..., "values"?: [...]}`
+// spec, for direct evaluation -- the toolbox `trend` group (numerics/support/toolbox/trend.hpp)
+// is the one caller. This is deliberately NOT a replacement for the `trends` array loop in
+// build_univariate_distribution_model below, which calls `m->set_trend_model(p, type)` to
+// attach a trend to a live model: that path computes the trend's default parameter values from
+// the model's fitted distribution and DataFrame (see univariate_distribution_model_trends.hpp),
+// state a bare spec has no access to. What IS shared between the two paths is the stateless
+// type -> concrete-class mapping (trend_functions::make_trend_model, hoisted to
+// trend_model_factory.hpp so it is written once); this builder starts a trend at that
+// factory's class defaults and then applies only what the spec gives explicitly.
+inline std::unique_ptr<trend_functions::ITrendModel> build_spec_trend(const JsonValue& spec) {
+    std::unique_ptr<trend_functions::ITrendModel> t =
+        trend_functions::make_trend_model(parse_trend_model_type(spec.at("type").as_string()));
+    if (spec.contains("start_index")) t->set_start_index(spec.at("start_index").as_int());
+    if (spec.contains("values")) t->set_parameter_values(spec.at("values").as_double_vector());
+    return t;
 }
 
 // A `{ "family": ..., "parameters": [...] }` distribution spec -> a parameterized distribution.

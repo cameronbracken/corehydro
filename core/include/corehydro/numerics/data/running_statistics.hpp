@@ -150,6 +150,28 @@ class RunningStatistics {
         for (double value : values) push(value);
     }
 
+    // corehydro ADDITION: the stateless R/Python surface serializes the accumulator between
+    // calls (there is no persistent C++ object on that side), so a round-trip is needed to
+    // resume push()ing across calls. No C# counterpart.
+    static RunningStatistics from_state(std::int64_t n, double m1, double m2, double m3, double m4,
+                                        double min, double max) {
+        RunningStatistics rs;
+        rs.n_ = n;
+        rs.min_ = min;
+        rs.max_ = max;
+        rs.m1_ = m1;
+        rs.m2_ = m2;
+        rs.m3_ = m3;
+        rs.m4_ = m4;
+        return rs;
+    }
+
+    // corehydro ADDITION: raw-moment accessors for the same round-trip. No C# counterpart.
+    double m1_state() const { return m1_; }
+    double m2_state() const { return m2_; }
+    double m3_state() const { return m3_; }
+    double m4_state() const { return m4_; }
+
     // Creates a copy of the running statistics, independent of the original (mirrors
     // RunningStatistics.Clone(), added in v2.1.4; see the file header -- the C++ value-type
     // port already gives an independent copy via the implicit copy constructor, so this

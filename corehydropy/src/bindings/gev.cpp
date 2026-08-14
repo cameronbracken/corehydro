@@ -69,9 +69,6 @@ PYBIND11_MODULE(_core, m) {
     // Bivariate copulas (Clayton, ...).
     register_copulas(m);
 
-    // Quasi-random sampling (Sobol sequence).
-    register_sobol(m);
-
     // MCMC sampling (model registry + RWMH).
     register_mcmc(m);
 
@@ -92,4 +89,7 @@ PYBIND11_MODULE(_core, m) {
 
     // The shared distribution-spec runner (composite distributions, copulas, multivariate).
     register_dist_spec(m);
+
+    // The shared toolbox runner (correlation and the rest of the Numerics utility layer).
+    register_toolbox(m);
 }

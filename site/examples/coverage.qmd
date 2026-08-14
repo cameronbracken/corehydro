@@ -23,7 +23,7 @@ estimation, and analysis layers of Numerics plus all of RMC-BestFit.
 | `05_mcmc_adaptive` | Adaptive sampler comparison | [Recast](05-mcmc-samplers/python.ipynb) | PyMC benchmark sections dropped |
 | `06_mcmc_diagnostics` | R-hat, ESS, autocorrelation | [Recast](06-mcmc-diagnostics/python.ipynb) | diagnostics on arbitrary external chains not exposed |
 | `07_integration_and_root_finding` | Numerical integration, root finding | Out of scope | the Numerics `Mathematics.Integration` / `RootFinding` namespaces are not part of the port |
-| `08_optimization` | Local and global optimizers | Out of scope | only the optimizers the estimation layer needs are ported (BFGS, Nelder-Mead, Brent, Powell, DE, MLSL), and they are internal |
+| `08_optimization` | Local and global optimizers | [Recast](13-custom-objective/python.ipynb) | all six ported optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent) are now public via `optim_minimize()`/`optim_maximize()`, not just internal to the estimation layer; example 13 fits a different (rating-curve) likelihood rather than reproducing this notebook's specific test functions |
 | `09_statistics` | Statistical tests, transforms, outliers | [Ported (partial)](09-statistics/python.ipynb) | MGBT, Box-Cox/Yeo-Johnson, plotting positions, bootstrap covered; t/Mann-Whitney/KS tests and Jenks breaks are not ported |
 | `10_time_series` | TimeSeries container operations | Out of scope | the heavy Numerics `TimeSeries` container (interpolation, file I/O, USGS download) is a documented severance; AR/MA/ARIMA/ARIMAX *models* are ported |
 | `11_machine_learning` | K-Means, random forest, KNN, GMM | Out of scope | the `Numerics.MachineLearning` namespace is not part of the port |
@@ -44,6 +44,8 @@ cross-language identity.
 
 | Example | Covers |
 |---------|--------|
+| [12. Model evaluation](12-model-evaluation/python.ipynb) | `goodness_of_fit()`, `gof_test()` (KS/AD), `gof_rmse()`, `aic()`/`aic_weights()`, and `classification_metrics()`, ranking four candidate distributions against the same record example 21 uses |
+| [13. A custom objective](13-custom-objective/python.ipynb) | `optim_minimize()`/`optim_maximize()` over a hand-written likelihood the port does not otherwise know how to fit; global (`"de"`) versus local (`"bfgs"`) optimization, and the sign convention of `optim_maximize()`'s reported value |
 | [23. Censored flood frequency](23-censored-flood-frequency/python.ipynb) | historical and paleoflood interval observations, perception thresholds, Hirsch-Stedinger plotting positions, Multiple Grubbs-Beck low outliers |
 | [24. Nonstationary frequency analysis](24-nonstationary-trends/python.ipynb) | trends on a distribution parameter, stationary versus nonstationary model comparison by AIC, BIC, and DIC |
 | [25. Estimation methods](25-estimation-methods/python.ipynb) | `fit_mle`, `fit_map`, `fit_bayesian`, and `fit_gmm` on the same censored record; AIC/BIC/DIC, profile versus credible intervals, R-hat/ESS, and estimation diagnostics |

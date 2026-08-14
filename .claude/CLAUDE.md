@@ -79,6 +79,33 @@ joint-exceedance/log-likelihood/theta-bounds verbs), and the five multivariate d
 `mvdist_bivariate_empirical`, with MultivariateNormal's marginal/conditional/rectangle-probability)
 all reach both languages through this one pair of headers rather than per-family glue.
 
+`core/include/corehydro/numerics/support/toolbox_runner.hpp` (siblings of `dist_runner.hpp` and
+`estimation/support/fit_runner.hpp`, likewise corehydro additions with no upstream C# counterpart)
+is the one place a general-purpose Numerics utility method is dispatched: eleven groups --
+`correlation`, `gof`, `statistics`, `spectra`, `histogram`, `interpolation`, `regression`,
+`sampling`, `probability`, `link`, `trend` -- each a standalone-compiling header under
+`numerics/support/toolbox/` (plus `common.hpp` for the shared `ToolboxResult`/data-access
+helpers), holding that group's `detail::run_<group>` function. Bulk data travels as native double
+vectors (not JSON, unlike `dist_spec`'s construct grammar) since a goodness-of-fit call carrying
+two arbitrary-length series has no business paying a JSON parse; scalars, enum names, and flags
+travel in a small `options_json`. `numerics/support/optimizer_runner.hpp` is the sibling for the
+six ported optimizers (Differential Evolution, BFGS, Powell, MLSL, Nelder-Mead, Brent): unlike
+every other toolbox/fixture surface, an optimizer's INPUT is a live callable, not serializable
+data, so it is a separate runner rather than a `run_toolbox` group, and `GuardedObjective` there
+is the one place a host-language (R/Python) callback crosses into the shared core, latching the
+first host-language exception a callback throws so it survives the ported `Optimizer::minimize()`
+catch-all instead of being replaced by an internal C++ exception. Four callers drive each runner
+and none owns any evaluation logic: the cpp11 glue (`corehydror/src/toolbox.cpp`), the pybind11
+glue (`corehydropy/src/bindings/toolbox.cpp`), the C++ fixture runner
+(`core/tests/test_fixtures.cpp`), and the dotnet oracle emitter -- so a fixture case, an oracle
+replay, and a user's `correlation()` or `optim_minimize()` call are the same code path. The
+`toolbox`/`optimizer` fixture kinds carry this surface's oracle values; the one purpose-built
+`toolbox_cross_language` kind (`fixtures/toolbox/toolbox_cross_language.json`) nests an
+`optimizer`-kind case and two `toolbox`-kind (group `sampling`) cases under one case name, proving
+a seeded DE run's parameters and two deterministic generators reproduce identically across all
+four runners in one fixture, the toolbox layer's counterpart to the estimation layer's
+`fit_cross_language.json`.
+
 `core/include/corehydro/numerics/sampling/mcmc/` holds the MCMC subsystem: `mcmc_sampler.hpp` (the
 shared base -- seeding cascade, chain initialization incl. the MAP/DE/Hessian path, the serial
 `sample()` driver), all 8 concrete samplers (`rwmh.hpp`, `arwmh.hpp`, `demcz.hpp`, `demczs.hpp`,
@@ -617,3 +644,42 @@ testthat 4886/0; pytest 1007**; `R CMD check --as-cran` holds at the same three 
 WARNING. The end-to-end cross-language check (a mixture pdf and seeded draw, a Clayton copula MPL
 fit and joint exceedance probability, and a trivariate normal conditional mean) reproduces byte
 for byte between R and Python.
+
+The numerics toolbox layer (branch `surface-numerics-toolbox`, August 2026) made the last major
+slice of Numerics -- everything that is not a distribution, copula, model, or estimator --
+reachable from R and Python: correlation, goodness of fit (17 continuous metrics, 6 classification
+metrics, 3 distribution test statistics, 3 information criteria, 2 model-weight verbs), descriptive
+and streaming statistics, spectral analysis (autocorrelation with PACF and confidence bands,
+cross-correlation, DFT), histograms, interpolation, linear regression, Sobol sequences,
+stratification, joint probability, the link-function layer, trend evaluation, and all six ported
+optimizers over a user-written R or Python objective. Two shared runners carry it (see "Layout &
+the vendoring invariant" above): `toolbox_runner.hpp` (eleven groups, each a standalone header
+under `numerics/support/toolbox/`) for serializable-data verbs, and `optimizer_runner.hpp` for the
+six optimizers, which take a live host-language callback instead -- the first place an R/Python
+callback crosses into the shared core, with `GuardedObjective` protecting a host-language exception
+raised inside it from being swallowed by the ported `Optimizer::minimize()`'s own catch-all. Four
+bugs surfaced and were fixed because this surface got its first real oracle or its first public
+callers: `Numerics/Data/Statistics/Autocorrelation.cs` had been unported since Phase 0 (nothing
+needed it until the `spectra` group did) and is now ported, with its sibling `Correlation.cs`'s
+matrix overloads recorded as a documented (previously unrecorded) severance alongside it;
+`linear_regression()`'s `vcov()` was unscaled, returning the raw `(X'X)^-1` term instead of that
+term times `sigma^2`, disagreeing with its own `standard_errors` by a factor of `sigma^2`; and the
+optimizer callback guard had a hole for `"bfgs"`/`"mlsl"` that let an internal C++ exception from
+the guard's own sentinel value replace the user's original R/Python exception before the guard was
+consulted, now closed by wrapping all six optimizer arms in a `try` that always prefers the guard's
+stored exception. A purpose-built `toolbox_cross_language` fixture kind
+(`fixtures/toolbox/toolbox_cross_language.json`) nests a seeded DE run and two deterministic
+generators (Sobol, stratify) under one case, the toolbox layer's counterpart to the estimation
+layer's `fit_cross_language.json`; it also surfaced an honest, non-guaranteed corner of the
+cross-language promise, written up in the two new worked examples (12, model evaluation; 13, a
+custom objective) rather than papered over: a seeded `"de"`/`"mlsl"` run's PARAMETERS reproduce
+bit-exact across languages (the PRNG lives entirely in the shared C++ core), but the reported
+objective VALUE does not, because it comes from re-evaluating the user's OWN R/Python likelihood
+code, and R's and Python's floating-point libraries do not guarantee bit-identical rounding for the
+same formula -- BFGS, being local and gradient-based, is sensitive enough to those same sub-ulp
+differences that even its parameters drift slightly (~1e-10) language to language. `correlation()`,
+shipped in this phase's first task but never added to either documentation index, is swept in along
+with every other new export across six new `_pkgdown.yml`/`quartodoc.sections` groups. The version
+bump to **0.6.0** records it. Final numbers: **ctest 84/84; oracle gate 5209 reproduced, 0 failed,
+11 skipped; testthat 5634/0; pytest 1344**; `R CMD check --as-cran` holds at the same three NOTEs
+with no WARNING.

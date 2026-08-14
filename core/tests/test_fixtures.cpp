@@ -11,6 +11,7 @@
 // Special functions use a flat target->lambda map.
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -55,6 +56,8 @@
 #include "corehydro/numerics/data/multiple_grubbs_beck_test.hpp"
 #include "corehydro/numerics/data/plotting_positions.hpp"
 #include "corehydro/numerics/data/yeo_johnson.hpp"
+#include "corehydro/numerics/support/toolbox_runner.hpp"
+#include "corehydro/numerics/support/optimizer_runner.hpp"
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
@@ -85,7 +88,6 @@
 #include "corehydro/numerics/math/linalg/lu_decomposition.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
-#include "corehydro/numerics/math/optimization/differential_evolution.hpp"
 #include "corehydro/numerics/math/special/beta.hpp"
 #include "corehydro/numerics/math/special/bessel.hpp"
 #include "corehydro/numerics/math/special/erf.hpp"
@@ -108,12 +110,14 @@
 #include "corehydro/numerics/tools.hpp"
 #include "corehydro/numerics/utilities/extension_methods.hpp"
 #include "check.hpp"
+#include "optimization_test_functions.hpp"
 #include "third_party/json.hpp"
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 namespace dist = corehydro::numerics::distributions;
 namespace supp = corehydro::numerics::distributions::support;
+namespace tbx = corehydro::numerics::support;
 namespace prob = corehydro::numerics::data::probability;
 using dist::EstimationMethod;
 using dist::GeneralizedExtremeValue;
@@ -234,7 +238,6 @@ namespace bfsamp = corehydro::numerics::sampling;
 namespace bfutil = corehydro::numerics::utilities;
 namespace bffourier = corehydro::numerics::math::fourier;
 namespace bfdiff = corehydro::numerics::math::differentiation;
-namespace bfopt = corehydro::numerics::math::optimization;
 
 // Correlation fixture args are [x..., y...] concatenated and split at the midpoint
 // (equal-length samples) -- see fixtures/special_functions/correlation.json / README.md.
@@ -270,18 +273,33 @@ static la::Matrix cholesky_matrix_from_flat(const std::vector<double>& a, int n)
 }
 
 // RunningCovariance fixture args: [size, num_pushes, data_flat(num_pushes*size), trailing
-// index/indices] -- see fixtures/special_functions/running_covariance.json for the
-// convention. Builds a RunningCovarianceMatrix and replays `num_pushes` push()es of
-// `size`-length rows sliced from the flattened data.
-static bfdata::RunningCovarianceMatrix running_covariance_build(const std::vector<double>& a, int size,
-                                                                  int num_pushes) {
-    bfdata::RunningCovarianceMatrix rcm(size);
-    for (int p = 0; p < num_pushes; ++p) {
-        std::vector<double> row(a.begin() + 2 + static_cast<std::ptrdiff_t>(p) * size,
-                                 a.begin() + 2 + static_cast<std::ptrdiff_t>(p + 1) * size);
-        rcm.push(row);
-    }
-    return rcm;
+// index/indices] -- see fixtures/special_functions/running_covariance.json for the convention.
+// Routed through run_toolbox (numerics/support/toolbox_runner.hpp's "statistics.running_covariance"
+// method) rather than building bfdata::RunningCovarianceMatrix directly, so these pinned
+// special_function values also exercise the toolbox dispatch path the running_covariance() verb
+// runs through in both languages. The toolbox convention transposes the fixture's row-major push
+// data into one column vector per variable; running_covariance_element() below then knows the
+// flat-packed result layout (n, mean, covariance, sample_covariance, sample_correlation,
+// population_covariance, population_correlation -- see run_statistics's own comment) well enough
+// to pick a single (block, i, j) element back out.
+static tbx::ToolboxResult running_covariance_toolbox(const std::vector<double>& a, int size, int num_pushes) {
+    std::vector<std::vector<double>> columns(static_cast<std::size_t>(size),
+                                             std::vector<double>(static_cast<std::size_t>(num_pushes)));
+    for (int p = 0; p < num_pushes; ++p)
+        for (int j = 0; j < size; ++j)
+            columns[static_cast<std::size_t>(j)][static_cast<std::size_t>(p)] =
+                a[2 + static_cast<std::size_t>(p) * static_cast<std::size_t>(size) + static_cast<std::size_t>(j)];
+    return tbx::run_toolbox("statistics", "running_covariance", columns, "{}");
+}
+
+// block: 0 = mean (i only), 1 = covariance, 2 = sample_covariance, 3 = sample_correlation,
+// 4 = population_covariance, 5 = population_correlation (each size x size, i, j both used).
+static double running_covariance_element(const tbx::ToolboxResult& r, int size, int block, int i, int j = 0) {
+    std::size_t block_size = static_cast<std::size_t>(size) * static_cast<std::size_t>(size);
+    std::size_t offset = 1;  // skip n
+    if (block == 0) return r.values[offset + static_cast<std::size_t>(i)];
+    offset += static_cast<std::size_t>(size) + static_cast<std::size_t>(block - 1) * block_size;
+    return r.values[offset + static_cast<std::size_t>(i) * static_cast<std::size_t>(size) + static_cast<std::size_t>(j)];
 }
 
 // RunningStatistics combine fixture args: [n1, sample1(n1 values), sample2(remaining
@@ -315,21 +333,31 @@ static bfdata::RunningStatistics running_statistics_clone(const std::vector<doub
 //  - Fourier.autocorrelation_at: args = [series..., lag_max, lag] -- n = len(args) - 2;
 //    autocorrelation(series, (int)lag_max) (lag_max == -1 triggers the default auto-lag),
 //    returns the acf value (column 1) at row `lag`.
+//
+// fft_at/real_fft_at/correlation_at are routed through run_toolbox (numerics/support/
+// toolbox_runner.hpp's "spectra.dft"/"dft_real"/"cross_correlation" methods, each a direct
+// wrapper with no behavior substitution), so these pinned special_function values also exercise
+// the toolbox dispatch path the dft()/dft_real()/cross_correlation() verbs run through.
+// autocorrelation_at stays a DIRECT call to bffourier::autocorrelation(): the toolbox
+// "spectra.autocorrelation" method wraps the newer, oracle-proven-equivalent
+// data::Autocorrelation class instead (see autocorrelation.hpp), not this FFT-based function, so
+// routing this particular target through it would silently swap which implementation gets
+// exercised rather than merely adding a toolbox-path check.
 static double fourier_fft_at(const std::vector<double>& a) {
     std::size_t n = a.size() - 2;
     std::vector<double> data(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));
     bool inverse = a[n] != 0.0;
     int index = static_cast<int>(a[n + 1]);
-    bffourier::fft(data, inverse);
-    return data[static_cast<std::size_t>(index)];
+    std::string opts = inverse ? "{\"inverse\":true}" : "{}";
+    return tbx::run_toolbox("spectra", "dft", {data}, opts).values.at(static_cast<std::size_t>(index));
 }
 static double fourier_real_fft_at(const std::vector<double>& a) {
     std::size_t n = a.size() - 2;
     std::vector<double> data(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));
     bool inverse = a[n] != 0.0;
     int index = static_cast<int>(a[n + 1]);
-    bffourier::real_fft(data, inverse);
-    return data[static_cast<std::size_t>(index)];
+    std::string opts = inverse ? "{\"inverse\":true}" : "{}";
+    return tbx::run_toolbox("spectra", "dft_real", {data}, opts).values.at(static_cast<std::size_t>(index));
 }
 static double fourier_correlation_at(const std::vector<double>& a) {
     std::size_t n = (a.size() - 1) / 2;
@@ -337,8 +365,8 @@ static double fourier_correlation_at(const std::vector<double>& a) {
     std::vector<double> data2(a.begin() + static_cast<std::ptrdiff_t>(n),
                                a.begin() + static_cast<std::ptrdiff_t>(2 * n));
     int index = static_cast<int>(a[2 * n]);
-    auto corr = bffourier::correlation(data1, data2);
-    return corr[static_cast<std::size_t>(index)];
+    return tbx::run_toolbox("spectra", "cross_correlation", {data1, data2}, "{}")
+        .values.at(static_cast<std::size_t>(index));
 }
 static double fourier_autocorrelation_at(const std::vector<double>& a) {
     std::size_t n = a.size() - 2;
@@ -431,6 +459,16 @@ static double numerical_derivative_hessian_element(const bfdiff::ScalarFunction&
 // ReportFailure (irrelevant here: whether hitting Max*Reached throws-then-is-swallowed or
 // never throws at all, BestParameterSet ends up identical either way -- see optimizer.hpp's
 // file header for the full analysis).
+//
+// Task 8 (the optimizer runner) routes this dispatch through tbx::run_optimizer rather than
+// constructing DifferentialEvolution directly, so this fixture -- and its pinned oracle values --
+// now also exercises optimizer_runner.hpp's own dispatch/spec-parsing path, the same one the R and
+// Python glue use. `index == D` (the fitness case) needs one adjustment: OptimResult::value is
+// deliberately un-scaled back to the RAW objective's own sign convention (see
+// optimizer_runner.hpp's fill_optimizer_result), whereas this fixture's pinned literals were
+// curated against C#'s `BestParameterSet.Fitness`, which is the INTERNAL function_scale-scaled
+// value (negative of the raw value under Maximize()). Re-applying that scale here keeps the
+// already-pinned oracle values unchanged rather than re-curating them.
 static double differential_evolution_best_value(const std::vector<double>& a) {
     int fn_id = static_cast<int>(a[0]);
     int direction = static_cast<int>(a[1]);
@@ -439,16 +477,16 @@ static double differential_evolution_best_value(const std::vector<double>& a) {
     std::vector<double> upper(a.begin() + 3 + D, a.begin() + 3 + 2 * D);
     int index = static_cast<int>(a[static_cast<std::size_t>(3 + 2 * D)]);
 
-    bfopt::DifferentialEvolution::Objective f =
-        fn_id == 0 ? bfopt::DifferentialEvolution::Objective(numerical_derivative_quadratic)
-                   : bfopt::DifferentialEvolution::Objective(numerical_derivative_normal_loglik);
-    bfopt::DifferentialEvolution de(f, D, lower, upper);
-    if (direction == 0)
-        de.minimize();
-    else
-        de.maximize();
-    return index == D ? de.best_parameter_set().fitness
-                       : de.best_parameter_set().values[static_cast<std::size_t>(index)];
+    tbx::Objective f = fn_id == 0 ? tbx::Objective(numerical_derivative_quadratic)
+                                  : tbx::Objective(numerical_derivative_normal_loglik);
+    json spec;
+    spec["method"] = "de";
+    spec["lower"] = lower;
+    spec["upper"] = upper;
+    spec["maximize"] = (direction == 1);
+    tbx::OptimResult r = tbx::run_optimizer(spec.dump(), f);
+    if (index == D) return direction == 1 ? -r.value : r.value;
+    return r.parameters.at(static_cast<std::size_t>(index));
 }
 
 // Histogram fixture args convention (fixtures/special_functions/histogram.json): args =
@@ -462,6 +500,13 @@ static bfdata::Histogram histogram_build(const std::vector<double>& a, std::size
     std::vector<double> data(a.begin() + 1, a.end() - static_cast<std::ptrdiff_t>(trailing));
     if (explicit_bins > 0) return bfdata::Histogram(data, explicit_bins);
     return bfdata::Histogram(data);
+}
+
+// Same [explicit_bins, ...] convention as histogram_build(), but for the run_toolbox-routed
+// Histogram.* table entries below: builds the "histogram" group's options_json (bins > 0 sets
+// the "bins" option; bins == 0 omits it, selecting the Rice-Rule constructor).
+static std::string histogram_toolbox_options(int explicit_bins) {
+    return explicit_bins > 0 ? "{\"bins\":" + std::to_string(explicit_bins) + "}" : "{}";
 }
 
 // Histogram.adapt_* fixture args convention (fixtures/special_functions/histogram.json):
@@ -484,14 +529,15 @@ static bfdata::Histogram histogram_build_adapt(const std::vector<double>& a) {
 // axes, y[i][j] = x1_values[i] for every j) with X1/X2/Y all Transform::Logarithmic -- the
 // exact grid the new v2.1.4 Test_LogarithmicFloorMatchesLinearInterpolation uses to prove
 // Bilinear's guarded log10 floor now matches Linear's (see bilinear.hpp's file header).
+// Routed through run_toolbox (numerics/support/toolbox_runner.hpp's "interpolation.bilinear"
+// method) rather than calling bfdata::Bilinear directly, so this pinned value also exercises
+// the toolbox dispatch path interpolate_2d() runs through in both languages.
 static double bilinear_log_floor_value(const std::vector<double>& a) {
     std::vector<double> coords = {0.0, 1e-15, 1.0};
-    std::vector<std::vector<double>> y = {{0.0, 0.0, 0.0}, {1e-15, 1e-15, 1e-15}, {1.0, 1.0, 1.0}};
-    bfdata::Bilinear bilin(coords, coords, y);
-    bilin.x1_transform = bfdata::Transform::Logarithmic;
-    bilin.x2_transform = bfdata::Transform::Logarithmic;
-    bilin.y_transform = bfdata::Transform::Logarithmic;
-    return bilin.interpolate(a[0], a[1]);
+    std::vector<double> flat = {0.0, 0.0, 0.0, 1e-15, 1e-15, 1e-15, 1.0, 1.0, 1.0};
+    std::string opts = "{\"x1_transform\":\"log\",\"x2_transform\":\"log\",\"y_transform\":\"log\"}";
+    auto r = tbx::run_toolbox("interpolation", "bilinear", {coords, coords, flat, {a[0]}, {a[1]}}, opts);
+    return r.values.at(0);
 }
 
 // Probability.hpcm_* fixture args convention (fixtures/special_functions/probability.json):
@@ -603,21 +649,24 @@ special_function_table() {
         {"Bessel.i0", [](const std::vector<double>& a) { return sf::bessel::i0(a[0]); }},
         {"Bessel.i1", [](const std::vector<double>& a) { return sf::bessel::i1(a[0]); }},
         // Correlation family (args: [x..., y...], split at the midpoint -- see
-        // fixtures/special_functions/correlation.json for the full convention)
+        // fixtures/special_functions/correlation.json for the full convention). Routed through
+        // run_toolbox (numerics/support/toolbox_runner.hpp) rather than calling bfdata::pearson
+        // etc. directly, so these pinned special_function values also exercise the toolbox
+        // dispatch path the "correlation" verb runs through in both languages.
         {"Correlation.pearson", [](const std::vector<double>& a) {
             std::vector<double> x, y;
             correlation_split(a, x, y);
-            return bfdata::pearson(x, y);
+            return tbx::run_toolbox("correlation", "pearson", {x, y}, "{}").values.at(0);
         }},
         {"Correlation.spearman", [](const std::vector<double>& a) {
             std::vector<double> x, y;
             correlation_split(a, x, y);
-            return bfdata::spearman(x, y);
+            return tbx::run_toolbox("correlation", "spearman", {x, y}, "{}").values.at(0);
         }},
         {"Correlation.kendalls_tau", [](const std::vector<double>& a) {
             std::vector<double> x, y;
             correlation_split(a, x, y);
-            return bfdata::kendalls_tau(x, y);
+            return tbx::run_toolbox("correlation", "kendall", {x, y}, "{}").values.at(0);
         }},
         // LU family (args: flattened row-major matrix, n inferred from length -- reuses
         // the Cholesky-fixture flatten helpers above, which are generic matrix-args
@@ -642,13 +691,17 @@ special_function_table() {
             return lu.solve(la::Vector(std::move(rhs)))[i];
         }},
         // Percentile (args: [data_1..data_n, k, data_is_sorted (0.0/1.0)] -- see
-        // fixtures/special_functions/percentile.json for the convention)
+        // fixtures/special_functions/percentile.json for the convention). Routed through
+        // run_toolbox (numerics/support/toolbox_runner.hpp's "statistics.percentile" method)
+        // rather than calling bfdata::percentile directly, so these pinned special_function
+        // values also exercise the toolbox dispatch path the percentile() verb runs through.
         {"Statistics.percentile", [](const std::vector<double>& a) {
             std::size_t n = a.size() - 2;
             std::vector<double> data(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));
             double k = a[n];
             bool sorted = a[n + 1] != 0.0;
-            return bfdata::percentile(data, k, sorted);
+            std::string opts = sorted ? "{\"sorted\":true}" : "{}";
+            return tbx::run_toolbox("statistics", "percentile", {data, {k}}, opts).values.at(0);
         }},
         // Extensions/MersenneTwister ranged-draw family (see
         // fixtures/special_functions/extension_methods.json for the conventions)
@@ -682,75 +735,103 @@ special_function_table() {
             return static_cast<double>(result);
         }},
         // RunningCovarianceMatrix family (args: [size, num_pushes, data_flat, trailing
-        // index/indices] -- see fixtures/special_functions/running_covariance.json)
+        // index/indices] -- see fixtures/special_functions/running_covariance.json). Routed
+        // through run_toolbox (running_covariance_toolbox()/running_covariance_element() above)
+        // rather than building bfdata::RunningCovarianceMatrix directly.
         {"RunningCovariance.mean_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
-            return rcm.mean()(i, 0);
+            return running_covariance_element(r, size, 0, i);
         }},
         {"RunningCovariance.covariance_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.covariance()(i, j);
+            return running_covariance_element(r, size, 1, i, j);
         }},
         {"RunningCovariance.sample_covariance_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.sample_covariance()(i, j);
+            return running_covariance_element(r, size, 2, i, j);
         }},
         {"RunningCovariance.sample_correlation_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.sample_correlation()(i, j);
+            return running_covariance_element(r, size, 3, i, j);
         }},
         {"RunningCovariance.population_covariance_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.population_covariance()(i, j);
+            return running_covariance_element(r, size, 4, i, j);
         }},
         {"RunningCovariance.population_correlation_element", [](const std::vector<double>& a) {
             int size = static_cast<int>(a[0]);
             int num_pushes = static_cast<int>(a[1]);
-            auto rcm = running_covariance_build(a, size, num_pushes);
+            auto r = running_covariance_toolbox(a, size, num_pushes);
             std::size_t base = 2 + static_cast<std::size_t>(num_pushes) * static_cast<std::size_t>(size);
             int i = static_cast<int>(a[base]);
             int j = static_cast<int>(a[base + 1]);
-            return rcm.population_correlation()(i, j);
+            return running_covariance_element(r, size, 5, i, j);
         }},
         // RunningStatistics family (args: the flat sample; see
-        // fixtures/special_functions/running_statistics.json)
-        {"RunningStatistics.mean", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).mean(); }},
-        {"RunningStatistics.variance", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).variance(); }},
-        {"RunningStatistics.standard_deviation", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).standard_deviation(); }},
+        // fixtures/special_functions/running_statistics.json). The nine properties the toolbox
+        // "statistics.summary" method exposes are routed through run_toolbox, so these pinned
+        // special_function values also exercise the toolbox dispatch path the
+        // running_statistics() verb runs through in both languages. The four population-
+        // normalized variants (population_variance/population_standard_deviation/
+        // population_skewness/population_kurtosis) have no run_statistics equivalent -- the
+        // "summary" method's fixed 13-name result mirrors only what running_statistics() exposes
+        // -- so those four, plus combined_*/clone_* below (which exercise combine()/clone(), not
+        // reachable through any toolbox verb), stay direct bfdata::RunningStatistics calls.
+        {"RunningStatistics.mean", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(3);  // "mean"
+        }},
+        {"RunningStatistics.variance", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(4);  // "variance"
+        }},
+        {"RunningStatistics.standard_deviation", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(5);  // "sd"
+        }},
         {"RunningStatistics.population_variance", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_variance(); }},
         {"RunningStatistics.population_standard_deviation", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_standard_deviation(); }},
-        {"RunningStatistics.coefficient_of_variation", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).coefficient_of_variation(); }},
-        {"RunningStatistics.skewness", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).skewness(); }},
+        {"RunningStatistics.coefficient_of_variation", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(6);  // "cv"
+        }},
+        {"RunningStatistics.skewness", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(7);  // "skewness"
+        }},
         {"RunningStatistics.population_skewness", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_skewness(); }},
-        {"RunningStatistics.kurtosis", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).kurtosis(); }},
+        {"RunningStatistics.kurtosis", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(8);  // "kurtosis"
+        }},
         {"RunningStatistics.population_kurtosis", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).population_kurtosis(); }},
-        {"RunningStatistics.minimum", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).minimum(); }},
-        {"RunningStatistics.maximum", [](const std::vector<double>& a) { return bfdata::RunningStatistics(a).maximum(); }},
-        {"RunningStatistics.count", [](const std::vector<double>& a) { return static_cast<double>(bfdata::RunningStatistics(a).count()); }},
+        {"RunningStatistics.minimum", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(1);  // "minimum"
+        }},
+        {"RunningStatistics.maximum", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(2);  // "maximum"
+        }},
+        {"RunningStatistics.count", [](const std::vector<double>& a) {
+            return tbx::run_toolbox("statistics", "summary", {a}, "{}").values.at(0);  // "n"
+        }},
         // RunningStatistics combine family (args: [n1, sample1(n1), sample2(m)] -- see
         // running_statistics_combined() above and fixtures/special_functions/running_statistics.json)
         {"RunningStatistics.combined_minimum", [](const std::vector<double>& a) { return running_statistics_combined(a).minimum(); }},
@@ -798,30 +879,79 @@ special_function_table() {
         // fixtures/special_functions/differential_evolution.json for the args convention)
         {"DifferentialEvolution.best_value", differential_evolution_best_value},
         // Histogram family (args: [explicit_bins, data..., trailing probe?] -- see
-        // histogram_build() above and fixtures/special_functions/histogram.json)
+        // histogram_build() above and fixtures/special_functions/histogram.json). The
+        // whole-histogram scalar targets and the bin_*_at element lookups are routed through
+        // run_toolbox (numerics/support/toolbox_runner.hpp's "histogram.statistics"/"histogram.bins"
+        // methods) rather than calling bfdata::Histogram directly, so these pinned special_function
+        // values also exercise the toolbox dispatch path histogram() runs through in both
+        // languages -- and, for bin_*_at, the FIRST toolbox method to return a real matrix through
+        // `dims`. data_count and get_bin_index_of have no toolbox-method equivalent (neither
+        // "statistics" nor "bins" exposes them) and adapt_* needs AddData(), which the toolbox
+        // arm's stateless one-shot construction never calls, so those stay direct calls, mirroring
+        // the RunningStatistics.population_variance precedent above.
         {"Histogram.number_of_bins", [](const std::vector<double>& a) {
-            return static_cast<double>(histogram_build(a, 0).number_of_bins());
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(7);  // "bins"
         }},
-        {"Histogram.bin_width", [](const std::vector<double>& a) { return histogram_build(a, 0).bin_width(); }},
-        {"Histogram.lower_bound", [](const std::vector<double>& a) { return histogram_build(a, 0).lower_bound(); }},
-        {"Histogram.upper_bound", [](const std::vector<double>& a) { return histogram_build(a, 0).upper_bound(); }},
+        {"Histogram.bin_width", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(6);  // "bin_width"
+        }},
+        {"Histogram.lower_bound", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(4);  // "lower"
+        }},
+        {"Histogram.upper_bound", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(5);  // "upper"
+        }},
         {"Histogram.data_count", [](const std::vector<double>& a) {
             return static_cast<double>(histogram_build(a, 0).data_count());
         }},
-        {"Histogram.mean", [](const std::vector<double>& a) { return histogram_build(a, 0).mean(); }},
-        {"Histogram.median", [](const std::vector<double>& a) { return histogram_build(a, 0).median(); }},
-        {"Histogram.mode", [](const std::vector<double>& a) { return histogram_build(a, 0).mode(); }},
+        {"Histogram.mean", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(0);  // "mean"
+        }},
+        {"Histogram.median", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(1);  // "median"
+        }},
+        {"Histogram.mode", [](const std::vector<double>& a) {
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(2);  // "mode"
+        }},
         {"Histogram.standard_deviation", [](const std::vector<double>& a) {
-            return histogram_build(a, 0).standard_deviation();
+            std::vector<double> data(a.begin() + 1, a.end());
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            return tbx::run_toolbox("histogram", "statistics", {data}, opts).values.at(3);  // "sd"
         }},
         {"Histogram.bin_lower_bound_at", [](const std::vector<double>& a) {
-            return histogram_build(a, 1).bin(static_cast<int>(a.back())).lower_bound;
+            int probe = static_cast<int>(a.back());
+            std::vector<double> data(a.begin() + 1, a.end() - 1);
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            auto r = tbx::run_toolbox("histogram", "bins", {data}, opts);
+            return r.values.at(static_cast<std::size_t>(probe) * 4 + 0);
         }},
         {"Histogram.bin_upper_bound_at", [](const std::vector<double>& a) {
-            return histogram_build(a, 1).bin(static_cast<int>(a.back())).upper_bound;
+            int probe = static_cast<int>(a.back());
+            std::vector<double> data(a.begin() + 1, a.end() - 1);
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            auto r = tbx::run_toolbox("histogram", "bins", {data}, opts);
+            return r.values.at(static_cast<std::size_t>(probe) * 4 + 1);
         }},
         {"Histogram.bin_frequency_at", [](const std::vector<double>& a) {
-            return static_cast<double>(histogram_build(a, 1).bin(static_cast<int>(a.back())).frequency);
+            int probe = static_cast<int>(a.back());
+            std::vector<double> data(a.begin() + 1, a.end() - 1);
+            auto opts = histogram_toolbox_options(static_cast<int>(a[0]));
+            auto r = tbx::run_toolbox("histogram", "bins", {data}, opts);
+            return r.values.at(static_cast<std::size_t>(probe) * 4 + 3);
         }},
         {"Histogram.get_bin_index_of", [](const std::vector<double>& a) {
             return static_cast<double>(histogram_build(a, 1).get_bin_index_of(a.back()));
@@ -864,7 +994,11 @@ special_function_table() {
             return pp[static_cast<std::size_t>(static_cast<int>(a[1]))];
         }},
         // Search family (args: [values..., x, start] -- see
-        // fixtures/special_functions/search.json)
+        // fixtures/special_functions/search.json). Stays a direct bfdata::search:: call: neither
+        // toolbox method the "interpolation" group exposes ("linear"/"bilinear") returns a search
+        // index, only an interpolated y -- the same "no run_toolbox-reachable equivalent" reasoning
+        // that keeps RunningStatistics.population_variance and Fourier.autocorrelation_at direct
+        // above.
         {"Search.sequential", [](const std::vector<double>& a) {
             std::size_t n = a.size() - 2;
             std::vector<double> values(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(n));
@@ -904,8 +1038,21 @@ special_function_table() {
         {"Bilinear.log_floor_value", bilinear_log_floor_value},
         // Probability.hpcm_* family (args: see probability_hpcm_joint()/
         // probability_hpcm_conditional_at() above and
-        // fixtures/special_functions/probability.json)
-        {"Probability.hpcm_joint", [](const std::vector<double>& a) { return probability_hpcm_joint(a); }},
+        // fixtures/special_functions/probability.json). Task 6 routes hpcm_joint (but not
+        // hpcm_conditional_at, which needs the conditional_probabilities out-param the
+        // "probability" toolbox group's "joint" method does not expose) through run_toolbox,
+        // the same "pin once, exercise the toolbox dispatch too" pattern Correlation.*/
+        // Bilinear.log_floor_value use -- so this pinned value is also a cross-language check.
+        {"Probability.hpcm_joint",
+         [](const std::vector<double>& a) {
+             int n = probability_hpcm_n(a.size());
+             std::vector<double> p(a.begin(), a.begin() + n);
+             std::vector<double> ind(a.begin() + n, a.begin() + 2 * n);
+             std::vector<double> corr(a.begin() + 2 * n, a.end());
+             return tbx::run_toolbox("probability", "joint", {p, ind, corr},
+                                     "{\"dependency\":\"correlation\"}")
+                 .values.at(0);
+         }},
         {"Probability.hpcm_conditional_at", probability_hpcm_conditional_at},
         // Tools.log10 (args: [x] -- see fixtures/special_functions/tools.json)
         {"Tools.log10", [](const std::vector<double>& a) { return corehydro::numerics::clamped_log10(a[0]); }},
@@ -1253,27 +1400,38 @@ static void run_generic(const json& spec) {
 
 // --- goodness_of_fit path -------------------------------------------------------------
 
-namespace gof = corehydro::numerics::data;
+static std::string format_g17(double v) {
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%.17g", v);
+    return std::string(buf);
+}
 
+// Delegates to numerics/support/toolbox_runner.hpp so a fixture case and a user's
+// goodness_of_fit() call are one code path. The function-name-to-method mapping is this file's
+// only remaining knowledge of the group.
 static double dispatch_gof(const std::string& fn, const std::vector<double>& args,
                             const std::vector<double>& obs, const std::vector<double>& mod) {
-    if (fn == "AIC")  return gof::GoodnessOfFit::aic(static_cast<int>(args[0]), args[1]);
-    if (fn == "AICc") return gof::GoodnessOfFit::aicc(static_cast<int>(args[0]),
-                                                       static_cast<int>(args[1]), args[2]);
-    if (fn == "BIC")  return gof::GoodnessOfFit::bic(static_cast<int>(args[0]),
-                                                      static_cast<int>(args[1]), args[2]);
-    if (fn == "MSE")  return gof::GoodnessOfFit::mse(obs, mod);
-    if (fn == "MAE")  return gof::GoodnessOfFit::mae(obs, mod);
-    if (fn == "NashSutcliffeEfficiency")  return gof::GoodnessOfFit::nash_sutcliffe_efficiency(obs, mod);
-    if (fn == "KlingGuptaEfficiency")     return gof::GoodnessOfFit::kling_gupta_efficiency(obs, mod);
-    if (fn == "KlingGuptaEfficiencyMod")  return gof::GoodnessOfFit::kling_gupta_efficiency_mod(obs, mod);
-    if (fn == "PBIAS")                    return gof::GoodnessOfFit::pbias(obs, mod);
-    if (fn == "RSR")                      return gof::GoodnessOfFit::rsr(obs, mod);
-    if (fn == "IndexOfAgreement")         return gof::GoodnessOfFit::index_of_agreement(obs, mod);
-    if (fn == "ModifiedIndexOfAgreement") return gof::GoodnessOfFit::modified_index_of_agreement(obs, mod);
-    if (fn == "RefinedIndexOfAgreement")  return gof::GoodnessOfFit::refined_index_of_agreement(obs, mod);
-    if (fn == "VolumetricEfficiency")     return gof::GoodnessOfFit::volumetric_efficiency(obs, mod);
-    throw std::runtime_error("unknown goodness_of_fit function: " + fn);
+    static const std::map<std::string, std::string> kMethods = {
+        {"MSE", "mse"}, {"MAE", "mae"},
+        {"NashSutcliffeEfficiency", "nse"},
+        {"KlingGuptaEfficiency", "kge"}, {"KlingGuptaEfficiencyMod", "kge_mod"},
+        {"PBIAS", "pbias"}, {"RSR", "rsr"},
+        {"IndexOfAgreement", "d"}, {"ModifiedIndexOfAgreement", "d_mod"},
+        {"RefinedIndexOfAgreement", "d_ref"}, {"VolumetricEfficiency", "ve"},
+    };
+    if (fn == "AIC")
+        return tbx::run_toolbox("gof", "aic", {},
+                                "{\"k\":" + std::to_string(static_cast<int>(args[0])) +
+                                    ",\"log_likelihood\":" + format_g17(args[1]) + "}").values[0];
+    if (fn == "AICc" || fn == "BIC")
+        return tbx::run_toolbox("gof", fn == "AICc" ? "aicc" : "bic", {},
+                                "{\"n\":" + std::to_string(static_cast<int>(args[0])) +
+                                    ",\"k\":" + std::to_string(static_cast<int>(args[1])) +
+                                    ",\"log_likelihood\":" + format_g17(args[2]) + "}").values[0];
+    auto it = kMethods.find(fn);
+    if (it == kMethods.end())
+        throw std::runtime_error("unknown goodness_of_fit function: " + fn);
+    return tbx::run_toolbox("gof", it->second, {obs, mod}, "{}").values[0];
 }
 
 static void run_goodness_of_fit(const json& spec) {
@@ -1382,6 +1540,190 @@ static void run_data_utility(const json& spec) {
         for (const auto& as : c["assertions"]) {
             std::string where = "data_utility/" + name;
             check_value(actual, as, where);
+        }
+    }
+}
+
+// --- toolbox path -----------------------------------------------------------------------
+// Every Numerics utility group (correlation, goodness of fit, statistics, interpolation, ...)
+// runs through numerics/support/toolbox_runner.hpp. A case carries its data vectors and an
+// options object; each assertion names a method and selects one value out of the result.
+
+static std::vector<std::vector<double>> toolbox_data(const json& c, const json& datasets) {
+    std::vector<std::vector<double>> out;
+    if (!c.contains("data")) return out;
+    for (const auto& d : c["data"]) {
+        std::vector<double> v;
+        if (d.is_string()) {
+            for (const auto& e : datasets[d.get<std::string>()]) v.push_back(parse_num(e));
+        } else {
+            for (const auto& e : d) v.push_back(parse_num(e));
+        }
+        out.push_back(std::move(v));
+    }
+    return out;
+}
+
+static double toolbox_select(const tbx::ToolboxResult& r, const json& as, const std::string& group) {
+    std::string select = as.value("select", std::string("value"));
+    if (select == "length") return static_cast<double>(r.values.size());
+    if (select == "rows") {
+        if (r.dims.empty())
+            throw std::runtime_error("toolbox select 'rows' has no dims (group '" + group + "')");
+        return static_cast<double>(r.dims[0]);
+    }
+    if (select == "columns") {
+        if (r.dims.size() < 2)
+            throw std::runtime_error("toolbox select 'columns' has no dims (group '" + group + "')");
+        return static_cast<double>(r.dims[1]);
+    }
+    std::size_t i = 0;
+    if (as.contains("label")) {
+        std::string label = as["label"].get<std::string>();
+        bool found = false;
+        for (std::size_t k = 0; k < r.names.size(); ++k)
+            if (r.names[k] == label) { i = k; found = true; break; }
+        if (!found) throw std::runtime_error("toolbox result has no label '" + label + "'");
+    } else {
+        i = static_cast<std::size_t>(as.value("index", 0));
+    }
+    if (i >= r.values.size())
+        throw std::runtime_error("toolbox result index out of range");
+    return r.values[i];
+}
+
+// Set once in main() from argv[1] (the fixtures directory); the Sobol direction-numbers file
+// lives at core/data/ next to it. Path resolution is a wrapper concern (see
+// numerics/support/toolbox/sampling.hpp's file header) -- fixtures/toolbox/sampling.json's own
+// `options` never carries a `path` key, so this harness injects its own resolved path before
+// calling run_toolbox, the same way corehydror's sobol_sequence() and corehydropy's
+// sobol_sequence() resolve theirs.
+static std::string g_sobol_path;
+
+static void run_toolbox_kind(const json& spec) {
+    json datasets = spec.value("datasets", json::object());
+    std::string group = spec["group"].get<std::string>();
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+        auto data = toolbox_data(c, datasets);
+        json options = c.contains("options") ? c["options"] : json::object();
+        // Only the "sobol" method reads a path (SobolSequence's constructor only touches it
+        // when dimension > 1); "stratify" never does, so this stays scoped to that one method
+        // rather than the whole "sampling" group.
+        bool is_sobol = !c["assertions"].empty() &&
+                        c["assertions"][0]["method"].get<std::string>() == "sobol";
+        if (group == "sampling" && is_sobol) options["path"] = g_sobol_path;
+        std::string options_str = options.dump();
+        for (const auto& as : c["assertions"]) {
+            std::string where = "toolbox/" + group + "/" + name;
+            auto r = tbx::run_toolbox(group, as["method"].get<std::string>(), data, options_str);
+            check_value(toolbox_select(r, as, group), as, where);
+        }
+    }
+}
+
+// --- optimizer path (Task 8) -------------------------------------------------------------
+//
+// fixtures/toolbox/optimizers.json cases name a built-in objective by the same name TestFunctions.cs
+// uses (DeJong/FXYZ/Booth/McCormick/FX/...); this table maps that name to the real C++ function in
+// core/tests/optimization_test_functions.hpp -- the C++ analogue of the native closures the R and
+// Python fixture runners write for the same names, so every fixture case exercises the real
+// host-language callback path optimizer_runner.hpp exists to protect. `construct` is passed
+// straight through to tbx::run_optimizer as the spec JSON (minus the "objective" key, which is not
+// part of the runner's own grammar -- see optimizer_runner.hpp's file header on why no objective
+// registry lives there).
+static tbx::Objective optimizer_fixture_objective(const std::string& name) {
+    if (name == "FXYZ") return tbx::Objective(test_functions::fxyz);
+    if (name == "DeJong") return tbx::Objective(test_functions::de_jong);
+    if (name == "Booth") return tbx::Objective(test_functions::booth);
+    if (name == "McCormick") return tbx::Objective(test_functions::mccormick);
+    if (name == "FX")
+        return tbx::Objective(
+            [](const std::vector<double>& v) { return test_functions::fx(v[0]); });
+    throw std::runtime_error("unknown optimizer fixture objective: " + name);
+}
+
+static void run_optimizer_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+        json construct = c["construct"];
+        std::string objective_name = construct.value("objective", "DeJong");
+        construct.erase("objective");
+        tbx::OptimResult r =
+            tbx::run_optimizer(construct.dump(), optimizer_fixture_objective(objective_name));
+        for (const auto& as : c["assertions"]) {
+            std::string method = as["method"].get<std::string>();
+            std::string where = "optimizer/" + name + "/" + method;
+            if (method == "value") {
+                check_value(r.value, as, where);
+            } else if (method == "parameter") {
+                std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
+                check_value(r.parameters.at(i), as, where);
+            } else if (method == "status") {
+                if (r.status == as["expected"].get<std::string>())
+                    chtest::report_pass();
+                else
+                    chtest::report_fail(__FILE__, __LINE__,
+                                        where + ": expected status " +
+                                            as["expected"].get<std::string>() + ", got " + r.status);
+            } else {
+                throw std::runtime_error("unknown optimizer fixture assertion method: " + method);
+            }
+        }
+    }
+}
+
+// --- toolbox_cross_language path (Task 9) -----------------------------------------------
+//
+// fixtures/toolbox/toolbox_cross_language.json's one case nests three sub-blocks -- "optimizer"
+// (shaped exactly like an "optimizer"-kind case's construct/assertions), "sobol" and "stratify"
+// (each shaped exactly like a "toolbox"-kind group-"sampling" case's options/assertions) -- under
+// one case name, because the fixture's whole job is proving all three reproduce identically
+// across languages in ONE guarantee rather than three separate files. Reuses
+// optimizer_fixture_objective (above) and tbx::run_toolbox/toolbox_select (below) verbatim; no
+// new evaluation logic, just the nesting.
+static void run_toolbox_cross_language_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+
+        // optimizer sub-block
+        {
+            json construct = c["optimizer"]["construct"];
+            std::string objective_name = construct.value("objective", "DeJong");
+            construct.erase("objective");
+            tbx::OptimResult r =
+                tbx::run_optimizer(construct.dump(), optimizer_fixture_objective(objective_name));
+            for (const auto& as : c["optimizer"]["assertions"]) {
+                std::string method = as["method"].get<std::string>();
+                std::string where = "toolbox_cross_language/" + name + "/optimizer/" + method;
+                if (method == "value") {
+                    check_value(r.value, as, where);
+                } else if (method == "parameter") {
+                    std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
+                    check_value(r.parameters.at(i), as, where);
+                } else if (method == "status") {
+                    if (r.status == as["expected"].get<std::string>())
+                        chtest::report_pass();
+                    else
+                        chtest::report_fail(__FILE__, __LINE__,
+                                            where + ": expected status " +
+                                                as["expected"].get<std::string>() + ", got " + r.status);
+                } else {
+                    throw std::runtime_error(
+                        "unknown toolbox_cross_language optimizer assertion method: " + method);
+                }
+            }
+        }
+        // sobol / stratify sub-blocks: group "sampling", no positional data, options only.
+        for (const char* sub : {"sobol", "stratify"}) {
+            json options = c[sub].value("options", json::object());
+            if (std::string(sub) == "sobol") options["path"] = g_sobol_path;
+            std::string options_str = options.dump();
+            for (const auto& as : c[sub]["assertions"]) {
+                std::string where = "toolbox_cross_language/" + name + "/" + sub;
+                auto r = tbx::run_toolbox("sampling", sub, {}, options_str);
+                check_value(toolbox_select(r, as, "sampling"), as, where);
+            }
         }
     }
 }
@@ -3171,6 +3513,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: %s <fixtures-dir>\n", argv[0]);
         return 2;
     }
+    g_sobol_path = (fs::path(argv[1]) / ".." / "core" / "data" / "new-joe-kuo-6.21201").string();
     int files = 0;
     for (const auto& entry : fs::recursive_directory_iterator(argv[1])) {
         if (entry.path().extension() != ".json") continue;
@@ -3184,6 +3527,12 @@ int main(int argc, char** argv) {
             run_goodness_of_fit(spec);
         } else if (kind == "data_utility") {
             run_data_utility(spec);
+        } else if (kind == "toolbox") {
+            run_toolbox_kind(spec);
+        } else if (kind == "optimizer") {
+            run_optimizer_kind(spec);
+        } else if (kind == "toolbox_cross_language") {
+            run_toolbox_cross_language_kind(spec);
         } else if (kind == "univariate_distribution") {
             if (spec.value("target", "") == "GeneralizedExtremeValue")
                 run_gev(spec);

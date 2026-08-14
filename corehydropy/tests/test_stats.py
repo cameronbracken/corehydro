@@ -28,7 +28,7 @@ def _fixtures_dir() -> Path:
 
 
 def test_public_stats_reproduce_data_utility_oracles():
-    spec = json.loads((_fixtures_dir() / "data" / "statistics_utilities.json").read_text())
+    spec = json.loads((_fixtures_dir() / "data" / "statistics_utilities.json").read_text(encoding="utf-8"))
     datasets = {k: list(v) for k, v in spec["datasets"].items()}
     for case in spec["cases"]:
         fn = case["function"]

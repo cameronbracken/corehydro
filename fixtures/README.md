@@ -19,6 +19,13 @@ Each package vendors this directory as a subtree symlink
 is one copy in git. Builds dereference the symlink into the shipped tarball/sdist
 (`R CMD build` for R; `tools/materialize_core.py` for Python).
 
+**These files are UTF-8 and some of them need to be.** A few assertions select a value by
+`label`, and a label can be a ported C# parameter name that carries a subscript or a Greek
+letter (`trend_functions.json` asserts against `(mu-subscript-1)` as the real
+`SubscriptFormatter` output). Any reader must therefore decode UTF-8 explicitly rather than
+falling back to the platform codec: Python's `read_text()` defaults to cp1252 on Windows and
+raises `UnicodeDecodeError` on exactly those bytes, which is how this was found (CI, phase 4).
+
 ## Schema
 
 ### `univariate_distribution`
@@ -1643,10 +1650,128 @@ argmin of a flat likelihood, port termination differs slightly from C#);
 `[sample_size, dimension, seed, row, col]` (element of the seeded Latin hypercube sample;
 stateless, locks the C# stream bit-for-bit).
 
+### `toolbox`
+
+The Numerics utility layer (Phase 4 of the docs/examples effort: correlation, goodness of fit,
+statistics, histogram, interpolation, regression, Sobol, links, trends, optimizers), reached
+through the shared `run_toolbox` dispatcher (`numerics/support/toolbox_runner.hpp`) rather than
+per-group glue. A case carries its data vectors (inline or by dataset name) and an optional
+options object; each assertion names a `method` and selects one value out of the flat
+`ToolboxResult` the runner returns. Processed by all four runners (`--dump` supported).
+
+```jsonc
+{
+  "kind": "toolbox",
+  "group": "correlation",                    // selects the run_toolbox group arm
+  "datasets": { "x": [ ...numbers... ], "y": [ ...numbers... ] },
+  "cases": [
+    {
+      "name": "small_sample",
+      "data": ["x", "y"],                     // dataset names OR inline arrays, in group order
+      "options": {},                          // optional; serialized to the grammar's options_json
+      "assertions": [
+        { "method": "pearson", "expected": 0.54502739907793, "mode": "abs", "tol": 1e-10 }
+      ]
+    }
+  ]
+}
+```
+
+Each assertion may also carry `index` (0-based, default 0, selects `values[index]`), `label`
+(selects by name out of `names` instead of by index), or `select` -- `"value"` (default),
+`"length"` (`len(values)`), `"rows"` / `"columns"` (out of `dims`, for a group whose method
+returns a flattened matrix).
+
+Two latent emitter-vs-runner divergences around `label`/dims selects (found in the v0.6.0 final
+review) are fixed rather than merely recorded: the dotnet emitter's `ToolboxSelectFlat` helper --
+the hand-rolled reproduction of `run_toolbox`'s selection logic used by the groups whose C# result
+is a positional flattened array rather than a named vector (Sobol, Stratify, Histogram bins,
+linear regression's coefficient/covariance/residual matrices, ...) -- has no `names` array to look
+`label` up against, so it now throws on a `label` key instead of silently falling through to
+`"index"`-or-0 the way the C++/R/Python `toolbox_select` helpers never would. Symmetrically, the
+groups whose C++ `ToolboxResult` never sets `dims` at all (`interpolation.linear`/`bilinear`,
+`regression.residuals`/`predict`, `statistics.ranks`/`percentile`, every `gof` method) now throw on
+`select: "rows"`/`"columns"` instead of answering a fabricated or unrelated value, matching the
+C++/R/Python helpers' behavior when `r.dims` is empty. No fixture pairs either combination with one
+of those groups today, so neither change altered any existing case. See `ToolboxSelectFlat`'s and
+`ToolboxSelectFlatNoDims`'s header comments in `tools/oracle_emitter/Program.cs`.
+
+### `optimizer`
+
+The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a
+NAMED built-in objective (one of `FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`, the same formulas
+`core/tests/optimization_test_functions.hpp` and each fixture runner's own native closure
+implement) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
+`toolbox` group, reached through its own runner (`numerics/support/optimizer_runner.hpp`) and its
+own glue (`ch_optim_run_` / `_core.optim_run`). `construct` is passed straight through as the
+runner's spec JSON, minus the `objective` key (not part of the runner's own grammar). Processed by
+all four runners; the emitter does not support `--dump` for this kind (a failed comparison's own
+error message already prints the actual value at `G17` precision, which is the curation path used
+in practice -- see `toolbox_cross_language` below for a worked example of pinning digest-precision
+literals this way).
+
+```jsonc
+{
+  "kind": "optimizer",
+  "cases": [
+    {
+      "name": "de_booth",
+      "construct": {
+        "method": "de", "objective": "Booth",
+        "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4 },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4 },
+        { "method": "status", "expected": "Success" }
+      ]
+    }
+  ]
+}
+```
+
+Assertion `method` is `"value"` (the objective's own value at the optimum, in its own sign
+convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
+or `"status"` (the exact `OptimizationStatus` name).
+
+### `toolbox_cross_language`
+
+One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose
+kind: its single case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
+case's `construct`/`assertions`) alongside `"sobol"` and `"stratify"` sub-blocks (each shaped
+exactly like a `toolbox`-kind group-`"sampling"` case's `options`/`assertions`), so that ONE
+fixture drives a seeded stochastic optimizer run and two deterministic sequence generators through
+all four runners together. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
+`short_exact`-digest precedent: proving R and Python agree bit for bit, this time across the
+toolbox/optimizer surface rather than a Bayesian MCMC chain. Every value is dumped from the REAL
+C# `DifferentialEvolution`/`SobolSequence`/`Stratify` via `tools/oracle_emitter --dump` and
+reproduced by `tools/verify_oracles.py`, at digest-precision tolerances (not the loose
+`optimizer`-kind MSTest deltas above) -- see the fixture's own `reference` field for why the DE
+values carry real trailing digits instead of the rounded textbook optimum.
+
+```jsonc
+{
+  "kind": "toolbox_cross_language",
+  "cases": [
+    {
+      "name": "de_booth_sobol_stratify_short_exact",
+      "optimizer": { "construct": { ... }, "assertions": [ ... ] },
+      "sobol":     { "options":   { ... }, "assertions": [ ... ] },
+      "stratify":  { "options":   { ... }, "assertions": [ ... ] }
+    }
+  ]
+}
+```
+
 ### `special_function`
 
 For internal C++ math utilities (not exposed to R/Python). The R and Python fixture runners
-skip files with this kind; only the C++ runner and the dotnet oracle gate process them.
+skip files with this kind; only the C++ runner and the dotnet oracle gate process them. The one
+exception is the three `Correlation.*` targets below, which are additionally routed through
+`run_toolbox` in all four runners (same dispatch the `toolbox`/`correlation` group above uses),
+so those pinned values are cross-language checks even though the file itself stays
+`special_function`-shaped for the special-function-only targets around it.
 
 ```jsonc
 {
@@ -1773,7 +1898,14 @@ data..., adds(num_adds)...]`: build the histogram as above from `data`, then rep
 (`lower_bound`/`upper_bound`/`bin_first_lower_bound`/`bin_last_upper_bound`/
 `bin_first_frequency`/`bin_last_frequency`/`data_count`) off the result -- exercising
 `AddData`'s v2.1.4 endpoint-auto-adapt fix (see `core/include/corehydro/numerics/data/
-histogram.hpp`'s file header).
+histogram.hpp`'s file header). Task 4 additionally routes the whole-histogram scalar targets
+through the `histogram` toolbox group's `statistics` method and the `bin_*_at` element-lookup
+targets through its `bins` method (`numerics/support/toolbox_runner.hpp`'s `run_histogram` arm),
+the same "pin once, exercise the toolbox dispatch too" pattern `Correlation.*`/`RunningStatistics.*`
+use above -- so these values are also cross-language checks. `data_count`/`get_bin_index_of` (no
+`histogram`-group method exposes them) and `adapt_*` (needs `AddData()`, which the toolbox arm's
+stateless one-shot construction never calls) stay C++-only, the same reasoning as
+`RunningStatistics`'s population-normalized variants.
 
 The `PlottingPositions.*` targets (`fixtures/special_functions/plotting_positions.json`) take
 `weibull_at` `args = [N, i]` (0-based `i`, analytic `PP[i] = (i+1)/(N+1)`) and `function_at`
@@ -1791,14 +1923,30 @@ targets (new in v2.1.4, adapted from the new `Test_Search.cs`) use the same `arg
 `SortOrder.Descending` explicitly, exercising `bisection()`'s v2.1.4 descending-branch fix (see
 `core/include/corehydro/numerics/data/interpolation/search.hpp`'s file header) -- two of the
 `bisection_descending_*` cases genuinely distinguish the pre-fix (`start`) from the fixed (correct
-bracketing index) behavior.
+bracketing index) behavior. Unlike `Histogram.*`/`Bilinear.log_floor_value` below, `Search.*` stays
+C++-only even after Task 4: neither `interpolation` toolbox method (`linear`/`bilinear`) returns a
+search index, only an interpolated `y`.
 
 The `Bilinear.log_floor_value` target (`fixtures/special_functions/bilinear.json`, new in v2.1.4,
 adapted from `Test_LogarithmicFloorMatchesLinearInterpolation`) takes `args = [x1_query,
 x2_query]` against a FIXED 3x3 identity grid (`{0, 1E-15, 1}` on both axes) with
 X1Transform/X2Transform/YTransform all `Logarithmic`, exercising Bilinear's v2.1.4 switch to the
 guarded `Tools.Log10` (see `core/include/corehydro/numerics/data/interpolation/bilinear.hpp`'s
-file header) -- before the fix both cases returned NaN.
+file header) -- before the fix both cases returned NaN. Task 4 additionally routes this target
+through the `interpolation` toolbox group's `bilinear` method (`x1_transform`/`x2_transform`/
+`y_transform` all `"log"`), so this pinned value is also a cross-language check.
+
+Task 4 also adds two small `toolbox`-kind files that pin what no `special_function` file already
+does: `fixtures/toolbox/histogram.json`'s `bins_kind_proof` case is the first to exercise the
+`toolbox` kind's dims-shaped-matrix selection (`select: "rows"`/`"columns"`, and a flat `index`
+into a row-major-flattened `bins` result), on a dataset distinct from `Test_Histogram.cs`'s own
+sample so it curates an honest new pin (via `oracle_emitter --dump`) rather than re-asserting an
+existing one; `fixtures/toolbox/interpolation.json` pins the `linear` method's transform matrix
+(`none`/`log`/`normal_z` on `x` and/or `y`), both sort orders, and the `interpolate()`-clamps-vs-
+`extrapolate()`-extends distinction, scraped verbatim from `Test_Linear.cs` (the exact class this
+method wraps, unlike the `Test_PairedDataInterpolation.cs`/`OrderedPairedData` class that exercises
+the identical transform formulas through a different C# type) -- no other fixture in this repo pins
+`Linear.Interpolate()`/`Extrapolate()` directly.
 
 The `Probability.hpcm_joint`/`Probability.hpcm_conditional_at` targets
 (`fixtures/special_functions/probability.json`, new in v2.1.4, adapted from the new
@@ -1808,7 +1956,34 @@ ind_0..ind_(n-1), corr(n*n flattened row-major)]` (n inferred from the argument 
 corresponding `conditionalProbabilities[i]` out-value. Exercises `JointProbabilityHPCM`'s v2.1.4
 `minimumCdf` guard fix (see `core/include/corehydro/numerics/data/probability.hpp`'s file
 header); curating this case surfaced and fixed an unrelated, pre-existing precision bug in this
-port's own `Normal::standard_cdf` (see `docs/upstream-csharp-issues.md`).
+port's own `Normal::standard_cdf` (see `docs/upstream-csharp-issues.md`). Task 6 additionally
+routes `Probability.hpcm_joint` (but not `hpcm_conditional_at`, which needs the
+`conditionalProbabilities` out-value the toolbox group below does not expose) through the new
+`probability` toolbox group's `joint` method (`dependency: "correlation"`), so that one pinned
+value is also a cross-language check.
+
+Task 6 adds two `toolbox`-kind files: `fixtures/toolbox/sampling.json` (group `sampling`, methods
+`sobol` and `stratify`) and `fixtures/toolbox/joint_probability.json` (group `probability`,
+method `joint`). `sobol`'s cases are scraped verbatim from `Test_SobolSequence.cs`'s `Test_Sobol`
+(dimension 2, first 10 points, verified upstream against R's `randtoolbox::sobol()`) plus a
+`skip_to` identity implied by the same oracle (`SkipTo(k)` reconstructs the Gray-code state up to
+point `k - 1`, so the first `NextDouble()` after it returns point `k`). `stratify`'s cases are
+scraped verbatim from `Test_Stratification.cs`'s `Test_XValues` (linear) and `Test_XValues_Log10`
+(logarithmic); only the single-`StratificationOptions` overload is exposed (the
+`List<StratificationOptions>` overload `Test_XValues_Multi` exercises has no toolbox verb -- see
+`stratify.hpp`'s file header on that overload's own scope). Sobol's direction-numbers file path is
+a wrapper concern (R's `system.file()`, Python's `importlib.resources`, the C++/R/Python fixture
+harnesses' own resolution against `core/data/`), so `options` in the fixture itself never carries
+a `path` key -- each harness injects its own resolved path before dispatching, and the dotnet
+emitter does not need one at all (the real `SobolSequence` ctor takes no path; the direction
+numbers are a compiled resource). `joint_probability.json`'s six cases are scraped verbatim from
+`Test_Probability.cs`'s `Test_JointABCD_{Independent,PositivelyDependent,NegativelyDependent}`
+(the plain `probabilities` + `DependencyType` overload) and the matching `_PCM` variants (the
+`indicators` + correlation-matrix overload, which routes to `JointProbabilityHPCM` under the
+default `CorrelationMatrix` dependency) -- contrary to an earlier assumption, `Test_Probability.cs`
+does carry dedicated coverage for these methods; only the correlated-mode `JointProbabilityMVN`/
+`UnionMVN`/exclusive-probability regions (unreached by any ported call site -- see
+`probability.hpp`'s file header) remain uncurated.
 
 The `MCMCDiagnostics.minimum_sample_size` target (`fixtures/special_functions/mcmc_diagnostics.json`)
 takes `args = [quantile, tolerance, probability]` (the Raftery-Lewis normal-approximation

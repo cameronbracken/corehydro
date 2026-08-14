@@ -1332,6 +1332,33 @@ def _dispatch_data_utility(fn, args, data):
     raise KeyError(f"unknown data_utility function: {fn}")
 
 
+# goodness_of_fit [function, args, observed_dataset, modeled_dataset]: routes through
+# _core.toolbox_run("gof", ...) (numerics/support/toolbox_runner.hpp), so this fixture kind and a
+# user's goodness_of_fit()/aic() call are the same code path. Mirrors dispatch_gof in
+# core/tests/test_fixtures.cpp.
+_GOF_FUNCTION_METHOD = {
+    "MSE": "mse", "MAE": "mae",
+    "NashSutcliffeEfficiency": "nse",
+    "KlingGuptaEfficiency": "kge", "KlingGuptaEfficiencyMod": "kge_mod",
+    "PBIAS": "pbias", "RSR": "rsr",
+    "IndexOfAgreement": "d", "ModifiedIndexOfAgreement": "d_mod",
+    "RefinedIndexOfAgreement": "d_ref", "VolumetricEfficiency": "ve",
+}
+
+
+def _dispatch_goodness_of_fit(fn, args, obs, mod):
+    if fn == "AIC":
+        options = json.dumps({"k": int(args[0]), "log_likelihood": args[1]})
+        return _core.toolbox_run("gof", "aic", [], options)["values"][0]
+    if fn in ("AICc", "BIC"):
+        options = json.dumps({"n": int(args[0]), "k": int(args[1]), "log_likelihood": args[2]})
+        method = "aicc" if fn == "AICc" else "bic"
+        return _core.toolbox_run("gof", method, [], options)["values"][0]
+    if fn not in _GOF_FUNCTION_METHOD:
+        raise KeyError(f"unknown goodness_of_fit function: {fn}")
+    return _core.toolbox_run("gof", _GOF_FUNCTION_METHOD[fn], [obs, mod], "{}")["values"][0]
+
+
 # Threshold-selection diagnostics: both methods share one glue call and differ only in which
 # field the function name selects. args are [u_min, u_max, n_thresholds, confidence_level,
 # point_index]; `*PointCount` ignores the index and returns how many candidate thresholds
@@ -1363,15 +1390,390 @@ def _dispatch_threshold_diagnostic(fn, args, data):
     return float(r[_TD_FIELDS[fn]][int(args[4])])
 
 
+# special_function/Correlation.* only: routes fixtures/special_functions/correlation.json's
+# three Correlation targets through _core.toolbox_run (numerics/support/toolbox_runner.hpp)
+# rather than adding bespoke glue, so the pinned pearson/spearman/kendalls_tau values become
+# cross-language checks. Every other special_function target stays C++-only and unexercised
+# here, exactly as before this kind gained any Python handling at all.
+_CORRELATION_SPECIAL_FUNCTION_METHOD = {
+    "Correlation.pearson": "pearson",
+    "Correlation.spearman": "spearman",
+    "Correlation.kendalls_tau": "kendall",
+}
+
+
+def _run_special_function_correlation_case(target, args_raw):
+    args = [_num(v) for v in args_raw]
+    mid = len(args) // 2
+    x, y = args[:mid], args[mid:]
+    method = _CORRELATION_SPECIAL_FUNCTION_METHOD[target]
+    return _core.toolbox_run("correlation", method, [x, y], "{}")["values"][0]
+
+
+# special_function/{RunningStatistics,RunningCovariance,Fourier,Statistics.percentile} (Task 3):
+# the same "route the pinned value through _core.toolbox_run" pattern as Correlation above, one
+# subset per family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's
+# running_covariance_toolbox()/running_covariance_element(), the RunningStatistics.* table
+# entries, and the Fourier.{fft_at,real_fft_at,correlation_at} functions for the args
+# conventions and the reasoning for which targets route and which stay C++-only:
+# RunningStatistics's four population-normalized variants and its combined_*/clone_* cases have
+# no toolbox_run("statistics", "summary", ...)-reachable equivalent, and Fourier.autocorrelation_at
+# deliberately stays off this list because the toolbox "spectra.autocorrelation" method wraps the
+# newer Autocorrelation class, not Fourier::autocorrelation itself).
+_RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX = {
+    "RunningStatistics.count": 0, "RunningStatistics.minimum": 1,
+    "RunningStatistics.maximum": 2, "RunningStatistics.mean": 3,
+    "RunningStatistics.variance": 4, "RunningStatistics.standard_deviation": 5,
+    "RunningStatistics.coefficient_of_variation": 6, "RunningStatistics.skewness": 7,
+    "RunningStatistics.kurtosis": 8,
+}
+
+_RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK = {
+    "RunningCovariance.mean_element": 0,
+    "RunningCovariance.covariance_element": 1,
+    "RunningCovariance.sample_covariance_element": 2,
+    "RunningCovariance.sample_correlation_element": 3,
+    "RunningCovariance.population_covariance_element": 4,
+    "RunningCovariance.population_correlation_element": 5,
+}
+
+_FOURIER_TOOLBOX_METHOD = {
+    "Fourier.fft_at": "dft",
+    "Fourier.real_fft_at": "dft_real",
+    "Fourier.correlation_at": "cross_correlation",
+}
+
+# special_function/{Histogram,Bilinear} (Task 4): the same routing pattern, one subset per
+# family. Mirrors core/tests/test_fixtures.cpp's own routing exactly (see that file's Histogram.*
+# table entries and bilinear_log_floor_value() for the args conventions). Histogram.data_count/
+# get_bin_index_of have no toolbox-method equivalent (neither "statistics" nor "bins" exposes
+# them) and Histogram.adapt_* needs AddData(), which the toolbox arm's stateless construction
+# never calls, so those four stay unrouted -- the same "no toolbox_run-reachable equivalent"
+# reasoning as RunningStatistics's population_* variants. Search.* also stays unrouted: neither
+# "linear" nor "bilinear" returns a search index, only an interpolated y.
+_HISTOGRAM_STATISTICS_INDEX = {
+    "Histogram.mean": 0, "Histogram.median": 1, "Histogram.mode": 2,
+    "Histogram.standard_deviation": 3, "Histogram.lower_bound": 4, "Histogram.upper_bound": 5,
+    "Histogram.bin_width": 6, "Histogram.number_of_bins": 7,
+}
+
+_HISTOGRAM_BINS_COLUMN = {
+    "Histogram.bin_lower_bound_at": 0,
+    "Histogram.bin_upper_bound_at": 1,
+    "Histogram.bin_frequency_at": 3,
+}
+
+
+def _histogram_toolbox_options(explicit_bins):
+    return json.dumps({"bins": explicit_bins}) if explicit_bins > 0 else "{}"
+
+
+_ROUTED_SPECIAL_FUNCTION_TARGETS = (
+    set(_CORRELATION_SPECIAL_FUNCTION_METHOD)
+    | set(_RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX)
+    | set(_RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK)
+    | set(_FOURIER_TOOLBOX_METHOD)
+    | {"Statistics.percentile"}
+    | set(_HISTOGRAM_STATISTICS_INDEX)
+    | set(_HISTOGRAM_BINS_COLUMN)
+    | {"Bilinear.log_floor_value"}
+    | {"Probability.hpcm_joint"}
+    | {"DifferentialEvolution.best_value"}
+)
+
+
+# special_function/DifferentialEvolution.best_value (Task 8): reuses
+# fixtures/special_functions/differential_evolution.json (already pinned C++-only) rather than
+# duplicating it -- routed through _core.optim_run so the callback path itself is exercised. args
+# convention: [fn_id, direction, D, lower(D), upper(D), index] -- see
+# core/tests/test_fixtures.cpp's differential_evolution_best_value() for the authoritative
+# description. fn_id 0 = "quadratic" (sum_i (x_i - i)^2, 0-based i), 1 = "normal_loglik" (Normal
+# log-likelihood of {9,10,11,12,13} at mean=p[0], sd=p[1]) -- NATIVE Python closures reproducing
+# the same two P3.3 numerical_derivative fixture functions, so this case exercises the real Python
+# callback path. The log-density is written out explicitly (not scipy.stats.norm.logpdf) so a
+# chaotic DE search sees the SAME density implementation in both languages -- corehydror's
+# test-fixtures.R mirrors this exact formula rather than calling dnorm(log = TRUE). `value`
+# un-applies OptimResult's raw-sign convention back to the C#
+# BestParameterSet.Fitness this fixture's literals were curated against (see
+# differential_evolution_best_value()'s own comment for why).
+def _run_special_function_differential_evolution_case(args_raw):
+    a = [_num(v) for v in args_raw]
+    fn_id, direction, D = int(a[0]), int(a[1]), int(a[2])
+    lower = a[3 : 3 + D]
+    upper = a[3 + D : 3 + 2 * D]
+    index = int(a[3 + 2 * D])
+    sample = [9.0, 10.0, 11.0, 12.0, 13.0]
+
+    if fn_id == 0:
+        def objective(p):
+            return sum((v - i) ** 2 for i, v in enumerate(p))
+    else:
+        def objective(p):
+            mu, sigma = p[0], p[1]
+            return sum(
+                -0.5 * ((x - mu) / sigma) ** 2 - math.log(math.sqrt(2 * math.pi) * sigma)
+                for x in sample
+            )
+
+    spec = json.dumps({"method": "de", "lower": lower, "upper": upper, "maximize": direction == 1})
+    r = _core.optim_run(spec, objective)
+    if index == D:
+        return -r["value"] if direction == 1 else r["value"]
+    return r["parameters"][index]
+
+
+# special_function/Probability.hpcm_joint (Task 6): the same routing pattern, through the new
+# "probability" toolbox group's "joint" method (dependency = "correlation"). Mirrors
+# core/tests/test_fixtures.cpp's special_function_table() entry for "Probability.hpcm_joint" for
+# the args convention (args = [p_0..p_(n-1), ind_0..ind_(n-1), corr(n*n flattened row-major)], n
+# inferred from the argument count). Probability.hpcm_conditional_at stays unrouted: it needs the
+# conditionalProbabilities out-value, which the "probability" toolbox group's "joint" method does
+# not expose.
+def _run_special_function_probability_hpcm_joint_case(args_raw):
+    args = [_num(v) for v in args_raw]
+    n = None
+    for candidate in range(1, 21):
+        if 2 * candidate + candidate * candidate == len(args):
+            n = candidate
+            break
+    if n is None:
+        raise ValueError("cannot infer n for Probability.hpcm args")
+    p = args[:n]
+    ind = args[n : 2 * n]
+    corr = args[2 * n :]
+    return _core.toolbox_run(
+        "probability", "joint", [p, ind, corr], json.dumps({"dependency": "correlation"})
+    )["values"][0]
+
+
+def _run_special_function_case(target, args_raw):
+    if target in _CORRELATION_SPECIAL_FUNCTION_METHOD:
+        return _run_special_function_correlation_case(target, args_raw)
+
+    args = [_num(v) for v in args_raw]
+
+    if target == "Statistics.percentile":
+        n = len(args) - 2
+        data, k, sorted_ = args[:n], args[n], args[n + 1] != 0.0
+        options = json.dumps({"sorted": True}) if sorted_ else "{}"
+        return _core.toolbox_run("statistics", "percentile", [data, [k]], options)["values"][0]
+
+    if target in _RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX:
+        r = _core.toolbox_run("statistics", "summary", [args], "{}")
+        return r["values"][_RUNNING_STATISTICS_SPECIAL_FUNCTION_INDEX[target]]
+
+    if target in _RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK:
+        size, num_pushes = int(args[0]), int(args[1])
+        columns = [[args[2 + p * size + j] for p in range(num_pushes)] for j in range(size)]
+        r = _core.toolbox_run("statistics", "running_covariance", columns, "{}")
+        base = 2 + num_pushes * size
+        i = int(args[base])
+        block = _RUNNING_COVARIANCE_SPECIAL_FUNCTION_BLOCK[target]
+        if block == 0:
+            return r["values"][1 + i]
+        j = int(args[base + 1])
+        offset = 1 + size + (block - 1) * (size * size)
+        return r["values"][offset + i * size + j]
+
+    if target in _FOURIER_TOOLBOX_METHOD:
+        if target == "Fourier.correlation_at":
+            n = (len(args) - 1) // 2
+            data1, data2 = args[:n], args[n : 2 * n]
+            index = int(args[2 * n])
+            r = _core.toolbox_run("spectra", "cross_correlation", [data1, data2], "{}")
+            return r["values"][index]
+        n = len(args) - 2
+        data, inverse, index = args[:n], args[n] != 0.0, int(args[n + 1])
+        options = json.dumps({"inverse": True}) if inverse else "{}"
+        r = _core.toolbox_run("spectra", _FOURIER_TOOLBOX_METHOD[target], [data], options)
+        return r["values"][index]
+
+    if target in _HISTOGRAM_STATISTICS_INDEX:
+        explicit_bins = int(args[0])
+        data = args[1:]
+        options = _histogram_toolbox_options(explicit_bins)
+        r = _core.toolbox_run("histogram", "statistics", [data], options)
+        return r["values"][_HISTOGRAM_STATISTICS_INDEX[target]]
+
+    if target in _HISTOGRAM_BINS_COLUMN:
+        explicit_bins = int(args[0])
+        probe = int(args[-1])
+        data = args[1:-1]
+        options = _histogram_toolbox_options(explicit_bins)
+        r = _core.toolbox_run("histogram", "bins", [data], options)
+        return r["values"][probe * 4 + _HISTOGRAM_BINS_COLUMN[target]]
+
+    if target == "Bilinear.log_floor_value":
+        coords = [0.0, 1e-15, 1.0]
+        flat = [0.0, 0.0, 0.0, 1e-15, 1e-15, 1e-15, 1.0, 1.0, 1.0]
+        options = json.dumps({"x1_transform": "log", "x2_transform": "log", "y_transform": "log"})
+        r = _core.toolbox_run(
+            "interpolation", "bilinear", [coords, coords, flat, [args[0]], [args[1]]], options
+        )
+        return r["values"][0]
+
+    if target == "Probability.hpcm_joint":
+        return _run_special_function_probability_hpcm_joint_case(args_raw)
+
+    if target == "DifferentialEvolution.best_value":
+        return _run_special_function_differential_evolution_case(args_raw)
+
+    raise KeyError(f"unrouted special_function target: {target}")
+
+
+# toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
+# utility group runs through _core.toolbox_run. Mirrors run_toolbox_kind in
+# core/tests/test_fixtures.cpp.
+def _toolbox_case_data(case, datasets):
+    out = []
+    for d in case.get("data", []):
+        src = datasets[d] if isinstance(d, str) else d
+        out.append([_num(v) for v in src])
+    return out
+
+
+def _toolbox_select(r, a, group):
+    select = a.get("select", "value")
+    if select == "length":
+        return float(len(r["values"]))
+    if select == "rows":
+        if "dims" not in r or len(r["dims"]) < 1:
+            raise ValueError(f"toolbox select 'rows' has no dims (group '{group}')")
+        return float(r["dims"][0])
+    if select == "columns":
+        if "dims" not in r or len(r["dims"]) < 2:
+            raise ValueError(f"toolbox select 'columns' has no dims (group '{group}')")
+        return float(r["dims"][1])
+    if "label" in a:
+        i = list(r["names"]).index(a["label"])
+    else:
+        i = int(a.get("index", 0))
+    return float(r["values"][i])
+
+
+def _run_toolbox_case(group, case, datasets):
+    data = _toolbox_case_data(case, datasets)
+    options_dict = dict(case.get("options", {}))
+    # Only the "sobol" method reads a path (SobolSequence's constructor only touches it when
+    # dimension > 1); "stratify" never does, so this stays scoped to that one method rather than
+    # the whole "sampling" group.
+    if group == "sampling" and case["assertions"][0]["method"] == "sobol":
+        # The Sobol direction-numbers file ships inside the package; path resolution is a
+        # wrapper concern (see numerics/support/toolbox/sampling.hpp's file header), so the
+        # fixture itself never carries a "path" key -- this harness injects its own resolved
+        # path, mirroring what sobol_sequence() does for a real caller.
+        options_dict["path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+    options = json.dumps(options_dict)
+    for a in case["assertions"]:
+        r = _core.toolbox_run(group, a["method"], data, options)
+        _check(_toolbox_select(r, a, group), a)
+
+
+# optimizer [construct carries method/lower/upper/initial/maximize/seed/control; assertions carry
+# value/parameter/status]: the six ported optimizers (Task 8), run through _core.optim_run against
+# a NATIVE Python closure -- not _core.toolbox_run -- because an optimizer's input is a live
+# function, not serializable data. Mirrors run_optimizer_kind in core/tests/test_fixtures.cpp.
+def _optimizer_spec_json(construct):
+    spec = {"method": construct["method"]}
+    for key in ("lower", "upper", "initial"):
+        if key in construct:
+            spec[key] = construct[key]
+    if "maximize" in construct:
+        spec["maximize"] = bool(construct["maximize"])
+    if "seed" in construct:
+        spec["seed"] = int(construct["seed"])
+    if construct.get("control"):
+        spec["control"] = construct["control"]
+    return json.dumps(spec)
+
+
+# The handful of TestFunctions.cs objectives fixtures/toolbox/optimizers.json names by string --
+# NATIVE Python closures reproducing the same formulas as
+# core/tests/optimization_test_functions.hpp, so every optimizer fixture case exercises the real
+# Python callback path (corehydro::numerics::support::GuardedObjective exists to protect exactly
+# this call).
+def _optimizer_fixture_objective(name):
+    if name == "FXYZ":
+        return lambda p: (4 * p[0] - 0.5) ** 2 + (3 * p[1] - 0.6) ** 2 + (2 * p[2] - 0.7) ** 2
+    if name == "DeJong":
+        return lambda p: sum(v ** 2 for v in p)
+    if name == "Booth":
+        return lambda p: (p[0] + 2 * p[1] - 7) ** 2 + (2 * p[0] + p[1] - 5) ** 2
+    if name == "McCormick":
+        return lambda p: (
+            math.sin(p[0] + p[1]) + (p[0] - p[1]) ** 2 - 1.5 * p[0] + 2.5 * p[1] + 1.0
+        )
+    if name == "FX":
+        return lambda p: (p[0] + 3.0) * (p[0] - 1.0) ** 2
+    raise KeyError(f"unknown optimizer fixture objective: {name}")
+
+
+def _run_optimizer_case(case):
+    construct = dict(case["construct"])
+    objective_name = construct.pop("objective", "DeJong")
+    r = _core.optim_run(_optimizer_spec_json(construct), _optimizer_fixture_objective(objective_name))
+    for a in case["assertions"]:
+        if a["method"] == "value":
+            _check(r["value"], a)
+        elif a["method"] == "parameter":
+            _check(r["parameters"][a["args"][0]], a)
+        elif a["method"] == "status":
+            assert r["status"] == a["expected"]
+        else:
+            raise KeyError(f"unknown optimizer fixture assertion method: {a['method']}")
+
+
+# toolbox_cross_language [one case nests "optimizer" (shaped like an "optimizer"-kind
+# construct/assertions), "sobol" and "stratify" (each shaped like a "toolbox"-kind
+# group-"sampling" case's options/assertions)]: fixtures/toolbox/toolbox_cross_language.json's
+# single fixture proves all three reproduce identically across R/Python/C++/C# in one
+# guarantee. Reuses _optimizer_spec_json/_optimizer_fixture_objective and
+# _core.toolbox_run/_toolbox_select verbatim -- see _run_optimizer_case/_run_toolbox_case above.
+def _run_toolbox_cross_language_case(case):
+    opt = case["optimizer"]
+    construct = dict(opt["construct"])
+    objective_name = construct.pop("objective", "DeJong")
+    r = _core.optim_run(_optimizer_spec_json(construct), _optimizer_fixture_objective(objective_name))
+    for a in opt["assertions"]:
+        if a["method"] == "value":
+            _check(r["value"], a)
+        elif a["method"] == "parameter":
+            _check(r["parameters"][a["args"][0]], a)
+        elif a["method"] == "status":
+            assert r["status"] == a["expected"]
+        else:
+            raise KeyError(f"unknown toolbox_cross_language optimizer assertion method: {a['method']}")
+
+    for sub in ("sobol", "stratify"):
+        block = case[sub]
+        options_dict = dict(block.get("options", {}))
+        if sub == "sobol":
+            options_dict["path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+        options = json.dumps(options_dict)
+        for a in block["assertions"]:
+            r = _core.toolbox_run("sampling", sub, [], options)
+            _check(_toolbox_select(r, a, "sampling"), a)
+
+
 def _load_cases():
     out = []
     for fx in sorted(_fixtures_dir().rglob("*.json")):
-        spec = json.loads(fx.read_text())
-        # Only validate univariate_distribution / multivariate_distribution /
-        # bivariate_copula / mcmc_sampler fixtures; skip other kinds (e.g.
-        # special_function) which are validated in C++ only and are not exposed to the
-        # Python package.
+        spec = json.loads(fx.read_text(encoding="utf-8"))
         kind = spec.get("kind")
+        if kind == "special_function":
+            # Only the targets in _ROUTED_SPECIAL_FUNCTION_TARGETS are exposed to Python (see
+            # _run_special_function_case above); every other special_function target is
+            # validated in C++ only and generates no Python case.
+            file_target = spec.get("target")
+            for case in spec["cases"]:
+                target = case.get("target", file_target)
+                if target not in _ROUTED_SPECIAL_FUNCTION_TARGETS:
+                    continue
+                out.append(("special_function", target, {}, case))
+            continue
+        # Only validate univariate_distribution / multivariate_distribution /
+        # bivariate_copula / mcmc_sampler / toolbox fixtures; skip other kinds which are
+        # validated in C++ only and are not exposed to the Python package.
         if kind not in (
             "univariate_distribution",
             "multivariate_distribution",
@@ -1381,10 +1783,14 @@ def _load_cases():
             "model_estimation",
             "analysis",
             "data_utility",
+            "goodness_of_fit",
+            "toolbox",
+            "optimizer",
+            "toolbox_cross_language",
         ):
             continue
         for case in spec["cases"]:
-            out.append((kind, spec.get("target", kind), spec.get("datasets", {}), case))
+            out.append((kind, spec.get("target", spec.get("group", kind)), spec.get("datasets", {}), case))
     return out
 
 
@@ -1395,6 +1801,24 @@ CASES = _load_cases()
     "kind,target,datasets,case", CASES, ids=[f"{k}:{t}:{c['name']}" for k, t, _, c in CASES]
 )
 def test_fixture_case(kind, target, datasets, case):
+    if kind == "special_function":
+        actual = _run_special_function_case(target, case["args"])
+        for a in case["assertions"]:
+            _check(actual, a)
+        return
+
+    if kind == "toolbox":
+        _run_toolbox_case(target, case, datasets)
+        return
+
+    if kind == "optimizer":
+        _run_optimizer_case(case)
+        return
+
+    if kind == "toolbox_cross_language":
+        _run_toolbox_cross_language_case(case)
+        return
+
     if kind == "model_estimation":
         _run_estimation_case(target, case["construct"], case["assertions"], datasets)
         return
@@ -1414,6 +1838,16 @@ def test_fixture_case(kind, target, datasets, case):
         # as an unconvertible str.
         data = [_num(v) for v in datasets[case["dataset"]]] if "dataset" in case else []
         actual = _dispatch_data_utility(case["function"], args, data)
+        for a in case["assertions"]:
+            _check(actual, a)
+        return
+
+    if kind == "goodness_of_fit":
+        fn = case["function"]
+        args = case.get("args", [])
+        obs = [_num(v) for v in datasets[case["observed_dataset"]]] if "observed_dataset" in case else []
+        mod = [_num(v) for v in datasets[case["modeled_dataset"]]] if "modeled_dataset" in case else []
+        actual = _dispatch_goodness_of_fit(fn, args, obs, mod)
         for a in case["assertions"]:
             _check(actual, a)
         return

@@ -27,6 +27,8 @@ here.
 | 05 | Adaptive MCMC samplers | [Python](05-mcmc-samplers/python.ipynb) | [R](05-mcmc-samplers/r.qmd) |
 | 06 | MCMC diagnostics | [Python](06-mcmc-diagnostics/python.ipynb) | [R](06-mcmc-diagnostics/r.qmd) |
 | 09 | Statistics toolbox | [Python](09-statistics/python.ipynb) | [R](09-statistics/r.qmd) |
+| 12 | Model evaluation | [Python](12-model-evaluation/python.ipynb) | [R](12-model-evaluation/r.qmd) |
+| 13 | A custom objective | [Python](13-custom-objective/python.ipynb) | [R](13-custom-objective/r.qmd) |
 | 20 | Bayesian regression | [Python](20-bayesian-regression/python.ipynb) | [R](20-bayesian-regression/r.qmd) |
 | 21 | Flood frequency analysis | [Python](21-flood-frequency/python.ipynb) | [R](21-flood-frequency/r.qmd) |
 | 22 | Reliability analysis | [Python](22-reliability/python.ipynb) | [R](22-reliability/r.qmd) |
@@ -37,5 +39,6 @@ here.
 | 27 | Composite distributions | [Python](27-composite-distributions/python.ipynb) | [R](27-composite-distributions/r.qmd) |
 
 Numbers 00-09 mirror the upstream notebooks; 20-22 are the upstream's three
-standalone scripts. Numbers 23 onward have no upstream counterpart: they cover
-capabilities of RMC.BestFit that the upstream examples never exercise.
+standalone scripts. Numbers 12 onward have no upstream counterpart: they cover
+capabilities of RMC.BestFit and the Numerics utility toolbox that the upstream examples
+never exercise.

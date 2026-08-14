@@ -1,0 +1,183 @@
+{
+  "kind": "optimizer",
+  "source": "Numerics/Mathematics/Optimization/{Global/Test_DifferentialEvolution.cs, Local/Test_BFGS.cs, Local/Test_Powell.cs, Global/Test_MLSL.cs, Local/Test_NelderMead.cs, Local/Test_BrentSearch.cs}",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_optimizer (core/include/corehydro/numerics/support/optimizer_runner.hpp) against the built-in objectives named by `construct.objective`, mapping onto the same TestFunctions.cs formulas the upstream MSTest classes call (FXYZ/DeJong/Booth/McCormick/FX -- see core/tests/optimization_test_functions.hpp). `parameter` assertions read `OptimResult.parameters[args[0]]`; `value` reads `OptimResult.value` (the raw objective at the optimum, in its own sign convention -- see optimizer_runner.hpp's fill_optimizer_result). Every case's tolerance matches the upstream MSTest `Assert.AreEqual(actual, expected, delta)` literal exactly. Every expected value is the upstream test file's own literal, transcribed verbatim -- never a value computed by this repo's own C++.",
+  "cases": [
+    {
+      "name": "de_fxyz",
+      "construct": {
+        "method": "de", "objective": "FXYZ",
+        "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_FXYZ" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "de_booth",
+      "construct": {
+        "method": "de", "objective": "Booth",
+        "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_Booth" }
+      ]
+    },
+    {
+      "name": "de_mccormick",
+      "construct": {
+        "method": "de", "objective": "McCormick",
+        "lower": [-1.5, -3], "upper": [4, 4],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": -1.9133, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_McCormick" },
+        { "method": "parameter", "args": [0], "expected": -0.54719, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_McCormick" },
+        { "method": "parameter", "args": [1], "expected": -1.54719, "mode": "abs", "tol": 1e-4, "source": "Test_DifferentialEvolution.Test_McCormick" }
+      ]
+    },
+    {
+      "name": "bfgs_fxyz",
+      "construct": {
+        "method": "bfgs", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_BFGS.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_BFGS.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_BFGS.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_BFGS.Test_FXYZ" }
+      ]
+    },
+    {
+      "name": "bfgs_booth",
+      "construct": {
+        "method": "bfgs", "objective": "Booth",
+        "initial": [0.0, 0.0], "lower": [-10, -10], "upper": [10, 10]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_BFGS.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_BFGS.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_BFGS.Test_Booth" }
+      ]
+    },
+    {
+      "name": "powell_fxyz",
+      "construct": {
+        "method": "powell", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Powell.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_Powell.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_Powell.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_Powell.Test_FXYZ" }
+      ]
+    },
+    {
+      "name": "powell_mccormick",
+      "construct": {
+        "method": "powell", "objective": "McCormick",
+        "initial": [0.0, 0.0], "lower": [-1.5, -3], "upper": [4, 4]
+      },
+      "assertions": [
+        { "method": "value", "expected": -1.9133, "mode": "abs", "tol": 1e-4, "source": "Test_Powell.Test_McCormick" },
+        { "method": "parameter", "args": [0], "expected": -0.54719, "mode": "abs", "tol": 1e-4, "source": "Test_Powell.Test_McCormick" },
+        { "method": "parameter", "args": [1], "expected": -1.54719, "mode": "abs", "tol": 1e-4, "source": "Test_Powell.Test_McCormick" }
+      ]
+    },
+    {
+      "name": "mlsl_fxyz",
+      "construct": {
+        "method": "mlsl", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MLSL.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_MLSL.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_MLSL.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_MLSL.Test_FXYZ" }
+      ]
+    },
+    {
+      "name": "mlsl_booth",
+      "construct": {
+        "method": "mlsl", "objective": "Booth",
+        "initial": [0.0, 0.0], "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MLSL.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_MLSL.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_MLSL.Test_Booth" }
+      ]
+    },
+    {
+      "name": "nelder_mead_fxyz",
+      "construct": {
+        "method": "nelder_mead", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_FXYZ" }
+      ]
+    },
+    {
+      "name": "nelder_mead_booth",
+      "construct": {
+        "method": "nelder_mead", "objective": "Booth",
+        "initial": [0.0, 0.0], "lower": [-10, -10], "upper": [10, 10]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" }
+      ]
+    },
+    {
+      "name": "brent_fx_minimize",
+      "construct": {
+        "method": "brent", "objective": "FX",
+        "lower": [-3], "upper": [3]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_BrentSearch.Test_Minimize" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_BrentSearch.Test_Minimize" }
+      ]
+    },
+    {
+      "name": "brent_fx_maximize",
+      "construct": {
+        "method": "brent", "objective": "FX",
+        "lower": [-3], "upper": [3], "maximize": true
+      },
+      "assertions": [
+        { "method": "value", "expected": 9.4815, "mode": "abs", "tol": 1e-4, "source": "Test_BrentSearch.Test_Maximize" },
+        { "method": "parameter", "args": [0], "expected": -1.6667, "mode": "abs", "tol": 1e-4, "source": "Test_BrentSearch.Test_Maximize" }
+      ]
+    },
+    {
+      "name": "brent_dejong",
+      "construct": {
+        "method": "brent", "objective": "DeJong",
+        "lower": [-5.12], "upper": [5.12]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_BrentSearch.Test_DeJong" },
+        { "method": "parameter", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_BrentSearch.Test_DeJong" }
+      ]
+    }
+  ]
+}

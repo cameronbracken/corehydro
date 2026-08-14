@@ -24,6 +24,8 @@ set(BF_TESTS
   test_goodness_of_fit
   test_mcmc_extra
   test_dist_runner
+  test_toolbox_runner
+  test_autocorrelation
   test_mixture
   test_mixture_em_seeding
   test_empirical_distribution
@@ -97,6 +99,7 @@ set(BF_TESTS
   test_copula_clone
   test_multivariate_normal_api
   test_brent_search
+  test_optimizer_runner
 )
 
 # Sobol test takes the direction-number file as its sole argument.
@@ -115,7 +118,11 @@ foreach(t ${BF_TESTS})
   target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_compile_options(${t} PRIVATE
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wextra>)
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wextra>
+    # MSVC caps an object file at 65,536 sections; the fixture-driven and dispatch-heavy
+    # translation units cross it as the fixture surface grows. /bigobj lifts the cap and is
+    # MSVC-only (clang/gcc have no such limit and reject the flag).
+    $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
 
@@ -123,5 +130,8 @@ endforeach()
 add_executable(test_fixtures tests/test_fixtures.cpp)
 target_link_libraries(test_fixtures PRIVATE corehydro_core)
 target_include_directories(test_fixtures PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+# This translation unit dispatches every fixture kind for every family, and crossed MSVC's
+# 65,536-section object-file cap (error C1128) as the toolbox surface landed. MSVC-only.
+target_compile_options(test_fixtures PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
 add_test(NAME test_fixtures
          COMMAND test_fixtures ${CMAKE_CURRENT_SOURCE_DIR}/../fixtures)
