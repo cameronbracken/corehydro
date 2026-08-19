@@ -6,6 +6,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cmath>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -46,6 +47,34 @@ class RngHandle {
    private:
     sup::RngBorrowPtr borrow_;
 };
+
+// The whole-number argument check, so the two packages refuse the SAME values for the same
+// reasons. Left to their defaults they did not: pybind11 rejects any float where an `int` is
+// declared (so `rng.uniform(3.0)` failed, though every number R hands a callback is a double),
+// while R's own `rng_check_count` silently truncated `n = 2.7` to 2. Neither half of that is
+// defensible in a pair of packages whose whole promise is that the same call means the same thing
+// in both. The rule now is one sentence in both languages: a whole number is accepted however it
+// is spelled (3 or 3.0), and anything with a fraction is refused by the name of the argument.
+int as_whole_number(const py::object& v, const char* message) {
+    constexpr double kIntMin = -2147483648.0, kIntMax = 2147483647.0;
+    if (py::isinstance<py::bool_>(v)) throw py::type_error(message);
+    if (py::isinstance<py::float_>(v)) {
+        const double d = v.cast<double>();
+        if (!std::isfinite(d) || d != std::trunc(d) || d < kIntMin || d > kIntMax)
+            throw py::type_error(message);
+        return static_cast<int>(d);
+    }
+    if (!PyIndex_Check(v.ptr())) throw py::type_error(message);
+    try {
+        return v.cast<int>();
+    } catch (const py::cast_error&) {
+        throw py::type_error(message);
+    }
+}
+
+// Worded exactly as corehydror's R checks are, so a caller cannot tell which language refused.
+const char* kBadCount = "`n` must be a single positive whole number";
+const char* kBadBounds = "`min` and `max` must each be a single finite whole number";
 
 // Wraps `f` as the (parameters, generator) callback the rng/mcmc/bootstrap groups call. The scope
 // is a local of this lambda, so the handle it hands Python is invalidated the moment the callback
@@ -136,11 +165,24 @@ object to keep. Storing it and drawing from it after your callback has returned 
 `RuntimeError`, which is deliberate: the generator it pointed at no longer exists, and reading it
 would crash the interpreter rather than merely misbehave.
 )doc")
-        .def("uniform", &RngHandle::uniform, py::arg("n"),
-             "n draws on [0, 1) (the ported C# MersenneTwister.NextDouble).")
-        .def("integers", &RngHandle::integers, py::arg("n"), py::arg("min"), py::arg("max"),
-             "n draws on [min, max) -- the upper bound is EXCLUDED, as in the ported C# "
-             "MersenneTwister.Next(minInclusive, maxExclusive).")
+        .def(
+            "uniform",
+            [](const RngHandle& h, const py::object& n) {
+                return h.uniform(as_whole_number(n, kBadCount));
+            },
+            py::arg("n"), "n draws on [0, 1) (the ported C# MersenneTwister.NextDouble).")
+        .def(
+            "integers",
+            [](const RngHandle& h, const py::object& n, const py::object& min,
+               const py::object& max) {
+                return h.integers(as_whole_number(n, kBadCount), as_whole_number(min, kBadBounds),
+                                  as_whole_number(max, kBadBounds));
+            },
+            py::arg("n"), py::arg("min"), py::arg("max"),
+            "n draws on [min, max) -- the upper bound is EXCLUDED, as in the ported C# "
+            "MersenneTwister.Next(minInclusive, maxExclusive). `min` and `max` must be whole "
+            "numbers no more than 2147483647 apart (the ported generator draws an int32 span, and "
+            "C# throws for a wider one).")
         .def("__repr__", [](const RngHandle& h) {
             return std::string("<corehydropy.Rng ") + (h.valid() ? "live" : "expired") + ">";
         });

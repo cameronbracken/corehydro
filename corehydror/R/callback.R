@@ -212,10 +212,13 @@ hessian <- function(f, x) {
 #' Mersenne Twister the core seeded, so both hold.
 #'
 #' @param rng the handle your callback was given. It cannot be created any other way.
-#' @param n how many values to draw; a single positive whole number.
+#' @param n how many values to draw; a single positive whole number. A fractional `n` is an error,
+#'   not a silent truncation, and the identical call in Python is refused the same way.
 #' @param min,max the bounds for `rng_integers()`. `min` is included and `max` is EXCLUDED,
 #'   matching the ported Numerics `Next(minInclusive, maxExclusive)` a C# proposal is written
-#'   against, so `rng_integers(rng, 1, 0, 10)` draws one of `0:9`.
+#'   against, so `rng_integers(rng, 1, 0, 10)` draws one of `0:9`. Both must be whole numbers, and
+#'   the range between them can be at most 2147483647 wide (the ported generator draws an integer
+#'   span, and C# throws for a wider one).
 #' @return `rng_uniform()` a numeric vector of length `n` with values in `[0, 1)`;
 #'   `rng_integers()` an integer vector of length `n`.
 #' @section Lifetime:
@@ -238,20 +241,29 @@ rng_uniform <- function(rng, n) {
 #' @rdname rng_uniform
 #' @export
 rng_integers <- function(rng, n, min, max) {
-  if (!is.numeric(min) || length(min) != 1L || !is.finite(min) ||
-      !is.numeric(max) || length(max) != 1L || !is.finite(max)) {
+  if (!rng_is_whole(min) || !rng_is_whole(max)) {
     stop("`min` and `max` must each be a single finite whole number", call. = FALSE)
   }
   ch_rng_integers_(rng, rng_check_count(n), as.integer(min), as.integer(max))
 }
 
 # Internal: the count check both verbs share, worded exactly as the core's own check so a caller
-# cannot tell which layer refused. Kept in step with corehydropy's _check_count.
+# cannot tell which layer refused. Kept in step with corehydropy's _check_count -- including the
+# refusal of a fractional count: R would happily truncate `n = 2.7` to 2 where Python raises, and a
+# silent truncation in one language and an error in the other is exactly the cross-language
+# disagreement this surface exists to prevent.
 rng_check_count <- function(n) {
-  if (!is.numeric(n) || length(n) != 1L || !is.finite(n) || n < 1) {
+  if (!rng_is_whole(n) || n < 1) {
     stop("`n` must be a single positive whole number", call. = FALSE)
   }
   as.integer(n)
+}
+
+# A single finite number with nothing after the decimal point, and inside integer range (beyond it
+# as.integer() gives NA with a warning). 2 and 2L both pass; 2.7 does not.
+rng_is_whole <- function(x) {
+  is.numeric(x) && length(x) == 1L && is.finite(x) &&
+    x == trunc(x) && abs(x) <= .Machine$integer.max
 }
 
 # Internal, test-only: seed a generator, hand `f` a handle on it, return what `f` drew. `f` takes

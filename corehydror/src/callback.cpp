@@ -58,14 +58,26 @@ std::function<double(const std::vector<double>&)> as_vector_scalar_fn(function f
 // draw goes through borrow_from() below, which checks the flag before the generator is touched.
 //
 // The `corehydro_rng` class attribute is for the user's benefit (print/inherits); the type check
-// does not trust it, because an attribute can be forged. EXTPTRSXP plus a null-pointer check plus
-// the borrow's own flag are what make a bad call an R error rather than a crash.
+// does not trust it, because an attribute can be forged.
+//
+// WHY THE TAG. EXTPTRSXP alone is nowhere near enough: every package that hands R an external
+// pointer produces the same SEXP type, so `TYPEOF == EXTPTRSXP` admits an Rcpp::XPtr, a curl
+// handle, an xml2 document -- anything -- and casting one of those to RngBorrowPtr* and
+// dereferencing it is a wild pointer read. It is not theoretical: passing the address slot of a
+// registered native routine (base R, no packages needed) segfaulted this function and aborted the
+// session. So the pointer is TAGGED with the `corehydro_rng` symbol where it is created, and the
+// tag is REQUIRED here before the cast. The tag lives in the SEXP itself, not in an attribute, and
+// R offers no way to set it from R code, so unlike the class attribute it cannot be forged from a
+// script. Four checks in order: EXTPTRSXP, our tag, a non-null address, the borrow's own flag.
 const char* kNotAHandle =
     "`rng` must be a random number generator handle, the one a callback is given as its second "
     "argument";
 
+SEXP rng_tag() { return Rf_install("corehydro_rng"); }
+
 sup::RngBorrowPtr& borrow_from(sexp handle) {
     if (TYPEOF(handle) != EXTPTRSXP) throw std::runtime_error(kNotAHandle);
+    if (R_ExternalPtrTag(handle) != rng_tag()) throw std::runtime_error(kNotAHandle);
     void* addr = R_ExternalPtrAddr(handle);
     if (addr == nullptr) throw std::runtime_error(sup::rng_handle_expired_message());
     sup::RngBorrowPtr* p = static_cast<sup::RngBorrowPtr*>(addr);
@@ -85,6 +97,9 @@ std::function<std::vector<double>(const std::vector<double>&, samp::MersenneTwis
         sup::RngScope scope(prng);
         external_pointer<sup::RngBorrowPtr> ptr(new sup::RngBorrowPtr(scope.handle()));
         sexp handle(ptr);
+        // The tag borrow_from() requires. A symbol is a permanent SEXP, so the check there is a
+        // pointer comparison against this same object.
+        R_SetExternalPtrTag(handle, rng_tag());
         sexp cls(Rf_mkString("corehydro_rng"));
         Rf_setAttrib(handle, R_ClassSymbol, cls);
 

@@ -206,6 +206,88 @@ test_that("the rng handle rejects nonsense arguments and non-handles", {
   expect_error(rng_integers("nope", 1, 0, 2), "random number generator handle")
 })
 
+test_that("an external pointer from somewhere else is refused instead of crashing the session", {
+  # THE case that matters, and the one `42` and `"nope"` above do NOT cover: they are refused by
+  # the type check and never reach the cast. Every package that hands R a pointer produces the
+  # same SEXP type, so an EXTPTRSXP-only check would cast a foreign pointer to the borrow type and
+  # dereference it -- a wild read that segfaulted and aborted R when it was tried. The pointer
+  # below is a genuinely foreign one built from base R alone (the address slot of a registered
+  # native routine, whose first word is a live function address, not a null). It must produce an R
+  # error.
+  foreign <- getDLLRegisteredRoutines(getLoadedDLLs()[["corehydror"]])$.Call[[1]]$address
+  expect_identical(typeof(foreign), "externalptr")
+  expect_error(rng_uniform(foreign, 1), "random number generator handle")
+  expect_error(rng_integers(foreign, 1, 0, 2), "random number generator handle")
+  # A null external pointer is refused too, by the address check behind the tag check.
+  null_ptr <- methods::new("externalptr")
+  expect_error(rng_uniform(null_ptr, 1), "random number generator handle")
+  # A forged class attribute buys nothing: the class is for print/inherits, never for dispatch.
+  fake <- structure(list(), class = "corehydro_rng")
+  expect_error(rng_uniform(fake, 1), "random number generator handle")
+})
+
+test_that("a range wider than an int32 span is an error, not an overflowed draw", {
+  # rng_integers hands `max - min` to the ported Next(int). C# computes that subtraction unchecked
+  # and throws once it wraps negative; the same expression in C++ is undefined behaviour, and
+  # rng_integers(rng, 1, -2e9, 2e9) used to return an arbitrary out-of-range integer
+  # (-208904155) in both languages. The Python twin asserts the same boundary.
+  ns <- asNamespace("corehydror")
+  int_max <- 2147483647
+  at_boundary <- ns$rng_probe(11, 1, function(parameters, rng) {
+    rng_integers(rng, 1, 0, int_max)  # span == int32 max, the widest allowed
+  })
+  expect_length(at_boundary, 1)
+  expect_true(at_boundary >= 0 && at_boundary < int_max)
+  expect_error(
+    ns$rng_probe(11, 1, function(parameters, rng) rng_integers(rng, 1, -1, int_max)),
+    "too wide"
+  )
+  expect_error(
+    ns$rng_probe(11, 1, function(parameters, rng) rng_integers(rng, 1, -2e9, 2e9)),
+    "too wide"
+  )
+})
+
+test_that("a fractional count is refused rather than truncated, as Python refuses it", {
+  # R would happily make 2.7 into 2 while Python raised, so the same call meant different things
+  # in the two packages. Both now refuse it by the name of the argument.
+  ns <- asNamespace("corehydror")
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) rng_uniform(rng, 2.7)),
+    "`n` must be a single positive whole number"
+  )
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) rng_integers(rng, 2.7, 0, 5)),
+    "`n` must be a single positive whole number"
+  )
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) rng_integers(rng, 1, 0.5, 5)),
+    "single finite whole number"
+  )
+  # A whole number spelled as a double is still a whole number -- in R every literal is one.
+  drawn <- ns$rng_probe(1, 1, function(parameters, rng) rng_uniform(rng, 2.0))
+  expect_length(drawn, 2)
+})
+
+test_that("a handle leaked out of a callback that then raises is dead", {
+  # The unwind path, which only the C++ suite covered. A destructor runs whether the call returns
+  # or throws, so the scope invalidates the borrow either way -- and a user who stashed the handle
+  # before their own error meets a message rather than freed memory. The Python twin is identical.
+  ns <- asNamespace("corehydror")
+  leaked <- NULL
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) {
+      leaked <<- rng
+      rng_uniform(rng, 1)
+      stop("my own error, raised half way through")
+    }),
+    "my own error, raised half way through"
+  )
+  expect_false(is.null(leaked))
+  expect_error(rng_uniform(leaked, 1), "no longer valid")
+  expect_error(rng_integers(leaked, 1, 0, 2), "no longer valid")
+})
+
 test_that("an error raised inside an rng callback reaches the caller unchanged", {
   ns <- asNamespace("corehydror")
   expect_error(

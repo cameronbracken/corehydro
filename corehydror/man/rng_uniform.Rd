@@ -12,11 +12,14 @@ rng_integers(rng, n, min, max)
 \arguments{
 \item{rng}{the handle your callback was given. It cannot be created any other way.}
 
-\item{n}{how many values to draw; a single positive whole number.}
+\item{n}{how many values to draw; a single positive whole number. A fractional \code{n} is an error,
+not a silent truncation, and the identical call in Python is refused the same way.}
 
 \item{min, max}{the bounds for \code{rng_integers()}. \code{min} is included and \code{max} is EXCLUDED,
 matching the ported Numerics \code{Next(minInclusive, maxExclusive)} a C# proposal is written
-against, so \code{rng_integers(rng, 1, 0, 10)} draws one of \code{0:9}.}
+against, so \code{rng_integers(rng, 1, 0, 10)} draws one of \code{0:9}. Both must be whole numbers, and
+the range between them can be at most 2147483647 wide (the ported generator draws an integer
+span, and C# throws for a wider one).}
 }
 \value{
 \code{rng_uniform()} a numeric vector of length \code{n} with values in \verb{[0, 1)};

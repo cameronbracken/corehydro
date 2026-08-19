@@ -300,3 +300,63 @@ def test_the_rng_handle_rejects_nonsense_arguments():
 def test_an_error_raised_inside_an_rng_callback_reaches_the_caller_unchanged():
     with pytest.raises(ValueError, match="my own error"):
         _rng_probe(1, [1], _boom)
+
+
+def test_a_range_wider_than_an_int32_span_is_an_error_not_an_overflowed_draw():
+    # rng.integers hands `max - min` to the ported Next(int). C# computes that subtraction
+    # unchecked and throws once it wraps negative; the same expression in C++ is undefined
+    # behaviour, and integers(1, -2_000_000_000, 2_000_000_000) used to return an arbitrary
+    # out-of-range integer (-208904155) in both languages. The R twin
+    # (corehydror/tests/testthat/test-callback.R) asserts the same boundary.
+    int_max = 2147483647
+    at_boundary = _rng_probe(
+        11, [1], lambda parameters, rng: [float(v) for v in rng.integers(1, 0, int_max)]
+    )
+    assert len(at_boundary) == 1
+    assert 0 <= at_boundary[0] < int_max
+    with pytest.raises(ValueError, match="too wide"):
+        _rng_probe(11, [1], lambda parameters, rng: rng.integers(1, -1, int_max))
+    with pytest.raises(ValueError, match="too wide"):
+        _rng_probe(
+            11, [1], lambda parameters, rng: rng.integers(1, -2_000_000_000, 2_000_000_000)
+        )
+
+
+def test_a_fractional_count_is_refused_rather_than_truncated_as_r_refuses_it():
+    # R would happily make 2.7 into 2 while Python raised its own overload dump, so the same call
+    # meant different things in the two packages and neither message named the argument. Both now
+    # refuse it by name, in the same words.
+    with pytest.raises(TypeError, match="`n` must be a single positive whole number"):
+        _rng_probe(1, [1], lambda parameters, rng: rng.uniform(2.7))
+    with pytest.raises(TypeError, match="`n` must be a single positive whole number"):
+        _rng_probe(1, [1], lambda parameters, rng: rng.integers(2.7, 0, 5))
+    with pytest.raises(TypeError, match="single finite whole number"):
+        _rng_probe(1, [1], lambda parameters, rng: rng.integers(1, 0.5, 5))
+    # A whole number spelled as a float is still a whole number -- which matters here, because
+    # every number a callback is handed arrives as one (`parameters[0]`), exactly as in R.
+    drawn = _rng_probe(1, [1], lambda parameters, rng: rng.uniform(2.0))
+    assert len(drawn) == 2
+    assert _rng_probe(1, [3], lambda parameters, rng: rng.uniform(parameters[0])) == _rng_probe(
+        1, [3], lambda parameters, rng: rng.uniform(3)
+    )
+
+
+def test_a_handle_leaked_out_of_a_callback_that_then_raises_is_dead():
+    # The unwind path, which only the C++ suite covered. A destructor runs whether the call returns
+    # or throws, so the scope invalidates the borrow either way -- and a user who stashed the handle
+    # before their own error meets a message rather than freed memory. The R twin is identical.
+    leaked = {}
+
+    def leak_then_raise(parameters, rng):
+        leaked["rng"] = rng
+        rng.uniform(1)
+        raise ValueError("my own error, raised half way through")
+
+    with pytest.raises(ValueError, match="my own error, raised half way through"):
+        _rng_probe(1, [1], leak_then_raise)
+
+    assert "rng" in leaked
+    with pytest.raises(RuntimeError, match="no longer valid"):
+        leaked["rng"].uniform(1)
+    with pytest.raises(RuntimeError, match="no longer valid"):
+        leaked["rng"].integers(1, 0, 2)

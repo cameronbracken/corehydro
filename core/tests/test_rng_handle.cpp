@@ -102,6 +102,35 @@ int main() {
         CHECK_EQ(h->uniform(1).at(0), reference.next_double());
     }
 
+    // The span `max - min` is what the ported Next(int) is handed, so it cannot exceed int32. C#
+    // computes that subtraction unchecked and throws once it wraps negative; the same expression in
+    // C++ is UNDEFINED, and behaved that way: integers(1, -2000000000, 2000000000) returned an
+    // arbitrary out-of-range integer instead of raising. At the boundary the draw is an ordinary
+    // draw; one past it is an error.
+    {
+        constexpr int kIntMax = 2147483647;
+        constexpr int kIntMin = -2147483647 - 1;
+        samp::MersenneTwister prng(7U);
+        sup::RngScope scope(prng);
+        sup::RngBorrowPtr h = scope.handle();
+
+        std::vector<int> edge = h->integers(1, 0, kIntMax);  // span == int32 max, allowed
+        CHECK_EQ(edge.size(), std::size_t{1});
+        CHECK_TRUE(edge.at(0) >= 0 && edge.at(0) < kIntMax);
+        std::vector<int> edge2 = h->integers(1, -1, kIntMax - 1);  // span == int32 max again
+        CHECK_TRUE(edge2.at(0) >= -1 && edge2.at(0) < kIntMax - 1);
+
+        CHECK_THROWS_MSG(h->integers(1, -1, kIntMax), "too wide");              // span = 2^31
+        CHECK_THROWS_MSG(h->integers(1, -2000000000, 2000000000), "too wide");  // the reported case
+        CHECK_THROWS_MSG(h->integers(1, kIntMin, kIntMax), "too wide");         // the widest span
+
+        // The ported generator itself refuses the same span rather than overflowing, which is what
+        // C# reaches by wrapping into Next(int)'s "must be positive" throw.
+        samp::MersenneTwister wide(1U);
+        CHECK_THROWS_MSG(wide.next(kIntMin, kIntMax), "must be positive");
+        CHECK_TRUE(wide.next(0, kIntMax) >= 0);  // the boundary span still draws
+    }
+
     // --- the rng group ------------------------------------------------------------------------
     //
     // The probe seeds a generator, hands the callback a handle, and returns what it drew. Same

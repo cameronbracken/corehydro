@@ -32,6 +32,7 @@
 // next()); written once, an R draw and a Python draw are literally the same instructions on the
 // same state, and the bindings are left with nothing but type conversion.
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -81,6 +82,7 @@ struct RngBorrow {
         if (min_inclusive >= max_exclusive)
             throw std::invalid_argument(
                 "`min` must be below `max` (the upper bound is exclusive)");
+        check_span(min_inclusive, max_exclusive);
         std::vector<int> out;
         out.reserve(static_cast<std::size_t>(n));
         for (int i = 0; i < n; ++i) out.push_back(prng_ref.next(min_inclusive, max_exclusive));
@@ -90,6 +92,26 @@ struct RngBorrow {
    private:
     static void check_count(int n) {
         if (n < 1) throw std::invalid_argument("`n` must be a single positive whole number");
+    }
+
+    // WHAT C# DOES WITH TOO WIDE A SPAN. `MersenneTwister.Next(minInclusive, maxExclusive)`
+    // forwards to `Next(maxExclusive - minInclusive)`, and C# computes that subtraction
+    // UNCHECKED: any span above int.MaxValue wraps to a negative int, and `Next(int)` then throws
+    // ArgumentOutOfRangeException("Must be positive."). So C# THROWS for such a call -- it never
+    // returns a wrapped draw. We mirror the throw, and say why in a message a user of the two
+    // packages can act on.
+    //
+    // The subtraction itself is done in int64 deliberately. Written as C# writes it, `max - min`
+    // is signed integer overflow, which C++ leaves UNDEFINED rather than wrapping: before this
+    // check, `integers(1, -2000000000, 2000000000)` returned an arbitrary out-of-range value
+    // (-208904155) in both R and Python instead of raising.
+    static void check_span(int min_inclusive, int max_exclusive) {
+        constexpr std::int64_t kMaxSpan = 2147483647;  // int32 max, the widest Next(int) accepts
+        const std::int64_t span =
+            static_cast<std::int64_t>(max_exclusive) - static_cast<std::int64_t>(min_inclusive);
+        if (span > kMaxSpan)
+            throw std::invalid_argument(
+                "the range `min` to `max` is too wide; `max` - `min` must be at most 2147483647");
     }
 };
 
