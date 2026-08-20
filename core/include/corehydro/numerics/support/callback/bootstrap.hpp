@@ -295,7 +295,14 @@ inline CallbackResult run_bootstrap(const std::string& method, const JsonValue& 
                                          chboot::MersenneTwister& prng) {
         return resample(d, p.values, prng);
     };
-    boot.fit_function = [&fit](const std::vector<double>& d) {
+    // `kNaN` is captured EXPLICITLY, and it has to be spelled out even though no capture is
+    // required here by the standard: `ParameterSet(std::vector<double>, double)` takes its
+    // fitness BY VALUE, so the lvalue-to-rvalue conversion on a constexpr double yields a
+    // constant expression and does not odr-use it. MSVC does not implement that exemption for
+    // non-integral constexpr variables and rejects the lambda outright (C3493), which broke
+    // every Windows target that includes this header. Capturing it by copy is well-formed
+    // everywhere and costs nothing.
+    boot.fit_function = [&fit, kNaN](const std::vector<double>& d) {
         return chopt::ParameterSet(fit(d), kNaN);
     };
     boot.statistic_function = [&statistic](const chopt::ParameterSet& p) {
