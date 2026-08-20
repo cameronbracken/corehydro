@@ -108,6 +108,7 @@
 #include "corehydro/numerics/sampling/mcmc/snis.hpp"
 #include "corehydro/numerics/sampling/mcmc/support/mcmc_diagnostics.hpp"
 #include "corehydro/numerics/sampling/mcmc/support/mcmc_results.hpp"
+#include "corehydro/numerics/sampling/mcmc/support/mcmc_run.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/tools.hpp"
 #include "corehydro/numerics/utilities/extension_methods.hpp"
@@ -2424,24 +2425,46 @@ namespace mcmc = corehydro::numerics::sampling::mcmc;
 // (CholeskyDecomposition rejects a non-positive-definite matrix) on its very first
 // ChainIteration -- confirmed against the real C# library. Any Randomize-init fixture case
 // therefore needs a non-degenerate proposal_sigma; identity is the simplest one.
-static la::Matrix parse_proposal_sigma(const json& settings, int dimension) {
-    if (!settings.contains("proposal_sigma")) return la::Matrix(dimension);
-    std::string s = settings["proposal_sigma"].get<std::string>();
-    if (s == "zeros") return la::Matrix(dimension);
-    if (s == "identity") return la::Matrix::identity(dimension);
-    throw std::runtime_error("unknown proposal_sigma sentinel: " + s);
-}
-
-static mcmc::MCMCSampler::InitializationType parse_initialize(const std::string& s) {
-    if (s == "MAP") return mcmc::MCMCSampler::InitializationType::MAP;
-    if (s == "Randomize") return mcmc::MCMCSampler::InitializationType::Randomize;
-    if (s == "UserDefined") return mcmc::MCMCSampler::InitializationType::UserDefined;
-    throw std::runtime_error("unknown initialize value: " + s);
+//
+// The sentinel STRINGS are parsed by mcmc_run.hpp's parse_proposal_sigma, along with everything
+// else about building a sampler: this file reads the fixture's `settings` object into an
+// MCMCRunSettings and hands it over, exactly as the R and Python glues do with their own native
+// settings containers. There is one switch over sampler names in the repo and it is not here.
+static mcmc::MCMCRunSettings read_settings(const json& settings) {
+    mcmc::MCMCRunSettings s;
+    auto read_int = [&settings](const char* key, std::optional<int>& slot) {
+        if (settings.contains(key)) slot = settings[key].get<int>();
+    };
+    auto read_double = [&settings](const char* key, std::optional<double>& slot) {
+        if (settings.contains(key)) slot = settings[key].get<double>();
+    };
+    auto read_string = [&settings](const char* key, std::optional<std::string>& slot) {
+        if (settings.contains(key)) slot = settings[key].get<std::string>();
+    };
+    read_string("initialize", s.initialize);
+    read_int("prng_seed", s.prng_seed);
+    read_int("initial_iterations", s.initial_iterations);
+    read_int("warmup_iterations", s.warmup_iterations);
+    read_int("iterations", s.iterations);
+    read_int("number_of_chains", s.number_of_chains);
+    read_int("thinning_interval", s.thinning_interval);
+    read_int("output_length", s.output_length);
+    read_string("proposal_sigma", s.proposal_sigma);
+    read_double("step_size", s.step_size);
+    read_int("steps", s.steps);
+    read_int("max_tree_depth", s.max_tree_depth);
+    if (settings.contains("adapt_mass_matrix")) s.adapt_mass_matrix = settings["adapt_mass_matrix"].get<bool>();
+    read_double("scale", s.scale);
+    read_double("beta", s.beta);
+    read_double("jump", s.jump);
+    read_double("jump_threshold", s.jump_threshold);
+    read_double("snooker_threshold", s.snooker_threshold);
+    read_double("noise", s.noise);
+    return s;
 }
 
 // Builds + configures + samples() one sampler from a {"model": {...}, "settings": {...}}
-// construct. `sampler_target`: the fixture's file-level "target" (the sampler type, e.g.
-// "RWMH"); a later task extends this with more cases as more samplers land.
+// construct. `sampler_target`: the fixture's file-level "target" (the sampler type, e.g. "RWMH").
 static std::unique_ptr<mcmc::MCMCSampler> build_and_sample(const std::string& sampler_target,
                                                              const json& construct, const json& datasets) {
     const auto& model_spec = construct["model"];
@@ -2449,68 +2472,12 @@ static std::unique_ptr<mcmc::MCMCSampler> build_and_sample(const std::string& sa
     for (const auto& v : datasets[model_spec["dataset"].get<std::string>()]) data.push_back(parse_num(v));
     auto model = mcmc::build_model(model_spec["name"].get<std::string>(),
                                     model_spec["family"].get<std::string>(), data);
-    int d = static_cast<int>(model.priors.size());
 
-    json settings = construct.value("settings", json::object());
-
-    std::unique_ptr<mcmc::MCMCSampler> sampler;
-    if (sampler_target == "RWMH") {
-        sampler = std::make_unique<mcmc::RWMH>(model.priors, model.log_likelihood,
-                                                parse_proposal_sigma(settings, d));
-    } else if (sampler_target == "HMC") {
-        std::optional<double> step_size =
-            settings.contains("step_size") ? std::optional<double>(settings["step_size"].get<double>()) : std::nullopt;
-        std::optional<int> steps =
-            settings.contains("steps") ? std::optional<int>(settings["steps"].get<int>()) : std::nullopt;
-        sampler = std::make_unique<mcmc::HMC>(model.priors, model.log_likelihood, std::nullopt,
-                                               step_size.value_or(0.1), steps.value_or(50));
-    } else if (sampler_target == "NUTS") {
-        std::optional<double> step_size =
-            settings.contains("step_size") ? std::optional<double>(settings["step_size"].get<double>()) : std::nullopt;
-        std::optional<int> max_tree_depth = settings.contains("max_tree_depth")
-                                                 ? std::optional<int>(settings["max_tree_depth"].get<int>())
-                                                 : std::nullopt;
-        auto nuts = std::make_unique<mcmc::NUTS>(model.priors, model.log_likelihood, std::nullopt,
-                                                  step_size.value_or(0.1), max_tree_depth.value_or(10));
-        if (settings.contains("adapt_mass_matrix")) nuts->adapt_mass_matrix = settings["adapt_mass_matrix"].get<bool>();
-        sampler = std::move(nuts);
-    } else if (sampler_target == "ARWMH") {
-        auto arwmh = std::make_unique<mcmc::ARWMH>(model.priors, model.log_likelihood);
-        if (settings.contains("scale")) arwmh->scale = settings["scale"].get<double>();
-        if (settings.contains("beta")) arwmh->beta = settings["beta"].get<double>();
-        sampler = std::move(arwmh);
-    } else if (sampler_target == "Gibbs") {
-        if (!model.proposal) throw std::runtime_error("Gibbs model has no proposal function");
-        sampler = std::make_unique<mcmc::Gibbs>(model.priors, model.log_likelihood, model.proposal);
-    } else if (sampler_target == "SNIS") {
-        sampler = std::make_unique<mcmc::SNIS>(model.priors, model.log_likelihood);
-    } else if (sampler_target == "DEMCz") {
-        auto demcz = std::make_unique<mcmc::DEMCz>(model.priors, model.log_likelihood);
-        if (settings.contains("jump")) demcz->jump = settings["jump"].get<double>();
-        if (settings.contains("jump_threshold")) demcz->jump_threshold = settings["jump_threshold"].get<double>();
-        if (settings.contains("noise")) demcz->set_noise(settings["noise"].get<double>());
-        sampler = std::move(demcz);
-    } else if (sampler_target == "DEMCzs") {
-        auto demczs = std::make_unique<mcmc::DEMCzs>(model.priors, model.log_likelihood);
-        if (settings.contains("jump")) demczs->jump = settings["jump"].get<double>();
-        if (settings.contains("jump_threshold")) demczs->jump_threshold = settings["jump_threshold"].get<double>();
-        if (settings.contains("snooker_threshold"))
-            demczs->snooker_threshold = settings["snooker_threshold"].get<double>();
-        if (settings.contains("noise")) demczs->set_noise(settings["noise"].get<double>());
-        sampler = std::move(demczs);
-    } else {
-        throw std::runtime_error("unknown mcmc_sampler target: " + sampler_target);
-    }
-
-    if (settings.contains("initialize")) sampler->initialize = parse_initialize(settings["initialize"].get<std::string>());
-    if (settings.contains("prng_seed")) sampler->set_prng_seed(settings["prng_seed"].get<int>());
-    if (settings.contains("initial_iterations")) sampler->set_initial_iterations(settings["initial_iterations"].get<int>());
-    if (settings.contains("warmup_iterations")) sampler->set_warmup_iterations(settings["warmup_iterations"].get<int>());
-    if (settings.contains("iterations")) sampler->set_iterations(settings["iterations"].get<int>());
-    if (settings.contains("number_of_chains")) sampler->set_number_of_chains(settings["number_of_chains"].get<int>());
-    if (settings.contains("thinning_interval")) sampler->set_thinning_interval(settings["thinning_interval"].get<int>());
-    if (settings.contains("output_length")) sampler->output_length = settings["output_length"].get<int>();
-
+    mcmc::MCMCRunCallbacks callbacks;
+    callbacks.proposal = model.proposal;
+    auto sampler = mcmc::build_sampler(sampler_target, model.priors, model.log_likelihood,
+                                        read_settings(construct.value("settings", json::object())),
+                                        callbacks);
     sampler->sample();
     return sampler;
 }
