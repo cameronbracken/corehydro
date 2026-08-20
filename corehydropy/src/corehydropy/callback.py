@@ -443,8 +443,12 @@ def mcmc_posterior(
     --------
     >>> import corehydropy as ch
     >>> data = [4.9, 5.1, 5.0, 5.2, 4.8]
+    >>> # A plain loop and ``+ - * /`` alone, the portable spelling described above.
     >>> def ll(p):
-    ...     return -0.5 * sum((x - p[0]) * (x - p[0]) for x in data)
+    ...     acc = 0.0
+    ...     for x in data:
+    ...         acc += (x - p[0]) * (x - p[0])
+    ...     return -0.5 * acc
     >>> fit = ch.mcmc_posterior(ll, [ch.Distribution("Uniform", [0.0, 10.0])],
     ...                         iterations=200, seed=12345)  # doctest: +SKIP
     """
@@ -453,6 +457,8 @@ def mcmc_posterior(
             "`log_likelihood` must be a function taking a parameter vector and returning a "
             "single number"
         )
+    if seed is None:
+        raise TypeError("`seed` must not be None")
     if sampler not in _SAMPLERS:
         raise ValueError(f"unknown sampler '{sampler}'; use one of {_SAMPLERS}")
     if initialize not in ("MAP", "Randomize"):

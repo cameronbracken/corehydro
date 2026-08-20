@@ -347,7 +347,12 @@ rng_is_whole <- function(x) {
 #' \donttest{
 #' set.seed(1)
 #' x <- rnorm(50, mean = 5)
-#' ll <- function(p) -0.5 * sum((x - p[1])^2)
+#' # A plain loop and `+ - * /` alone, the portable spelling described above.
+#' ll <- function(p) {
+#'   acc <- 0
+#'   for (xi in x) acc <- acc + (xi - p[1]) * (xi - p[1])
+#'   -0.5 * acc
+#' }
 #' fit <- mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))),
 #'                       iterations = 500, seed = 12345)
 #' fit$posterior_mean
@@ -367,6 +372,9 @@ mcmc_posterior <- function(
   if (!is.function(log_likelihood)) {
     stop("`log_likelihood` must be a function taking a parameter vector and returning a single number",
          call. = FALSE)
+  }
+  if (is.null(seed)) {
+    stop("`seed` must not be NULL", call. = FALSE)
   }
   sampler <- match.arg(sampler)
   initialize <- match.arg(initialize)

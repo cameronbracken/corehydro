@@ -346,15 +346,34 @@ int main() {
         // the chain runs to completion and only the TRAILING rethrow catches the abort. Under
         // "MAP" the DifferentialEvolution pass is handed nothing but -infinity and can throw from
         // its own internals first, which the wrap catches.
+        //
+        // This loops the SAME seven-sampler vector the passing-callback test above uses (RWMH,
+        // ARWMH, DEMCz, DEMCzs, HMC, NUTS, SNIS), not just RWMH: a guard wired for one sampler's
+        // arm and silently missing on another is exactly the shape of bug a previous phase
+        // shipped, and a single-sampler throwing test cannot catch it.
         sup::CallbackSet cbs;
         cbs.vector_scalar = [](const std::vector<double>&) -> double { throw HostError(); };
-        for (const char* init : {"Randomize", "MAP"}) {
-            std::string options = std::string(R"({"sampler": "RWMH", "iterations": 100,
-                "warmup": 50, "chains": 2, "thinning": 1, "seed": 12345, "output_length": 100,
-                "proposal_sigma": "identity", "initialize": ")") + init +
-                                  R"(", "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
-            CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", options, cbs),
-                             "host language error");
+        const std::vector<std::pair<const char*, const char*>> samplers = {
+            {"RWMH", R"("chains": 2, "warmup": 50,)"},
+            {"ARWMH", R"("chains": 2, "warmup": 50,)"},
+            {"DEMCz", R"("chains": 3, "warmup": 50,)"},
+            {"DEMCzs", R"("chains": 3, "warmup": 50,)"},
+            {"HMC", R"("chains": 2, "warmup": 50,)"},
+            {"NUTS", R"("chains": 2, "warmup": 50,)"},
+            {"SNIS", R"("chains": 1,)"},
+        };
+        for (const auto& entry : samplers) {
+            const char* sampler = entry.first;
+            for (const char* init : {"Randomize", "MAP"}) {
+                std::string options = std::string(R"({"sampler": ")") + sampler + R"(", )" +
+                                      entry.second +
+                                      R"( "iterations": 100, "thinning": 1, "seed": 12345,
+                                         "output_length": 100, "proposal_sigma": "identity",
+                                         "initialize": ")" + init + R"(",
+                                         "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+                CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", options, cbs),
+                                 "host language error");
+            }
         }
     }
     {

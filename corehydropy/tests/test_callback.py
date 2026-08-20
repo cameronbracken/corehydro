@@ -429,8 +429,30 @@ def test_a_two_parameter_model_reads_its_priors_in_order():
     assert fit["map"][1] == pytest.approx(2.0, abs=0.2)
 
 
+# The SAME seven-sampler vector mcmc_posterior()'s own `sampler` argument accepts (Gibbs
+# excluded -- it is refused before it ever reaches a sampler, see
+# test_mcmc_posterior_refuses_a_prior_list_that_is_not_one's "unknown sampler" case for the
+# neighboring check). A guard wired for one sampler's arm and silently missing on another is
+# exactly the shape of bug a previous phase shipped, and a single-sampler test cannot catch it.
+_ALL_SAMPLERS = [
+    ("RWMH", 2, 100, 50),
+    ("ARWMH", 2, 100, 50),
+    ("DEMCz", 3, 100, 50),
+    ("DEMCzs", 3, 100, 50),
+    ("HMC", 2, 100, 50),
+    ("NUTS", 2, 100, 50),
+    # SNIS is not a Markov chain: its own ported validation rejects any warm-up and requires
+    # iterations >= output_length, which mcmc_posterior() does not expose (fixed at the ported
+    # default, 10000) -- so this is the smallest legal call, not an arbitrary round number.
+    ("SNIS", 1, 10000, None),
+]
+
+
 @pytest.mark.parametrize("initialize", ["Randomize", "MAP"])
-def test_an_error_raised_inside_the_log_likelihood_reaches_the_caller(initialize):
+@pytest.mark.parametrize("sampler,chains,iterations,warmup", _ALL_SAMPLERS)
+def test_an_error_raised_inside_the_log_likelihood_reaches_the_caller(
+    sampler, chains, iterations, warmup, initialize
+):
     # On BOTH initialization paths, and they fail differently underneath: "Randomize" never raises
     # of its own accord (-infinity is a legal, always rejected fitness, so the chain runs to
     # completion), while "MAP" hands DifferentialEvolution nothing but -infinity and can throw
@@ -438,11 +460,14 @@ def test_an_error_raised_inside_the_log_likelihood_reaches_the_caller(initialize
     def boom(p):
         raise ValueError("my own error")
 
+    kwargs = dict(
+        sampler=sampler, iterations=iterations, chains=chains, thinning=1, seed=12345,
+        initialize=initialize,
+    )
+    if warmup is not None:
+        kwargs["warmup"] = warmup
     with pytest.raises(ValueError, match="my own error"):
-        ch.mcmc_posterior(
-            boom, _ONE_PRIOR, iterations=100, warmup=50, chains=2, thinning=1, seed=12345,
-            initialize=initialize,
-        )
+        ch.mcmc_posterior(boom, _ONE_PRIOR, **kwargs)
 
 
 def test_mcmc_posterior_refuses_a_prior_list_that_is_not_one():
@@ -456,6 +481,10 @@ def test_mcmc_posterior_refuses_a_prior_list_that_is_not_one():
         ch.mcmc_posterior("not a function", _ONE_PRIOR)
     with pytest.raises(ValueError, match="unknown sampler"):
         ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="Gibbs")
+    # A None seed used to reach int(None) and fail deep inside the JSON builder with a message
+    # that never names the argument; it is now refused by name before that point.
+    with pytest.raises(TypeError, match="`seed` must not be None"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, seed=None)
     # A single Distribution is accepted for a one-parameter model.
     fit = ch.mcmc_posterior(
         _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), iterations=100, warmup=50,

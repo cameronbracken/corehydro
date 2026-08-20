@@ -372,20 +372,39 @@ test_that("a two-parameter model reads its priors in order", {
   expect_equal(fit$map[[2]], 2.0, tolerance = 0.2)
 })
 
-test_that("an error raised inside the log-likelihood reaches the caller", {
+test_that("an error raised inside the log-likelihood reaches the caller, for every sampler", {
   # On BOTH initialization paths, and they fail differently underneath: "Randomize" never throws
   # of its own accord (-infinity is a legal, always rejected fitness, so the chain runs to
   # completion), while "MAP" hands DifferentialEvolution nothing but -infinity and can throw from
   # its own internals first. Only the guard makes the user's own message win in both.
-  for (init in c("Randomize", "MAP")) {
-    expect_error(
-      mcmc_posterior(
-        function(p) stop("my own error"), list(distribution("Uniform", c(0, 10))),
-        iterations = 100, warmup = 50, chains = 2, thinning = 1, seed = 12345,
-        initialize = init
-      ),
-      "my own error"
-    )
+  #
+  # This loops the SAME seven-sampler vector `mcmc_posterior()`'s own `sampler` argument accepts
+  # (Gibbs excluded -- it is refused before it ever reaches a sampler, see the "not one" test
+  # below): a guard wired for one sampler's arm and silently missing on another is exactly the
+  # shape of bug a previous phase shipped, and a single-sampler test cannot catch it.
+  samplers <- list(
+    list(sampler = "RWMH", chains = 2L, iterations = 100L, warmup = 50L),
+    list(sampler = "ARWMH", chains = 2L, iterations = 100L, warmup = 50L),
+    list(sampler = "DEMCz", chains = 3L, iterations = 100L, warmup = 50L),
+    list(sampler = "DEMCzs", chains = 3L, iterations = 100L, warmup = 50L),
+    list(sampler = "HMC", chains = 2L, iterations = 100L, warmup = 50L),
+    list(sampler = "NUTS", chains = 2L, iterations = 100L, warmup = 50L),
+    # SNIS is not a Markov chain: its own ported validation rejects any warm-up and requires
+    # iterations >= output_length, which mcmc_posterior() does not expose (fixed at the ported
+    # default, 10000) -- so this is the smallest legal call, not an arbitrary round number.
+    list(sampler = "SNIS", chains = 1L, iterations = 10000L, warmup = NULL)
+  )
+  for (s in samplers) {
+    for (init in c("Randomize", "MAP")) {
+      expect_error(
+        mcmc_posterior(
+          function(p) stop("my own error"), list(distribution("Uniform", c(0, 10))),
+          sampler = s$sampler, iterations = s$iterations, warmup = s$warmup,
+          chains = s$chains, thinning = 1, seed = 12345, initialize = init
+        ),
+        "my own error"
+      )
+    }
   }
 })
 
@@ -400,6 +419,12 @@ test_that("mcmc_posterior refuses a prior list that is not one", {
   expect_error(
     mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "Gibbs"),
     "'arg' should be one of"
+  )
+  # A NULL seed used to reach as.integer(NULL) and fail deep inside the JSON builder with an
+  # unhelpful message; it is now refused by name before that point.
+  expect_error(
+    mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), seed = NULL),
+    "`seed` must not be NULL"
   )
   # A single distribution is accepted for a one-parameter model.
   fit <- mcmc_posterior(ll, distribution("Uniform", c(0, 10)), iterations = 100, warmup = 50,
