@@ -177,16 +177,23 @@ implementation, so it is not a fourth entry in the table above. It is, however, 
 f_gmm <- fit_gmm(model_bulletin17c(flood_data))
 gmm_coef <- setNames(coef(f_gmm), c("mean (log10)", "sd (log10)", "skew"))
 round(gmm_coef, 4)
-cat(sprintf(
-  "j-statistic %.4f, p-value %s (always NA: Bulletin 17C is always just-identified)\n",
-  f_gmm$j_stat, format(f_gmm$j_stat_pval)
-))
+print(f_gmm)
 ```
 
-The J-statistic is GMM's own goodness-of-fit diagnostic, an overidentification test. It is the
-method-of-moments analogue of a likelihood-based AIC/BIC/DIC, not a value on the same scale as
-any of them, and Bulletin 17C's moment conditions exactly match its parameter count, so there is
-no over-identified case here for the p-value to describe.
+The J-statistic is GMM's own goodness-of-fit diagnostic, an overidentification test, and the
+method-of-moments analogue of a likelihood-based AIC/BIC/DIC rather than a value on the same
+scale as any of them. Bulletin 17C's moment conditions exactly match its parameter count, so
+this fit has zero over-identifying degrees of freedom and `$j_stat_pval` is `NA`. `$j_stat`
+itself carries no information there either, which is why `print()` names the reason instead of
+showing a number: the residual covariance the statistic is scaled by is theoretically zero at
+zero degrees of freedom, so what comes back is whatever inverting a numerically singular matrix
+happened to give. The field is still on the fit for anyone who wants it.
+
+Writing more moment conditions than parameters with `fit_gmm_moments()` restores the p-value.
+It does not make the statistic itself trustworthy: the same residual covariance has rank
+`q - p` for any `q` and `p`, so it is singular whether or not the fit is over-identified, and
+inverting it amplifies the optimizer's convergence tolerance. `docs/upstream-csharp-issues.md`
+carries the measurement.
 
 `quantile_variance()` gives the delta-method variance of a fitted quantile off a GMM fit's
 sandwich covariance, useful directly without going through `bulletin17c_analysis()`'s full
@@ -265,7 +272,8 @@ stopifnot(
   near(f_gmm$parameters[1], 4.0862266825545781),
   near(f_gmm$parameters[2], 0.2031671188484615),
   near(f_gmm$parameters[3], -0.68625874896060901),
-  near(f_gmm$j_stat, 3.6036312001472797),
+  # $j_stat is deliberately NOT pinned: at zero degrees of freedom it is the inverse of a
+  # theoretically zero matrix, and it is not reproducible across optimizers or across languages.
   is.na(f_gmm$j_stat_pval),
   near(quantile_variance(f_gmm, 0.01), 0.0043287640050973901),
 
@@ -276,13 +284,12 @@ stopifnot(
 
 # Internal consistency: the informative prior moves MAP away from MLE and toward the prior mean,
 # every confidence/credible interval brackets its own point estimate, and GMM's log-likelihood
-# based fields are structurally NA while its J-statistic is not.
+# based fields are structurally NA.
 stopifnot(
   abs(f_map$parameters[3] - (-0.3)) < abs(f_mle$parameters[3] - (-0.3)),
   ci["MLE (profile)", "lower"] < f_mle$parameters[3] && f_mle$parameters[3] < ci["MLE (profile)", "upper"],
   ci["MAP (profile)", "lower"] < f_map$parameters[3] && f_map$parameters[3] < ci["MAP (profile)", "upper"],
-  is.na(f_gmm$aic), is.na(f_gmm$bic), is.na(logLik(f_gmm)),
-  !is.na(f_gmm$j_stat)
+  is.na(f_gmm$aic), is.na(f_gmm$bic), is.na(logLik(f_gmm))
 )
 cat("All reproduction checks passed.\n")
 ```

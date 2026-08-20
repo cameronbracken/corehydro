@@ -426,6 +426,300 @@ optimizer_fixture_objective <- function(name) {
   )
 }
 
+# callback [construct carries group/method/callback/options; assertions carry value/dim/status]:
+# the ported routines whose input is a live function, run through ch_callback_math_ against a
+# NATIVE R closure. Mirrors run_callback_kind in core/tests/test_fixtures.cpp. NOTE these catalog
+# names are NOT the optimizer catalog's above: `Diff_FXYZ` is Test_Differentiation.FXYZ
+# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`. `Diff_FX` and `Quad_FX3` are both
+# x^3, from two different upstream test files -- hence the prefixes.
+callback_fixture_function <- function(name) {
+  switch(name,
+    Root_Quadratic = function(x) x^2 - 2,
+    Root_Cubic = function(x) x^3 - x - 1,
+    Diff_FX = function(x) x^3,
+    Diff_FXY = function(p) p[1]^2 * p[2]^3,
+    Diff_FXYZ = function(p) p[1]^3 + p[2]^4 + p[3]^5,
+    Diff_FH = function(p) p[1]^3 - 2 * p[1] * p[2] - p[2]^6,
+    Quad_FX3 = function(x) x^3,
+    Quad_Cosine = function(x) cos(x),
+    Quad_Sine = function(x) sin(x),
+    Quad_FXX = function(x) 0.5 + 24 * x + 3 * x^2,
+    Quad_FXXX = function(x) 0.5 + 24 * x + 3 * x^2 + 8 * x^3,
+    # corehydro addition, no upstream integrand -- the one callback that reaches the subdividing
+    # branch of the recursion. Written with `x * x` rather than `x^2`, arithmetic only, so all
+    # four runners agree bit for bit and the evaluation count is a real oracle.
+    Quad_Peak = function(x) 1 / (1 + 1e4 * x * x),
+    # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
+    # sum in an explicit `for` loop rather than through sum(): R's sum() accumulates in extended
+    # precision where C++, Python and C# accumulate in double, and a Markov chain turns one
+    # differing bit into a different chain outright. See the fixture's own note.
+    Mcmc_GaussianKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) acc <- acc + (x - p[1]) * (x - p[1])
+      -0.5 * acc
+    },
+    Mcmc_LinearKernel = function(p) {
+      t <- c(1, 2, 3, 4, 5, 6, 7, 8)
+      y <- c(2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1)
+      acc <- 0
+      for (i in seq_along(t)) {
+        residual <- y[i] - p[1] - p[2] * t[i]
+        acc <- acc + residual * residual
+      }
+      -0.5 * acc
+    },
+    # The Gibbs case's model, whose full conditional really IS uniform: with
+    # x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+    # Uniform(max(x) - 1, min(x) + 1), so Prop_UniformConditional below is an exact Gibbs step
+    # rather than a random walk wearing Gibbs's name. Comparisons and arithmetic only.
+    Mcmc_UniformWidthKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      for (x in data) {
+        if (x - p[1] > 1 || p[1] - x > 1) return(-Inf)
+      }
+      0
+    },
+    # The proposal catalog: (parameters, rng) -> parameters, upstream's Gibbs.Proposal shape.
+    # Draws through the HANDLE, exactly as a user's own proposal would.
+    Prop_UniformConditional = function(parameters, rng) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      lo <- max(data) - 1
+      hi <- min(data) + 1
+      lo + rng_uniform(rng, 1) * (hi - lo)
+    },
+    # The gradient catalog: (parameters) -> vector, upstream's HMC.Gradient shape. The analytic
+    # derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu), summed in an explicit loop.
+    Grad_GaussianKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) acc <- acc + (x - p[1])
+      acc
+    },
+    # Task-5 review fix, coverage finding: unlike Mcmc_GaussianKernel, whose derivative
+    # sum(x - mu) is LINEAR in mu (so its third derivative is zero and the ported
+    # central-difference default agrees with the analytic gradient to rounding, ~4e-16), this
+    # kernel's derivative is CUBIC in mu, so the central-difference truncation error is real rather
+    # than rounding -- the analytic and default gradients genuinely disagree, which is what a
+    # supplied-vs-ignored gradient regression needs to be caught by the oracle gate. The 0.05
+    # coefficient is load-bearing, not decorative: measured by brute-force sweep (a coefficient of
+    # 1 over the same data), an unscaled quartic makes HMC's leapfrog trajectory genuinely CHAOTIC
+    # over 200 iterations -- the analytic and default gradients then diverge at the ~0.3% level, the
+    # same order this fixture's own cross-language divergence measured at that scale, so no fixed
+    # tolerance could pin it. At 0.05 the divergence is small and smooth (~3e-8 relative, four
+    # orders past the file's 1e-12 tolerance) rather than chaotic, which is what keeps the case
+    # usable as an oracle at all.
+    Mcmc_QuarticKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) {
+        d <- x - p[1]
+        acc <- acc + d * d * d * d
+      }
+      -0.05 * acc
+    },
+    # The analytic derivative of Mcmc_QuarticKernel, d/dmu = 0.05 * 4 * sum((x - mu)^3).
+    Grad_QuarticKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) {
+        d <- x - p[1]
+        acc <- acc + d * d * d
+      }
+      0.2 * acc
+    },
+    # The bootstrap catalog (fixtures/callback/bootstrap.json), upstream's four Bootstrap<TData>
+    # delegate shapes. Every one is arithmetic and comparisons only, and the mean is summed in an
+    # explicit `for` loop rather than with sum() or mean(): both accumulate in extended precision in
+    # R where C++, Python and C# accumulate in double, and one differing bit in a fitted mean moves
+    # a percentile. The resample draws every index through the HANDLE, exactly as a user's own
+    # resample function does; rng_integers draws on [0, n) counting from 0, so the index is shifted
+    # by one for R's own 1-based subscript.
+    Resample_Iid = function(data, parameters, rng) {
+      data[rng_integers(rng, length(data), 0, length(data)) + 1L]
+    },
+    Fit_Mean = function(data) {
+      acc <- 0
+      for (x in data) acc <- acc + x
+      acc / length(data)
+    },
+    Stat_Identity = function(parameters) parameters,
+    Stat_MeanAndSquare = function(parameters) c(parameters[1], parameters[1] * parameters[1]),
+    # `index` counts from 0, as the ported delegate does, so the sample without it is
+    # data[-(index + 1)] -- the naive data[-index] is data[-0], which R evaluates to numeric(0),
+    # the empty vector, when index is 0, and drops the wrong observation at every later index.
+    Jack_LeaveOneOut = function(data, index) data[-(index + 1)],
+    # The gmm catalog (fixtures/callback/gmm.json), upstream's three delegate shapes from
+    # GeneralizedMethodOfMoments's delegate constructor. The model is the just-identified
+    # two-parameter method-of-moments fit of a Normal: theta = (mu, sigma2) and
+    #   g = [mean(x - mu), mean((x - mu)^2 - sigma2)],  S = the covariance of those two
+    # whose unique root -- and so the GMM optimum, since q = p makes g = 0 attainable -- is the
+    # sample mean and the population variance. Arithmetic and an explicit `for` loop only, never
+    # sum() or mean(): both accumulate in extended precision in R where C++, Python and C#
+    # accumulate in double, and one differing bit moves a fitted parameter.
+    Mom_NormalMeanVariance = function(p) {
+      data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+      n <- 8
+      g0 <- 0
+      g1 <- 0
+      s00 <- 0
+      s01 <- 0
+      s11 <- 0
+      for (x in data) {
+        a <- x - p[1]
+        b <- a * a - p[2]
+        g0 <- g0 + a
+        g1 <- g1 + b
+        s00 <- s00 + a * a
+        s01 <- s01 + a * b
+        s11 <- s11 + b * b
+      }
+      list(
+        g = c(g0 / n, g1 / n),
+        # matrix() fills COLUMN-major; this one is symmetric, and the glue transposes anyway.
+        s = matrix(c(s00 / n, s01 / n, s01 / n, s11 / n), nrow = 2, ncol = 2)
+      )
+    },
+    # The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the identical
+    # eight observations, with a third moment condition added -- mean((x - mu)^3), zero for a
+    # Normal -- so q = 3 > p = 2 and the degrees of freedom become 1. The only case in the file
+    # that reaches the chi-squared p-value branch of the J-statistic.
+    Mom_NormalThreeMoments = function(p) {
+      data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+      n <- 8
+      g0 <- 0
+      g1 <- 0
+      g2 <- 0
+      s00 <- 0
+      s01 <- 0
+      s02 <- 0
+      s11 <- 0
+      s12 <- 0
+      s22 <- 0
+      for (x in data) {
+        a <- x - p[1]
+        b <- a * a - p[2]
+        cc <- a * a * a
+        g0 <- g0 + a
+        g1 <- g1 + b
+        g2 <- g2 + cc
+        s00 <- s00 + a * a
+        s01 <- s01 + a * b
+        s02 <- s02 + a * cc
+        s11 <- s11 + b * b
+        s12 <- s12 + b * cc
+        s22 <- s22 + cc * cc
+      }
+      list(
+        g = c(g0 / n, g1 / n, g2 / n),
+        # matrix() fills COLUMN-major; this one is symmetric, and the glue transposes anyway.
+        s = matrix(
+          c(s00 / n, s01 / n, s02 / n, s01 / n, s11 / n, s12 / n, s02 / n, s12 / n, s22 / n),
+          nrow = 3, ncol = 3
+        )
+      )
+    },
+    # The CUBIC-JACOBIAN member of the same catalog, and the one case in the file whose analytic
+    # Jacobian is distinguishable from the ported numerical one. theta = (mu, sigma), matched on
+    # the first and fourth central moments of a Normal:
+    #   g = [mean(x - mu), mean(u^4) - 3 t^4],  u = 100 (x - mu),  t = 100 sigma
+    # so dg2/dsigma = -1200 t^3 is cubic in the parameter, where every other case in the file has a
+    # Jacobian linear in it. The eight observations are the ones above with the decimal point moved
+    # two places, which is what makes the fitted sigma (0.00404) small next to the numerical
+    # Jacobian's step h = 1e-4 (|theta| + 1).
+    Mom_NormalFourthMoment = function(p) {
+      data <- c(0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+      n <- 8
+      t <- p[2] * 100
+      t4 <- 3 * t * t * t * t
+      g0 <- 0
+      g1 <- 0
+      s00 <- 0
+      s01 <- 0
+      s11 <- 0
+      for (x in data) {
+        a <- x - p[1]
+        u <- a * 100
+        b <- u * u * u * u - t4
+        g0 <- g0 + a
+        g1 <- g1 + b
+        s00 <- s00 + a * a
+        s01 <- s01 + a * b
+        s11 <- s11 + b * b
+      }
+      list(
+        g = c(g0 / n, g1 / n),
+        # matrix() fills COLUMN-major; this one is symmetric, and the glue transposes anyway.
+        s = matrix(c(s00 / n, s01 / n, s01 / n, s11 / n), nrow = 2, ncol = 2)
+      )
+    },
+    # The analytic Jacobian of Mom_NormalFourthMoment, one ROW per moment condition:
+    # dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3), dg2/dsigma = -1200 t^3.
+    Jac_NormalFourthMoment = function(p) {
+      data <- c(0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+      acc <- 0
+      for (x in data) {
+        u <- (x - p[1]) * 100
+        acc <- acc + u * u * u
+      }
+      t <- p[2] * 100
+      matrix(c(-1, -400 * acc / 8, 0, -1200 * t * t * t), nrow = 2, ncol = 2)
+    },
+    # The analytic Jacobian of Mom_NormalMeanVariance, one ROW per moment condition:
+    # dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.
+    Jac_NormalMeanVariance = function(p) {
+      data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+      acc <- 0
+      for (x in data) acc <- acc + (x - p[1])
+      matrix(c(-1, -2 * acc / 8, 0, -1), nrow = 2, ncol = 2)
+    },
+    # A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the ported half-quadratic
+    # convention expects.
+    Pen_SigmaTowardsOne = function(p) 0.5 * (p[2] - 1) * (p[2] - 1),
+    # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
+    # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
+    # user's proposal function would do -- rather than reaching for a generator of its own, which
+    # is the property the fixture exists to pin.
+    Rng_Uniform = function(parameters, rng) rng_uniform(rng, parameters[1]),
+    Rng_Integers = function(parameters, rng) {
+      rng_integers(rng, parameters[1], parameters[2], parameters[3])
+    },
+    Rng_Interleaved = function(parameters, rng) {
+      c(rng_uniform(rng, 2), rng_integers(rng, 2, 0, 100), rng_uniform(rng, 1))
+    },
+    Rng_Warmup1000 = function(parameters, rng) {
+      rng_uniform(rng, 1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
+      rng_uniform(rng, 10)
+    },
+    stop(sprintf("unknown callback fixture callback: %s", name))
+  )
+}
+
+# `construct$options` was parsed with simplifyVector = FALSE, so a JSON array leaf is an R list of
+# scalars; re-flattened here so a length-1 array survives as a JSON array, not an auto-unboxed
+# scalar. Recursive because the mcmc group's options carry strings (the sampler name) and an array
+# of prior OBJECTS beside their numbers.
+callback_options_value <- function(ns, v) {
+  if (is.list(v)) {
+    nms <- names(v)
+    if (!is.null(nms) && all(nzchar(nms))) {
+      return(lapply(v, function(e) callback_options_value(ns, e)))
+    }
+    if (all(vapply(v, function(e) !is.list(e) && is.numeric(e) && length(e) == 1L, logical(1)))) {
+      return(ns$spec_array(vapply(v, as.double, numeric(1))))
+    }
+    return(lapply(v, function(e) callback_options_value(ns, e)))
+  }
+  if (is.character(v)) return(as.character(v))
+  if (is.logical(v)) return(as.logical(v))
+  as.double(v)
+}
+
+callback_options_json <- function(ns, options) {
+  if (is.null(options) || length(options) == 0L) return("{}")
+  ns$to_spec_json(lapply(options, function(v) callback_options_value(ns, v)))
+}
+
 # toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
 # utility group runs through ch_toolbox_run_. Mirrors run_toolbox_kind in
 # core/tests/test_fixtures.cpp.
@@ -1608,6 +1902,103 @@ test_that("oracle fixtures validate", {
             expect_identical(r$status, a$expected)
           } else {
             stop(sprintf("unknown optimizer fixture assertion method: %s", a$method))
+          }
+        }
+      }
+      next
+    }
+    if (identical(spec$kind, "callback") ||
+          identical(spec$kind, "callback_cross_language")) {
+      ns <- asNamespace("corehydror")
+      # A "callback"-kind case IS its own single block; a "callback_cross_language"-kind case
+      # (fixtures/callback/callback_cross_language.json) nests two -- "mcmc" and "bootstrap" --
+      # each shaped exactly like a "callback"-kind case's construct/assertions, so the one body
+      # below drives both kinds and the cross-language fixture grows no evaluation path of its own.
+      # Its assertions are spelled mode "abs" with tol 0, i.e. bit equality with the C++, Python and
+      # C# runners rather than a tolerance.
+      blocks <- list()
+      for (case in spec$cases) {
+        if (identical(spec$kind, "callback")) {
+          blocks[[length(blocks) + 1L]] <- case
+        } else {
+          for (sub in c("mcmc", "bootstrap")) blocks[[length(blocks) + 1L]] <- case[[sub]]
+        }
+      }
+      for (case in blocks) {
+        construct <- case$construct
+        # Every group has its own R entry point: ch_callback_math_, ch_rng_probe_,
+        # ch_callback_mcmc_, ch_callback_gmm_ and ch_callback_bootstrap_.
+        opts <- callback_options_json(ns, construct$options)
+        fn <- callback_fixture_function(construct$callback)
+        r <- if (identical(construct$group, "math")) {
+          ns$ch_callback_math_(construct$method, opts, fn)
+        } else if (identical(construct$group, "rng")) {
+          ns$ch_rng_probe_(opts, fn)
+        } else if (identical(construct$group, "mcmc")) {
+          # The two other delegates the mcmc group's samplers take, each resolved out of the same
+          # catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys stay NULL, which is
+          # what "no proposal" and "the ported default gradient" mean.
+          proposal <- if (is.null(construct$proposal)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$proposal)
+          }
+          gradient <- if (is.null(construct$gradient)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$gradient)
+          }
+          ns$ch_callback_mcmc_(opts, fn, proposal, gradient)
+        } else if (identical(construct$group, "gmm")) {
+          # `callback` names the MOMENT CONDITION function -- this group's required delegate, its
+          # counterpart of the mcmc group's log-likelihood -- and the two optional ones have keys
+          # of their own. An absent key stays NULL, which is what "the ported numerical Jacobian"
+          # and "no penalty" mean.
+          jacobian <- if (is.null(construct$jacobian)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$jacobian)
+          }
+          penalty <- if (is.null(construct$penalty)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$penalty)
+          }
+          ns$ch_callback_gmm_(opts, fn, jacobian, penalty)
+        } else if (identical(construct$group, "bootstrap")) {
+          # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
+          # counterpart of the mcmc group's log-likelihood -- and the other three have keys of
+          # their own. An absent `jackknife` stays NULL, which is what every method but BCa means.
+          jackknife <- if (is.null(construct$jackknife)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$jackknife)
+          }
+          ns$ch_callback_bootstrap_(
+            opts, fn,
+            callback_fixture_function(construct$fit),
+            callback_fixture_function(construct$statistic),
+            jackknife
+          )
+        } else {
+          stop(sprintf("unknown callback fixture group: %s", construct$group))
+        }
+        for (a in case$assertions) {
+          idx <- if (is.null(a$args)) 1L else a$args[[1]] + 1L
+          if (identical(a$method, "value")) {
+            check_assertion(r$values[[idx]], a)
+          } else if (identical(a$method, "named")) {
+            # By label, not position: the mcmc group's summary block is long and its indices
+            # shift with the chain and parameter counts.
+            at <- match(a$name, as.character(unlist(r$names)))
+            if (is.na(at)) stop(sprintf("callback: no result named '%s'", a$name))
+            check_assertion(r$values[[at]], a)
+          } else if (identical(a$method, "dim")) {
+            check_assertion(as.double(r$dims[[idx]]), a)
+          } else if (identical(a$method, "status")) {
+            expect_identical(r$status, a$expected)
+          } else {
+            stop(sprintf("unknown callback fixture assertion method: %s", a$method))
           }
         }
       }

@@ -1,3 +1,51 @@
+# corehydror 0.7.0
+
+The callback layer. Five upstream classes are delegate-driven by design, and until now the package
+could reach them only through internal registries, so the model always had to be one the port
+already knew how to build. Your own R function can now drive them: a log-likelihood, a Gibbs
+proposal, an HMC/NUTS gradient, the four bootstrap delegates, and a set of GMM moment conditions.
+See `CHANGELOG.md` at the repository root for the full account, including the guard design and the
+review-round fixes; this file lists the package-facing additions and fixes.
+
+## New features
+
+* `mcmc_posterior()` -- sample a posterior whose likelihood is not in the package, over priors you
+  choose. All eight ported samplers are reachable, including `"Gibbs"`, which needs a
+  model-specific conditional `proposal` and so could not be run before. `"HMC"` and `"NUTS"` take
+  an optional analytic `gradient`.
+* `bootstrap_custom()` -- a confidence interval on any statistic you can compute from a fitted
+  parameter set, over the four delegates `resample`, `fit`, `statistic` and `jackknife`, and the
+  five interval methods Percentile, BiasCorrected, Normal, BootstrapT and BCa.
+* `fit_gmm_moments()` -- fit moment conditions you write, with an optional analytic `jacobian` and
+  `penalty`. Returns the same `corehydro_fit` object `fit_gmm()` does. `fit_gmm()` itself can only
+  fit a `model_bulletin17c()` model.
+* `root_find()`, `derivative()`, `gradient()`, `hessian()`, `quadrature()` -- Brent root finding,
+  numerical differentiation, and adaptive Gauss-Kronrod integration over a plain R function.
+  `gradient()` and `hessian()` collide with `numDeriv` and `pracma`, so the examples call them as
+  `corehydror::gradient()`.
+* `rng_uniform()`, `rng_integers()` -- draw from the handle a callback is given on the generator
+  the run is already using. Drawing with `runif()` or `sample()` instead leaves a seeded run
+  unreproducible.
+
+## Bug fixes
+
+* The RNG handle refuses a foreign external pointer. It previously accepted any `EXTPTRSXP` and
+  cast it, so an `Rcpp::XPtr`, or the address slot of a registered native routine, segfaulted and
+  aborted the R session.
+* `rng_integers()` no longer overflows on a span wider than `.Machine$integer.max`; it raises, as
+  the ported generator does.
+* `print()` and `summary()` on a GMM fit no longer show the J statistic where it cannot be
+  trusted: at zero over-identifying degrees of freedom, or when the statistic is not finite. The
+  `$j_stat` field is untouched.
+* The `bootstrap_custom()` jackknife documentation claimed `data[-index]` returns the sample
+  untouched at index 0; in R that is `data[-0]`, the empty vector.
+* An R log-likelihood returning `NA` is refused by name instead of walking a motionless chain, and
+  a `NULL` seed is refused by name instead of failing inside the JSON builder.
+
+## Documentation
+
+* Two worked examples: a custom posterior and a custom bootstrap.
+
 # corehydror 0.6.0
 
 The numerics toolbox layer. Every general-purpose Numerics utility that is not itself a

@@ -5,11 +5,11 @@ toc: true
 
 What is currently implemented, by source library for both the shared C++ core library 
 (the faithful port itself) and the R/Python packages (`corehydror` /
-`corehydropy`). "Internal" means the core carries a validated port that the packages use
-under the hood (or expose only through the analysis functions) but that has no public
-wrapper of its own yet. Every "Ported" row is validated by test suites which have also been ported and compared to the original C# libraries.
+`corehydropy`). As of v0.7.0 every ported area has a public wrapper in both packages, so
+no row is marked "Internal" any more; where only part of an area is exposed, the Notes
+column says which part. Every "Ported" row is validated by test suites which have also been ported and compared to the original C# libraries.
 
-Status as of v0.6.0.
+Status as of v0.7.0.
 
 ## Numerics
 
@@ -20,21 +20,21 @@ general-purpose math, machine learning, and data-container layers are out of sco
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
 | `Distributions` (univariate, 42 families) | Ported | Public | `Distribution` / `distribution()` + density, CDF, quantile, moments, L-moments, fitting (MLE / L-moments / MOM), seeded sampling |
-| `Distributions` (multivariate) | Ported | Internal | Dirichlet, Multinomial, BivariateEmpirical, MultivariateNormal (Genz MVNDST), MultivariateStudentT |
-| `Distributions.Copulas` (7 bivariate + estimation) | Ported | Internal | drives `bivariate_analysis` and `coincident_frequency_analysis` |
-| `Sampling.MCMC` (8 samplers + R-hat / ESS) | Ported | Public | `mcmc_sample()` exposes 7 (Gibbs needs a model-specific proposal); all drive the Bayesian analyses |
+| `Distributions` (multivariate) | Ported | Public | Dirichlet, Multinomial, BivariateEmpirical, MultivariateNormal (Genz MVNDST), MultivariateStudentT, through the `mvdist_*` verbs since v0.5.0 |
+| `Distributions.Copulas` (7 bivariate + estimation) | Ported | Public | `copula()` / `copula_fit()` and the density, CDF, tail-dependence and joint-exceedance verbs since v0.5.0; also drives `bivariate_analysis` and `coincident_frequency_analysis` |
+| `Sampling.MCMC` (8 samplers + R-hat / ESS) | Ported | Public | `mcmc_sample()` fits a built-in family; `mcmc_posterior()` takes a log-likelihood you write and reaches all eight samplers, Gibbs included, through the proposal callback it accepts; all drive the Bayesian analyses |
 | `Sampling` (Latin hypercube, Sobol, Stratify) | Ported | Public | `latin_hypercube()`, `sobol_sequence()`, `stratify()` |
-| `Sampling.Bootstrap` | Ported (non-pivotal) | Public | `bootstrap_analysis()`; the covariance-aware pivotal workflow is a documented omission |
+| `Sampling.Bootstrap` | Ported (non-pivotal) | Public | `bootstrap_analysis()` for a fitted distribution, `bootstrap_custom()` for a statistic you write, reaching all four upstream delegates (resample, fit, statistic, jackknife) and all five interval methods; the covariance-aware pivotal workflow is a documented omission |
 | `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation, autocorrelation, goodness of fit, histogram binning, and joint probability all public; t / Mann-Whitney / KS tests, single Grubbs-Beck, and Jenks breaks not ported |
 | `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z) |
 | `Data.Regression` | Ported | Public | `linear_regression()` -- ordinary least squares, returning a `corehydro_lm` / `LinearRegressionResult` with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict` |
 | `Data` (TimeSeries container) | Not ported | -- | a thin adapter exists for the time-series models; The additional functionality (file I/O, USGS download) may be implemented later |
-| `Mathematics` (linear algebra, special functions, root finding) | Ported (as needed) | Internal | everything the distribution / estimation layers require; general optimization is a separate row below, now public |
+| `Mathematics` (linear algebra, special functions, root finding, numerical derivatives) | Ported (as needed) | Public | `root_find()` (Brent), `derivative()`, `gradient()` and `hessian()` run over a function you write; the linear algebra and special functions stay internal, covering what the distribution / estimation layers require; general optimization is a separate row below |
 | `Mathematics.Optimization` | Partial | Public | `optim_minimize()` / `optim_maximize()` expose DE, Nelder-Mead, Brent, BFGS, Powell, MLSL (the estimators' needs); PSO, SCE-UA, simulated annealing, augmented Lagrange, multi-start not ported |
-| `Mathematics.Integration` | Not ported | -- | except the Genz MVNDST integrator inside MultivariateNormal |
+| `Mathematics.Integration` | Partial | Public | `quadrature()` integrates a function you write with the adaptive Gauss-Kronrod rule; the Genz MVNDST integrator inside MultivariateNormal is ported too; the Simpson, Gauss-Lobatto, trapezoidal and Monte Carlo (Vegas, Miser) integrators are not |
 | `MachineLearning` (K-Means, random forest, KNN, decision trees, GMM, GLM) | Not ported | -- | Planned for future release |
 | `Functions` (link functions) | Ported | Public | `link_function()` / `link()` / `link_inverse()` / `link_derivative()` / `link_names()` expose the seven standard links; the five BestFit-specific links (ASinH, SES, LogSES, LogASinH, Centered) are used internally by the GMM / Bulletin 17C track |
-| `Random Numbers` (Mersenne Twister) | Ported (bit-exact) | Internal | the foundation of cross-language reproducibility |
+| `Random Numbers` (Mersenne Twister) | Ported (bit-exact) | Public (through callbacks) | the foundation of cross-language reproducibility; a callback that needs randomness draws from the generator the run is already using, through a handle passed to it (R `rng_uniform()` / `rng_integers()`, Python's `Rng`, which users cannot construct themselves) |
 
 : {tbl-colwidths="[30,14,14,42]"}
 
@@ -46,7 +46,7 @@ fully ported; only its WPF desktop shell is out of scope.
 
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
-| `Estimation` (MLE, MAP, Bayesian, GMM) | Ported | Public | via the analysis functions and `estimation_diagnostics()` |
+| `Estimation` (MLE, MAP, Bayesian, GMM) | Ported | Public | `fit_mle()`, `fit_map()`, `fit_bayesian()` and `fit_gmm()` over any `model_*()`, `fit_gmm_moments()` over moment conditions you write, plus the analysis functions and `estimation_diagnostics()` |
 | `Models` (data frame, censored data, trends, all model families) | Ported | Public | flood frequency, Bulletin 17C, mixtures, competing risks, point process, AR/MA/ARIMA/ARIMAX, spatial GEV, rating curves, bivariate |
 | `Analyses` (all orchestrators) | Ported | Public | the 19 analysis functions in each package |
 | `Diagnostics` (leverage, influence, prior influence, predictive checks) | Ported | Public | `estimation_diagnostics()`, `prior_predictive_check()`, `posterior_predictive_check()` |

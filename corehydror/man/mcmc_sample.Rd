@@ -7,13 +7,14 @@
 mcmc_sample(
   data,
   distribution = "Normal",
-  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS"),
+  sampler = "RWMH",
   iterations = NULL,
   warmup = NULL,
   chains = NULL,
   thinning = NULL,
+  output_length = NULL,
   seed = 12345,
-  initialize = c("MAP", "Randomize")
+  initialize = "MAP"
 )
 }
 \arguments{
@@ -33,6 +34,11 @@ default if \code{NULL}).}
 \item{chains}{number of chains (sampler default if \code{NULL}).}
 
 \item{thinning}{thinning interval (sampler default if \code{NULL}).}
+
+\item{output_length}{total number of retained draws across all chains
+(sampler default, 10,000, if \code{NULL}). The ported sampler collects
+\code{ceiling(output_length / chains)} draws per chain after the iteration
+loop. The ported floor is 100 and it is refused below that.}
 
 \item{seed}{PRNG seed; \code{12345} is the C# default.}
 

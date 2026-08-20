@@ -92,4 +92,7 @@ PYBIND11_MODULE(_core, m) {
 
     // The shared toolbox runner (correlation and the rest of the Numerics utility layer).
     register_toolbox(m);
+
+    // The shared callback runner (ported routines driven by a user-written Python function).
+    register_callback(m);
 }

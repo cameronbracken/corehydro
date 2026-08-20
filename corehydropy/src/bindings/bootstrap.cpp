@@ -12,20 +12,17 @@
 #include <vector>
 
 #include "corehydro/numerics/sampling/bootstrap/bootstrap.hpp"
+#include "corehydro/numerics/sampling/bootstrap/ci_method_names.hpp"
 #include "corehydro/numerics/sampling/bootstrap/model_registry.hpp"
 #include "bindings.hpp"
 
 namespace py = pybind11;
 namespace bs = corehydro::numerics::sampling;
 
-static bs::BootstrapCIMethod parse_ci_method(const std::string& s) {
-    if (s == "Percentile") return bs::BootstrapCIMethod::Percentile;
-    if (s == "BiasCorrected") return bs::BootstrapCIMethod::BiasCorrected;
-    if (s == "BCa") return bs::BootstrapCIMethod::BCa;
-    if (s == "Normal") return bs::BootstrapCIMethod::Normal;
-    if (s == "BootstrapT") return bs::BootstrapCIMethod::BootstrapT;
-    throw py::value_error("unknown bootstrap ci_method: " + s);
-}
+// The name-to-enum mapping lives in the core (ci_method_names.hpp) rather than here: this glue,
+// the cpp11 glue, the C++ fixture runner and the bootstrap callback group all need it, and four
+// copies is how a sixth enum member reaches only some of them. pybind11 turns the
+// std::invalid_argument it throws into the same ValueError this file used to raise itself.
 
 void register_bootstrap(py::module_& m) {
     // Builds the named model, runs it once, computes confidence intervals once, and returns a
@@ -54,7 +51,7 @@ void register_bootstrap(py::module_& m) {
                 throw py::value_error("unknown bootstrap run kind: " + run);
             }
 
-            bs::BootstrapResults results = boot.get_confidence_intervals(parse_ci_method(ci_method), alpha);
+            bs::BootstrapResults results = boot.get_confidence_intervals(bs::parse_bootstrap_ci_method(ci_method), alpha);
 
             int n_stats = static_cast<int>(results.statistic_results.size());
             int n_params = static_cast<int>(results.parameter_results.size());

@@ -1,0 +1,320 @@
+---
+title: "14. A custom posterior"
+---
+
+::: {.callout-note appearance="minimal" icon=false}
+Language: **R** (Quarto) - [Python version](python.ipynb)
+:::
+
+`mcmc_sample()` samples the posterior of a built-in distribution family under uniform priors
+spanning that family's parameter constraints. `mcmc_posterior()` drops both restrictions: you
+write the log-likelihood, you choose the priors, and all eight ported samplers become
+reachable, including Gibbs, which neither package could run before this surface existed because
+Gibbs needs a proposal function and there was no way to pass one in.
+
+## What you'll learn
+
+- Write a log-likelihood by hand and sample its posterior with `mcmc_posterior()`.
+- Read the trace plot, R-hat and posterior summary the same way you would for a built-in model.
+- Where the cross-language guarantee stops, and why a callback posterior is the place it stops
+  hardest.
+- Run the Gibbs sampler with a proposal function, drawing from the handle the sampler gives you
+  rather than from R's own generator.
+
+## Setup
+
+```{r}
+library(corehydror)
+```
+
+## A model the package does not have
+
+Runoff against basin precipitation at a gauge, twelve water years, in inches. The model is a
+straight line with Gaussian errors and three parameters: intercept $a$, slope $b$, and error
+scale $\sigma$. No `model_*()` constructor builds this, so `fit_bayesian()` cannot reach it.
+
+$$
+y_i = a + b\,x_i + \varepsilon_i, \qquad \varepsilon_i \sim \mathcal{N}(0, \sigma^2)
+$$
+
+```{r}
+precip <- c(18.2, 22.5, 25.1, 19.8, 30.4, 27.6, 21.3, 33.0, 24.7, 28.9, 20.6, 31.5)
+runoff <- c(4.1, 6.8, 8.0, 5.2, 11.9, 9.6, 6.0, 13.4, 7.7, 10.5, 5.5, 12.6)
+n <- length(runoff)
+
+plot(precip, runoff, pch = 19, col = "#5b7a8c",
+     xlab = "Basin precipitation (in)", ylab = "Runoff (in)",
+     main = "Twelve water years")
+```
+
+Dropping the constant $-\tfrac{n}{2}\log(2\pi)$, the log-likelihood is
+
+$$
+\ell(a, b, \sigma) = -n \log \sigma
+  - \frac{1}{2\sigma^2} \sum_{i=1}^{n} \bigl(y_i - a - b\,x_i\bigr)^2 .
+$$
+
+Written as a plain loop, which is deliberate and is explained in the next section.
+
+```{r}
+log_likelihood <- function(p) {
+  a <- p[1]
+  b <- p[2]
+  sigma <- p[3]
+  acc <- 0
+  for (i in seq_len(n)) {
+    resid <- runoff[i] - (a + b * precip[i])
+    acc <- acc + resid * resid
+  }
+  -n * log(sigma) - acc / (2 * sigma * sigma)
+}
+```
+
+One prior per parameter, in the order `log_likelihood` reads them. These are flat, so the
+log-likelihood carries no prior term: a parameter outside its prior's support is rejected before
+your function is called, and the priors are used for the feasible bounds and for chain
+initialization. A prior that is not flat would need its log density added to the returned value
+yourself, which is the upstream contract rather than a corehydro choice.
+
+```{r}
+priors <- list(
+  distribution("Uniform", c(-20, 10)),   # intercept
+  distribution("Uniform", c(0, 2)),      # slope
+  distribution("Uniform", c(0.01, 5))    # error scale
+)
+
+fit <- mcmc_posterior(log_likelihood, priors, sampler = "RWMH",
+                      iterations = 1000, warmup = 500, chains = 3, thinning = 1,
+                      seed = 12345)
+```
+
+Keep the run small. Every evaluation crosses back into R, and the count is
+`(iterations + output_length / chains) * thinning * chains`, so a thinning interval or an
+unset `iterations` costs far more than it looks like it should. This fit takes about a third of
+a second.
+
+### Trace plot
+
+```{r}
+#| fig-height: 7
+labels <- c("intercept a", "slope b", "sigma")
+colors <- c("#5b7a8c", "#b06a3b", "#6b7f3f")
+par(mfrow = c(3, 1), mar = c(4, 4, 2, 1))
+for (j in 1:3) {
+  draws <- sapply(fit$chains, function(ch) ch[, j])
+  matplot(draws, type = "l", lty = 1, col = colors, xlab = "Draw", ylab = labels[j],
+          main = labels[j])
+}
+```
+
+### R-hat and the posterior summary
+
+R-hat compares between-chain and within-chain variance. Values near 1 mean the three chains have
+settled on the same distribution.
+
+```{r}
+summary_table <- data.frame(
+  parameter = labels,
+  mean = round(fit$posterior_mean, 4),
+  sd = round(fit$posterior_sd, 4),
+  median = round(fit$posterior_median, 4),
+  lower = round(fit$posterior_lower_ci, 4),
+  upper = round(fit$posterior_upper_ci, 4),
+  rhat = round(fit$rhat, 4),
+  ess = round(fit$ess)
+)
+print(summary_table, row.names = FALSE)
+```
+
+The posterior mode is the MAP, reported alongside the value of your log-likelihood there.
+Ordinary least squares is a useful cross-check on the two regression parameters, since with a
+flat prior the mode of $(a, b)$ given $\sigma$ is the least-squares fit.
+
+```{r}
+ols <- coef(lm(runoff ~ precip))
+cat(sprintf("MAP:  a = %.6f, b = %.6f, sigma = %.6f\n",
+            fit$map[1], fit$map[2], fit$map[3]))
+cat(sprintf("OLS:  a = %.6f, b = %.6f\n", ols[1], ols[2]))
+cat(sprintf("log-likelihood at the MAP: %.6f\n", fit$map_fitness))
+```
+
+### The fitted line with its credible band
+
+```{r}
+grid <- seq(min(precip), max(precip), length.out = 100)
+draws <- do.call(rbind, fit$chains)
+band <- sapply(grid, function(xi) quantile(draws[, 1] + draws[, 2] * xi, c(0.025, 0.5, 0.975)))
+
+plot(precip, runoff, pch = 19, col = "#5b7a8c",
+     xlab = "Basin precipitation (in)", ylab = "Runoff (in)",
+     main = "Posterior median and 95% credible band")
+polygon(c(grid, rev(grid)), c(band[1, ], rev(band[3, ])),
+        col = "#b06a3b33", border = NA)
+lines(grid, band[2, ], col = "#b06a3b", lwd = 2)
+points(precip, runoff, pch = 19, col = "#5b7a8c")
+```
+
+## Where the cross-language guarantee stops
+
+corehydro promises that a seeded run gives the same numbers in R and in Python. On the built-in
+path that promise is unconditional: `mcmc_sample()`, `fit_bayesian()`, `dist_random()` and the
+rest do every arithmetic operation inside the shared C++ core, so the two languages are running
+the same compiled code and there is nothing left to disagree about.
+
+`mcmc_posterior()` is weaker, and the difference deserves a section rather than a footnote. The
+draws still come from the core's seeded Mersenne Twister, so the proposals are identical. The
+log-density is not: it is your own R arithmetic, evaluated by R, and R and Python do not
+guarantee identical rounding for the same formula. MCMC amplifies that without mercy. A single
+differing bit in one log-density can flip one accept-or-reject decision, and every state after
+it is then drawn from a different point, so the two chains diverge outright instead of drifting
+apart slowly. There is no tolerance that repairs it.
+
+A seeded run reproduces across the two languages if and only if your function returns
+bit-identical values. Three practical rules follow.
+
+1. `+`, `-`, `*` and `/` are IEEE-deterministic. They reproduce.
+2. `log`, `exp`, `sqrt` of a non-exact value, `gamma` and friends come from each platform's own
+   math library. They are not guaranteed to agree to the last bit, in either direction, and
+   nothing in corehydro can make them.
+3. R's `sum()` and `mean()` accumulate in extended precision. Python's do not. An explicit loop
+   is the portable spelling in both languages, which is why the log-likelihood above is written
+   as one.
+
+The regression above obeys rules 1 and 3 but not rule 2: it calls `log(sigma)`. Measured on this
+machine, the R and Python versions of that page happen to return identical posteriors to the
+last bit, and the reproduction check below asserts those numbers as a within-R regression rather
+than as a cross-language claim, because the agreement is an observation about two math libraries
+and not something the package guarantees. The Gibbs model in the next section uses arithmetic and
+comparisons alone, which is why it is the one this page pins against the shared oracle.
+
+## Gibbs, the sampler that was out of reach
+
+Gibbs replaces the Metropolis accept-or-reject step with a draw from the full conditional of the
+model, which it accepts unconditionally. That draw is model-specific, so there is nothing
+sensible to default it to, and until `mcmc_posterior()` existed neither package could run the
+ported Gibbs sampler at all.
+
+The model is small enough that its full conditional is exact. Five observations, each Uniform on
+$(\mu - 1, \mu + 1)$. Dropping the normalizer, the log-likelihood is $0$ when every
+$|x_i - \mu| \le 1$ and $-\infty$ otherwise, so under a flat prior the conditional of $\mu$ is
+Uniform on $(\max x - 1, \min x + 1)$, here Uniform(4.2, 5.8). One uniform draw, rescaled, is
+the Gibbs step.
+
+```{r}
+x <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+
+uniform_width <- function(p) {
+  mu <- p[1]
+  for (xi in x) {
+    d <- xi - mu
+    if (d > 1 || d < -1) return(-Inf)
+  }
+  0
+}
+
+full_conditional <- function(parameters, rng) {
+  lo <- max(x) - 1
+  hi <- min(x) + 1
+  lo + rng_uniform(rng, 1) * (hi - lo)
+}
+```
+
+`rng` is a handle on the generator this chain is already running on, not a generator of your
+own. Drawing with `runif()` instead is not an error and nothing will warn you, but it silently
+breaks two guarantees: the run stops being reproducible from its seed, and it stops agreeing
+with the same run in Python. `rng_uniform(rng, n)` returns `n` values on `[0, 1)`;
+`rng_integers(rng, n, min, max)` returns whole numbers with `min` included and `max` excluded.
+The handle is borrowed for the duration of the one call it was given to, so storing it and
+drawing from it later raises an error rather than reading freed memory.
+
+```{r}
+gibbs <- mcmc_posterior(uniform_width, distribution("Uniform", c(0, 10)),
+                        sampler = "Gibbs", proposal = full_conditional,
+                        iterations = 300, warmup = 100, thinning = 1,
+                        output_length = 100, seed = 12345, initialize = "Randomize")
+
+chain <- gibbs$chains[[1]]
+cat(sprintf("draws: %d, parameters: %d, chains: %d\n",
+            nrow(chain), ncol(chain), length(gibbs$chains)))
+cat(sprintf("acceptance rate: %g\n", gibbs$acceptance_rates[1]))
+cat(sprintf("MAP: %.16g   log-likelihood there: %g\n", gibbs$map[1], gibbs$map_fitness))
+cat(sprintf("first, middle and last states: %.16g, %.16g, %.16g\n",
+            chain[1, 1], chain[151, 1], chain[300, 1]))
+```
+
+Two of those numbers look wrong at first and are not. The acceptance rate is exactly 0 because
+Gibbs draws from the exact conditional and the upstream sampler counts no Metropolis accepts at
+all. The log-likelihood at the MAP is exactly 0 because this kernel returns 0 everywhere inside
+its support, which also means the MAP is whichever state the chain visited first at that height,
+making it a pin on the order of the draws rather than on their values.
+
+```{r}
+hist(chain[, 1], breaks = 20, col = "#5b7a8c", border = "white",
+     xlab = "mu", main = "Gibbs draws, exact Uniform(4.2, 5.8) conditional")
+abline(v = c(4.2, 5.8), col = "#b06a3b", lwd = 2, lty = 2)
+```
+
+## Key takeaways
+
+1. `mcmc_posterior()` takes any log-likelihood you can write as an R function, over priors you
+   choose, and reaches all eight ported samplers.
+2. Flat priors need no term in your log-likelihood. Anything else does, and adding it is your
+   job, following the upstream contract.
+3. The cross-language guarantee is conditional on the callback path. It holds exactly when your
+   function returns bit-identical values, so arithmetic and explicit loops hold it and calls into
+   a platform math library are not guaranteed to.
+4. Gibbs needs a proposal, and the proposal must draw from the handle it is given. Reaching for
+   `runif()` compiles, runs, and quietly costs you reproducibility.
+5. Keep callback runs small. The evaluation count is
+   `(iterations + output_length / chains) * thinning * chains`, and `initialize = "MAP"` runs a
+   differential evolution fit over your function before the first iteration.
+
+## Reproduction check
+
+The Gibbs block below is pinned against `fixtures/callback/callback_cross_language.json`, whose
+values are read from the real USACE-RMC Numerics library by the oracle emitter. That fixture
+asserts this exact construct at ZERO tolerance, not at a loosened one: the C++, R, Python and C#
+runners reproduce it bit for bit, because both callbacks are built from arithmetic and
+comparisons alone. It is checked at 1e-15 relative tolerance here only to match the convention
+the other example pages use.
+
+`output_length` is worth a word, since the call above sets it. The ported sampler computes its
+posterior summaries over an OUTPUT BLOCK collected after the iteration loop, not over the
+recorded chain, so the mean and the median depend on it while the chain does not. The fixture
+uses 100; left at the ported Gibbs default of 10,000 the same run reports a posterior mean of
+5.003896 rather than 4.984070. Every number below is therefore the fixture's own, and R and
+Python return the same double for each.
+
+The regression numbers are a within-R regression check on this page, not a cross-language claim,
+for the reason given in the cross-language section above.
+
+```{r}
+near <- \(x, literal, tol = 1e-15) abs(x / literal - 1) < tol
+
+stopifnot(
+  # Gibbs, against the shared fixture oracle.
+  nrow(chain) == 300, ncol(chain) == 1, length(gibbs$chains) == 1,
+  near(gibbs$map[1], 5.7310633707791565),
+  gibbs$map_fitness == 0,
+  gibbs$acceptance_rates[1] == 0,
+  near(chain[1, 1], 4.369926358014346),
+  near(chain[151, 1], 4.430059107020497),
+  near(chain[300, 1], 4.246628397703171),
+
+  # Gibbs summary statistics, over the fixture's own 100-draw output block (see above).
+  near(gibbs$posterior_mean[1], 4.984069999799132),
+  near(gibbs$posterior_median[1], 4.943827163241803),
+
+  # The regression posterior, within R only.
+  near(fit$posterior_mean[1], -7.4538132847773335),
+  near(fit$posterior_mean[2], 0.6283589815314603),
+  near(fit$posterior_mean[3], 0.27803652002522816),
+  near(fit$map_fitness, 12.139529268441548),
+  all(fit$rhat < 1.01),
+
+  # The MAP of the two regression parameters agrees with least squares.
+  abs(fit$map[1] - ols[1]) < 0.01,
+  abs(fit$map[2] - ols[2]) < 0.001
+)
+cat("All reproduction checks passed.\n")
+```

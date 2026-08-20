@@ -1,186 +1,112 @@
-// pybind11 glue exposing the MCMC sampler surface (model registry + RWMH, extensible to
-// later samplers) of the shared C++ core to Python. Unlike the per-method dispatch style
-// used elsewhere in this package (dist_val, cop_val, ...), `mcmc_sampler` fixtures are
+// pybind11 glue exposing the MCMC sampler surface of the shared C++ core to Python, over the
+// built-in model registry (corehydropy.mcmc's mcmc_sample()). Unlike the per-method dispatch
+// style used elsewhere in this package (dist_val, cop_val, ...), `mcmc_sampler` fixtures are
 // inherently STATEFUL -- one sampler construct + settings + a single sample() run backs
 // every assertion in a case (see fixtures/README.md's mcmc_sampler schema) -- so this file
 // exposes ONE function, `mcmc_run`, that builds the model, configures and runs the sampler
 // once, and returns every value test_fixtures.py's dispatcher needs in one dict.
+//
+// The sampler-construction switch and the result post-processing are NOT here: both live in
+// numerics/sampling/mcmc/support/mcmc_run.hpp, shared with the R glue and with the callback path
+// behind mcmc_posterior() (numerics/support/callback/mcmc.hpp). This file's whole job is building
+// the registry model, translating a settings dict into MCMCRunSettings, and packing an
+// MCMCRunOutput into a dict.
 // Core headers are vendored under ../corehydro_core/include (a symlink into core/; regenerate real files with tools/materialize_core.py).
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "corehydro/numerics/math/linalg/matrix.hpp"
-#include "corehydro/numerics/sampling/mcmc/arwmh.hpp"
-#include "corehydro/numerics/sampling/mcmc/demcz.hpp"
-#include "corehydro/numerics/sampling/mcmc/demczs.hpp"
-#include "corehydro/numerics/sampling/mcmc/gibbs.hpp"
-#include "corehydro/numerics/sampling/mcmc/hmc.hpp"
-#include "corehydro/numerics/sampling/mcmc/model_registry.hpp"
-#include "corehydro/numerics/sampling/mcmc/nuts.hpp"
-#include "corehydro/numerics/sampling/mcmc/rwmh.hpp"
-#include "corehydro/numerics/sampling/mcmc/snis.hpp"
-#include "corehydro/numerics/sampling/mcmc/support/mcmc_results.hpp"
 #include "bindings.hpp"
+#include "corehydro/numerics/sampling/mcmc/model_registry.hpp"
+#include "corehydro/numerics/sampling/mcmc/support/mcmc_run.hpp"
 
 namespace py = pybind11;
 namespace mcmc = corehydro::numerics::sampling::mcmc;
-namespace la = corehydro::numerics::math::linalg;
 
-// `proposal_sigma` sentinel strings -- see fixtures/README.md's mcmc_sampler schema for why
-// "identity" exists alongside the C# test's literal "zeros" (an all-zero proposal covariance
-// is only safe when MAP initialization is expected to overwrite it before first use).
-static la::Matrix parse_proposal_sigma(const std::string& s, int dimension) {
-    if (s == "zeros") return la::Matrix(dimension);
-    if (s == "identity") return la::Matrix::identity(dimension);
-    throw py::value_error("unknown proposal_sigma sentinel: " + s);
+namespace {
+
+// Reads `key` off the settings dict into `slot` when the caller set it, leaving it empty
+// otherwise -- the MCMCRunSettings contract (an absent setting keeps the ported default).
+template <typename T>
+void read_setting(const py::dict& settings, const char* key, std::optional<T>& slot) {
+    if (settings.contains(key)) slot = settings[key].cast<T>();
 }
 
-static mcmc::MCMCSampler::InitializationType parse_initialize(const std::string& s) {
-    if (s == "MAP") return mcmc::MCMCSampler::InitializationType::MAP;
-    if (s == "Randomize") return mcmc::MCMCSampler::InitializationType::Randomize;
-    if (s == "UserDefined") return mcmc::MCMCSampler::InitializationType::UserDefined;
-    throw py::value_error("unknown initialize value: " + s);
+mcmc::MCMCRunSettings read_settings(const py::dict& settings) {
+    mcmc::MCMCRunSettings s;
+    read_setting(settings, "initialize", s.initialize);
+    read_setting(settings, "prng_seed", s.prng_seed);
+    read_setting(settings, "initial_iterations", s.initial_iterations);
+    read_setting(settings, "warmup_iterations", s.warmup_iterations);
+    read_setting(settings, "iterations", s.iterations);
+    read_setting(settings, "number_of_chains", s.number_of_chains);
+    read_setting(settings, "thinning_interval", s.thinning_interval);
+    read_setting(settings, "output_length", s.output_length);
+    read_setting(settings, "proposal_sigma", s.proposal_sigma);
+    read_setting(settings, "step_size", s.step_size);
+    read_setting(settings, "steps", s.steps);
+    read_setting(settings, "max_tree_depth", s.max_tree_depth);
+    read_setting(settings, "adapt_mass_matrix", s.adapt_mass_matrix);
+    read_setting(settings, "scale", s.scale);
+    read_setting(settings, "beta", s.beta);
+    read_setting(settings, "jump", s.jump);
+    read_setting(settings, "jump_threshold", s.jump_threshold);
+    read_setting(settings, "snooker_threshold", s.snooker_threshold);
+    read_setting(settings, "noise", s.noise);
+    return s;
+}
+
+}  // namespace
+
+// Packs an MCMCRunOutput into the dict test_fixtures.py's mcmc_sampler dispatcher and
+// corehydropy.mcmc's mcmc_sample() read from. Shared with corehydropy.callback's
+// mcmc_posterior(), which rebuilds the identical shape from the flat callback result -- see
+// numerics/support/callback/mcmc.hpp.
+//   chains              -- list of NumberOfChains [n_draws][n_params] nested lists
+//                          (MarkovChains)
+//   chain_fitness       -- list of NumberOfChains [n_draws] lists
+//   acceptance_rates    -- [n_chains] list
+//   map_values          -- [n_params] list (MCMCResults.MAP.Values)
+//   map_fitness         -- scalar (MCMCResults.MAP.Fitness)
+//   mean_log_likelihood -- [iterations] list
+//   posterior_mean/sd/median/lower_ci/upper_ci -- [n_params] lists
+//   rhat/ess            -- [n_params] lists
+static py::dict pack_mcmc_run(const mcmc::MCMCRunOutput& o) {
+    py::dict out;
+    out["chains"] = o.chains;
+    out["chain_fitness"] = o.chain_fitness;
+    out["acceptance_rates"] = o.acceptance_rates;
+    out["map_values"] = o.map_values;
+    out["map_fitness"] = o.map_fitness;
+    out["mean_log_likelihood"] = o.mean_log_likelihood;
+    out["posterior_mean"] = o.posterior_mean;
+    out["posterior_sd"] = o.posterior_sd;
+    out["posterior_median"] = o.posterior_median;
+    out["posterior_lower_ci"] = o.posterior_lower_ci;
+    out["posterior_upper_ci"] = o.posterior_upper_ci;
+    out["rhat"] = o.rhat;
+    out["ess"] = o.ess;
+    return out;
 }
 
 void register_mcmc(py::module_& m) {
-    // Builds the named model, configures `sampler_type` with `settings` (a dict; every key
-    // optional, matching fixtures/README.md), samples once, and returns a dict with the full
-    // posterior surface test_fixtures.py's mcmc_sampler dispatcher reads assertions from:
-    //   chains              -- list of NumberOfChains [n_draws][n_params] nested lists
-    //                          (MarkovChains)
-    //   chain_fitness       -- list of NumberOfChains [n_draws] lists
-    //   acceptance_rates    -- [n_chains] list
-    //   map_values          -- [n_params] list (MCMCResults.MAP.Values)
-    //   map_fitness         -- scalar (MCMCResults.MAP.Fitness)
-    //   mean_log_likelihood -- [iterations] list
-    //   posterior_mean/sd/median/lower_ci/upper_ci -- [n_params] lists
-    //   rhat/ess            -- [n_params] lists
+    // Builds the named registry model, configures `sampler_type` with `settings` (a dict; every
+    // key optional, matching fixtures/README.md), samples once, and returns the packed run.
     m.def(
         "mcmc_run",
         [](const std::string& sampler_type, const std::string& model_name, const std::string& family,
            const std::vector<double>& dataset, const py::dict& settings) {
             auto model = mcmc::build_model(model_name, family, dataset);
-            int d = static_cast<int>(model.priors.size());
-
-            la::Matrix proposal_sigma(d);
-            if (settings.contains("proposal_sigma"))
-                proposal_sigma = parse_proposal_sigma(settings["proposal_sigma"].cast<std::string>(), d);
-
-            std::unique_ptr<mcmc::MCMCSampler> sampler;
-            if (sampler_type == "RWMH") {
-                sampler = std::make_unique<mcmc::RWMH>(model.priors, model.log_likelihood, proposal_sigma);
-            } else if (sampler_type == "HMC") {
-                double step_size = settings.contains("step_size") ? settings["step_size"].cast<double>() : 0.1;
-                int steps = settings.contains("steps") ? settings["steps"].cast<int>() : 50;
-                sampler = std::make_unique<mcmc::HMC>(model.priors, model.log_likelihood, std::nullopt, step_size, steps);
-            } else if (sampler_type == "NUTS") {
-                double step_size = settings.contains("step_size") ? settings["step_size"].cast<double>() : 0.1;
-                int max_tree_depth = settings.contains("max_tree_depth") ? settings["max_tree_depth"].cast<int>() : 10;
-                auto nuts = std::make_unique<mcmc::NUTS>(model.priors, model.log_likelihood, std::nullopt, step_size,
-                                                          max_tree_depth);
-                if (settings.contains("adapt_mass_matrix"))
-                    nuts->adapt_mass_matrix = settings["adapt_mass_matrix"].cast<bool>();
-                sampler = std::move(nuts);
-            } else if (sampler_type == "ARWMH") {
-                auto arwmh = std::make_unique<mcmc::ARWMH>(model.priors, model.log_likelihood);
-                if (settings.contains("scale")) arwmh->scale = settings["scale"].cast<double>();
-                if (settings.contains("beta")) arwmh->beta = settings["beta"].cast<double>();
-                sampler = std::move(arwmh);
-            } else if (sampler_type == "Gibbs") {
-                if (!model.proposal) throw py::value_error("Gibbs model has no proposal function");
-                sampler = std::make_unique<mcmc::Gibbs>(model.priors, model.log_likelihood, model.proposal);
-            } else if (sampler_type == "SNIS") {
-                sampler = std::make_unique<mcmc::SNIS>(model.priors, model.log_likelihood);
-            } else if (sampler_type == "DEMCz") {
-                auto demcz = std::make_unique<mcmc::DEMCz>(model.priors, model.log_likelihood);
-                if (settings.contains("jump")) demcz->jump = settings["jump"].cast<double>();
-                if (settings.contains("jump_threshold"))
-                    demcz->jump_threshold = settings["jump_threshold"].cast<double>();
-                if (settings.contains("noise")) demcz->set_noise(settings["noise"].cast<double>());
-                sampler = std::move(demcz);
-            } else if (sampler_type == "DEMCzs") {
-                auto demczs = std::make_unique<mcmc::DEMCzs>(model.priors, model.log_likelihood);
-                if (settings.contains("jump")) demczs->jump = settings["jump"].cast<double>();
-                if (settings.contains("jump_threshold"))
-                    demczs->jump_threshold = settings["jump_threshold"].cast<double>();
-                if (settings.contains("snooker_threshold"))
-                    demczs->snooker_threshold = settings["snooker_threshold"].cast<double>();
-                if (settings.contains("noise")) demczs->set_noise(settings["noise"].cast<double>());
-                sampler = std::move(demczs);
-            } else {
-                throw py::value_error("unknown mcmc_sampler target: " + sampler_type);
-            }
-
-            if (settings.contains("initialize"))
-                sampler->initialize = parse_initialize(settings["initialize"].cast<std::string>());
-
-            auto set_int = [&](const char* key, const std::function<void(int)>& setter) {
-                if (settings.contains(key)) setter(settings[key].cast<int>());
-            };
-            set_int("prng_seed", [&](int v) { sampler->set_prng_seed(v); });
-            set_int("initial_iterations", [&](int v) { sampler->set_initial_iterations(v); });
-            set_int("warmup_iterations", [&](int v) { sampler->set_warmup_iterations(v); });
-            set_int("iterations", [&](int v) { sampler->set_iterations(v); });
-            set_int("number_of_chains", [&](int v) { sampler->set_number_of_chains(v); });
-            set_int("thinning_interval", [&](int v) { sampler->set_thinning_interval(v); });
-            set_int("output_length", [&](int v) { sampler->output_length = v; });
-
+            mcmc::MCMCRunCallbacks callbacks;
+            callbacks.proposal = model.proposal;
+            std::unique_ptr<mcmc::MCMCSampler> sampler = mcmc::build_sampler(
+                sampler_type, model.priors, model.log_likelihood, read_settings(settings), callbacks);
             sampler->sample();
-            mcmc::MCMCResults results(*sampler);
-
-            int n_chains = sampler->number_of_chains();
-            int p = sampler->number_of_parameters();
-
-            std::vector<std::vector<std::vector<double>>> chains(static_cast<std::size_t>(n_chains));
-            std::vector<std::vector<double>> chain_fitness(static_cast<std::size_t>(n_chains));
-            for (int c = 0; c < n_chains; ++c) {
-                const auto& chain = sampler->markov_chains()[static_cast<std::size_t>(c)];
-                chains[static_cast<std::size_t>(c)].resize(chain.size());
-                chain_fitness[static_cast<std::size_t>(c)].resize(chain.size());
-                for (std::size_t i = 0; i < chain.size(); ++i) {
-                    chains[static_cast<std::size_t>(c)][i] = chain[i].values;
-                    chain_fitness[static_cast<std::size_t>(c)][i] = chain[i].fitness;
-                }
-            }
-
-            std::vector<double> map_values(static_cast<std::size_t>(p));
-            std::vector<double> post_mean(static_cast<std::size_t>(p)), post_sd(static_cast<std::size_t>(p)),
-                post_median(static_cast<std::size_t>(p)), post_lo(static_cast<std::size_t>(p)),
-                post_hi(static_cast<std::size_t>(p)), rhat(static_cast<std::size_t>(p)),
-                ess(static_cast<std::size_t>(p));
-            for (int j = 0; j < p; ++j) {
-                map_values[static_cast<std::size_t>(j)] = results.map.values[static_cast<std::size_t>(j)];
-                const auto& stats = results.parameter_results[static_cast<std::size_t>(j)].summary_statistics;
-                post_mean[static_cast<std::size_t>(j)] = stats.mean;
-                post_sd[static_cast<std::size_t>(j)] = stats.standard_deviation;
-                post_median[static_cast<std::size_t>(j)] = stats.median;
-                post_lo[static_cast<std::size_t>(j)] = stats.lower_ci;
-                post_hi[static_cast<std::size_t>(j)] = stats.upper_ci;
-                rhat[static_cast<std::size_t>(j)] = stats.rhat;
-                ess[static_cast<std::size_t>(j)] = stats.ess;
-            }
-
-            py::dict out;
-            out["chains"] = chains;
-            out["chain_fitness"] = chain_fitness;
-            out["acceptance_rates"] = sampler->acceptance_rates();
-            out["map_values"] = map_values;
-            out["map_fitness"] = results.map.fitness;
-            out["mean_log_likelihood"] = sampler->mean_log_likelihood();
-            out["posterior_mean"] = post_mean;
-            out["posterior_sd"] = post_sd;
-            out["posterior_median"] = post_median;
-            out["posterior_lower_ci"] = post_lo;
-            out["posterior_upper_ci"] = post_hi;
-            out["rhat"] = rhat;
-            out["ess"] = ess;
-            return out;
+            return pack_mcmc_run(mcmc::collect_run(*sampler));
         },
         py::arg("sampler_type"), py::arg("model_name"), py::arg("family"), py::arg("dataset"),
         py::arg("settings"));

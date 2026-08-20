@@ -28,6 +28,34 @@ ch_bootstrap_run_ <- function(model, mu, sigma, sample_size, probabilities, data
   .Call(`_corehydror_ch_bootstrap_run_`, model, mu, sigma, sample_size, probabilities, dataset, replicates, seed, max_retries, run, ci_method, alpha)
 }
 
+ch_callback_math_ <- function(method, options_json, f) {
+  .Call(`_corehydror_ch_callback_math_`, method, options_json, f)
+}
+
+ch_callback_mcmc_ <- function(options_json, f, proposal, gradient) {
+  .Call(`_corehydror_ch_callback_mcmc_`, options_json, f, proposal, gradient)
+}
+
+ch_callback_bootstrap_ <- function(options_json, resample, fit, statistic, jackknife) {
+  .Call(`_corehydror_ch_callback_bootstrap_`, options_json, resample, fit, statistic, jackknife)
+}
+
+ch_callback_gmm_ <- function(options_json, moment_conditions, jacobian, penalty) {
+  .Call(`_corehydror_ch_callback_gmm_`, options_json, moment_conditions, jacobian, penalty)
+}
+
+ch_rng_probe_ <- function(options_json, f) {
+  .Call(`_corehydror_ch_rng_probe_`, options_json, f)
+}
+
+ch_rng_uniform_ <- function(handle, n) {
+  .Call(`_corehydror_ch_rng_uniform_`, handle, n)
+}
+
+ch_rng_integers_ <- function(handle, n, min_inclusive, max_exclusive) {
+  .Call(`_corehydror_ch_rng_integers_`, handle, n, min_inclusive, max_exclusive)
+}
+
 ch_cop_val_ <- function(type, params, method, args, marg_x_target, marg_x_params, marg_y_target, marg_y_params) {
   .Call(`_corehydror_ch_cop_val_`, type, params, method, args, marg_x_target, marg_x_params, marg_y_target, marg_y_params)
 }

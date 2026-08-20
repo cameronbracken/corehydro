@@ -1,0 +1,70 @@
+{
+  "kind": "callback_cross_language",
+  "source": "Numerics/Sampling/MCMC/Base/MCMCSampler.cs (the delegate constructor) + Numerics/Sampling/MCMC/Gibbs.cs; Numerics/Sampling/Bootstrap/Bootstrap.cs (the four delegate properties) @ 2a0357a",
+  "reference": "Numerics @ 2a0357a. One case nesting two sub-blocks, each shaped exactly like a \"callback\"-kind case's construct/assertions: an \"mcmc\" block (group \"mcmc\", method \"sample\") and a \"bootstrap\" block (group \"bootstrap\", method \"run\"). The nesting is the point. Every other callback fixture pins ACCURACY against the real C# library at that file's relative tolerance; this file's job is the CROSS-LANGUAGE guarantee on the CALLBACK path, so EVERY assertion below is spelled mode \"abs\" with tol 0, i.e. bit equality in all four runners, not a tolerance. It is the callback layer's counterpart to fixtures/toolbox/toolbox_cross_language.json and fixtures/estimation/fit_cross_language.json. WHAT THE PACKAGES PROMISE AND WHERE IT STOPS: on the registry path every operation happens inside the shared C++ core, so a seeded run is bit-identical between R and Python by construction. On the callback path the draws still come from the core generator, but the log-density (or the proposal, or the statistic) is arithmetic the HOST language evaluates, and R and Python do not guarantee identical rounding for the same formula. MCMC amplifies that without mercy: one flipped accept-or-reject changes every state after it, so chains diverge outright rather than drift. Both callbacks used here are therefore built from + - * / and comparisons alone, with every summation written as an explicit loop rather than any language's sum()/mean()/Average() (R accumulates those in extended precision where C++, Python and C# accumulate in double). Arithmetic-only callbacks are IEEE-deterministic, so they reproduce exactly; a callback that calls log() or exp() need not, and the two worked examples (site/examples/14-custom-posterior, 15-custom-bootstrap) say so in prose rather than leaving it implied. WHY THESE TWO CONSTRUCTS AND NOT WIDER ONES: the constructs were chosen by measurement, not by taste. R and Python agree bit for bit on EVERY callback case in this directory, including the DEMCz two-parameter regression posterior of fixtures/callback/mcmc.json. They agree with the real C# library only where the arithmetic that produces the number lives in the CALLBACK rather than in the compiled core, because clang and gcc contract `a*b + c` into a fused multiply-add by default and .NET does not: on the DEMCz case that gap is 1.5e-14 on the posterior mean and 7e-15 on a late chain state, well inside every other fixture's rel 1e-12 but not zero. The Gibbs case has no such gap. Its recorded states are exact full-conditional draws, `lo + u * (hi - lo)` evaluated in the host language off the core generator, and its posterior mean, median and MAP are a plain sum, an order statistic and a maximum over those states, none of which the core can fuse. So this file pins the quantities that are bit-identical in all four runners and says here, in the open, which ones are not: posterior_sd and ess accumulate `d*d` inside the core and reproduce C#-vs-package to 1.4e-16 and 4.6e-14 rather than exactly, so they are deliberately absent below rather than pinned at a loosened tolerance. THE MCMC BLOCK IS THE GIBBS SAMPLER on purpose: it is the one sampler neither package could reach before this phase, because Gibbs requires a proposal delegate and the packages had no way to pass one. EVERY expected value is EMITTER-READ from the real Numerics classes driven by tools/oracle_emitter, never a value computed by this repo's own C++.",
+  "callbacks": {
+    "Mcmc_UniformWidthKernel": "f(mu) = 0 when every |x - mu| <= 1 over x = {4.9, 5.1, 5.0, 5.2, 4.8}, else -infinity  [the same catalog callback fixtures/callback/mcmc.json documents: the log-likelihood of x_i ~ Uniform(mu - 1, mu + 1) with the normalizing term dropped. Comparisons only, so it cannot round differently anywhere]",
+    "Prop_UniformConditional": "proposal(parameters, prng) = lo + prng.NextDouble() * (hi - lo), lo = max(x) - 1 = 4.2, hi = min(x) + 1 = 5.8  [the same catalog callback fixtures/callback/mcmc.json documents, upstream's Gibbs.Proposal(double[], Random) shape: the EXACT full conditional of Mcmc_UniformWidthKernel under a flat prior, so every recorded state is an independent Uniform(4.2, 5.8) draw. One NextDouble per call, off the generator the sampler hands in]",
+    "Resample_Iid": "resample(data, parameters, prng) -> n draws of data[prng.Next(0, n)], n = data.Length  [the same catalog callback fixtures/callback/bootstrap.json documents: the ordinary nonparametric resample, every index drawn off the generator the replicate hands in]",
+    "Fit_Mean": "fit(data) -> [sum(data) / data.Length], summed in an explicit loop  [the same catalog callback fixtures/callback/bootstrap.json documents]",
+    "Stat_Identity": "statistic(parameters) -> parameters  [the same catalog callback fixtures/callback/bootstrap.json documents: the statistic IS the fitted parameter, so the interval is an interval on the mean]"
+  },
+  "cases": [
+    {
+      "name": "gibbs_posterior_and_mean_bootstrap_short_exact",
+      "mcmc": {
+        "construct": {
+          "group": "mcmc",
+          "method": "sample",
+          "callback": "Mcmc_UniformWidthKernel",
+          "proposal": "Prop_UniformConditional",
+          "options": {
+            "sampler": "Gibbs",
+            "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+            "iterations": 300, "warmup": 100, "thinning": 1, "seed": 12345,
+            "output_length": 100, "initialize": "Randomize"
+          }
+        },
+        "assertions": [
+          { "method": "named", "name": "posterior_mean[0]", "expected": 4.984069999799132, "mode": "abs", "tol": 0, "source": "EMITTER-READ: ParameterResults[0].SummaryStatistics.Mean. A plain sum over the recorded states divided by their count, so nothing in the core can fuse it and the number is bit-identical in all four runners. fixtures/callback/mcmc.json pins the same value at rel 1e-12; asserting it at tol 0 is the whole difference between the two files" },
+          { "method": "named", "name": "posterior_median[0]", "expected": 4.943827163241803, "mode": "abs", "tol": 0, "source": "EMITTER-READ: SummaryStatistics.Median, an order statistic of the recorded states -- no arithmetic at all, so it moves only if a state does" },
+          { "method": "named", "name": "map[0]", "expected": 5.7310633707791565, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]. Every state of this model has log-density 0, so the MAP is whichever state the sampler visited first at that height -- which makes it a pin on the ORDER of the draws, not just their values" },
+          { "method": "named", "name": "map_fitness", "expected": 0.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MCMCResults.MAP.Fitness, the USER's log-density at that state. Exactly 0, and it has to be: this kernel returns 0 inside the support, so a non-zero here would mean the callback's return value was not the number the sampler recorded" },
+          { "method": "named", "name": "acceptance_rate[0]", "expected": 0.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ: AcceptanceRates[0]. Gibbs draws from the exact full conditional, so upstream counts no Metropolis accepts at all and the rate is exactly 0" },
+          { "method": "value", "args": [10], "expected": 4.369926358014346, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MarkovChains[0][0].Values[0], the FIRST entry of the draw block that follows the 10-value summary block. This is the proposal callback's own return value, `lo + u * (hi - lo)` evaluated in the host language off the core generator" },
+          { "method": "value", "args": [160], "expected": 4.430059107020497, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MarkovChains[0][150].Values[0], a mid-chain state" },
+          { "method": "value", "args": [309], "expected": 4.246628397703171, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MarkovChains[0][299].Values[0], the LAST state. Nothing between the first draw and this one can have consumed a different number from the generator" },
+          { "method": "dim", "args": [0], "expected": 10, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_summary = 1 + 1 chain + 8 * 1 parameter" },
+          { "method": "dim", "args": [1], "expected": 1, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_chains -- Gibbs runs a single chain" },
+          { "method": "dim", "args": [2], "expected": 300, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_draws" },
+          { "method": "dim", "args": [3], "expected": 1, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_parameters" }
+        ]
+      },
+      "bootstrap": {
+        "construct": {
+          "group": "bootstrap",
+          "method": "run",
+          "callback": "Resample_Iid",
+          "fit": "Fit_Mean",
+          "statistic": "Stat_Identity",
+          "options": {
+            "data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7],
+            "replicates": 200, "seed": 12345, "alpha": 0.1, "ci_method": "Percentile"
+          }
+        },
+        "assertions": [
+          { "method": "named", "name": "statistic[0]", "expected": 4.95, "mode": "abs", "tol": 0, "source": "EMITTER-READ: StatisticResults[0].PopulationEstimate, the statistic of the ORIGINAL fit rather than a bootstrap average" },
+          { "method": "named", "name": "statistic_lower[0]", "expected": 4.750000000000001, "mode": "abs", "tol": 0, "source": "EMITTER-READ: StatisticResults[0].LowerCI. Read off the sorted replicate means, so a single differing resampled INDEX moves it: the whole seeded draw stream stands behind this one number, and its trailing 1 ulp is exactly what a tolerance would hide" },
+          { "method": "named", "name": "statistic_upper[0]", "expected": 5.175, "mode": "abs", "tol": 0, "source": "EMITTER-READ: StatisticResults[0].UpperCI" },
+          { "method": "named", "name": "statistic_se[0]", "expected": 0.1408037320342551, "mode": "abs", "tol": 0, "source": "EMITTER-READ: StatisticResults[0].StandardError, which depends on every valid replicate rather than on the two order statistics at the tails" },
+          { "method": "named", "name": "statistic_mean[0]", "expected": 4.961249999999999, "mode": "abs", "tol": 0, "source": "EMITTER-READ: StatisticResults[0].Mean over the valid replicates, so the gap to statistic[0] is the bias estimate" },
+          { "method": "named", "name": "statistic_valid[0]", "expected": 200, "mode": "abs", "tol": 0, "source": "EMITTER-READ: StatisticResults[0].ValidCount -- every replicate of an iid resample of a finite sample succeeds" },
+          { "method": "named", "name": "failed_replicates", "expected": 0, "mode": "abs", "tol": 0, "source": "EMITTER-READ: BootstrapResults.FailedReplicates" },
+          { "method": "named", "name": "parameter_lower[0]", "expected": 4.750000000000001, "mode": "abs", "tol": 0, "source": "EMITTER-READ: ParameterResults[0].LowerCI. Equal to the statistic interval here because Stat_Identity makes the statistic the parameter" },
+          { "method": "dim", "args": [0], "expected": 1, "mode": "abs", "tol": 0, "source": "EMITTER-READ: StatisticResults.Length" },
+          { "method": "dim", "args": [1], "expected": 1, "mode": "abs", "tol": 0, "source": "EMITTER-READ: ParameterResults.Length" }
+        ]
+      }
+    }
+  ]
+}

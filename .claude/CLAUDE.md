@@ -106,6 +106,25 @@ a seeded DE run's parameters and two deterministic generators reproduce identica
 four runners in one fixture, the toolbox layer's counterpart to the estimation layer's
 `fit_cross_language.json`.
 
+`core/include/corehydro/numerics/support/callback_runner.hpp` is the third runner in that family
+and the one place a ported class whose INPUT is a live host-language function is dispatched:
+`run_callback(group, method, options_json, callbacks)` over one standalone-compiling header per
+group under `numerics/support/callback/` -- `math.hpp` (root finding, derivatives, quadrature),
+`mcmc.hpp` (a user log-likelihood plus the Gibbs proposal and the HMC/NUTS gradient),
+`bootstrap.hpp` (upstream's four delegates), `gmm.hpp` (moment conditions, Jacobian, penalty) and
+`rng.hpp` (the borrowed generator handle). `numerics/support/callback_guard.hpp` is the generic
+`GuardedCall<TResult, TArgs...>` every crossing goes through, including the optimizer surface,
+which aliases it: a host exception cannot travel through the ported algorithm's own catch-all, so
+the guard latches the first one, substitutes a sentinel, and rethrows once the ported call has
+unwound. Guards belonging to one run share a `CallbackAbortState`, which is what stops a latched
+log-likelihood from letting the sampler re-enter the host through the proposal. The four callers
+are the cpp11 glue (`corehydror/src/callback.cpp`), the pybind11 glue
+(`corehydropy/src/bindings/callback.cpp`), the C++ fixture runner, and the dotnet oracle emitter.
+The `callback` fixture kind carries this surface's oracle values; the purpose-built
+`callback_cross_language` kind (`fixtures/callback/callback_cross_language.json`) nests a seeded
+Gibbs posterior and a seeded bootstrap interval under one case name at ZERO tolerance, the
+callback layer's counterpart to the two files above.
+
 `core/include/corehydro/numerics/sampling/mcmc/` holds the MCMC subsystem: `mcmc_sampler.hpp` (the
 shared base -- seeding cascade, chain initialization incl. the MAP/DE/Hessian path, the serial
 `sample()` driver), all 8 concrete samplers (`rwmh.hpp`, `arwmh.hpp`, `demcz.hpp`, `demczs.hpp`,
@@ -683,3 +702,45 @@ with every other new export across six new `_pkgdown.yml`/`quartodoc.sections` g
 bump to **0.6.0** records it. Final numbers: **ctest 84/84; oracle gate 5209 reproduced, 0 failed,
 11 skipped; testthat 5634/0; pytest 1344**; `R CMD check --as-cran` holds at the same three NOTEs
 with no WARNING.
+
+The callback layer (branch `surface-callback-layer`, August 2026) opened the host-language boundary.
+Five upstream classes are delegate-driven by design, and both packages could previously reach them
+only through internal registries, so the model always had to be one the port already knew how to
+build. Now a user's own R or Python function drives them: `mcmc_posterior()` takes a log-likelihood
+and priors and reaches ALL EIGHT samplers (Gibbs was unreachable in both packages before this,
+because it needs a conditional proposal callback; HMC/NUTS take an optional analytic gradient),
+`bootstrap_custom()` takes upstream's four delegates (resample/fit/statistic/jackknife) over the
+five interval methods, `fit_gmm_moments()` takes moment conditions and reaches
+`GeneralizedMethodOfMoments`'s SECOND constructor (the first, `IGMMModel`, has exactly one
+implementation, so `fit_gmm()` could fit Bulletin 17C and nothing else), and `root_find()` /
+`derivative()` / `gradient()` / `hessian()` / `quadrature()` run over a plain function. A callback
+that needs randomness gets a HANDLE on the generator the run is already using (R `rng_uniform()` /
+`rng_integers()`, Python's unconstructable `Rng`), borrowed for one call and invalidated on return.
+The shared runner and guard are described under "Layout & the vendoring invariant" above. THE
+HONEST CROSS-LANGUAGE LIMIT, which the two new worked examples (14, a custom posterior; 15, a custom
+bootstrap) state in prose rather than as a footnote: on the registry path a seeded run is
+bit-identical between R and Python because every operation happens in the shared core, but on the
+callback path the log-density (or statistic, or moment condition) is the user's OWN R/Python
+arithmetic, and the two languages do not guarantee identical rounding for the same formula. MCMC
+amplifies that brutally, since one flipped accept-or-reject changes every state after it, so chains
+diverge outright rather than drift. `fixtures/callback/callback_cross_language.json` is the proof
+and the boundary: arithmetic-only callbacks are IEEE-deterministic, and its seeded Gibbs posterior
+and seeded bootstrap interval are asserted at ZERO tolerance in all four runners. Measured while
+building it, and worth knowing before writing another such fixture: R and Python agree bit for bit
+on EVERY callback case in that directory, including the DEMCz two-parameter regression posterior,
+but they agree with the real C# library only where the arithmetic producing the number lives in the
+CALLBACK rather than in the compiled core, because clang and gcc contract `a*b + c` into a fused
+multiply-add by default and .NET does not (1.5e-14 on that posterior mean). That is also why
+`core/CMakeLists.txt` now passes `-ffp-contract=off` to `test_fixtures` on non-MSVC compilers: its
+fixture callback catalog stands in for the R/Python/C# ones and must compute the same arithmetic.
+The phase's most significant finding is a new entry in `docs/upstream-csharp-issues.md`: the
+over-identified GMM J statistic does not reproduce C#-vs-C++ and STRUCTURALLY CANNOT, because
+`V = S - D(D'S^-1 D)^-1 D'` has rank exactly `q - p` for any `q` and `p` and upstream inverts it, so
+`V.inverse()` amplifies the optimizer's 1e-8 convergence tolerance (C# 214.59 against the core's
+-129.46 on parameters agreeing to 2e-11; `g' V^+ g = 2.3466` through a pseudo-inverse matches the
+textbook `n g' S^-1 g = 2.3466`, proving the port's S, D and g are all correct). `j_stat` is
+therefore left unasserted in the fixture with NO `oracle_skip` and NO loosened tolerance, and both
+packages' `print()`/`summary()` refuse to display it at zero degrees of freedom or when it is not
+finite. The version bump to **0.7.0** records it. Final numbers: **ctest 87/87; oracle gate 5426
+reproduced, 0 failed, 11 skipped; testthat 6144/0; pytest 1487**; `R CMD check --as-cran` holds at
+the same three NOTEs with no WARNING.

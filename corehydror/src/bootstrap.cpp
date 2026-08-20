@@ -11,19 +11,16 @@
 #include <vector>
 
 #include "corehydro/numerics/sampling/bootstrap/bootstrap.hpp"
+#include "corehydro/numerics/sampling/bootstrap/ci_method_names.hpp"
 #include "corehydro/numerics/sampling/bootstrap/model_registry.hpp"
 
 namespace bs = corehydro::numerics::sampling;
 using namespace cpp11;
 
-static bs::BootstrapCIMethod parse_ci_method(const std::string& s) {
-    if (s == "Percentile") return bs::BootstrapCIMethod::Percentile;
-    if (s == "BiasCorrected") return bs::BootstrapCIMethod::BiasCorrected;
-    if (s == "BCa") return bs::BootstrapCIMethod::BCa;
-    if (s == "Normal") return bs::BootstrapCIMethod::Normal;
-    if (s == "BootstrapT") return bs::BootstrapCIMethod::BootstrapT;
-    stop("unknown bootstrap ci_method '%s'", s.c_str());
-}
+// The name-to-enum mapping lives in the core (ci_method_names.hpp) rather than here: this glue,
+// the pybind11 glue, the C++ fixture runner and the bootstrap callback group all need it, and
+// four copies is how a sixth enum member reaches only some of them. cpp11 turns the
+// std::invalid_argument it throws into an R error with the same message.
 
 // Builds the named model, configures it with `construct` (a named R list; see
 // fixtures/README.md's bootstrap schema for every key), runs it once, computes confidence
@@ -54,7 +51,7 @@ list ch_bootstrap_run_(std::string model, double mu, double sigma, int sample_si
         stop("unknown bootstrap run kind '%s'", run.c_str());
     }
 
-    bs::BootstrapResults results = boot.get_confidence_intervals(parse_ci_method(ci_method), alpha);
+    bs::BootstrapResults results = boot.get_confidence_intervals(bs::parse_bootstrap_ci_method(ci_method), alpha);
 
     int n_stats = static_cast<int>(results.statistic_results.size());
     int n_params = static_cast<int>(results.parameter_results.size());

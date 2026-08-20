@@ -4,6 +4,32 @@
 # printed, saved, and passed between R sessions unchanged. Bayesian and GMM fits (fit_bayesian(),
 # fit_gmm()) land in a later task on top of the same `ch_fit_run_()` entry point.
 
+# The optimizer and GMM-strategy names every verb that takes one accepts, declared ONCE. There
+# were four copies of these two vectors before -- two in this file and two in R/callback.R -- and
+# `fit_gmm()` and `fit_gmm_moments()` accepting different names is exactly the drift they invite.
+# corehydropy carries the same two tuples as `_KNOWN_OPTIMIZERS` / `_KNOWN_GMM_STRATEGIES` in
+# fit.py, and its callback.py imports them from there rather than repeating them; this is the R
+# half of that arrangement. Internal, so no NAMESPACE entry.
+known_optimizers <- c(
+  "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
+)
+known_gmm_strategies <- c("OneStep", "TwoStep", "Iterative")
+
+# Internal: refuse an unrecognized name for an enumerated argument, with the sentence corehydropy
+# raises for the same mistake. Used in place of match.arg() throughout the fit and callback
+# surfaces: match.arg accepts an unambiguous PREFIX, so `optimizer = "BF"` would be legal in R and
+# an error in Python, and it reports the offending value as `'arg'` rather than by name.
+check_choice <- function(value, choices, what) {
+  value <- as.character(value)
+  if (length(value) != 1L || is.na(value) || !value %in% choices) {
+    stop(sprintf(
+      "unknown %s '%s'; expected one of %s", what,
+      paste(value, collapse = ", "), paste(choices, collapse = ", ")
+    ), call. = FALSE)
+  }
+  value
+}
+
 # Internal: assemble the construct the C++ fit runner parses, from the dual first argument every
 # fit verb takes (a corehydro_model, or a numeric vector plus a distribution name). Reuses
 # analysis_input() (R/analysis.R) so the vector path and the model path build the identical model
@@ -264,9 +290,37 @@ new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup,
   )
 }
 
-# Internal: build a corehydro_fit from a ch_fit_run_() result for the GMM target -- the
-# covariance stack (same shape as new_fit()'s, GMM's own sandwich covariance rather than a
-# Hessian) plus the GMM-specific bookkeeping (J-statistic, iteration/convergence counters).
+# Internal: everything a GMM fit carries beyond the common field set -- the covariance stack (same
+# shape as new_fit()'s, GMM's own sandwich covariance rather than a Hessian) plus the GMM-specific
+# bookkeeping (J-statistic, iteration/convergence counters). Shared by the two verbs that produce a
+# GMM fit: new_fit_gmm() below (fit_gmm(), a bulletin17c model through ch_fit_run_) and
+# new_fit_gmm_moments() (fit_gmm_moments(), user-written moment conditions through
+# ch_callback_gmm_). The two reach the SAME C++ estimator by its two constructors, so the fields
+# they report are the same fields and are assembled here once.
+#
+# `j_stat_pval` is NaN whenever the fit is just-identified (q == p): zero degrees of freedom leaves
+# no over-identifying restriction to test. It is reported as NA, R's spelling of "not available".
+gmm_fit_fields <- function(result) {
+  standard_errors <- if (length(result$standard_errors)) {
+    se <- result$standard_errors
+    names(se) <- result$parameter_names
+    se
+  } else {
+    NULL
+  }
+  list(
+    covariance = name_square(result$covariance, result$parameter_names),
+    standard_errors = standard_errors,
+    correlation = name_square(result$correlation, result$parameter_names),
+    j_stat = result$j_stat,
+    j_stat_pval = if (is.nan(result$j_stat_pval)) NA_real_ else result$j_stat_pval,
+    gmm_iterations = result$gmm_iterations,
+    converged_within_tolerance = result$converged_within_tolerance,
+    optimizer_fallback_count = result$optimizer_fallback_count
+  )
+}
+
+# Internal: build a corehydro_fit from a ch_fit_run_() result for the GMM target.
 new_fit_gmm <- function(result, base_spec, dataset, construct_json) {
   base <- new_fit_base(result, base_spec, dataset, construct_json)
   # GMM is method-of-moments: run_fit() leaves log_likelihood/aic/bic at their structural NaN
@@ -277,28 +331,40 @@ new_fit_gmm <- function(result, base_spec, dataset, construct_json) {
   base$aic <- NA_real_
   base$bic <- NA_real_
 
-  covariance <- name_square(result$covariance, result$parameter_names)
-  correlation <- name_square(result$correlation, result$parameter_names)
-  standard_errors <- if (length(result$standard_errors)) {
-    se <- result$standard_errors
-    names(se) <- result$parameter_names
-    se
-  } else {
-    NULL
-  }
+  structure(c(base, gmm_fit_fields(result)), class = "corehydro_fit")
+}
 
+# Internal: build a corehydro_fit from a ch_callback_gmm_() result -- the same GMM estimator fitted
+# through its delegate constructor instead of a model. Everything the model path takes from the
+# model is absent by construction and is NULL here: `$model`, `$spec`, `$dataset` and
+# `$construct_json`. That is what fit_diagnostics() and quantile_variance() test for before they
+# try to rerun a construct that does not exist (both need a distribution; moment conditions are not
+# one). Parameters are named p1..pn, matching mcmc_posterior(): a model you write down yourself
+# names nothing.
+new_fit_gmm_moments <- function(result) {
+  parameters <- result$parameters
+  names(parameters) <- result$parameter_names
   structure(
     c(
-      base,
       list(
-        covariance = covariance,
-        standard_errors = standard_errors,
-        correlation = correlation,
-        j_stat = result$j_stat,
-        j_stat_pval = if (is.nan(result$j_stat_pval)) NA_real_ else result$j_stat_pval,
-        gmm_iterations = result$gmm_iterations,
-        converged_within_tolerance = result$converged_within_tolerance,
-        optimizer_fallback_count = result$optimizer_fallback_count
+        method = "GMM",
+        parameters = parameters,
+        log_likelihood = NA_real_,
+        prior_log_likelihood = NA_real_,
+        aic = NA_real_,
+        bic = NA_real_,
+        nobs = result$nobs,
+        converged = result$converged,
+        status = result$status,
+        model = NULL,
+        spec = NULL,
+        dataset = NULL,
+        construct_json = NULL
+      ),
+      gmm_fit_fields(result),
+      list(
+        number_of_moment_conditions = result$number_of_moment_conditions,
+        degree_of_freedom = result$degree_of_freedom
       )
     ),
     class = "corehydro_fit"
@@ -312,15 +378,7 @@ new_fit_gmm <- function(result, base_spec, dataset, construct_json) {
 # level without a public `alpha` argument nobody else needs.
 fit_optimized <- function(target, model, distribution, optimizer, hessian, profile, profile_bins,
                           alpha = 0.1) {
-  known_optimizers <- c(
-    "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
-  )
-  optimizer <- as.character(optimizer)
-  if (!optimizer %in% known_optimizers) {
-    stop(sprintf(
-      "unknown optimizer '%s'; expected one of %s", optimizer, paste(known_optimizers, collapse = ", ")
-    ), call. = FALSE)
-  }
+  optimizer <- check_choice(optimizer, known_optimizers, "optimizer")
   profile <- isTRUE(profile)
   # `profile_bins` reaches profile_likelihood(bins) unguarded in the core, where a non-positive
   # count is a silently empty profile rather than an error, so it is validated here.
@@ -624,23 +682,8 @@ fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains =
 #' f$parameters
 #' quantile_variance(f, 0.01)
 fit_gmm <- function(model, optimizer = "BFGS", strategy = "Iterative", max_gmm_iterations = 0L) {
-  known_optimizers <- c(
-    "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
-  )
-  optimizer <- as.character(optimizer)
-  if (!optimizer %in% known_optimizers) {
-    stop(sprintf(
-      "unknown optimizer '%s'; expected one of %s", optimizer, paste(known_optimizers, collapse = ", ")
-    ), call. = FALSE)
-  }
-  known_strategies <- c("OneStep", "TwoStep", "Iterative")
-  strategy <- as.character(strategy)
-  if (!strategy %in% known_strategies) {
-    stop(sprintf(
-      "unknown GMM estimation strategy '%s'; expected one of %s",
-      strategy, paste(known_strategies, collapse = ", ")
-    ), call. = FALSE)
-  }
+  optimizer <- check_choice(optimizer, known_optimizers, "optimizer")
+  strategy <- check_choice(strategy, known_gmm_strategies, "GMM estimation strategy")
   if (!inherits(model, "corehydro_model") || !identical(model$spec$type, "bulletin17c")) {
     stop("fit_gmm fits a bulletin17c model only; build one with model_bulletin17c()", call. = FALSE)
   }
@@ -694,6 +737,14 @@ fit_diagnostics <- function(fit) {
       fit$method
     ), call. = FALSE)
   }
+  # A fit_gmm_moments() fit is a GMM fit with no model behind it, so there is no construct to rerun
+  # through the C++ diagnostics entry point. Refused by name rather than left to fail three layers
+  # down on a NULL construct.
+  if (is.null(fit$construct_json)) {
+    stop("fit_diagnostics needs a fit built from a model; a fit_gmm_moments() fit has only your ",
+         "moment conditions, and the GMM diagnostics are computed from a model's per-observation ",
+         "moment contributions", call. = FALSE)
+  }
   ch_fit_diagnostics_(fit$method, fit$construct_json, fit$dataset)
 }
 
@@ -716,7 +767,47 @@ quantile_variance <- function(fit, aep) {
   if (!inherits(fit, "corehydro_fit") || !identical(fit$method, "GMM")) {
     stop("quantile_variance needs a fit_gmm() result", call. = FALSE)
   }
+  # See fit_diagnostics() above: a fit_gmm_moments() fit has no distribution to take a quantile of.
+  if (is.null(fit$construct_json)) {
+    stop("quantile_variance needs a fit_gmm() fit of a bulletin17c model; a fit_gmm_moments() fit ",
+         "has no distribution to take a quantile of", call. = FALSE)
+  }
   ch_fit_quantile_variance_(fit$construct_json, fit$dataset, as.double(aep))
+}
+
+# Internal: the over-identifying degrees of freedom q - p of a GMM fit, or NA when they cannot be
+# told. fit_gmm_moments() reports the field directly. The fit_gmm() model path does not carry it and
+# does not need to: its only IGMMModel implementation, Bulletin 17C, is always just-identified, and
+# a NaN p-value says the same thing, since the ported post_process() writes NaN there exactly when
+# the degrees of freedom are zero.
+gmm_degree_of_freedom <- function(x) {
+  if (!is.null(x$degree_of_freedom)) {
+    return(as.integer(x$degree_of_freedom))
+  }
+  if (isTRUE(is.na(x$j_stat_pval))) 0L else NA_integer_
+}
+
+# Internal: why this GMM fit's J-statistic should not be printed, or NULL when it should be.
+#
+# Two reasons, and they are different failures. At ZERO over-identifying degrees of freedom -- which
+# every fit_gmm() fit is, Bulletin 17C being structurally just-identified, and which a
+# fit_gmm_moments() fit is whenever q == p -- the residual covariance J is scaled by is theoretically
+# zero, so the number is whatever inverting a numerically singular matrix happened to give (see
+# docs/upstream-csharp-issues.md and fixtures/callback/gmm.json for the measured spread). Printing it
+# would put a meaningless figure in front of a reader with no way to know it is meaningless. Separately,
+# the residual covariance can be singular enough that inverting it RAISES, in which case the ported
+# post_process() reports NaN and there is no statistic at all: printing "j-statistic: nan" says less
+# than saying so. `$j_stat` itself is untouched in both cases and still on the fit for anyone who
+# wants it.
+gmm_j_stat_note <- function(x) {
+  dof <- gmm_degree_of_freedom(x)
+  if (!is.na(dof) && dof == 0L) {
+    return("not interpretable at 0 degrees of freedom")
+  }
+  if (is.null(x$j_stat) || !is.finite(x$j_stat)) {
+    return("could not be computed for this fit")
+  }
+  NULL
 }
 
 #' @export
@@ -735,10 +826,15 @@ print.corehydro_fit <- function(x, ...) {
   }
   if (!is.null(x$dic)) cat(sprintf("  dic: %g\n", x$dic))
   if (!is.null(x$j_stat_pval)) {
-    cat(sprintf(
-      "  j-statistic: %g   p-value: %s   gmm iterations: %d\n",
-      x$j_stat, format(x$j_stat_pval), x$gmm_iterations
-    ))
+    note <- gmm_j_stat_note(x)
+    if (is.null(note)) {
+      cat(sprintf(
+        "  j-statistic: %g   p-value: %s   gmm iterations: %d\n",
+        x$j_stat, format(x$j_stat_pval), x$gmm_iterations
+      ))
+    } else {
+      cat(sprintf("  j-statistic: %s   gmm iterations: %d\n", note, x$gmm_iterations))
+    }
   }
   if (x$method %in% c("MaximumLikelihood", "MaximumAPosteriori")) {
     cat(sprintf(

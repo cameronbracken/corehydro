@@ -42,6 +42,7 @@
 #include "corehydro/numerics/math/optimization/powell.hpp"
 #include "corehydro/numerics/math/optimization/support/optimization_status.hpp"
 #include "corehydro/numerics/math/optimization/support/optimizer.hpp"
+#include "corehydro/numerics/support/callback_guard.hpp"
 
 namespace corehydro::numerics::support {
 
@@ -80,66 +81,32 @@ struct OptimResult {
 // later evaluation short-circuits without re-entering the host, so the run cannot trigger a
 // second host-language exception (or a second unwind) once the first has been captured.
 // run_optimizer rethrows the stored exception once the optimizer returns.
-class GuardedObjective {
-   public:
-    GuardedObjective(Objective fn, bool maximize) : fn_(std::move(fn)), maximize_(maximize) {}
+//
+// The guard itself now lives in callback_guard.hpp, shared with callback_runner.hpp. The only
+// optimizer-specific part is the sentinel: the optimizer is always driven through ITS OWN
+// minimize()/maximize() (never negate-and-always-minimize; see run_optimizer's header comment for
+// why), so the sentinel must be the worst value in the RAW objective's own sign convention.
+// Minimizing wants a small value, so a huge one is worst (+inf); maximizing wants a large one, so
+// a hugely negative one is worst (-inf). Either way the optimizer treats the aborted point as
+// unconditionally rejected. `call_count()` is the real (non-short-circuited) call count into the
+// host objective -- the only function-evaluation count available for NelderMead/BrentSearch (see
+// the file header); redundant with, but not necessarily identical to, the four Optimizer-base
+// classes' own function_evaluations() (incremented only inside Optimizer::evaluate(), so -- like
+// that counter -- it does NOT include the post-success Hessian-differentiation probes, which call
+// the objective function directly and bypass evaluate() entirely).
+using GuardedObjective = GuardedCall<double, const std::vector<double>&>;
 
-    double operator()(const std::vector<double>& p) {
-        if (aborted_) return sentinel();
-        try {
-            double v = fn_(p);
-            ++function_evaluations_;
-            return v;
-        } catch (...) {
-            error_ = std::current_exception();
-            aborted_ = true;
-            return sentinel();
-        }
-    }
-
-    bool aborted() const { return aborted_; }
-    void rethrow_if_aborted() const {
-        if (error_) std::rethrow_exception(error_);
-    }
-    // Real (non-short-circuited) calls into the host objective. The only function-evaluation
-    // count available for NelderMead/BrentSearch (see the file header); redundant with, but not
-    // necessarily identical to, the four Optimizer-base classes' own function_evaluations()
-    // (incremented only inside Optimizer::evaluate(), so -- like this counter -- it does NOT
-    // include the post-success Hessian-differentiation probes, which call the objective function
-    // directly and bypass evaluate() entirely).
-    int function_evaluations() const { return function_evaluations_; }
-
-   private:
-    // The optimizer is always driven through ITS OWN minimize()/maximize() (never negate-and-
-    // always-minimize; see run_optimizer's header comment for why), so the sentinel must be
-    // the worst value in the RAW objective's own sign convention: minimizing wants a small
-    // value, so a huge one is worst (+inf); maximizing wants a large value, so a hugely
-    // negative one is worst (-inf). Either way the optimizer that receives it treats the
-    // aborted point as unconditionally rejected.
-    double sentinel() const {
-        return maximize_ ? -std::numeric_limits<double>::infinity()
-                          : std::numeric_limits<double>::infinity();
-    }
-
-    Objective fn_;
-    bool maximize_;
-    bool aborted_ = false;
-    std::exception_ptr error_;
-    int function_evaluations_ = 0;
-};
+inline GuardedObjective make_guarded_objective(const Objective& fn, bool maximize) {
+    return GuardedObjective(fn, maximize ? -std::numeric_limits<double>::infinity()
+                                         : std::numeric_limits<double>::infinity());
+}
 
 namespace detail {
 
-inline std::string optim_status_name(opt::OptimizationStatus s) {
-    using S = opt::OptimizationStatus;
-    switch (s) {
-        case S::None: return "None";
-        case S::Success: return "Success";
-        case S::MaximumIterationsReached: return "MaximumIterationsReached";
-        case S::MaximumFunctionEvaluationsReached: return "MaximumFunctionEvaluationsReached";
-        default: return "Failure";
-    }
-}
+// A thin forwarder to the one definition, which lives beside the enum
+// (optimization/support/optimization_status.hpp). This file and fit_runner.hpp each carried an
+// identical copy of the switch until callback/gmm.hpp would have made a third.
+inline std::string optim_status_name(opt::OptimizationStatus s) { return opt::status_name(s); }
 
 inline std::vector<double> spec_vector(const JsonValue& spec, const char* key) {
     if (!spec.contains(key)) return {};
@@ -230,8 +197,8 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 // time on top of the ported one, and every other optimizer's convergence test
 // (Optimizer::check_convergence, NelderMead's own) compares raw fitness values, so getting the
 // sign wrong anywhere in a hand-rolled negation would silently break convergence detection.
-// Calling the class's own maximize() needs no such care. See GuardedObjective::sentinel() for the
-// one place this decision has an observable consequence: which infinity is "worst" for the
+// Calling the class's own maximize() needs no such care. See make_guarded_objective() above for
+// the one place this decision has an observable consequence: which infinity is "worst" for the
 // aborted-objective path.
 inline OptimResult run_optimizer(const std::string& spec_json, const Objective& objective) {
     JsonValue spec = corehydro::models::spec::parse_json(spec_json);
@@ -244,7 +211,7 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
     std::vector<double> upper = detail::spec_vector(spec, "upper");
     std::vector<double> initial = detail::spec_vector(spec, "initial");
 
-    GuardedObjective guarded(objective, maximize);
+    GuardedObjective guarded = make_guarded_objective(objective, maximize);
     // Adapts GuardedObjective's const-ref call operator to the ported Optimizer-base and
     // NelderMead mutable-ref Objective signatures (see optimizer.hpp's MUTABLE-POINT SEMANTICS
     // note) -- an implicit const-ref-to-mutable-ref binding is not legal, so this lambda is the
@@ -349,7 +316,7 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
         // standalone class).
         result.parameters = nm.best_parameters();
         result.value = objective(result.parameters);
-        result.function_evaluations = guarded.function_evaluations();
+        result.function_evaluations = guarded.call_count();
         result.status = "Success";
     } else if (method == "brent") {
         if (lower.empty() || upper.empty())
@@ -374,7 +341,7 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
         // extra unguarded probe -- best_fitness() already carries the value).
         result.parameters = {brent.best_parameter()};
         result.value = maximize ? -brent.best_fitness() : brent.best_fitness();
-        result.function_evaluations = guarded.function_evaluations();
+        result.function_evaluations = guarded.call_count();
         result.status = "Success";
     } else {
         throw std::runtime_error("unknown optimizer method: " + method);

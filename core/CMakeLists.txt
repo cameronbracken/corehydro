@@ -99,7 +99,10 @@ set(BF_TESTS
   test_copula_clone
   test_multivariate_normal_api
   test_brent_search
+  test_adaptive_gauss_kronrod
   test_optimizer_runner
+  test_callback_runner
+  test_rng_handle
 )
 
 # Sobol test takes the direction-number file as its sole argument.
@@ -132,6 +135,18 @@ target_link_libraries(test_fixtures PRIVATE corehydro_core)
 target_include_directories(test_fixtures PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 # This translation unit dispatches every fixture kind for every family, and crossed MSVC's
 # 65,536-section object-file cap (error C1128) as the toolbox surface landed. MSVC-only.
-target_compile_options(test_fixtures PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
+#
+# -ffp-contract=off is the callback surface's requirement, and it is about correctness of the
+# COMPARISON rather than of the core. This file writes the fixture callback catalog as C++ lambdas
+# -- the counterparts of the R closures, Python functions and C# delegates the other three runners
+# write for the same names -- and every one of them is specified as arithmetic in double. Clang and
+# GCC contract `y - a - b*t` and `sum + r*r` into fused multiply-adds by default, which computes a
+# DIFFERENT (more accurate) function than the one the fixture names, so the C++ runner drifted a few
+# ulp from the other three and fixtures/callback/callback_cross_language.json's bit-equality
+# assertions could not hold. Turning contraction off makes the C++ catalog evaluate the same
+# arithmetic the other three do. MSVC needs no flag: /fp:precise, its default, does not contract.
+target_compile_options(test_fixtures PRIVATE
+  $<$<CXX_COMPILER_ID:MSVC>:/bigobj>
+  $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffp-contract=off>)
 add_test(NAME test_fixtures
          COMMAND test_fixtures ${CMAKE_CURRENT_SOURCE_DIR}/../fixtures)

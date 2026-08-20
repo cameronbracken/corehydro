@@ -1735,6 +1735,188 @@ Assertion `method` is `"value"` (the objective's own value at the optimum, in it
 convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
 or `"status"` (the exact `OptimizationStatus` name).
 
+### `callback`
+
+The ported routines whose input is a live host-language function rather than serializable data,
+run through the shared callback runner (`numerics/support/callback_runner.hpp`) and its exception
+guard. `construct` names a `group` (`"math"`, `"rng"`, `"mcmc"`, `"bootstrap"` or `"gmm"`), a
+`method`, a `callback` (a NAMED built-in each of the four runners writes itself as a
+native closure: a C++ lambda, an R closure, a Python lambda, a C# delegate), and an `options`
+object passed through verbatim as the runner's options JSON. The catalog names are documented in
+each fixture's own `callbacks` block; they are deliberately NOT the `optimizer` kind's names
+(`Diff_FXYZ` is `Test_Differentiation.FXYZ`, unrelated to the optimizer catalog's `FXYZ`), and the
+`Root_`/`Diff_`/`Quad_`/`Rng_` prefixes keep two upstream test files' identically named functions
+apart (`Diff_FX` and `Quad_FX3` are both `x^3`), so nothing can be confused. Processed by all four
+runners; `--dump` is supported.
+
+```jsonc
+{
+  "kind": "callback",
+  "callbacks": { "Diff_FH": "f(x, y) = x^3 - 2xy - y^6  [Test_Differentiation.FH]" },
+  "cases": [
+    {
+      "name": "hessian_mixed_partials",
+      "construct": {
+        "group": "math", "method": "hessian", "callback": "Diff_FH",
+        "options": { "point": [1.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 6.0, "mode": "abs", "tol": 1e-3 },
+        { "method": "dim", "args": [0], "expected": 2, "mode": "abs", "tol": 0 }
+      ]
+    }
+  ]
+}
+```
+
+Assertion `method` is `"value"` (`args: [index]` into the flat result -- a matrix is flattened
+row-major), `"named"` (`name: "<label>"`, resolved through the result's `names`), `"dim"`
+(`args: [index]` into the result's `dims`), or `"status"`. `dims` takes one of
+three shapes: empty when the group reports no shape (a scalar result, or a plain vector whose
+length is the number of values -- `math/root_find`, `math/derivative`), `{n}` for an explicitly
+shaped vector (`math/gradient`), and `{rows, cols}` for a row-major matrix (`math/hessian`). A
+`"dim"` assertion on a method whose `dims` is empty is therefore an error, not a zero.
+
+A `"status"` assertion is only as strong as the driven class: `math/quadrature` reports the ported
+`IntegrationStatus` read off `AdaptiveGaussKronrod`, so its status is a real oracle, while
+`root_find`/`derivative`/`gradient`/`hessian` sit on static C# methods with no status object and
+report `"Success"` unconditionally in every runner. `math/quadrature` also returns three values,
+`{integral, function_evaluations, standard_error}`, so `"value"` with `args: [1]` pins the
+evaluation counter and `args: [2]` the rule's own error estimate. Neither the counter, the error
+estimate nor the status has an upstream test literal (the C# tests read only `Result`), so those
+assertions are read off the real C# library through the emitter and say so in their `source`, which
+opens with `EMITTER-READ`. `Quad_Peak` in `fixtures/callback/math.json` is likewise a corehydro
+addition rather than an upstream integrand: every upstream integrand converges on the first
+whole-interval evaluation at 21 evaluations, so it is the one callback pinning the SUBDIVIDING
+branch of the recursion.
+
+The `"rng"` group has one method, `probe`, and one job: prove that a draw taken INSIDE a
+host-language callback comes off the core's seeded stream rather than off R's or Python's own
+generator. Its `options` carry exactly one of `seed` (a number, the C# `MersenneTwister(int)`
+constructor) or `seeds` (an array, the `MersenneTwister(int[])` constructor upstream's own
+`Test_MersenneTwister` uses), plus an optional `parameters` array; the callback is handed
+`(parameters, rng)` -- upstream's own `Gibbs.Proposal` signature -- and returns what it drew, so
+`values` is the draw vector and `dims` is `{n}`. `fixtures/callback/rng_handle.json` is the one
+file of this group: its `mt19937_reference_stream` case carries genuine upstream literals
+(`Test_MersenneTwister.Test_MT19937`, whose expected numbers come from the reference
+`mt19937ar.c` output file), and its other three cases are `EMITTER-READ`, since no upstream test
+seeds 12345 and reads `NextDouble`/`Next`. Because the handle borrows the generator for one call
+only, there is nothing for a fixture to assert about its expiry -- that half is asserted in each
+package's own tests (`corehydror/tests/testthat/test-callback.R`,
+`corehydropy/tests/test_callback.py`).
+
+The `"mcmc"` group has one method, `sample`, and drives upstream's own delegate constructor,
+`MCMCSampler(List<IUnivariateDistribution> priorDistributions, LogLikelihood
+logLikelihoodFunction)` -- the model registry the `mcmc_sampler` kind builds against is corehydro
+scaffolding, while these cases pass their own priors and their own delegate as a C# caller would.
+Its `options` carry a `sampler` name, a REQUIRED `priors` array in the same distribution-spec
+grammar `dist_spec.hpp` builds from, the five short user-facing settings (`iterations`, `warmup`,
+`chains`, `thinning`, `seed`), `initialize`, and any of the sampler's own setting names; an absent
+key leaves the ported default in force. The result is the one place `values` is only PARTLY named:
+a summary block (`map_fitness`, `acceptance_rate[c]`, then `map[j]`/`posterior_mean[j]`/
+`posterior_sd[j]`/`posterior_median[j]`/`posterior_lower_ci[j]`/`posterior_upper_ci[j]`/`rhat[j]`/
+`ess[j]`) followed by the raw draws row-major by `[chain][draw][parameter]`, with
+`dims = {n_summary, n_chains, n_draws, n_parameters}`. That is why the `"named"` assertion method
+exists: the summary indices shift with the chain and parameter counts, so `"posterior_mean[0]"`
+says what it pins where `12` does not. `fixtures/callback/mcmc.json` is the one file of this group
+and every value in it is `EMITTER-READ`; all its catalog log-densities are built from `+ - * /`
+alone and sum in an explicit loop, because a Markov chain turns one differing bit into a different
+chain outright (R's `sum()` accumulates in extended precision, so it is specifically avoided).
+
+A `"mcmc"` case may also name the two OTHER delegates upstream's samplers take, each a catalog
+entry of its own resolved the same way `callback` is: `construct.proposal` (upstream's
+`Gibbs.Proposal(double[] parameters, Random prng)`, REQUIRED by the Gibbs sampler and accepted by
+nothing else -- the callback is handed a borrowed handle on THIS chain's generator, exactly as the
+`"rng"` group's probe is) and `construct.gradient` (upstream's `HMC.Gradient(IList<double>
+parameters)`, OPTIONAL for HMC and NUTS and accepted by nothing else -- an absent key leaves the
+ported bound-aware finite-difference default in force, which `hmc_gaussian_kernel_default_gradient`
+pins beside `hmc_gaussian_kernel_analytic_gradient`). Both catalogs live in the same fixture's
+`callbacks` block as the log-densities, under the `Prop_`/`Grad_` prefixes.
+
+The `"bootstrap"` group has one method, `run`, and drives upstream's own four delegate properties
+on `Bootstrap<TData>` (`ResampleFunction`, `FitFunction`, `StatisticFunction`,
+`JackknifeFunction`) with `TData` instantiated as a vector of doubles. It is the one group whose
+`construct` names FOUR callbacks: `callback` is the RESAMPLE delegate -- the one handed a borrowed
+handle on the replicate's generator, this group's counterpart of the mcmc group's log-likelihood --
+and `fit`, `statistic` and `jackknife` name the rest, under the `Resample_`/`Fit_`/`Stat_`/`Jack_`
+prefixes. `jackknife` is optional and used by the `BCa` method alone; a case without it is every
+other method. The `options` carry a REQUIRED `data` array (the original sample), plus `replicates`,
+`seed`, `alpha`, `ci_method`, `parameters` (theta-hat, defaulting to `fit(data)`),
+`inner_replicates` and `max_retries`, each optional and each leaving the ported default in force
+when absent. `ci_method` picks the workflow as well as the interval: `BootstrapT` runs
+`RunWithStudentizedBootstrap()`, everything else `Run()`. The result is fully named --
+`replicates`, `failed_replicates`, `alpha`, then `statistic[i]` (the population estimate) with
+`statistic_lower[i]`/`statistic_upper[i]`/`statistic_se[i]`/`statistic_mean[i]`/`statistic_valid[i]`
+beside it, then the same for `parameter[j]` -- with `dims = {n_statistics, n_parameters}`, so cases
+assert by `"named"` and by `"dim"`. `fixtures/callback/bootstrap.json` is the one file of this
+group and every value in it is `EMITTER-READ`, with one documented exception to the file's 1e-12
+tolerance: the `BCa` case is pinned at 1e-6 because C#'s acceleration constant is a
+`Tools.ParallelAdd` reduction that is not reproducible run-to-run in the real library, exactly as
+`fixtures/sampling/bootstrap.json`'s own `bca` case records.
+
+The `"gmm"` group has one method, `fit`, and drives upstream's own DELEGATE constructor on
+`GeneralizedMethodOfMoments` (C# 143) -- the one a C# caller uses to fit moment conditions of their
+own, as opposed to the `IGMMModel` constructor the `estimation`-kind `gmm` target drives, whose
+single implementation is `Bulletin17CDistribution`. `construct.callback` is the MOMENT CONDITION
+function, this group's required delegate and the counterpart of the mcmc group's log-likelihood,
+under the `Mom_` prefix; `construct.jacobian` (`Jac_`) and `construct.penalty` (`Pen_`) name the two
+optional ones, and an absent key means the ported bounds-aware finite-difference Jacobian and no
+penalty. The fourth C# delegate, `PointwiseMomentConditionFunction`, is deliberately not on this
+surface (its only consumer is the GMM Diagnostics region, reached through a model-based fit). The
+moment condition callback returns TWO things -- the moment vector `g` and the weighting matrix `s`
+-- spelled as a list in R, a tuple or dict in Python, a `(Vector G, Matrix S)` tuple in C#, and each
+runner's converter checks both by name. The `options` carry a REQUIRED `initial`, `lower`, `upper`
+and `sample_size`, plus optional `optimizer`, `strategy`, `max_gmm_iterations` and
+`number_of_moment_conditions` (a cross-check, not a declaration: q is MEASURED by probing the
+callback once at `initial`). The result is fully named -- `parameter[j]`, `standard_error[j]`,
+`covariance[i,j]`, `correlation[i,j]`, then `j_stat`, `j_stat_pval`, `degree_of_freedom`,
+`gmm_iterations`, `converged_within_tolerance`, `optimizer_fallback_count`, `sample_size`,
+`number_of_parameters`, `number_of_moment_conditions` -- with `dims = {p, p}`.
+`fixtures/callback/gmm.json` is the one file of this group and every value in it is `EMITTER-READ`.
+Its model is chosen so the oracle is checkable arithmetic rather than a regression: the
+just-identified method-of-moments fit of a Normal, whose GMM optimum IS the sample mean and the
+population variance. `j_stat` is deliberately NOT asserted anywhere in that file -- see its own
+`reference` field for the measurements behind that decision.
+
+### `callback_cross_language`
+
+One purpose-built fixture (`fixtures/callback/callback_cross_language.json`), not a general-purpose
+kind: its single case nests an `"mcmc"` and a `"bootstrap"` sub-block, each shaped exactly like a
+`callback`-kind case's `construct`/`assertions`, so ONE fixture drives a seeded posterior and a
+seeded bootstrap interval through all four runners together. It is the callback layer's counterpart
+to `toolbox_cross_language` below and to `fixtures/estimation/fit_cross_language.json`, and the
+only fixture in the repository whose EVERY assertion is `"mode": "abs", "tol": 0`, i.e. bit
+equality rather than a tolerance.
+
+Bit equality is reachable there and not everywhere, and the difference matters when adding a case.
+R and Python agree bit for bit on every callback case in that directory, because both drive the
+same compiled core; they agree with the real C# library only where the arithmetic producing the
+number lives in the CALLBACK rather than in the compiled core, since clang and gcc contract
+`a*b + c` into a fused multiply-add by default and .NET does not. The Gibbs case qualifies: its
+recorded states are exact full-conditional draws evaluated in the host language, and its posterior
+mean, median and MAP are a plain sum, an order statistic and a maximum over those states.
+`posterior_sd` and `ess` do not, because they accumulate `d*d` inside the core, so they are absent
+from the file rather than pinned at a loosened tolerance. Both callbacks are arithmetic only, with
+every summation written as an explicit loop; see the fixture's own `reference` field.
+
+`core/CMakeLists.txt` passes `-ffp-contract=off` to `test_fixtures` on non-MSVC compilers for the
+same reason: that file's callback catalog is written as C++ lambdas standing in for the R closures,
+Python functions and C# delegates the other three runners write for the same names, and a
+contracted lambda computes a different function from the one the fixture names.
+
+```jsonc
+{
+  "kind": "callback_cross_language",
+  "cases": [
+    {
+      "name": "gibbs_posterior_and_mean_bootstrap_short_exact",
+      "mcmc":      { "construct": { ... }, "assertions": [ ... ] },
+      "bootstrap": { "construct": { ... }, "assertions": [ ... ] }
+    }
+  ]
+}
+```
+
 ### `toolbox_cross_language`
 
 One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose

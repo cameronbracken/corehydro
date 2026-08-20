@@ -15,10 +15,12 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -57,6 +59,8 @@
 #include "corehydro/numerics/data/plotting_positions.hpp"
 #include "corehydro/numerics/data/yeo_johnson.hpp"
 #include "corehydro/numerics/support/toolbox_runner.hpp"
+#include "corehydro/numerics/support/callback_runner.hpp"
+#include "corehydro/numerics/support/rng_handle.hpp"
 #include "corehydro/numerics/support/optimizer_runner.hpp"
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
@@ -94,6 +98,7 @@
 #include "corehydro/numerics/math/special/factorial.hpp"
 #include "corehydro/numerics/math/special/gamma.hpp"
 #include "corehydro/numerics/sampling/bootstrap/bootstrap.hpp"
+#include "corehydro/numerics/sampling/bootstrap/ci_method_names.hpp"
 #include "corehydro/numerics/sampling/bootstrap/model_registry.hpp"
 #include "corehydro/numerics/sampling/mcmc/arwmh.hpp"
 #include "corehydro/numerics/sampling/mcmc/demcz.hpp"
@@ -106,6 +111,7 @@
 #include "corehydro/numerics/sampling/mcmc/snis.hpp"
 #include "corehydro/numerics/sampling/mcmc/support/mcmc_diagnostics.hpp"
 #include "corehydro/numerics/sampling/mcmc/support/mcmc_results.hpp"
+#include "corehydro/numerics/sampling/mcmc/support/mcmc_run.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/tools.hpp"
 #include "corehydro/numerics/utilities/extension_methods.hpp"
@@ -149,10 +155,17 @@ static void check_value(double actual, const json& as, const std::string& where)
     } else {
         throw std::runtime_error("unknown comparison mode: " + mode);
     }
-    if (ok)
+    if (ok) {
         chtest::report_pass();
-    else
-        chtest::report_fail(__FILE__, __LINE__, where + ": value mismatch");
+    } else {
+        // The actual is printed at full precision because a mismatch here is usually a question of
+        // HOW FAR off, not whether: a fixture pinned at tol 0 and one pinned at rel 1e-12 fail the
+        // same way, and only the digits distinguish a real divergence from a last-ulp one.
+        std::ostringstream msg;
+        msg << where << ": value mismatch, expected " << as["expected"] << ", got "
+            << std::setprecision(17) << actual;
+        chtest::report_fail(__FILE__, __LINE__, msg.str());
+    }
 }
 
 static void check_bool(bool actual, const json& as, const std::string& where) {
@@ -1673,6 +1686,429 @@ static void run_optimizer_kind(const json& spec) {
     }
 }
 
+// --- callback path (callback surface, Task 1) --------------------------------------------
+//
+// fixtures/callback/*.json cases name a built-in callback by the same name the fixture's own
+// `callbacks` block documents; this table maps that name to a real C++ lambda -- the C++ analogue
+// of the native closures the R and Python fixture runners (and the dotnet emitter's delegates)
+// write for the same names, so every case exercises the real host-language callback path
+// callback_runner.hpp exists to protect. NOTE these names are NOT the optimizer catalog's above:
+// `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), unrelated to the optimizer
+// catalog's `FXYZ`; the `Diff_`/`Root_`/`Quad_` prefixes exist so the catalogs can never be
+// confused (`Diff_FX` and `Quad_FX3` are both x^3, from two different upstream test files).
+static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs) {
+    if (name == "Root_Quadratic") {
+        cbs.scalar = [](double x) { return x * x - 2.0; };
+    } else if (name == "Root_Cubic") {
+        cbs.scalar = [](double x) { return x * x * x - x - 1.0; };
+    } else if (name == "Diff_FX") {
+        cbs.scalar = [](double x) { return std::pow(x, 3.0); };
+    } else if (name == "Diff_FXY") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return std::pow(p[0], 2.0) * std::pow(p[1], 3.0);
+        };
+    } else if (name == "Diff_FXYZ") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return std::pow(p[0], 3.0) + std::pow(p[1], 4.0) + std::pow(p[2], 5.0);
+        };
+    } else if (name == "Diff_FH") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return std::pow(p[0], 3.0) - 2.0 * p[0] * p[1] - std::pow(p[1], 6.0);
+        };
+    } else if (name == "Quad_FX3") {
+        cbs.scalar = [](double x) { return std::pow(x, 3.0); };
+    } else if (name == "Quad_Cosine") {
+        cbs.scalar = [](double x) { return std::cos(x); };
+    } else if (name == "Quad_Sine") {
+        cbs.scalar = [](double x) { return std::sin(x); };
+    } else if (name == "Quad_FXX") {
+        cbs.scalar = [](double x) { return 0.5 + 24.0 * x + 3.0 * x * x; };
+    } else if (name == "Quad_FXXX") {
+        cbs.scalar = [](double x) { return 0.5 + 24.0 * x + 3.0 * x * x + 8.0 * x * x * x; };
+    } else if (name == "Quad_Peak") {
+        // corehydro addition, no upstream integrand -- the one callback that reaches the
+        // subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
+        // bit and the evaluation count is a real oracle. See the fixture's `callbacks` note.
+        cbs.scalar = [](double x) { return 1.0 / (1.0 + 1.0e4 * x * x); };
+    } else if (name == "Mcmc_GaussianKernel") {
+        // The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only
+        // and sum in an explicit loop rather than through any accumulate helper: a Markov chain
+        // turns one differing bit into a different chain, so the four runners have to agree to
+        // the last bit for these oracles to mean anything. See the fixture's own note.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            double acc = 0.0;
+            for (double x : data) acc += (x - p[0]) * (x - p[0]);
+            return -0.5 * acc;
+        };
+    } else if (name == "Mcmc_LinearKernel") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double t[] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0};
+            const double y[] = {2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1};
+            double acc = 0.0;
+            for (std::size_t i = 0; i < 8; ++i) {
+                double residual = y[i] - p[0] - p[1] * t[i];
+                acc += residual * residual;
+            }
+            return -0.5 * acc;
+        };
+    } else if (name == "Mcmc_UniformWidthKernel") {
+        // The Gibbs case's model, whose full conditional really IS uniform: with
+        // x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+        // Uniform(max(x) - 1, min(x) + 1), so `Prop_UniformConditional` below is an exact Gibbs
+        // step rather than a random walk wearing Gibbs's name. The normalizing term is dropped,
+        // as the two kernels above drop theirs; comparisons and arithmetic only.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            for (double x : data)
+                if (x - p[0] > 1.0 || p[0] - x > 1.0)
+                    return -std::numeric_limits<double>::infinity();
+            return 0.0;
+        };
+    } else if (name == "Prop_UniformConditional") {
+        // The proposal catalog: (parameters, rng) -> parameters, upstream's Gibbs.Proposal shape.
+        // Draws through the HANDLE, exactly as the R closure and the Python lambda do.
+        cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            tbx::RngScope scope(prng);
+            double lo = data[0] - 1.0, hi = data[0] + 1.0;
+            for (double x : data) {
+                if (x - 1.0 > lo) lo = x - 1.0;
+                if (x + 1.0 < hi) hi = x + 1.0;
+            }
+            return std::vector<double>{lo + scope.handle()->uniform(1).at(0) * (hi - lo)};
+        };
+    } else if (name == "Grad_GaussianKernel") {
+        // The gradient catalog: (parameters) -> vector, upstream's HMC.Gradient shape. The
+        // analytic derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu).
+        cbs.vector_vector = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            double acc = 0.0;
+            for (double x : data) acc += x - p[0];
+            return std::vector<double>{acc};
+        };
+    } else if (name == "Mcmc_QuarticKernel") {
+        // Task-5 review fix, coverage finding: unlike Mcmc_GaussianKernel, whose derivative
+        // sum(x - mu) is LINEAR in mu (so its third derivative is zero and the ported
+        // central-difference default agrees with the analytic gradient to rounding, ~4e-16), this
+        // kernel's derivative is CUBIC in mu, so the central-difference truncation error is real
+        // rather than rounding -- the analytic and default gradients genuinely disagree here, which
+        // is what a supplied-vs-ignored gradient regression needs to be caught by the oracle gate.
+        // The 0.05 coefficient is load-bearing, not decorative: measured by brute-force sweep
+        // (a coefficient of 1 over the same data), an unscaled quartic makes HMC's leapfrog
+        // trajectory genuinely CHAOTIC over 200 iterations -- the analytic and default gradients
+        // then diverge at the ~0.3% level, the same order this fixture's own cross-language
+        // divergence measured at that scale, so no fixed tolerance could pin it. At 0.05 the
+        // divergence is small and smooth (~3e-8 relative, four orders past the file's 1e-12
+        // tolerance) rather than chaotic, which is what keeps the case usable as an oracle at all.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            double acc = 0.0;
+            for (double x : data) {
+                double d = x - p[0];
+                acc += d * d * d * d;
+            }
+            return -0.05 * acc;
+        };
+    } else if (name == "Grad_QuarticKernel") {
+        // The analytic derivative of Mcmc_QuarticKernel, d/dmu = 0.05 * 4 * sum((x - mu)^3).
+        cbs.vector_vector = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            double acc = 0.0;
+            for (double x : data) {
+                double d = x - p[0];
+                acc += d * d * d;
+            }
+            return std::vector<double>{0.2 * acc};
+        };
+    } else if (name == "Resample_Iid") {
+        // The bootstrap catalog (fixtures/callback/bootstrap.json), upstream's four
+        // Bootstrap<TData> delegate shapes. Every one is arithmetic and comparisons only, and the
+        // mean is summed in an explicit loop rather than through any accumulate helper: R's sum()
+        // and mean() accumulate in extended precision, and one differing bit in a fitted mean moves
+        // a percentile. The resample draws every index through the HANDLE, exactly as a user's own
+        // resample function does.
+        cbs.data_rng = [](const std::vector<double>& data, const std::vector<double>&,
+                          bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            const int n = static_cast<int>(data.size());
+            std::vector<double> out;
+            out.reserve(data.size());
+            for (int k : scope.handle()->integers(n, 0, n))
+                out.push_back(data[static_cast<std::size_t>(k)]);
+            return out;
+        };
+    } else if (name == "Fit_Mean") {
+        cbs.data_vector = [](const std::vector<double>& data) {
+            double acc = 0.0;
+            for (double x : data) acc += x;
+            return std::vector<double>{acc / static_cast<double>(data.size())};
+        };
+    } else if (name == "Stat_Identity") {
+        cbs.vector_vector = [](const std::vector<double>& p) { return p; };
+    } else if (name == "Stat_MeanAndSquare") {
+        cbs.vector_vector = [](const std::vector<double>& p) {
+            return std::vector<double>{p[0], p[0] * p[0]};
+        };
+    } else if (name == "Jack_LeaveOneOut") {
+        cbs.data_index = [](const std::vector<double>& data, int index) {
+            std::vector<double> out;
+            out.reserve(data.size() - 1);
+            for (std::size_t i = 0; i < data.size(); ++i)
+                if (static_cast<int>(i) != index) out.push_back(data[i]);
+            return out;
+        };
+    } else if (name == "Mom_NormalMeanVariance") {
+        // The gmm catalog (fixtures/callback/gmm.json), upstream's three delegate shapes from
+        // GeneralizedMethodOfMoments's delegate constructor. The model is the just-identified
+        // two-parameter method-of-moments fit of a Normal: theta = (mu, sigma2) and
+        //   g = [mean(x - mu), mean((x - mu)^2 - sigma2)],  S = the covariance of those two
+        // whose unique root -- and so the GMM optimum, since q = p makes g = 0 attainable -- is
+        // the sample mean and the population variance. Arithmetic and an explicit loop only, never
+        // sum()/mean()/Average(): R accumulates both in extended precision where the other three
+        // languages accumulate in double, and one differing bit moves a fitted parameter.
+        cbs.moment_conditions = [](const std::vector<double>& p) {
+            const double data[] = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+            const double n = 8.0;
+            double g0 = 0.0, g1 = 0.0, s00 = 0.0, s01 = 0.0, s11 = 0.0;
+            for (double x : data) {
+                double a = x - p[0];
+                double b = a * a - p[1];
+                g0 += a;
+                g1 += b;
+                s00 += a * a;
+                s01 += a * b;
+                s11 += b * b;
+            }
+            tbx::MomentConditionReturn out;
+            out.g = {g0 / n, g1 / n};
+            out.s = {s00 / n, s01 / n, s01 / n, s11 / n};  // row-major, symmetric
+            out.s_rows = 2;
+            out.s_cols = 2;
+            return out;
+        };
+    } else if (name == "Mom_NormalThreeMoments") {
+        // The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the
+        // identical eight observations, with a third moment condition added -- mean((x - mu)^3),
+        // zero for a Normal -- so q = 3 > p = 2 and the degrees of freedom become 1. This is the
+        // only case in the file that reaches the chi-squared p-value branch of the J-statistic;
+        // see the fixture's own note on why J ITSELF still cannot be pinned even here.
+        cbs.moment_conditions = [](const std::vector<double>& p) {
+            const double data[] = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+            const double n = 8.0;
+            double g0 = 0.0, g1 = 0.0, g2 = 0.0;
+            double s00 = 0.0, s01 = 0.0, s02 = 0.0, s11 = 0.0, s12 = 0.0, s22 = 0.0;
+            for (double x : data) {
+                double a = x - p[0];
+                double b = a * a - p[1];
+                double c = a * a * a;
+                g0 += a;
+                g1 += b;
+                g2 += c;
+                s00 += a * a;
+                s01 += a * b;
+                s02 += a * c;
+                s11 += b * b;
+                s12 += b * c;
+                s22 += c * c;
+            }
+            tbx::MomentConditionReturn out;
+            out.g = {g0 / n, g1 / n, g2 / n};
+            out.s = {s00 / n, s01 / n, s02 / n,  // row-major, symmetric
+                     s01 / n, s11 / n, s12 / n,
+                     s02 / n, s12 / n, s22 / n};
+            out.s_rows = 3;
+            out.s_cols = 3;
+            return out;
+        };
+    } else if (name == "Mom_NormalFourthMoment") {
+        // The CUBIC-JACOBIAN member of the same catalog, and the one case in the file whose
+        // analytic Jacobian is distinguishable from the ported numerical one. theta = (mu, sigma),
+        // matched on the first and fourth central moments of a Normal:
+        //   g = [mean(x - mu), mean(u^4) - 3 t^4],  u = 100 (x - mu),  t = 100 sigma
+        // so dg2/dsigma = -1200 t^3 is cubic in the parameter, where every other case in the file
+        // has a Jacobian that is linear in it. The eight observations are the ones above with the
+        // decimal point moved two places, which is what makes the fitted sigma (0.00404) small next
+        // to the numerical Jacobian's step h = 1e-4 (|theta| + 1); the factors of 100 write the
+        // fourth-moment condition on the same order of magnitude as the first, which GMM is
+        // invariant to because W = S^-1 absorbs it.
+        cbs.moment_conditions = [](const std::vector<double>& p) {
+            const double data[] = {0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047};
+            const double n = 8.0;
+            const double t = p[1] * 100.0;
+            const double t4 = 3.0 * t * t * t * t;
+            double g0 = 0.0, g1 = 0.0, s00 = 0.0, s01 = 0.0, s11 = 0.0;
+            for (double x : data) {
+                double a = x - p[0];
+                double u = a * 100.0;
+                double b = u * u * u * u - t4;
+                g0 += a;
+                g1 += b;
+                s00 += a * a;
+                s01 += a * b;
+                s11 += b * b;
+            }
+            tbx::MomentConditionReturn out;
+            out.g = {g0 / n, g1 / n};
+            out.s = {s00 / n, s01 / n, s01 / n, s11 / n};  // row-major, symmetric
+            out.s_rows = 2;
+            out.s_cols = 2;
+            return out;
+        };
+    } else if (name == "Jac_NormalFourthMoment") {
+        // The analytic Jacobian of Mom_NormalFourthMoment, row-major 2 x 2 (one ROW per moment
+        // condition): dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3), dg2/dsigma =
+        // -1200 t^3.
+        cbs.vector_matrix = [](const std::vector<double>& p) {
+            const double data[] = {0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047};
+            double acc = 0.0;
+            for (double x : data) {
+                double u = (x - p[0]) * 100.0;
+                acc += u * u * u;
+            }
+            const double t = p[1] * 100.0;
+            return std::make_pair(
+                std::vector<double>{-1.0, 0.0, -400.0 * acc / 8.0, -1200.0 * t * t * t},
+                std::vector<int>{2, 2});
+        };
+    } else if (name == "Jac_NormalMeanVariance") {
+        // The analytic Jacobian of Mom_NormalMeanVariance, row-major 2 x 2 (one ROW per moment
+        // condition): dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.
+        cbs.vector_matrix = [](const std::vector<double>& p) {
+            const double data[] = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+            double acc = 0.0;
+            for (double x : data) acc += x - p[0];
+            return std::make_pair(std::vector<double>{-1.0, 0.0, -2.0 * acc / 8.0, -1.0},
+                                  std::vector<int>{2, 2});
+        };
+    } else if (name == "Pen_SigmaTowardsOne") {
+        // A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the ported
+        // half-quadratic convention expects. Moves the estimate off the closed form, which is what
+        // makes the penalty case an oracle rather than a repeat of the first one.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            double d = p[1] - 1.0;
+            return 0.5 * d * d;
+        };
+    } else if (name == "Rng_Uniform") {
+        // The rng catalog (fixtures/callback/rng_handle.json). Each of these takes the handle the
+        // runner hands it -- the C++ analogue of the R closure calling rng_uniform() and the Python
+        // lambda calling rng.uniform() -- rather than reaching for the generator directly, so the
+        // fixture pins what a USER's callback draws and not merely what the generator emits.
+        cbs.vector_rng = [](const std::vector<double>& p, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            return scope.handle()->uniform(static_cast<int>(p.at(0)));
+        };
+    } else if (name == "Rng_Integers") {
+        cbs.vector_rng = [](const std::vector<double>& p, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            std::vector<int> k = scope.handle()->integers(
+                static_cast<int>(p.at(0)), static_cast<int>(p.at(1)), static_cast<int>(p.at(2)));
+            return std::vector<double>(k.begin(), k.end());
+        };
+    } else if (name == "Rng_Interleaved") {
+        cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            tbx::RngBorrowPtr rng = scope.handle();
+            std::vector<double> out = rng->uniform(2);
+            for (int k : rng->integers(2, 0, 100)) out.push_back(static_cast<double>(k));
+            out.push_back(rng->uniform(1).at(0));
+            return out;
+        };
+    } else if (name == "Rng_Warmup1000") {
+        cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            tbx::RngBorrowPtr rng = scope.handle();
+            rng->uniform(1000);  // discarded, as upstream's own test discards 1000 GenRandInt32
+            return rng->uniform(10);
+        };
+    } else {
+        throw std::runtime_error("unknown callback fixture callback: " + name);
+    }
+}
+
+// One callback case: build the delegate set the group needs out of the catalog above, run it, and
+// apply the case's assertions. Factored out of run_callback_kind so run_callback_cross_language_kind
+// (below) can drive the identical path for each of its nested sub-blocks -- the cross-language
+// fixture nests two blocks of this exact shape and must not grow an evaluation path of its own.
+static void run_one_callback_case(const std::string& where_prefix, const json& construct,
+                                  const json& assertions) {
+    tbx::CallbackSet cbs;
+    callback_fixture_set(construct["callback"].get<std::string>(), cbs);
+    // The two other delegates the mcmc group's samplers take, each resolved out of the same
+    // catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys leave the set's members
+    // empty, which is what "no proposal" and "the ported default gradient" mean.
+    if (construct.contains("proposal"))
+        callback_fixture_set(construct["proposal"].get<std::string>(), cbs);
+    if (construct.contains("gradient"))
+        callback_fixture_set(construct["gradient"].get<std::string>(), cbs);
+    // The bootstrap group's other three delegates and the gmm group's two optional ones,
+    // resolved out of the same catalog (each group's `callback` key names its own required
+    // delegate: the resample, or the moment conditions). An absent key means that delegate is
+    // not supplied, which is what "no jackknife", "the ported numerical Jacobian" and "no
+    // penalty" mean.
+    for (const char* key : {"fit", "statistic", "jackknife", "jacobian", "penalty"})
+        if (construct.contains(key)) callback_fixture_set(construct[key].get<std::string>(), cbs);
+    json options = construct.contains("options") ? construct["options"] : json::object();
+    tbx::CallbackResult r =
+        tbx::run_callback(construct["group"].get<std::string>(),
+                          construct["method"].get<std::string>(), options.dump(), cbs);
+    for (const auto& as : assertions) {
+        std::string method = as["method"].get<std::string>();
+        std::string where = where_prefix + "/" + method;
+        std::size_t i = as.contains("args") ? static_cast<std::size_t>(as["args"][0].get<int>())
+                                            : std::size_t{0};
+        if (method == "value") {
+            check_value(r.values.at(i), as, where);
+        } else if (method == "named") {
+            // Reads a value by the label the group gave it rather than by position: the mcmc
+            // group's summary block is long and its indices shift with the chain and parameter
+            // counts, so "posterior_mean[0]" says what it pins and "12" does not.
+            std::string want = as["name"].get<std::string>();
+            auto it = std::find(r.names.begin(), r.names.end(), want);
+            if (it == r.names.end())
+                throw std::runtime_error(where + ": no result named '" + want + "'");
+            check_value(r.values.at(static_cast<std::size_t>(it - r.names.begin())), as, where);
+        } else if (method == "dim") {
+            check_value(static_cast<double>(r.dims.at(i)), as, where);
+        } else if (method == "status") {
+            if (r.status == as["expected"].get<std::string>())
+                chtest::report_pass();
+            else
+                chtest::report_fail(__FILE__, __LINE__,
+                                    where + ": expected status " +
+                                        as["expected"].get<std::string>() + ", got " + r.status);
+        } else {
+            throw std::runtime_error("unknown callback fixture assertion method: " + method);
+        }
+    }
+}
+
+static void run_callback_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
+        run_one_callback_case("callback/" + c["name"].get<std::string>(), c["construct"],
+                              c["assertions"]);
+    }
+}
+
+// --- callback_cross_language path (Task 8) -----------------------------------------------
+//
+// fixtures/callback/callback_cross_language.json's one case nests two sub-blocks -- "mcmc" and
+// "bootstrap", each shaped exactly like a "callback"-kind case's construct/assertions -- under one
+// case name, because the file's job is proving both reproduce identically across languages in ONE
+// guarantee rather than two separate files. Reuses run_one_callback_case verbatim; no new
+// evaluation logic, just the nesting. The assertions there are spelled mode "abs" with tol 0, so
+// this runner's agreement with the R, Python and C# ones is bit equality rather than a tolerance.
+static void run_callback_cross_language_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+        for (const char* sub : {"mcmc", "bootstrap"}) {
+            const json& block = c[sub];
+            run_one_callback_case("callback_cross_language/" + name + "/" + sub, block["construct"],
+                                  block["assertions"]);
+        }
+    }
+}
+
 // --- toolbox_cross_language path (Task 9) -----------------------------------------------
 //
 // fixtures/toolbox/toolbox_cross_language.json's one case nests three sub-blocks -- "optimizer"
@@ -2276,24 +2712,46 @@ namespace mcmc = corehydro::numerics::sampling::mcmc;
 // (CholeskyDecomposition rejects a non-positive-definite matrix) on its very first
 // ChainIteration -- confirmed against the real C# library. Any Randomize-init fixture case
 // therefore needs a non-degenerate proposal_sigma; identity is the simplest one.
-static la::Matrix parse_proposal_sigma(const json& settings, int dimension) {
-    if (!settings.contains("proposal_sigma")) return la::Matrix(dimension);
-    std::string s = settings["proposal_sigma"].get<std::string>();
-    if (s == "zeros") return la::Matrix(dimension);
-    if (s == "identity") return la::Matrix::identity(dimension);
-    throw std::runtime_error("unknown proposal_sigma sentinel: " + s);
-}
-
-static mcmc::MCMCSampler::InitializationType parse_initialize(const std::string& s) {
-    if (s == "MAP") return mcmc::MCMCSampler::InitializationType::MAP;
-    if (s == "Randomize") return mcmc::MCMCSampler::InitializationType::Randomize;
-    if (s == "UserDefined") return mcmc::MCMCSampler::InitializationType::UserDefined;
-    throw std::runtime_error("unknown initialize value: " + s);
+//
+// The sentinel STRINGS are parsed by mcmc_run.hpp's parse_proposal_sigma, along with everything
+// else about building a sampler: this file reads the fixture's `settings` object into an
+// MCMCRunSettings and hands it over, exactly as the R and Python glues do with their own native
+// settings containers. There is one switch over sampler names in the repo and it is not here.
+static mcmc::MCMCRunSettings read_settings(const json& settings) {
+    mcmc::MCMCRunSettings s;
+    auto read_int = [&settings](const char* key, std::optional<int>& slot) {
+        if (settings.contains(key)) slot = settings[key].get<int>();
+    };
+    auto read_double = [&settings](const char* key, std::optional<double>& slot) {
+        if (settings.contains(key)) slot = settings[key].get<double>();
+    };
+    auto read_string = [&settings](const char* key, std::optional<std::string>& slot) {
+        if (settings.contains(key)) slot = settings[key].get<std::string>();
+    };
+    read_string("initialize", s.initialize);
+    read_int("prng_seed", s.prng_seed);
+    read_int("initial_iterations", s.initial_iterations);
+    read_int("warmup_iterations", s.warmup_iterations);
+    read_int("iterations", s.iterations);
+    read_int("number_of_chains", s.number_of_chains);
+    read_int("thinning_interval", s.thinning_interval);
+    read_int("output_length", s.output_length);
+    read_string("proposal_sigma", s.proposal_sigma);
+    read_double("step_size", s.step_size);
+    read_int("steps", s.steps);
+    read_int("max_tree_depth", s.max_tree_depth);
+    if (settings.contains("adapt_mass_matrix")) s.adapt_mass_matrix = settings["adapt_mass_matrix"].get<bool>();
+    read_double("scale", s.scale);
+    read_double("beta", s.beta);
+    read_double("jump", s.jump);
+    read_double("jump_threshold", s.jump_threshold);
+    read_double("snooker_threshold", s.snooker_threshold);
+    read_double("noise", s.noise);
+    return s;
 }
 
 // Builds + configures + samples() one sampler from a {"model": {...}, "settings": {...}}
-// construct. `sampler_target`: the fixture's file-level "target" (the sampler type, e.g.
-// "RWMH"); a later task extends this with more cases as more samplers land.
+// construct. `sampler_target`: the fixture's file-level "target" (the sampler type, e.g. "RWMH").
 static std::unique_ptr<mcmc::MCMCSampler> build_and_sample(const std::string& sampler_target,
                                                              const json& construct, const json& datasets) {
     const auto& model_spec = construct["model"];
@@ -2301,68 +2759,12 @@ static std::unique_ptr<mcmc::MCMCSampler> build_and_sample(const std::string& sa
     for (const auto& v : datasets[model_spec["dataset"].get<std::string>()]) data.push_back(parse_num(v));
     auto model = mcmc::build_model(model_spec["name"].get<std::string>(),
                                     model_spec["family"].get<std::string>(), data);
-    int d = static_cast<int>(model.priors.size());
 
-    json settings = construct.value("settings", json::object());
-
-    std::unique_ptr<mcmc::MCMCSampler> sampler;
-    if (sampler_target == "RWMH") {
-        sampler = std::make_unique<mcmc::RWMH>(model.priors, model.log_likelihood,
-                                                parse_proposal_sigma(settings, d));
-    } else if (sampler_target == "HMC") {
-        std::optional<double> step_size =
-            settings.contains("step_size") ? std::optional<double>(settings["step_size"].get<double>()) : std::nullopt;
-        std::optional<int> steps =
-            settings.contains("steps") ? std::optional<int>(settings["steps"].get<int>()) : std::nullopt;
-        sampler = std::make_unique<mcmc::HMC>(model.priors, model.log_likelihood, std::nullopt,
-                                               step_size.value_or(0.1), steps.value_or(50));
-    } else if (sampler_target == "NUTS") {
-        std::optional<double> step_size =
-            settings.contains("step_size") ? std::optional<double>(settings["step_size"].get<double>()) : std::nullopt;
-        std::optional<int> max_tree_depth = settings.contains("max_tree_depth")
-                                                 ? std::optional<int>(settings["max_tree_depth"].get<int>())
-                                                 : std::nullopt;
-        auto nuts = std::make_unique<mcmc::NUTS>(model.priors, model.log_likelihood, std::nullopt,
-                                                  step_size.value_or(0.1), max_tree_depth.value_or(10));
-        if (settings.contains("adapt_mass_matrix")) nuts->adapt_mass_matrix = settings["adapt_mass_matrix"].get<bool>();
-        sampler = std::move(nuts);
-    } else if (sampler_target == "ARWMH") {
-        auto arwmh = std::make_unique<mcmc::ARWMH>(model.priors, model.log_likelihood);
-        if (settings.contains("scale")) arwmh->scale = settings["scale"].get<double>();
-        if (settings.contains("beta")) arwmh->beta = settings["beta"].get<double>();
-        sampler = std::move(arwmh);
-    } else if (sampler_target == "Gibbs") {
-        if (!model.proposal) throw std::runtime_error("Gibbs model has no proposal function");
-        sampler = std::make_unique<mcmc::Gibbs>(model.priors, model.log_likelihood, model.proposal);
-    } else if (sampler_target == "SNIS") {
-        sampler = std::make_unique<mcmc::SNIS>(model.priors, model.log_likelihood);
-    } else if (sampler_target == "DEMCz") {
-        auto demcz = std::make_unique<mcmc::DEMCz>(model.priors, model.log_likelihood);
-        if (settings.contains("jump")) demcz->jump = settings["jump"].get<double>();
-        if (settings.contains("jump_threshold")) demcz->jump_threshold = settings["jump_threshold"].get<double>();
-        if (settings.contains("noise")) demcz->set_noise(settings["noise"].get<double>());
-        sampler = std::move(demcz);
-    } else if (sampler_target == "DEMCzs") {
-        auto demczs = std::make_unique<mcmc::DEMCzs>(model.priors, model.log_likelihood);
-        if (settings.contains("jump")) demczs->jump = settings["jump"].get<double>();
-        if (settings.contains("jump_threshold")) demczs->jump_threshold = settings["jump_threshold"].get<double>();
-        if (settings.contains("snooker_threshold"))
-            demczs->snooker_threshold = settings["snooker_threshold"].get<double>();
-        if (settings.contains("noise")) demczs->set_noise(settings["noise"].get<double>());
-        sampler = std::move(demczs);
-    } else {
-        throw std::runtime_error("unknown mcmc_sampler target: " + sampler_target);
-    }
-
-    if (settings.contains("initialize")) sampler->initialize = parse_initialize(settings["initialize"].get<std::string>());
-    if (settings.contains("prng_seed")) sampler->set_prng_seed(settings["prng_seed"].get<int>());
-    if (settings.contains("initial_iterations")) sampler->set_initial_iterations(settings["initial_iterations"].get<int>());
-    if (settings.contains("warmup_iterations")) sampler->set_warmup_iterations(settings["warmup_iterations"].get<int>());
-    if (settings.contains("iterations")) sampler->set_iterations(settings["iterations"].get<int>());
-    if (settings.contains("number_of_chains")) sampler->set_number_of_chains(settings["number_of_chains"].get<int>());
-    if (settings.contains("thinning_interval")) sampler->set_thinning_interval(settings["thinning_interval"].get<int>());
-    if (settings.contains("output_length")) sampler->output_length = settings["output_length"].get<int>();
-
+    mcmc::MCMCRunCallbacks callbacks;
+    callbacks.proposal = model.proposal;
+    auto sampler = mcmc::build_sampler(sampler_target, model.priors, model.log_likelihood,
+                                        read_settings(construct.value("settings", json::object())),
+                                        callbacks);
     sampler->sample();
     return sampler;
 }
@@ -2410,14 +2812,6 @@ static void run_mcmc_sampler(const json& spec) {
 // ci_method/alpha; every assertion in the case reads that single cached (bootstrap, results)
 // pair. See fixtures/README.md's bootstrap schema.
 
-static bfsamp::BootstrapCIMethod parse_ci_method(const std::string& s) {
-    if (s == "Percentile") return bfsamp::BootstrapCIMethod::Percentile;
-    if (s == "BiasCorrected") return bfsamp::BootstrapCIMethod::BiasCorrected;
-    if (s == "BCa") return bfsamp::BootstrapCIMethod::BCa;
-    if (s == "Normal") return bfsamp::BootstrapCIMethod::Normal;
-    if (s == "BootstrapT") return bfsamp::BootstrapCIMethod::BootstrapT;
-    throw std::runtime_error("unknown bootstrap ci_method: " + s);
-}
 
 struct BootstrapCase {
     bfsamp::Bootstrap<std::vector<double>> boot;
@@ -2448,7 +2842,7 @@ static BootstrapCase build_and_run_bootstrap(const json& construct, const json& 
     else
         throw std::runtime_error("unknown bootstrap run kind: " + run);
 
-    auto method = parse_ci_method(construct["ci_method"].get<std::string>());
+    auto method = bfsamp::parse_bootstrap_ci_method(construct["ci_method"].get<std::string>());
     double alpha = construct.value("alpha", 0.1);
     bfsamp::BootstrapResults results = boot.get_confidence_intervals(method, alpha);
 
@@ -3531,6 +3925,10 @@ int main(int argc, char** argv) {
             run_toolbox_kind(spec);
         } else if (kind == "optimizer") {
             run_optimizer_kind(spec);
+        } else if (kind == "callback") {
+            run_callback_kind(spec);
+        } else if (kind == "callback_cross_language") {
+            run_callback_cross_language_kind(spec);
         } else if (kind == "toolbox_cross_language") {
             run_toolbox_cross_language_kind(spec);
         } else if (kind == "univariate_distribution") {

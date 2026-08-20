@@ -1,0 +1,193 @@
+{
+  "kind": "callback",
+  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs, Integration/Test_AdaptiveGaussKronrod.cs}",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python lambda, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. NOTE the catalog names here are NOT the `optimizer`-kind catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), not the unrelated TestFunctions.FXYZ the optimizer fixtures use. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal, transcribed verbatim, EXCEPT the assertions whose `source` opens with EMITTER-READ: no upstream test reads AdaptiveGaussKronrod's FunctionEvaluations, StandardError or Status, so those are read off the REAL C# library through tools/oracle_emitter instead. Neither kind is ever a value computed by this repo's own C++. `Quad_Peak` is likewise a corehydro addition rather than an upstream integrand: every Integrands.cs function the upstream tests integrate converges on the first whole-interval evaluation at 21 function evaluations, so without it the subdividing branch of the recursion has no oracle at all.",
+  "callbacks": {
+    "Root_Quadratic": "f(x) = x^2 - 2  [Mathematics/Root Finding/TestFunctions.Quadratic]",
+    "Root_Cubic": "f(x) = x^3 - x - 1  [Mathematics/Root Finding/TestFunctions.Cubic]",
+    "Diff_FX": "f(x) = x^3  [Test_Differentiation.FX]",
+    "Diff_FXY": "f(x, y) = x^2 * y^3  [Test_Differentiation.FXY]",
+    "Diff_FXYZ": "f(x, y, z) = x^3 + y^4 + z^5  [Test_Differentiation.FXYZ]",
+    "Diff_FH": "f(x, y) = x^3 - 2xy - y^6  [Test_Differentiation.FH]",
+    "Quad_FX3": "f(x) = x^3  [Mathematics/Integration/Integrands.FX3]",
+    "Quad_Cosine": "f(x) = cos(x)  [Mathematics/Integration/Integrands.Cosine]",
+    "Quad_Sine": "f(x) = sin(x)  [Mathematics/Integration/Integrands.Sine]",
+    "Quad_FXX": "f(x) = 0.5 + 24x + 3x^2  [Mathematics/Integration/Integrands.FXX]",
+    "Quad_FXXX": "f(x) = 0.5 + 24x + 3x^2 + 8x^3  [Mathematics/Integration/Integrands.FXXX]",
+    "Quad_Peak": "f(x) = 1 / (1 + 1e4 * x^2)  [corehydro addition, NOT an upstream integrand -- see quadrature_peak_subdivides]"
+  },
+  "cases": [
+    {
+      "name": "root_find_quadratic",
+      "construct": {
+        "group": "math",
+        "method": "root_find",
+        "callback": "Root_Quadratic",
+        "options": { "lower": 0.0, "upper": 4.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.4142135623730951, "mode": "abs", "tol": 1e-5, "source": "Test_Brent.Test_Quadratic (trueX = Math.Sqrt(2))" }
+      ]
+    },
+    {
+      "name": "root_find_cubic",
+      "construct": {
+        "group": "math",
+        "method": "root_find",
+        "callback": "Root_Cubic",
+        "options": { "lower": -1.0, "upper": 5.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.32472, "mode": "abs", "tol": 1e-5, "source": "Test_Brent.Test_Cubic" }
+      ]
+    },
+    {
+      "name": "derivative_x_cubed",
+      "construct": {
+        "group": "math",
+        "method": "derivative",
+        "callback": "Diff_FX",
+        "options": { "point": 2.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 12.0, "mode": "abs", "tol": 1e-6, "source": "Test_Differentiation.Test_Derivative_MultipleFunctions" }
+      ]
+    },
+    {
+      "name": "gradient_two_variables",
+      "construct": {
+        "group": "math",
+        "method": "gradient",
+        "callback": "Diff_FXY",
+        "options": { "point": [2.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 32.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_TwoVariables" },
+        { "method": "value", "args": [1], "expected": 48.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_TwoVariables" }
+      ]
+    },
+    {
+      "name": "gradient_three_variables",
+      "construct": {
+        "group": "math",
+        "method": "gradient",
+        "callback": "Diff_FXYZ",
+        "options": { "point": [2.0, 2.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 12.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_ThreeVariables" },
+        { "method": "value", "args": [1], "expected": 32.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_ThreeVariables" },
+        { "method": "value", "args": [2], "expected": 80.0, "mode": "abs", "tol": 1e-5, "source": "Test_Differentiation.Test_Gradient_ThreeVariables" }
+      ]
+    },
+    {
+      "name": "hessian_mixed_partials",
+      "construct": {
+        "group": "math",
+        "method": "hessian",
+        "callback": "Diff_FH",
+        "options": { "point": [1.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 6.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "value", "args": [1], "expected": -2.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "value", "args": [2], "expected": -2.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "value", "args": [3], "expected": -480.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_MixedPartials" },
+        { "method": "dim", "args": [0], "expected": 2, "mode": "abs", "tol": 0, "source": "Test_Differentiation.Test_Hessian_MixedPartials (a 2x2 Hessian)" },
+        { "method": "dim", "args": [1], "expected": 2, "mode": "abs", "tol": 0, "source": "Test_Differentiation.Test_Hessian_MixedPartials (a 2x2 Hessian)" }
+      ]
+    },
+    {
+      "name": "quadrature_x_cubed",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "lower": 0.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_FX3 (trueResult = 0.25d)" },
+        { "method": "value", "args": [1], "expected": 21, "mode": "abs", "tol": 0, "source": "Test_AdaptiveGaussKronrod.Test_FX3, FunctionEvaluations read off the driven C# AdaptiveGaussKronrod: the G10K21 rule is exact for a cubic, so the whole-interval evaluation (1 centre + 10 symmetric pairs) converges with no subdivision" },
+        { "method": "value", "args": [2], "expected": 0.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: StandardError read off the driven C# AdaptiveGaussKronrod. Exactly zero, and not by accident -- G10K21 is exact for a cubic, so the Gauss and Kronrod estimates agree to the last bit, the one accumulated squared error is 0, and no subdivision happens. Compare quadrature_peak_subdivides, where it is not" },
+        { "method": "status", "expected": "Success", "source": "Test_AdaptiveGaussKronrod.Test_FX3, Status read off the driven C# AdaptiveGaussKronrod after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_cosine",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_Cosine",
+        "options": { "lower": -1.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.6829419, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_Cosine (trueResult = 1.6829419d)" }
+      ]
+    },
+    {
+      "name": "quadrature_sine",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_Sine",
+        "options": { "lower": 0.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.459697694131, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_Sine (trueResult = 0.459697694131d)" }
+      ]
+    },
+    {
+      "name": "quadrature_second_order_polynomial",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FXX",
+        "options": { "lower": 0.0, "upper": 2.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 57.0, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_FXX (trueResult = 57)" }
+      ]
+    },
+    {
+      "name": "quadrature_third_order_polynomial",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FXXX",
+        "options": { "lower": 0.0, "upper": 2.0, "absolute_tolerance": 1e-10, "relative_tolerance": 1e-10 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 89.0, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussKronrod.Test_FXXX (trueResult = 89); the two tolerance keys are set here so the options grammar's optional tolerances are exercised against the real C# AbsoluteTolerance/RelativeTolerance setters, not just their defaults" }
+      ]
+    },
+    {
+      "name": "quadrature_peak_subdivides",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_Peak",
+        "options": { "lower": -1.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.031215933202164866, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ, no upstream test literal: Result read off the driven C# AdaptiveGaussKronrod. The closed form is 0.02 * atan(100) = 0.0312159332021646..., which the pinned value matches to the last bit but is not the oracle -- the oracle is what the real C# library returns" },
+        { "method": "value", "args": [1], "expected": 483, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: FunctionEvaluations read off the driven C# AdaptiveGaussKronrod. 483 = 23 G10K21 panels (21 evaluations each), i.e. 22 subdivisions, so this is the one case pinning the RECURSIVE branch -- every upstream integrand converges on the whole-interval evaluation at 21" },
+        { "method": "value", "args": [2], "expected": 1.796182411755072e-10, "mode": "rel", "tol": 1e-9, "source": "EMITTER-READ, no upstream test literal: StandardError read off the driven C# AdaptiveGaussKronrod (sqrt of the accumulated squared Gauss-Kronrod differences), non-zero only because this case subdivides" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# AdaptiveGaussKronrod after Integrate(); Success rather than MaximumFunctionEvaluationsReached, so the 483 is a converged count, not a capped one" }
+      ]
+    },
+    {
+      "name": "hessian_diagonal",
+      "construct": {
+        "group": "math",
+        "method": "hessian",
+        "callback": "Diff_FXYZ",
+        "options": { "point": [2.0, 2.0, 2.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 12.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" },
+        { "method": "value", "args": [4], "expected": 48.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" },
+        { "method": "value", "args": [8], "expected": 160.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" }
+      ]
+    }
+  ]
+}

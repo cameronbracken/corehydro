@@ -821,6 +821,707 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
     _ => throw new Exception($"unknown optimizer fixture objective: {name}")
 };
 
+// The callback surface, Task 1: the Test_Brent/Test_Differentiation formulas
+// fixtures/callback/math.json names by string, inlined here for the same reason as the optimizer
+// catalog above (Test_Numerics is not referenced by this emitter). These are the C# delegates the
+// REAL Brent/NumericalDerivative are driven with, the counterpart of the native closures the
+// C++/R/Python fixture runners write for the same names -- so every case exercises a real
+// host-language callback in each of the four runners. NOTE the names here are deliberately NOT the
+// optimizer catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), unrelated to
+// OptimizerTestFXYZ above. `Quad_*` are Mathematics/Integration/Integrands.*; `Diff_FX` and
+// `Quad_FX3` are both x^3, from two different upstream test files -- hence the prefixes.
+static Func<double, double>? CallbackScalarFunction(string name) => name switch
+{
+    "Root_Quadratic" => x => Math.Pow(x, 2) - 2,
+    "Root_Cubic" => x => x * x * x - x - 1d,
+    "Diff_FX" => x => Math.Pow(x, 3.0),
+    "Quad_FX3" => x => Math.Pow(x, 3d),
+    "Quad_Cosine" => x => Math.Cos(x),
+    "Quad_Sine" => x => Math.Sin(x),
+    "Quad_FXX" => x => 0.5 + 24 * x + 3 * x * x,
+    "Quad_FXXX" => x => 0.5 + 24 * x + 3 * x * x + 8 * x * x * x,
+    // corehydro addition, no upstream integrand: every Integrands.cs function the upstream tests
+    // integrate converges on the first whole-interval G10K21 evaluation, so none of them reaches
+    // the subdividing branch of the recursion. This Lorentzian peak (half-width 0.01 on [-1, 1])
+    // does, and it is written with multiplication and division only -- no transcendental -- so the
+    // C++/R/Python/C# closures for it are bit-identical and the evaluation count is an oracle
+    // rather than a libm coincidence.
+    "Quad_Peak" => x => 1d / (1d + 1e4 * x * x),
+    _ => null
+};
+static Func<double[], double>? CallbackVectorFunction(string name) => name switch
+{
+    "Diff_FXY" => p => Math.Pow(p[0], 2) * Math.Pow(p[1], 3),
+    "Diff_FXYZ" => p => Math.Pow(p[0], 3.0) + Math.Pow(p[1], 4.0) + Math.Pow(p[2], 5.0),
+    "Diff_FH" => p => Math.Pow(p[0], 3.0) - 2 * p[0] * p[1] - Math.Pow(p[1], 6),
+    _ => null
+};
+
+// The callback surface, Task 3: the rng-group catalog for fixtures/callback/rng_handle.json. The
+// delegate signature is `(double[] parameters, Random prng)` -- upstream's OWN Gibbs.Proposal
+// signature -- and these are the C# counterparts of the four runners' native closures, each drawing
+// from the generator the runner seeded and hands in. What they pin is the property the RNG handle
+// exists for: a draw taken inside a host-language callback is a draw off THIS stream, so R and
+// Python agree with C# value for value. Loops rather than LINQ, so the draw ORDER is written down
+// rather than left to deferred execution.
+static Func<double[], Random, double[]>? CallbackRngFunction(string name) => name switch
+{
+    // n uniforms; n comes from the parameters vector so one entry serves any count.
+    "Rng_Uniform" => (p, prng) =>
+    {
+        var v = new double[(int)p[0]];
+        for (int i = 0; i < v.Length; i++) v[i] = prng.NextDouble();
+        return v;
+    },
+    // n integers on [min, max), i.e. Next(minInclusive, maxExclusive): parameters are n, min, max.
+    "Rng_Integers" => (p, prng) =>
+    {
+        var v = new double[(int)p[0]];
+        for (int i = 0; i < v.Length; i++) v[i] = prng.Next((int)p[1], (int)p[2]);
+        return v;
+    },
+    // Two uniforms, two integers, one uniform, off ONE generator. Uniforms and integers share the
+    // state, so this pins the draw ORDER as well as the values: a runner that took its integers
+    // from a second generator, or that reordered the two verbs, would reproduce neither the third
+    // uniform nor the integers.
+    "Rng_Interleaved" => (p, prng) =>
+    {
+        var v = new double[5];
+        v[0] = prng.NextDouble();
+        v[1] = prng.NextDouble();
+        v[2] = prng.Next(0, 100);
+        v[3] = prng.Next(0, 100);
+        v[4] = prng.NextDouble();
+        return v;
+    },
+    // 1000 draws discarded, then 10 kept -- the shape of upstream's own Test_MersenneTwister
+    // (Sampling/Test_MersenneTwister.cs), whose ten trueDouble literals come from the reference
+    // mt19937ar.c output file. NextDouble() is GenRandReal2, one GenRandInt32 per call, so
+    // discarding 1000 of them advances the state exactly as the upstream test's 1000 GenRandInt32
+    // calls do and the eleventh through twentieth draws are its literals.
+    "Rng_Warmup1000" => (p, prng) =>
+    {
+        for (int i = 0; i < 1000; i++) prng.NextDouble();
+        var v = new double[10];
+        for (int i = 0; i < v.Length; i++) v[i] = prng.NextDouble();
+        return v;
+    },
+    _ => null
+};
+
+// The callback surface, Task 4: the mcmc-group catalog for fixtures/callback/mcmc.json. These are
+// the C# `LogLikelihood` delegates the REAL Numerics samplers are constructed with -- upstream's
+// own `MCMCSampler(List<IUnivariateDistribution>, LogLikelihood)` constructor -- and the
+// counterpart of the native closures the C++/R/Python fixture runners write for the same names.
+//
+// BOTH are deliberately built from `+ - * /` alone, with the summation written as an explicit
+// loop rather than any language's sum(): a Markov chain amplifies one differing bit into a
+// different chain outright (one flipped accept/reject changes every state after it), so a
+// transcendental call, or R's extended-precision `sum()`, would make these oracles a coincidence
+// of one platform's math library rather than a reproducible fact. The datasets are inlined here
+// exactly as they are in the other three runners.
+// (The datasets are built inside each delegate rather than held in fields: this file is a C#
+// top-level program, which has no place to declare one.)
+static Func<double[], double>? CallbackMcmcFunction(string name) => name switch
+{
+    // One parameter: the Gaussian kernel -0.5 * sum((x - mu)^2), unit variance, no normalizer.
+    "Mcmc_GaussianKernel" => p =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data) acc += (x - p[0]) * (x - p[0]);
+        return -0.5 * acc;
+    },
+    // Two parameters: the same kernel over the residuals of a straight line, y = a + b * t.
+    "Mcmc_LinearKernel" => p =>
+    {
+        double[] t = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+        double[] y = { 2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1 };
+        double acc = 0d;
+        for (int i = 0; i < t.Length; i++)
+        {
+            double residual = y[i] - p[0] - p[1] * t[i];
+            acc += residual * residual;
+        }
+        return -0.5 * acc;
+    },
+    // The Gibbs case's model, whose full conditional really IS uniform: with
+    // x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+    // Uniform(max(x) - 1, min(x) + 1), so CallbackProposalFunction below is an EXACT Gibbs step
+    // rather than a random walk wearing Gibbs's name. The normalizing term is dropped, as the two
+    // kernels above drop theirs; comparisons and arithmetic only.
+    "Mcmc_UniformWidthKernel" => p =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        foreach (double x in data)
+            if (x - p[0] > 1d || p[0] - x > 1d) return double.NegativeInfinity;
+        return 0d;
+    },
+    // Task-5 review fix, coverage finding: unlike Mcmc_GaussianKernel, whose derivative
+    // sum(x - mu) is LINEAR in mu (so its third derivative is zero and the ported
+    // central-difference default agrees with the analytic gradient to rounding, ~4e-16), this
+    // kernel's derivative is CUBIC in mu, so the central-difference truncation error is real rather
+    // than rounding -- the analytic and default gradients genuinely disagree, which is what a
+    // supplied-vs-ignored gradient regression needs to be caught by the oracle gate. The 0.05
+    // coefficient is load-bearing, not decorative: measured by brute-force sweep (a coefficient of
+    // 1 over the same data), an unscaled quartic makes HMC's leapfrog trajectory genuinely CHAOTIC
+    // over 200 iterations -- the analytic and default gradients then diverge at the ~0.3% level, the
+    // same order this fixture's own cross-language divergence measured at that scale, so no fixed
+    // tolerance could pin it. At 0.05 the divergence is small and smooth (~3e-8 relative, four
+    // orders past the file's 1e-12 tolerance) rather than chaotic, which is what keeps the case
+    // usable as an oracle at all.
+    "Mcmc_QuarticKernel" => p =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data)
+        {
+            double d = x - p[0];
+            acc += d * d * d * d;
+        }
+        return -0.05d * acc;
+    },
+    _ => null
+};
+
+// The callback surface, Task 5: the two OTHER delegates upstream's samplers take, driven against
+// the REAL C# Gibbs and HMC/NUTS. `Gibbs.Proposal(double[] parameters, Random prng)` is required
+// by Gibbs and accepted by nothing else; `HMC.Gradient(IList<double> parameters)` is optional for
+// HMC/NUTS and, left null, leaves the C# class's own bound-aware finite-difference gradient in
+// force -- which is exactly what a case with no `gradient` key pins.
+static Gibbs.Proposal? CallbackProposalFunction(string name) => name switch
+{
+    // One uniform draw from the full conditional Uniform(max(x) - 1, min(x) + 1). The draw comes
+    // off the generator the sampler hands in, which is the whole point of the delegate's signature.
+    "Prop_UniformConditional" => (parameters, prng) =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double lo = data[0] - 1d, hi = data[0] + 1d;
+        foreach (double x in data)
+        {
+            if (x - 1d > lo) lo = x - 1d;
+            if (x + 1d < hi) hi = x + 1d;
+        }
+        return new[] { lo + prng.NextDouble() * (hi - lo) };
+    },
+    _ => null
+};
+static HMC.Gradient? CallbackGradientFunction(string name) => name switch
+{
+    // The analytic derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu), summed in an explicit
+    // loop for the same reason the kernels are.
+    "Grad_GaussianKernel" => parameters =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data) acc += x - parameters[0];
+        return new Vector(new[] { acc });
+    },
+    // The analytic derivative of Mcmc_QuarticKernel, d/dmu = 0.05 * 4 * sum((x - mu)^3).
+    "Grad_QuarticKernel" => parameters =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data)
+        {
+            double d = x - parameters[0];
+            acc += d * d * d;
+        }
+        return new Vector(new[] { 0.2d * acc });
+    },
+    _ => null
+};
+
+// The callback surface, Task 6: the bootstrap-group catalog for fixtures/callback/bootstrap.json.
+// These are the four C# delegates the REAL Numerics `Bootstrap<double[]>` is driven with --
+// upstream's own `ResampleFunction` / `FitFunction` / `StatisticFunction` / `JackknifeFunction`
+// properties -- and the counterpart of the native closures the C++/R/Python fixture runners write
+// for the same names.
+//
+// All four are built from `+ - * /` and comparisons alone, with the mean summed in an explicit loop
+// rather than through LINQ's Average(): R's sum()/mean() accumulate in extended precision where the
+// other three languages accumulate in double, and one differing bit in a fitted mean moves a
+// percentile. They are also pure functions of their arguments, which matters here and nowhere else
+// in this file: C#'s Bootstrap.Run drives them from a Parallel.For.
+static Func<double[], ParameterSet, Random, double[]>? CallbackResampleFunction(string name) => name switch
+{
+    // The ordinary nonparametric resample: n draws of data[prng.Next(0, n)], every index off the
+    // generator the replicate hands in (which is the whole point of the delegate's signature).
+    "Resample_Iid" => (data, parameters, prng) =>
+    {
+        var v = new double[data.Length];
+        for (int i = 0; i < v.Length; i++) v[i] = data[prng.Next(0, data.Length)];
+        return v;
+    },
+    _ => null
+};
+static Func<double[], ParameterSet>? CallbackFitFunction(string name) => name switch
+{
+    // A one-parameter model whose fit is the sample mean. NaN fitness matches what the C++ runner
+    // and both glues construct; nothing in the bootstrap reads it.
+    "Fit_Mean" => data =>
+    {
+        double acc = 0d;
+        foreach (double x in data) acc += x;
+        return new ParameterSet(new[] { acc / data.Length }, double.NaN);
+    },
+    _ => null
+};
+static Func<ParameterSet, double[]>? CallbackStatisticFunction(string name) => name switch
+{
+    "Stat_Identity" => ps => (double[])ps.Values.Clone(),
+    "Stat_MeanAndSquare" => ps => new[] { ps.Values[0], ps.Values[0] * ps.Values[0] },
+    _ => null
+};
+static Func<double[], int, double[]>? CallbackJackknifeFunction(string name) => name switch
+{
+    // The leave-one-out sample ComputeAccelerationConstants needs for BCa. `index` counts from 0,
+    // as upstream's own delegate does.
+    "Jack_LeaveOneOut" => (data, index) =>
+    {
+        var v = new double[data.Length - 1];
+        int at = 0;
+        for (int i = 0; i < data.Length; i++)
+            if (i != index) v[at++] = data[i];
+        return v;
+    },
+    _ => null
+};
+
+// Flattens a callback fixture file into the (caseName, subLabel, subCase) triples its one branch
+// below drives. A "callback"-kind case IS its own single sub-block, so it yields one triple with an
+// empty label; a "callback_cross_language"-kind case nests two blocks -- "mcmc" and "bootstrap" --
+// each shaped exactly like a "callback"-kind case's construct/assertions, so it yields two. The
+// branch body is then written once and reached identically by both kinds, which is what keeps the
+// cross-language fixture from growing an evaluation path of its own.
+static IEnumerable<(string caseName, string subLabel, JsonElement subCase)> CallbackSubCases(
+    JsonElement root, string kind)
+{
+    foreach (var c in root.GetProperty("cases").EnumerateArray())
+    {
+        string caseName = c.GetProperty("name").GetString()!;
+        if (kind == "callback")
+        {
+            yield return (caseName, "", c);
+        }
+        else
+        {
+            foreach (string sub in new[] { "mcmc", "bootstrap" })
+                yield return (caseName, sub, c.GetProperty(sub));
+        }
+    }
+}
+
+// Builds + configures + runs one callback-group bootstrap case, mirroring callback/bootstrap.hpp's
+// run_bootstrap() decision for decision: theta-hat is the `parameters` option or the fit of the
+// original data, the ci_method picks the workflow (BootstrapT is the studentized one, everything
+// else the regular Run), and an absent key leaves the C# class's OWN default in force.
+static (double[] values, string[] names, int[] dims) RunCallbackBootstrap(
+    JsonElement options,
+    Func<double[], ParameterSet, Random, double[]> resample,
+    Func<double[], ParameterSet> fit,
+    Func<ParameterSet, double[]> statistic,
+    Func<double[], int, double[]>? jackknife)
+{
+    bool Has(string key) => options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
+    double Num(string key, double dflt) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+            ? ParseNum(v) : dflt;
+
+    if (!Has("data")) throw new Exception("bootstrap/run requires the option 'data'");
+    double[] data = options.GetProperty("data").EnumerateArray().Select(ParseNum).ToArray();
+    string ciName = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("ci_method", out var ciEl)
+        ? ciEl.GetString()! : "Percentile";
+    var method = ParseBootstrapCIMethod(ciName);
+    double alpha = Num("alpha", 0.1);
+
+    ParameterSet original = Has("parameters")
+        ? new ParameterSet(options.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray(),
+                           double.NaN)
+        : fit(data);
+
+    var boot = new Bootstrap<double[]>(data, original)
+    {
+        ResampleFunction = resample,
+        FitFunction = fit,
+        StatisticFunction = statistic
+    };
+    if (jackknife != null)
+    {
+        boot.JackknifeFunction = jackknife;
+        // Not a user callback on this surface: TData is a double[], so its length IS the sample
+        // size (see callback/bootstrap.hpp).
+        boot.SampleSizeFunction = d => d.Length;
+    }
+    if (Has("replicates")) boot.Replicates = (int)Num("replicates", 0);
+    if (Has("seed")) boot.PRNGSeed = (int)Num("seed", 0);
+    if (Has("prng_seed")) boot.PRNGSeed = (int)Num("prng_seed", 0);
+    if (Has("max_retries")) boot.MaxRetries = (int)Num("max_retries", 0);
+    if (Has("inner_replicates")) boot.InnerReplicates = (int)Num("inner_replicates", 0);
+
+    if (method == BootstrapCIMethod.BootstrapT) boot.RunWithStudentizedBootstrap();
+    else boot.Run();
+    var results = boot.GetConfidenceIntervals(method, alpha);
+
+    // The layout callback/bootstrap.hpp's bootstrap_flatten() documents.
+    var values = new List<double>();
+    var names = new List<string>();
+    void Push(string name, double value) { names.Add(name); values.Add(value); }
+    void PushBlock(string label, BootstrapStatisticResult[] block)
+    {
+        for (int i = 0; i < block.Length; i++)
+        {
+            string ix = $"[{i}]";
+            Push(label + ix, block[i].PopulationEstimate);
+            Push(label + "_lower" + ix, block[i].LowerCI);
+            Push(label + "_upper" + ix, block[i].UpperCI);
+            Push(label + "_se" + ix, block[i].StandardError);
+            Push(label + "_mean" + ix, block[i].Mean);
+            Push(label + "_valid" + ix, block[i].ValidCount);
+        }
+    }
+
+    Push("replicates", boot.Replicates);
+    Push("failed_replicates", results.FailedReplicates);
+    Push("alpha", results.Alpha);
+    PushBlock("statistic", results.StatisticResults);
+    PushBlock("parameter", results.ParameterResults);
+
+    return (values.ToArray(), names.ToArray(),
+            new[] { results.StatisticResults.Length, results.ParameterResults.Length });
+}
+
+// The callback surface, Task 7: the gmm-group catalog for fixtures/callback/gmm.json. These are the
+// three C# delegates the REAL RMC.BestFit `GeneralizedMethodOfMoments` delegate constructor (C# 143)
+// takes -- upstream's own `MomentConditionFunction` / `JacobianFunction` / `PenaltyFunction` -- and
+// the counterpart of the native closures the C++/R/Python fixture runners write for the same names.
+//
+// The model is the just-identified two-parameter method-of-moments fit of a Normal: theta =
+// (mu, sigma2) and g = [mean(x - mu), mean((x - mu)^2 - sigma2)], whose unique root -- and so the
+// GMM optimum, since q = p makes g = 0 attainable -- is the sample mean and the population
+// variance. All three are built from `+ - * /` alone, with every sum written as an explicit loop
+// rather than through LINQ's Average(): R's sum()/mean() accumulate in extended precision where the
+// other three languages accumulate in double, and one differing bit moves a fitted parameter.
+// A method rather than a field: this file is a top-level-statements program, where a `static
+// readonly` field is not legal.
+static double[] CallbackGmmData() => new[] { 4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7 };
+
+// The same eight observations with the decimal point moved two places, so the fitted scale
+// parameter is small (0.00404) next to the ported numerical Jacobian's step h = 1e-4 (|theta| + 1).
+// That is what makes the analytic and numerical Jacobians of the fourth-moment condition below
+// genuinely disagree; see the fixture's note on Mom_NormalFourthMoment.
+static double[] CallbackGmmSmallScaleData() =>
+    new[] { 0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047 };
+
+static MomentConditionFunction? CallbackMomentConditionFunction(string name) => name switch
+{
+    "Mom_NormalMeanVariance" => parameters =>
+    {
+        double n = 8d;
+        double g0 = 0d, g1 = 0d, s00 = 0d, s01 = 0d, s11 = 0d;
+        foreach (double x in CallbackGmmData())
+        {
+            double a = x - parameters[0];
+            double b = a * a - parameters[1];
+            g0 += a; g1 += b; s00 += a * a; s01 += a * b; s11 += b * b;
+        }
+        var g = new Vector(new[] { g0 / n, g1 / n });
+        var s = new Matrix(new[,] { { s00 / n, s01 / n }, { s01 / n, s11 / n } });
+        return (g, s);
+    },
+    // The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the identical
+    // eight observations, with a third moment condition added -- mean((x - mu)^3), zero for a
+    // Normal -- so q = 3 > p = 2 and DegreeOfFreedom becomes 1. The only case in the file that
+    // reaches the chi-squared p-value branch of PostProcess().
+    "Mom_NormalThreeMoments" => parameters =>
+    {
+        double n = 8d;
+        double g0 = 0d, g1 = 0d, g2 = 0d;
+        double s00 = 0d, s01 = 0d, s02 = 0d, s11 = 0d, s12 = 0d, s22 = 0d;
+        foreach (double x in CallbackGmmData())
+        {
+            double a = x - parameters[0];
+            double b = a * a - parameters[1];
+            double c = a * a * a;
+            g0 += a; g1 += b; g2 += c;
+            s00 += a * a; s01 += a * b; s02 += a * c;
+            s11 += b * b; s12 += b * c; s22 += c * c;
+        }
+        var g = new Vector(new[] { g0 / n, g1 / n, g2 / n });
+        var s = new Matrix(new[,] { { s00 / n, s01 / n, s02 / n },
+                                    { s01 / n, s11 / n, s12 / n },
+                                    { s02 / n, s12 / n, s22 / n } });
+        return (g, s);
+    },
+    // theta = (mu, sigma), matched on the FIRST and FOURTH central moments of a Normal:
+    //   g = [mean(x - mu), mean(u^4) - 3 t^4]   with u = 100 (x - mu) and t = 100 sigma
+    // so dg2/dsigma = -1200 t^3 is CUBIC in the parameter. A central difference is EXACT for a
+    // linear or quadratic derivative and is not for a cubic one, which is the whole point of this
+    // member of the catalog -- see Jac_NormalFourthMoment.
+    "Mom_NormalFourthMoment" => parameters =>
+    {
+        double n = 8d;
+        double t = parameters[1] * 100d;
+        double t4 = 3d * t * t * t * t;
+        double g0 = 0d, g1 = 0d, s00 = 0d, s01 = 0d, s11 = 0d;
+        foreach (double x in CallbackGmmSmallScaleData())
+        {
+            double a = x - parameters[0];
+            double u = a * 100d;
+            double b = u * u * u * u - t4;
+            g0 += a; g1 += b; s00 += a * a; s01 += a * b; s11 += b * b;
+        }
+        var g = new Vector(new[] { g0 / n, g1 / n });
+        var s = new Matrix(new[,] { { s00 / n, s01 / n }, { s01 / n, s11 / n } });
+        return (g, s);
+    },
+    _ => null
+};
+
+static JacobianFunction? CallbackJacobianFunction(string name) => name switch
+{
+    // One ROW per moment condition: dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu),
+    // dg2/dsigma2 = -1.
+    "Jac_NormalMeanVariance" => parameters =>
+    {
+        double acc = 0d;
+        foreach (double x in CallbackGmmData()) acc += x - parameters[0];
+        return new[,] { { -1d, 0d }, { -2d * acc / 8d, -1d } };
+    },
+    // The analytic Jacobian of Mom_NormalFourthMoment, one ROW per moment condition:
+    // dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3), dg2/dsigma = -1200 t^3.
+    "Jac_NormalFourthMoment" => parameters =>
+    {
+        double acc = 0d;
+        foreach (double x in CallbackGmmSmallScaleData())
+        {
+            double u = (x - parameters[0]) * 100d;
+            acc += u * u * u;
+        }
+        double t = parameters[1] * 100d;
+        return new[,] { { -1d, 0d }, { -400d * acc / 8d, -1200d * t * t * t } };
+    },
+    _ => null
+};
+
+static PenaltyFunction? CallbackPenaltyFunction(string name) => name switch
+{
+    // A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the half-quadratic
+    // convention in Q() expects.
+    "Pen_SigmaTowardsOne" => parameters => 0.5d * (parameters[1] - 1d) * (parameters[1] - 1d),
+    _ => null
+};
+
+// Builds + configures + fits one callback-group gmm case, mirroring callback/gmm.hpp's run_gmm()
+// decision for decision: q is MEASURED by probing the moment condition function once at the initial
+// values (never declared), the optimizer/strategy names parse the same way fit_gmm()'s do, and an
+// absent key leaves the C# class's OWN default in force. PostProcess(sandwich: true,
+// computeJstat: true) matches both the C++ group and fit_gmm()'s model path.
+static (double[] values, string[] names, int[] dims) RunCallbackGmm(
+    JsonElement options,
+    MomentConditionFunction moments,
+    JacobianFunction? jacobian,
+    PenaltyFunction? penalty)
+{
+    bool Has(string key) => options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
+    double[] Vector1(string key)
+    {
+        if (!Has(key)) throw new Exception($"gmm/fit requires the option '{key}'");
+        return options.GetProperty(key).EnumerateArray().Select(ParseNum).ToArray();
+    }
+
+    double[] initial = Vector1("initial"), lower = Vector1("lower"), upper = Vector1("upper");
+    if (!Has("sample_size")) throw new Exception("gmm/fit requires the option 'sample_size'");
+    int sampleSize = (int)ParseNum(options.GetProperty("sample_size"));
+    int p = initial.Length;
+    int q = moments(initial).G.Length;   // the up-front probe, exactly as the C++ group does
+
+    var gmm = new GeneralizedMethodOfMoments(moments, p, q, sampleSize, initial, lower, upper,
+                                             null, jacobian, penalty, null);
+    gmm.OptimizerMethod = Has("optimizer")
+        ? ParseOptimizationMethod(options.GetProperty("optimizer").GetString()!)
+        : OptimizationMethod.BFGS;
+    if (Has("strategy"))
+        gmm.EstimationStrategy = ParseGmmStrategy(options.GetProperty("strategy").GetString()!);
+    if (Has("max_gmm_iterations"))
+        gmm.MaxGMMIterations = (int)ParseNum(options.GetProperty("max_gmm_iterations"));
+
+    if (!gmm.Estimate())
+        throw new Exception("GeneralizedMethodOfMoments.Estimate() failed with optimizer " +
+                            (Has("optimizer") ? options.GetProperty("optimizer").GetString() : "BFGS"));
+    // The J-statistic is allowed to fail, exactly as callback/gmm.hpp's drive site allows it:
+    // on a just-identified fit the moment residual covariance is theoretically zero, so inverting
+    // it throws as readily as it returns noise, and neither is worth failing an exact fit over.
+    // The C# members initialize to 0, not NaN, so the flag is what keeps an uncomputable
+    // J-statistic from being reported as a p-value of exactly zero.
+    bool jstatComputed = true;
+    try { gmm.PostProcess(useSandwich: true, computeJstat: true); }
+    catch (Exception) { jstatComputed = false; }
+
+    // The layout callback/gmm.hpp's result block documents.
+    var values = new List<double>();
+    var names = new List<string>();
+    void Push(string name, double value) { names.Add(name); values.Add(value); }
+
+    for (int j = 0; j < p; j++) Push($"parameter[{j}]", gmm.BestParameterSet.Values[j]);
+    var se = gmm.GetStandardErrors();
+    for (int j = 0; j < p; j++) Push($"standard_error[{j}]", se[j]);
+    var cov = gmm.GetCovarianceMatrix();
+    var corr = gmm.GetCorrelationMatrix();
+    for (int i = 0; i < p; i++)
+        for (int j = 0; j < p; j++) Push($"covariance[{i},{j}]", cov[i, j]);
+    for (int i = 0; i < p; i++)
+        for (int j = 0; j < p; j++) Push($"correlation[{i},{j}]", corr[i, j]);
+    Push("j_stat", jstatComputed ? gmm.JStat : double.NaN);
+    Push("j_stat_pval", jstatComputed ? gmm.JStatPval : double.NaN);
+    Push("degree_of_freedom", gmm.DegreeOfFreedom);
+    Push("gmm_iterations", gmm.GMMIterations);
+    Push("converged_within_tolerance", gmm.ConvergedWithinTolerance ? 1d : 0d);
+    Push("optimizer_fallback_count", gmm.OptimizerFallbackCount);
+    Push("sample_size", gmm.SampleSize);
+    Push("number_of_parameters", p);
+    Push("number_of_moment_conditions", q);
+
+    return (values.ToArray(), names.ToArray(), new[] { p, p });
+}
+
+// Builds the prior list a callback-group mcmc case names, from the same {"family", "parameters"}
+// spec grammar dist_spec.hpp builds from on the C++ side.
+static List<IUnivariateDistribution> CallbackMcmcPriors(JsonElement options)
+{
+    if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty("priors", out var pel))
+        throw new Exception("mcmc/sample requires the option 'priors'");
+    var priors = new List<IUnivariateDistribution>();
+    foreach (var spec in pel.EnumerateArray())
+    {
+        var dist = UnivariateDistributionFactory.CreateDistribution(
+            Enum.Parse<UnivariateDistributionType>(spec.GetProperty("family").GetString()!));
+        dist.SetParameters(spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray());
+        priors.Add(dist);
+    }
+    if (priors.Count == 0) throw new Exception("mcmc/sample requires at least one prior distribution");
+    return priors;
+}
+
+// Builds + configures + samples one sampler from a callback-group mcmc case's options, mirroring
+// mcmc_run.hpp's build_sampler() arm for arm (the five short user-facing keys plus the sampler's
+// own setting names; an absent key leaves the C# class's OWN default in force).
+static MCMCSampler BuildAndSampleCallbackMcmc(JsonElement options, LogLikelihood logLikelihood,
+                                              Gibbs.Proposal? proposal = null,
+                                              HMC.Gradient? gradient = null)
+{
+    var priors = CallbackMcmcPriors(options);
+    int d = priors.Count;
+    bool Has(string key) => options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
+    double Num(string key, double dflt) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+            ? ParseNum(v) : dflt;
+    string? Str(string key) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+            ? v.GetString() : null;
+    // The short key wins where both exist, matching callback/mcmc.hpp's read order.
+    bool HasEither(string shortKey, string longKey) => Has(shortKey) || Has(longKey);
+    int IntEither(string shortKey, string longKey, int dflt) =>
+        Has(shortKey) ? (int)Num(shortKey, dflt) : (int)Num(longKey, dflt);
+
+    string samplerType = Str("sampler") ?? "RWMH";
+    MCMCSampler sampler = samplerType switch
+    {
+        "RWMH" => new RWMH(priors, logLikelihood,
+            Str("proposal_sigma") switch
+            {
+                null => new Matrix(d),
+                "zeros" => new Matrix(d),
+                "identity" => Matrix.Identity(d),
+                var s => throw new Exception($"unknown proposal_sigma sentinel: {s}")
+            }),
+        // `gradientFunction: null!` is the C# default, i.e. the class's own bound-aware
+        // finite-difference gradient -- which is exactly what a case with no `gradient` key must
+        // exercise, so it is passed through rather than replaced by a hand-rolled equivalent.
+        "HMC" => new HMC(priors, logLikelihood, stepSize: Num("step_size", 0.1),
+                          steps: (int)Num("steps", 50), gradientFunction: gradient!),
+        "NUTS" => new NUTS(priors, logLikelihood, stepSize: Num("step_size", 0.1),
+                            maxTreeDepth: (int)Num("max_tree_depth", 10), gradientFunction: gradient),
+        "ARWMH" => new ARWMH(priors, logLikelihood),
+        "Gibbs" => new Gibbs(priors, logLikelihood,
+            proposal ?? throw new Exception("the Gibbs sampler requires a proposal function")),
+        "SNIS" => new SNIS(priors, logLikelihood),
+        "DEMCz" => new DEMCz(priors, logLikelihood),
+        "DEMCzs" => new DEMCzs(priors, logLikelihood),
+        _ => throw new Exception($"unknown MCMC sampler '{samplerType}'")
+    };
+
+    if (Str("initialize") is string init) sampler.Initialize = ParseInitialize(init);
+    if (HasEither("seed", "prng_seed")) sampler.PRNGSeed = IntEither("seed", "prng_seed", 12345);
+    if (Has("initial_iterations")) sampler.InitialIterations = (int)Num("initial_iterations", 0);
+    if (HasEither("warmup", "warmup_iterations"))
+        sampler.WarmupIterations = IntEither("warmup", "warmup_iterations", 0);
+    if (Has("iterations")) sampler.Iterations = (int)Num("iterations", 0);
+    if (HasEither("chains", "number_of_chains"))
+        sampler.NumberOfChains = IntEither("chains", "number_of_chains", 0);
+    if (HasEither("thinning", "thinning_interval"))
+        sampler.ThinningInterval = IntEither("thinning", "thinning_interval", 0);
+    if (Has("output_length")) sampler.OutputLength = (int)Num("output_length", 0);
+    if (sampler is ARWMH arwmhC)
+    {
+        if (Has("scale")) arwmhC.Scale = Num("scale", 0);
+        if (Has("beta")) arwmhC.Beta = Num("beta", 0);
+    }
+    if (sampler is DEMCz demczC)
+    {
+        if (Has("jump")) demczC.Jump = Num("jump", 0);
+        if (Has("jump_threshold")) demczC.JumpThreshold = Num("jump_threshold", 0);
+        if (Has("noise")) demczC.Noise = Num("noise", 0);
+    }
+    if (sampler is DEMCzs demczsC)
+    {
+        if (Has("jump")) demczsC.Jump = Num("jump", 0);
+        if (Has("jump_threshold")) demczsC.JumpThreshold = Num("jump_threshold", 0);
+        if (Has("snooker_threshold")) demczsC.SnookerThreshold = Num("snooker_threshold", 0);
+        if (Has("noise")) demczsC.Noise = Num("noise", 0);
+    }
+    if (sampler is NUTS nutsC && Has("adapt_mass_matrix"))
+        nutsC.AdaptMassMatrix = options.GetProperty("adapt_mass_matrix").GetBoolean();
+
+    sampler.Sample();
+    return sampler;
+}
+
+// Flattens a finished run into the layout callback/mcmc.hpp's mcmc_flatten() documents: a named
+// summary block, then the draws row-major by [chain][draw][parameter].
+static (double[] values, string[] names, int[] dims) FlattenCallbackMcmc(MCMCSampler sampler)
+{
+    var results = new MCMCResults(sampler);
+    int chains = sampler.NumberOfChains, p = sampler.NumberOfParameters;
+    var values = new List<double>();
+    var names = new List<string>();
+    void Push(string name, double value) { names.Add(name); values.Add(value); }
+    void PushEach(string label, Func<int, double> read, int count)
+    {
+        for (int j = 0; j < count; j++) Push($"{label}[{j}]", read(j));
+    }
+
+    Push("map_fitness", results.MAP.Fitness);
+    PushEach("acceptance_rate", j => sampler.AcceptanceRates[j], chains);
+    PushEach("map", j => results.MAP.Values[j], p);
+    PushEach("posterior_mean", j => results.ParameterResults[j].SummaryStatistics.Mean, p);
+    PushEach("posterior_sd", j => results.ParameterResults[j].SummaryStatistics.StandardDeviation, p);
+    PushEach("posterior_median", j => results.ParameterResults[j].SummaryStatistics.Median, p);
+    PushEach("posterior_lower_ci", j => results.ParameterResults[j].SummaryStatistics.LowerCI, p);
+    PushEach("posterior_upper_ci", j => results.ParameterResults[j].SummaryStatistics.UpperCI, p);
+    PushEach("rhat", j => results.ParameterResults[j].SummaryStatistics.Rhat, p);
+    PushEach("ess", j => results.ParameterResults[j].SummaryStatistics.ESS, p);
+    int nSummary = values.Count;
+
+    int draws = sampler.MarkovChains[0].Count;
+    for (int c = 0; c < chains; c++)
+        for (int i = 0; i < draws; i++)
+            for (int j = 0; j < p; j++) values.Add(sampler.MarkovChains[c][i].Values[j]);
+
+    return (values.ToArray(), names.ToArray(), new[] { nSummary, chains, draws, p });
+}
+
 // numerical_derivative fixture args convention -- MUST mirror
 // numerical_derivative_parse()/gradient_element()/hessian_element() in
 // core/tests/test_fixtures.cpp exactly.
@@ -4609,6 +5310,262 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
                     _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
                 };
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- callback branch (the callback surface, Task 1) -------------------------------------
+    // Drives the REAL C# Brent / NumericalDerivative against the delegates
+    // CallbackScalarFunction/CallbackVectorFunction above, mirroring callback/math.hpp's own
+    // dispatch: construct carries group/method/callback/options; assertions carry
+    // value (`args: [index]` into the flat result), dim (`args: [index]` into {rows, cols}), or
+    // status. The hessian result is flattened row-major, exactly as the C++ runner flattens it.
+    //
+    // The same branch drives "callback_cross_language" (Task 8), whose one case nests an "mcmc" and
+    // a "bootstrap" sub-block, each shaped exactly like a "callback"-kind case: CallbackSubCases
+    // above flattens both kinds into the same triples, so the cross-language fixture reuses this
+    // evaluation path verbatim rather than growing one of its own.
+    if (kindStr == "callback" || kindStr == "callback_cross_language")
+    {
+        foreach (var (caseName, subLabel, c) in CallbackSubCases(root, kindStr))
+        {
+            string dumpTarget = subLabel.Length == 0 ? "callback" : $"callback_cross_language/{subLabel}";
+            var construct = c.GetProperty("construct");
+            string group = construct.GetProperty("group").GetString()!;
+            if (group != "math" && group != "rng" && group != "mcmc" && group != "bootstrap" &&
+                group != "gmm")
+                throw new Exception($"unknown callback fixture group: {group}");
+            string method = construct.GetProperty("method").GetString()!;
+            string callbackName = construct.GetProperty("callback").GetString()!;
+            var options = construct.TryGetProperty("options", out var optEl)
+                ? optEl : default;
+            double Opt(string key, double dflt) =>
+                options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+                    ? ParseNum(v) : dflt;
+            double[] OptVector(string key)
+            {
+                if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty(key, out var v))
+                    throw new Exception($"callback/{method} requires the option '{key}'");
+                return v.EnumerateArray().Select(ParseNum).ToArray();
+            }
+
+            double[] values;
+            int[] dims;
+            // Set by the mcmc arm, which is the one group whose result is partly NAMED (see
+            // callback/mcmc.hpp's layout note); every other arm leaves it empty and its cases
+            // assert by index.
+            string[] valueNames = Array.Empty<string>();
+            // Only quadrature has a C# class with a status to read (AdaptiveGaussKronrod over the
+            // Integrator base). Brent and NumericalDerivative are static methods with none, so
+            // their arms leave this at the "Success" the C++ runner unconditionally reports for
+            // them -- see the status assertion below.
+            string statusName = "Success";
+            if (group == "mcmc")
+            {
+                if (method != "sample") throw new Exception($"unknown mcmc fixture method: {method}");
+                var f = CallbackMcmcFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an mcmc log-likelihood");
+                // The two other delegates, each resolved out of the same catalog. An absent key
+                // means no proposal (illegal for Gibbs, unused by everything else) and the C#
+                // class's own default gradient.
+                Gibbs.Proposal? proposalFn = null;
+                if (construct.TryGetProperty("proposal", out var propEl))
+                {
+                    string pn = propEl.GetString()!;
+                    proposalFn = CallbackProposalFunction(pn)
+                        ?? throw new Exception($"callback '{pn}' is not a proposal function");
+                }
+                HMC.Gradient? gradientFn = null;
+                if (construct.TryGetProperty("gradient", out var gradEl))
+                {
+                    string gn = gradEl.GetString()!;
+                    gradientFn = CallbackGradientFunction(gn)
+                        ?? throw new Exception($"callback '{gn}' is not a gradient function");
+                }
+                var sampler = BuildAndSampleCallbackMcmc(options, new LogLikelihood(f), proposalFn,
+                                                          gradientFn);
+                (values, valueNames, dims) = FlattenCallbackMcmc(sampler);
+            }
+            else if (group == "bootstrap")
+            {
+                if (method != "run") throw new Exception($"unknown bootstrap fixture method: {method}");
+                // `callback` names the RESAMPLE delegate -- the one handed the generator, this
+                // group's counterpart of the mcmc group's log-likelihood -- and the other three
+                // have keys of their own. An absent `jackknife` means every method but BCa.
+                var resampleFn = CallbackResampleFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a resample function");
+                string fitName = construct.GetProperty("fit").GetString()!;
+                var fitFn = CallbackFitFunction(fitName)
+                    ?? throw new Exception($"callback '{fitName}' is not a fit function");
+                string statName = construct.GetProperty("statistic").GetString()!;
+                var statFn = CallbackStatisticFunction(statName)
+                    ?? throw new Exception($"callback '{statName}' is not a statistic function");
+                Func<double[], int, double[]>? jackFn = null;
+                if (construct.TryGetProperty("jackknife", out var jackEl))
+                {
+                    string jn = jackEl.GetString()!;
+                    jackFn = CallbackJackknifeFunction(jn)
+                        ?? throw new Exception($"callback '{jn}' is not a jackknife function");
+                }
+                (values, valueNames, dims) =
+                    RunCallbackBootstrap(options, resampleFn, fitFn, statFn, jackFn);
+            }
+            else if (group == "gmm")
+            {
+                if (method != "fit") throw new Exception($"unknown gmm fixture method: {method}");
+                // `callback` names the MOMENT CONDITION function -- this group's required delegate,
+                // its counterpart of the mcmc group's log-likelihood -- and the two optional ones
+                // have keys of their own. An absent key means the C# class's own numerical Jacobian
+                // and no penalty.
+                var momentFn = CallbackMomentConditionFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a moment condition function");
+                JacobianFunction? jacobianFn = null;
+                if (construct.TryGetProperty("jacobian", out var jacEl))
+                {
+                    string jn = jacEl.GetString()!;
+                    jacobianFn = CallbackJacobianFunction(jn)
+                        ?? throw new Exception($"callback '{jn}' is not a jacobian function");
+                }
+                PenaltyFunction? penaltyFn = null;
+                if (construct.TryGetProperty("penalty", out var penEl))
+                {
+                    string pn2 = penEl.GetString()!;
+                    penaltyFn = CallbackPenaltyFunction(pn2)
+                        ?? throw new Exception($"callback '{pn2}' is not a penalty function");
+                }
+                (values, valueNames, dims) = RunCallbackGmm(options, momentFn, jacobianFn, penaltyFn);
+            }
+            else if (group == "rng")
+            {
+                if (method != "probe") throw new Exception($"unknown rng fixture method: {method}");
+                var f = CallbackRngFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an rng function");
+                // Exactly as callback/rng.hpp: `seeds` (the C# int[] constructor, upstream's own
+                // Test_MersenneTwister seeding) wins over `seed` (the int constructor every
+                // sampler uses).
+                MersenneTwister prng;
+                if (options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("seeds", out var seedsEl))
+                    prng = new MersenneTwister(seedsEl.EnumerateArray().Select(v => (int)ParseNum(v)).ToArray());
+                else
+                    prng = new MersenneTwister((int)Opt("seed", 0d));
+                double[] parameters =
+                    options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("parameters", out var parEl)
+                        ? parEl.EnumerateArray().Select(ParseNum).ToArray()
+                        : Array.Empty<double>();
+                values = f(parameters, prng);
+                dims = [values.Length];
+            }
+            else if (method == "root_find")
+            {
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                values = [Numerics.Mathematics.RootFinding.Brent.Solve(
+                    f, Opt("lower", 0d), Opt("upper", 0d), Opt("tolerance", 1E-8),
+                    (int)Opt("max_iterations", 1000))];
+                dims = [];
+            }
+            else if (method == "derivative")
+            {
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                values = [NumericalDerivative.Derivative(f, Opt("point", 0d), Opt("step_size", -1d))];
+                dims = [];
+            }
+            else if (method == "gradient")
+            {
+                var f = CallbackVectorFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a vector function");
+                values = NumericalDerivative.Gradient(f, OptVector("point"));
+                dims = [values.Length];
+            }
+            else if (method == "hessian")
+            {
+                var f = CallbackVectorFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a vector function");
+                double[,] h = NumericalDerivative.Hessian(f, OptVector("point"));
+                int n = h.GetLength(0), m = h.GetLength(1);
+                values = new double[n * m];
+                for (int i = 0; i < n; i++)
+                    for (int j = 0; j < m; j++) values[i * m + j] = h[i, j];
+                dims = [n, m];
+            }
+            else if (method == "quadrature")
+            {
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                var agk = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod(
+                    f, Opt("lower", 0d), Opt("upper", 0d));
+                // Written only when the fixture carries the key, exactly as callback/math.hpp
+                // does, so an absent key exercises the C# class's OWN default.
+                if (options.ValueKind == JsonValueKind.Object)
+                {
+                    if (options.TryGetProperty("absolute_tolerance", out var at))
+                        agk.AbsoluteTolerance = ParseNum(at);
+                    if (options.TryGetProperty("relative_tolerance", out var rt))
+                        agk.RelativeTolerance = ParseNum(rt);
+                    if (options.TryGetProperty("max_function_evaluations", out var mfe))
+                        agk.MaxFunctionEvaluations = (int)ParseNum(mfe);
+                }
+                agk.Integrate();
+                values = [agk.Result, agk.FunctionEvaluations, agk.StandardError];
+                dims = [];
+                statusName = agk.Status.ToString();
+            }
+            else
+            {
+                throw new Exception($"unknown callback fixture method: {method}");
+            }
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string am = asrt.GetProperty("method").GetString()!;
+                string where = $"{dumpTarget}/{caseName}/{am}";
+                int index = asrt.TryGetProperty("args", out var argsEl) ? argsEl[0].GetInt32() : 0;
+                if (am == "status")
+                {
+                    // `statusName` is read off the driven C# object for every method whose class
+                    // has one (today: quadrature's AdaptiveGaussKronrod.Status, an
+                    // IntegrationStatus whose member names match the C++ status_name strings). For
+                    // root_find/derivative/gradient/hessian it stays "Success", which is not a
+                    // hardcoded oracle but the honest report that Brent and NumericalDerivative
+                    // are static methods with no status object -- exactly what the C++ runner
+                    // reports for them. A later group with a real status must set `statusName` in
+                    // its own arm the same way the quadrature arm does.
+                    string expected = asrt.GetProperty("expected").GetString()!;
+                    if (dump) { DumpLine(dumpTarget, caseName, am, Array.Empty<JsonElement>(), () => (object)statusName); continue; }
+                    if (expected == statusName) pass++;
+                    else { fail++; failures.Add($"{where}: expected {expected} got {statusName}"); }
+                    continue;
+                }
+                // `named` reads a value by the label the group gave it rather than by position,
+                // because the mcmc group's summary block is long and its indices shift with the
+                // chain and parameter counts -- "posterior_mean[0]" says what it pins; "12" does
+                // not. Every runner resolves it the same way.
+                double actual = am switch
+                {
+                    "value" => values[index],
+                    "dim" => dims[index],
+                    "named" => values[Array.IndexOf(valueNames, asrt.GetProperty("name").GetString()!) is int ni && ni >= 0
+                        ? ni
+                        : throw new Exception($"{where}: no result named '{asrt.GetProperty("name").GetString()}'")],
+                    _ => throw new Exception($"unknown callback fixture assertion method: {am}")
+                };
+                if (dump)
+                {
+                    var dumpArgs = asrt.TryGetProperty("args", out var aEl)
+                        ? aEl.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+                    if (am == "named")
+                        DumpLine(dumpTarget, caseName, asrt.GetProperty("name").GetString()!,
+                                 Array.Empty<JsonElement>(), () => (object)actual);
+                    else
+                        DumpLine(dumpTarget, caseName, am, dumpArgs, () => (object)actual);
+                    continue;
+                }
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
             }

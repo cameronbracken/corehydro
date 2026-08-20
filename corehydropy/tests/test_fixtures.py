@@ -1723,6 +1723,394 @@ def _run_optimizer_case(case):
             raise KeyError(f"unknown optimizer fixture assertion method: {a['method']}")
 
 
+# callback [construct carries group/method/callback/options; assertions carry value/dim/status]:
+# the ported routines whose input is a live function, run through _core.callback_math against a
+# NATIVE Python closure. Mirrors run_callback_kind in core/tests/test_fixtures.cpp. NOTE these
+# catalog names are NOT the optimizer catalog's above: `Diff_FXYZ` is Test_Differentiation.FXYZ
+# (x^3 + y^4 + z^5), unrelated to the optimizer catalog's `FXYZ`. `Diff_FX` and `Quad_FX3` are both
+# x^3, from two different upstream test files -- hence the prefixes.
+def _callback_fixture_function(name):
+    if name == "Root_Quadratic":
+        return lambda x: x ** 2 - 2.0
+    if name == "Root_Cubic":
+        return lambda x: x ** 3 - x - 1.0
+    if name == "Diff_FX":
+        return lambda x: x ** 3
+    if name == "Diff_FXY":
+        return lambda p: p[0] ** 2 * p[1] ** 3
+    if name == "Diff_FXYZ":
+        return lambda p: p[0] ** 3 + p[1] ** 4 + p[2] ** 5
+    if name == "Diff_FH":
+        return lambda p: p[0] ** 3 - 2.0 * p[0] * p[1] - p[1] ** 6
+    if name == "Quad_FX3":
+        return lambda x: x ** 3
+    if name == "Quad_Cosine":
+        return math.cos
+    if name == "Quad_Sine":
+        return math.sin
+    if name == "Quad_FXX":
+        return lambda x: 0.5 + 24.0 * x + 3.0 * x ** 2
+    if name == "Quad_FXXX":
+        return lambda x: 0.5 + 24.0 * x + 3.0 * x ** 2 + 8.0 * x ** 3
+    if name == "Quad_Peak":
+        # corehydro addition, no upstream integrand -- the one callback that reaches the
+        # subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
+        # bit and the evaluation count is a real oracle.
+        return lambda x: 1.0 / (1.0 + 1.0e4 * x * x)
+    # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
+    # sum in an explicit loop rather than through sum(): a Markov chain turns one differing bit
+    # into a different chain outright, so the four runners have to agree to the last bit for these
+    # oracles to mean anything. See the fixture's own note.
+    if name == "Mcmc_GaussianKernel":
+        return _mcmc_gaussian_kernel
+    if name == "Mcmc_LinearKernel":
+        return _mcmc_linear_kernel
+    # The Gibbs case's model, whose full conditional really IS uniform: with
+    # x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+    # Uniform(max(x) - 1, min(x) + 1), so Prop_UniformConditional is an exact Gibbs step rather
+    # than a random walk wearing Gibbs's name. Comparisons and arithmetic only.
+    if name == "Mcmc_UniformWidthKernel":
+        return _mcmc_uniform_width_kernel
+    # (parameters, rng) -> parameters, upstream's Gibbs.Proposal shape, drawing through the HANDLE.
+    if name == "Prop_UniformConditional":
+        return _mcmc_uniform_conditional
+    # (parameters) -> vector, upstream's HMC.Gradient shape: d/dmu of Mcmc_GaussianKernel.
+    if name == "Grad_GaussianKernel":
+        return _mcmc_gaussian_gradient
+    # Task-5 review fix, coverage finding: unlike Mcmc_GaussianKernel, whose derivative
+    # sum(x - mu) is LINEAR in mu (so its third derivative is zero and the ported
+    # central-difference default agrees with the analytic gradient to rounding, ~4e-16), this
+    # kernel's derivative is CUBIC in mu, so the central-difference truncation error is real rather
+    # than rounding -- the analytic and default gradients genuinely disagree, which is what a
+    # supplied-vs-ignored gradient regression needs to be caught by the oracle gate.
+    if name == "Mcmc_QuarticKernel":
+        return _mcmc_quartic_kernel
+    if name == "Grad_QuarticKernel":
+        return _mcmc_quartic_gradient
+    # The bootstrap catalog (fixtures/callback/bootstrap.json), upstream's four Bootstrap<TData>
+    # delegate shapes. Every one is arithmetic and comparisons only, and the mean is summed in an
+    # explicit loop rather than through statistics.mean(): R's own sum()/mean() accumulate in
+    # extended precision, and one differing bit in a fitted mean moves a percentile. The resample
+    # draws every index through the HANDLE, exactly as a user's own resample function does.
+    if name == "Resample_Iid":
+        return _boot_resample_iid
+    if name == "Fit_Mean":
+        return _boot_fit_mean
+    if name == "Stat_Identity":
+        return _boot_stat_identity
+    if name == "Stat_MeanAndSquare":
+        return _boot_stat_mean_and_square
+    if name == "Jack_LeaveOneOut":
+        return _boot_jack_leave_one_out
+    # The gmm catalog (fixtures/callback/gmm.json), upstream's three delegate shapes from
+    # GeneralizedMethodOfMoments's delegate constructor. The model is the just-identified
+    # two-parameter method-of-moments fit of a Normal: theta = (mu, sigma2), whose unique root --
+    # and so the GMM optimum, since q = p makes g = 0 attainable -- is the sample mean and the
+    # population variance. Arithmetic and an explicit loop only, never sum()/mean(): R accumulates
+    # both in extended precision where the other three languages accumulate in double, and one
+    # differing bit moves a fitted parameter.
+    if name == "Mom_NormalMeanVariance":
+        return _gmm_moment_conditions
+    # The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the identical
+    # eight observations, with a third moment condition added -- mean((x - mu)^3), zero for a
+    # Normal -- so q = 3 > p = 2 and the degrees of freedom become 1. The only case in the file
+    # that reaches the chi-squared p-value branch of the J-statistic.
+    if name == "Mom_NormalThreeMoments":
+        return _gmm_moment_conditions_three
+    # The CUBIC-JACOBIAN member of the same catalog, and the one case in the file whose analytic
+    # Jacobian is distinguishable from the ported numerical one.
+    if name == "Mom_NormalFourthMoment":
+        return _gmm_moment_conditions_fourth
+    if name == "Jac_NormalFourthMoment":
+        return _gmm_jacobian_fourth
+    if name == "Jac_NormalMeanVariance":
+        return _gmm_jacobian
+    if name == "Pen_SigmaTowardsOne":
+        return _gmm_penalty
+    # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
+    # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
+    # user's proposal function would do -- rather than reaching for a generator of its own, which
+    # is the property the fixture exists to pin.
+    if name == "Rng_Uniform":
+        return lambda parameters, rng: rng.uniform(int(parameters[0]))
+    if name == "Rng_Integers":
+        return lambda parameters, rng: [
+            float(v) for v in rng.integers(int(parameters[0]), int(parameters[1]), int(parameters[2]))
+        ]
+    if name == "Rng_Interleaved":
+        return lambda parameters, rng: (
+            list(rng.uniform(2))
+            + [float(v) for v in rng.integers(2, 0, 100)]
+            + list(rng.uniform(1))
+        )
+    if name == "Rng_Warmup1000":
+        return _rng_warmup_1000
+    raise KeyError(f"unknown callback fixture callback: {name}")
+
+
+def _mcmc_gaussian_kernel(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        acc += (x - p[0]) * (x - p[0])
+    return -0.5 * acc
+
+
+def _mcmc_linear_kernel(p):
+    t = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)
+    y = (2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1)
+    acc = 0.0
+    for i in range(len(t)):
+        residual = y[i] - p[0] - p[1] * t[i]
+        acc += residual * residual
+    return -0.5 * acc
+
+
+def _mcmc_uniform_width_kernel(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    for x in data:
+        if x - p[0] > 1.0 or p[0] - x > 1.0:
+            return float("-inf")
+    return 0.0
+
+
+def _mcmc_uniform_conditional(parameters, rng):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    lo = max(data) - 1.0
+    hi = min(data) + 1.0
+    return [lo + rng.uniform(1)[0] * (hi - lo)]
+
+
+def _mcmc_gaussian_gradient(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        acc += x - p[0]
+    return [acc]
+
+
+def _mcmc_quartic_kernel(p):
+    # Coefficient 0.05 is load-bearing, not decorative: see the note in the R/C++ twins -- an
+    # unscaled quartic makes HMC's leapfrog trajectory genuinely chaotic over 200 iterations, and
+    # 0.05 keeps the analytic-vs-default gradient divergence small and smooth instead.
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        d = x - p[0]
+        acc += d * d * d * d
+    return -0.05 * acc
+
+
+def _mcmc_quartic_gradient(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        d = x - p[0]
+        acc += d * d * d
+    return [0.2 * acc]
+
+
+def _boot_resample_iid(data, parameters, rng):
+    # rng.integers draws on [0, n), counting from 0 exactly as the ported delegate does.
+    return [data[k] for k in rng.integers(len(data), 0, len(data))]
+
+
+def _boot_fit_mean(data):
+    acc = 0.0
+    for x in data:
+        acc += x
+    return [acc / len(data)]
+
+
+def _boot_stat_identity(parameters):
+    return parameters
+
+
+def _boot_stat_mean_and_square(parameters):
+    return [parameters[0], parameters[0] * parameters[0]]
+
+
+def _boot_jack_leave_one_out(data, index):
+    # `index` counts from 0, as the ported delegate does.
+    return list(data[:index]) + list(data[index + 1:])
+
+
+def _gmm_moment_conditions(p):
+    data = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+    n = 8.0
+    g0 = g1 = s00 = s01 = s11 = 0.0
+    for x in data:
+        a = x - p[0]
+        b = a * a - p[1]
+        g0 += a
+        g1 += b
+        s00 += a * a
+        s01 += a * b
+        s11 += b * b
+    return ([g0 / n, g1 / n], [[s00 / n, s01 / n], [s01 / n, s11 / n]])
+
+
+def _gmm_moment_conditions_three(p):
+    data = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+    n = 8.0
+    g0 = g1 = g2 = 0.0
+    s00 = s01 = s02 = s11 = s12 = s22 = 0.0
+    for x in data:
+        a = x - p[0]
+        b = a * a - p[1]
+        c = a * a * a
+        g0 += a
+        g1 += b
+        g2 += c
+        s00 += a * a
+        s01 += a * b
+        s02 += a * c
+        s11 += b * b
+        s12 += b * c
+        s22 += c * c
+    return (
+        [g0 / n, g1 / n, g2 / n],
+        [[s00 / n, s01 / n, s02 / n], [s01 / n, s11 / n, s12 / n], [s02 / n, s12 / n, s22 / n]],
+    )
+
+
+def _gmm_moment_conditions_fourth(p):
+    # theta = (mu, sigma), matched on the FIRST and FOURTH central moments of a Normal:
+    #   g = [mean(x - mu), mean(u^4) - 3 t^4],  u = 100 (x - mu),  t = 100 sigma
+    # so dg2/dsigma = -1200 t^3 is CUBIC in the parameter. The eight observations are the ones the
+    # rest of the catalog uses with the decimal point moved two places, which is what makes the
+    # fitted sigma (0.00404) small next to the ported numerical Jacobian's step h = 1e-4
+    # (|theta| + 1).
+    data = (0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+    n = 8.0
+    t = p[1] * 100.0
+    t4 = 3.0 * t * t * t * t
+    g0 = g1 = s00 = s01 = s11 = 0.0
+    for x in data:
+        a = x - p[0]
+        u = a * 100.0
+        b = u * u * u * u - t4
+        g0 += a
+        g1 += b
+        s00 += a * a
+        s01 += a * b
+        s11 += b * b
+    return ([g0 / n, g1 / n], [[s00 / n, s01 / n], [s01 / n, s11 / n]])
+
+
+def _gmm_jacobian_fourth(p):
+    # One ROW per moment condition: dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3),
+    # dg2/dsigma = -1200 t^3.
+    data = (0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+    acc = 0.0
+    for x in data:
+        u = (x - p[0]) * 100.0
+        acc += u * u * u
+    t = p[1] * 100.0
+    return [[-1.0, 0.0], [-400.0 * acc / 8.0, -1200.0 * t * t * t]]
+
+
+def _gmm_jacobian(p):
+    # One ROW per moment condition: dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu),
+    # dg2/dsigma2 = -1.
+    data = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+    acc = 0.0
+    for x in data:
+        acc += x - p[0]
+    return [[-1.0, 0.0], [-2.0 * acc / 8.0, -1.0]]
+
+
+def _gmm_penalty(p):
+    # A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the ported half-quadratic
+    # convention expects.
+    return 0.5 * (p[1] - 1.0) * (p[1] - 1.0)
+
+
+def _rng_warmup_1000(parameters, rng):
+    rng.uniform(1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
+    return rng.uniform(10)
+
+
+def _run_callback_case(case):
+    construct = case["construct"]
+    # Every group has its own Python entry point: callback_math, rng_probe, callback_mcmc,
+    # callback_gmm and callback_bootstrap.
+    options_json = json.dumps(construct.get("options", {}))
+    fn = _callback_fixture_function(construct["callback"])
+    if construct["group"] == "math":
+        r = _core.callback_math(construct["method"], options_json, fn)
+    elif construct["group"] == "rng":
+        r = _core.rng_probe(options_json, fn)
+    elif construct["group"] == "mcmc":
+        # The two other delegates the mcmc group's samplers take, each resolved out of the same
+        # catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys stay None, which is what
+        # "no proposal" and "the ported default gradient" mean.
+        proposal = (
+            _callback_fixture_function(construct["proposal"]) if "proposal" in construct else None
+        )
+        gradient = (
+            _callback_fixture_function(construct["gradient"]) if "gradient" in construct else None
+        )
+        r = _core.callback_mcmc(options_json, fn, proposal, gradient)
+    elif construct["group"] == "gmm":
+        # `callback` names the MOMENT CONDITION function -- this group's required delegate, its
+        # counterpart of the mcmc group's log-likelihood -- and the two optional ones have keys of
+        # their own. An absent key stays None, which is what "the ported numerical Jacobian" and
+        # "no penalty" mean.
+        jacobian = (
+            _callback_fixture_function(construct["jacobian"]) if "jacobian" in construct else None
+        )
+        penalty = (
+            _callback_fixture_function(construct["penalty"]) if "penalty" in construct else None
+        )
+        r = _core.callback_gmm(options_json, fn, jacobian, penalty)
+    elif construct["group"] == "bootstrap":
+        # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
+        # counterpart of the mcmc group's log-likelihood -- and the other three have keys of their
+        # own. An absent `jackknife` stays None, which is what every method but BCa means.
+        jackknife = (
+            _callback_fixture_function(construct["jackknife"]) if "jackknife" in construct else None
+        )
+        r = _core.callback_bootstrap(
+            options_json,
+            fn,
+            _callback_fixture_function(construct["fit"]),
+            _callback_fixture_function(construct["statistic"]),
+            jackknife,
+        )
+    else:
+        raise KeyError(f"unknown callback fixture group: {construct['group']}")
+    for a in case["assertions"]:
+        index = a["args"][0] if "args" in a else 0
+        if a["method"] == "value":
+            _check(r["values"][index], a)
+        elif a["method"] == "named":
+            # By label, not position: the mcmc group's summary block is long and its indices
+            # shift with the chain and parameter counts.
+            names = list(r["names"])
+            if a["name"] not in names:
+                raise KeyError(f"callback: no result named '{a['name']}'")
+            _check(r["values"][names.index(a["name"])], a)
+        elif a["method"] == "dim":
+            _check(float(r["dims"][index]), a)
+        elif a["method"] == "status":
+            assert r["status"] == a["expected"]
+        else:
+            raise KeyError(f"unknown callback fixture assertion method: {a['method']}")
+
+
+# callback_cross_language [one case nests "mcmc" and "bootstrap", each shaped exactly like a
+# "callback"-kind case's construct/assertions]: fixtures/callback/callback_cross_language.json's
+# one case asserts a seeded posterior and a seeded bootstrap interval TOGETHER, because the file's
+# job is proving both reproduce identically across languages in one guarantee rather than two.
+# Reuses _run_callback_case verbatim; no new evaluation logic, just the nesting. Its assertions are
+# spelled mode "abs" with tol 0, i.e. bit equality with the C++, R and C# runners rather than a
+# tolerance.
+def _run_callback_cross_language_case(case):
+    for sub in ("mcmc", "bootstrap"):
+        _run_callback_case(case[sub])
+
+
 # toolbox_cross_language [one case nests "optimizer" (shaped like an "optimizer"-kind
 # construct/assertions), "sobol" and "stratify" (each shaped like a "toolbox"-kind
 # group-"sampling" case's options/assertions)]: fixtures/toolbox/toolbox_cross_language.json's
@@ -1786,6 +2174,8 @@ def _load_cases():
             "goodness_of_fit",
             "toolbox",
             "optimizer",
+            "callback",
+            "callback_cross_language",
             "toolbox_cross_language",
         ):
             continue
@@ -1813,6 +2203,14 @@ def test_fixture_case(kind, target, datasets, case):
 
     if kind == "optimizer":
         _run_optimizer_case(case)
+        return
+
+    if kind == "callback":
+        _run_callback_case(case)
+        return
+
+    if kind == "callback_cross_language":
+        _run_callback_cross_language_case(case)
         return
 
     if kind == "toolbox_cross_language":

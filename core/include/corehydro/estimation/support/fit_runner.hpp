@@ -35,6 +35,7 @@
 #include "corehydro/estimation/maximum_a_posteriori.hpp"
 #include "corehydro/estimation/maximum_likelihood.hpp"
 #include "corehydro/estimation/optimization_method.hpp"
+#include "corehydro/estimation/support/estimator_names.hpp"
 #include "corehydro/numerics/data/goodness_of_fit.hpp"
 #include "corehydro/models/json_lite.hpp"
 #include "corehydro/models/model_spec.hpp"
@@ -118,31 +119,10 @@ struct FitDiagnostics {
     std::vector<std::string> prior_influence_names;
 };
 
-// Maps an OptimizationStatus to the string the bindings surface.
-inline std::string status_name(numerics::math::optimization::OptimizationStatus s) {
-    using S = numerics::math::optimization::OptimizationStatus;
-    switch (s) {
-        case S::None: return "None";
-        case S::Success: return "Success";
-        case S::MaximumIterationsReached: return "MaximumIterationsReached";
-        case S::MaximumFunctionEvaluationsReached: return "MaximumFunctionEvaluationsReached";
-        default: return "Failure";
-    }
-}
-
-// Optimizer name -> OptimizationMethod. Accepts the "MLSL" alias, matching the pre-phase-2
-// glue (corehydror/src/estimation.cpp's parse_optimization_method). Throws naming the value
-// it could not parse.
-inline OptimizationMethod parse_optimizer(const std::string& s) {
-    if (s == "Brent") return OptimizationMethod::Brent;
-    if (s == "BFGS") return OptimizationMethod::BFGS;
-    if (s == "NelderMead") return OptimizationMethod::NelderMead;
-    if (s == "Powell") return OptimizationMethod::Powell;
-    if (s == "DifferentialEvolution") return OptimizationMethod::DifferentialEvolution;
-    if (s == "MultilevelSingleLinkage" || s == "MLSL")
-        return OptimizationMethod::MultilevelSingleLinkage;
-    throw std::runtime_error("unknown optimizer '" + s + "'");
-}
+// `status_name`, `parse_optimizer` and `parse_gmm_strategy` moved to
+// estimation/support/estimator_names.hpp (included above) when the callback surface's
+// fit_gmm_moments() needed the same three without this header's model/analysis closure. Same
+// namespace, same spelling: every caller below and in both glues is unchanged.
 
 // Sampler name -> SamplerType. BayesianAnalysis::set_up_sampler (bayesian_analysis.hpp:429-492)
 // constructs exactly these four (mirrors parse_sampler_type in corehydror/src/estimation.cpp);
@@ -179,16 +159,6 @@ inline std::vector<std::string> parameter_names_of(const TModel& model) {
         names.push_back(n.empty() ? ("p" + std::to_string(i + 1)) : n);
     }
     return names;
-}
-
-// The GMM estimation-strategy knob (default Iterative, matching the C# GMM default). Mirrors
-// corehydror/src/estimation.cpp's parse_gmm_strategy.
-inline GeneralizedMethodOfMoments::GMMEstimationStrategy parse_gmm_strategy(const std::string& s) {
-    using Strat = GeneralizedMethodOfMoments::GMMEstimationStrategy;
-    if (s == "OneStep") return Strat::OneStep;
-    if (s == "TwoStep") return Strat::TwoStep;
-    if (s == "Iterative") return Strat::Iterative;
-    throw std::runtime_error("unknown GMM estimation strategy '" + s + "'");
 }
 
 // Builds a concrete Bulletin17CDistribution (NOT a ModelBase -- the GMM ctor takes it as

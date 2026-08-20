@@ -128,7 +128,15 @@ class MersenneTwister {
     int next(int min_inclusive, int max_exclusive) {
         if (min_inclusive >= max_exclusive)
             throw std::invalid_argument("min_inclusive must be less than max_exclusive.");
-        return next(max_exclusive - min_inclusive) + min_inclusive;
+        // C# computes `maxExclusive - minInclusive` unchecked, so a span wider than int.MaxValue
+        // wraps negative and Next(int) throws "Must be positive." The same expression in C++ is
+        // signed integer overflow -- undefined, not wrapping -- so the span is taken in int64 and
+        // the C# throw is reproduced directly. Behaviour below the boundary is unchanged.
+        const std::int64_t span =
+            static_cast<std::int64_t>(max_exclusive) - static_cast<std::int64_t>(min_inclusive);
+        if (span > static_cast<std::int64_t>(kIntMax))
+            throw std::invalid_argument("max_exclusive must be positive.");
+        return next(static_cast<int>(span)) + min_inclusive;
     }
 
    private:
