@@ -177,6 +177,78 @@ std::function<double(const std::vector<double>&)> as_vector_scalar_fn(py::functi
     };
 }
 
+// --- the bootstrap delegates ----------------------------------------------------------------
+//
+// nan IS TREATED DIFFERENTLY BY THE TWO SHAPES BELOW, on purpose, and corehydror's glue draws the
+// same line for the same reason.
+//
+//   - A delegate returning DATA (resample, jackknife) refuses nan by name. The ported Bootstrap has
+//     no finiteness check on data at all, so a nan -- R's answer for an index past the end of a
+//     vector, and numpy's for plenty of ordinary mistakes -- would sail into the user's OWN fit
+//     function and surface there, two calls from where it was made.
+//   - A delegate returning NUMBERS the ported class tests for itself (fit, statistic) passes nan
+//     through untouched. `HasExpectedFiniteParameterValues` and `ValidateStatistics` exist
+//     precisely to read a non-finite value as "this replicate failed" and retry it; refusing it
+//     here would steal a documented upstream behaviour and turn a legitimately hard resample into
+//     a hard error.
+//
+// Both wrappers below build the handle the way as_rng_fn does -- an RngScope local to the lambda,
+// so the handle is invalidated the moment the callback returns, by a normal return or by an
+// unwind. It is copied rather than shared because upstream's resample delegate is a THREE-argument
+// shape, `Func<TData, ParameterSet, Random, TData>`, and as_rng_fn's is (parameters, generator).
+std::vector<double> as_number_list(const py::object& out, const char* what) {
+    std::vector<double> result;
+    try {
+        result = out.cast<std::vector<double>>();
+    } catch (const py::cast_error&) {
+        throw std::runtime_error("the " + std::string(what) +
+                                 " function must return a sequence of numbers; got " +
+                                 std::string(py::str(out)));
+    }
+    return result;
+}
+
+// f(data, parameters, rng) -> data. Upstream's `Func<TData, ParameterSet, Random, TData>`.
+std::function<std::vector<double>(const std::vector<double>&, const std::vector<double>&,
+                                  samp::MersenneTwister&)>
+as_resample_fn(py::function f) {
+    return [f](const std::vector<double>& data, const std::vector<double>& p,
+               samp::MersenneTwister& prng) {
+        sup::RngScope scope(prng);
+        py::object out = f(data, p, RngHandle(scope.handle()));
+        std::vector<double> result = as_number_list(out, "resample");
+        for (double value : result)
+            if (std::isnan(value))
+                throw std::runtime_error(
+                    "the resample function returned nan rather than a number; rng.integers() draws "
+                    "on [0, n), which is already Python's own subscript base");
+        return result;
+    };
+}
+
+// f(data, index) -> data. Upstream's `Func<TData, int, TData>`, called with `index` counting from
+// 0 (both packages say so by name).
+std::function<std::vector<double>(const std::vector<double>&, int)> as_jackknife_fn(
+    py::function f) {
+    return [f](const std::vector<double>& data, int index) {
+        py::object out = f(data, index);
+        std::vector<double> result = as_number_list(out, "jackknife");
+        for (double value : result)
+            if (std::isnan(value))
+                throw std::runtime_error(
+                    "the jackknife function returned nan rather than a number; `index` counts from "
+                    "0, so the sample without it is data[:index] + data[index + 1:]");
+        return result;
+    };
+}
+
+// f(x) -> numbers, the shape both the fit (data -> parameters) and the statistic (parameters ->
+// statistics) take. nan passes through: see the note above.
+std::function<std::vector<double>(const std::vector<double>&)> as_numbers_fn(py::function f,
+                                                                            const char* what) {
+    return [f, what](const std::vector<double>& x) { return as_number_list(f(x), what); };
+}
+
 py::dict pack(const sup::CallbackResult& r) {
     py::dict out;
     out["values"] = r.values;
@@ -245,6 +317,31 @@ void register_callback(py::module_& m) {
         },
         py::arg("options_json"), py::arg("f"), py::arg("proposal") = py::none(),
         py::arg("gradient") = py::none());
+
+    // Runs the callback runner's "bootstrap" group against the four delegates upstream's
+    // `Bootstrap<TData>` takes as public properties: `resample(data, parameters, rng)`,
+    // `fit(data)`, `statistic(parameters)` and, for the BCa method alone, `jackknife(data,
+    // index)`. `jackknife` may be None; every other argument is required. The flat result is the
+    // layout documented in numerics/support/callback/bootstrap.hpp;
+    // corehydropy.callback's bootstrap_custom() reads it back by name.
+    //
+    // The resample delegate is handed a handle on the replicate's own generator, so a seeded run
+    // stays reproducible and agrees with the identical run in R. INTERRUPTS behave exactly as the
+    // mcmc note above describes, and for the same reason.
+    m.def(
+        "callback_bootstrap",
+        [](const std::string& options_json, py::function resample, py::function fit,
+           py::function statistic, py::object jackknife) {
+            sup::CallbackSet cbs;
+            cbs.data_rng = as_resample_fn(resample);
+            cbs.data_vector = as_numbers_fn(fit, "fit");
+            cbs.vector_vector = as_numbers_fn(statistic, "statistic");
+            if (!jackknife.is_none())
+                cbs.data_index = as_jackknife_fn(jackknife.cast<py::function>());
+            return pack(sup::run_callback("bootstrap", "run", options_json, cbs));
+        },
+        py::arg("options_json"), py::arg("resample"), py::arg("fit"), py::arg("statistic"),
+        py::arg("jackknife") = py::none());
 
     // The handle a callback is given on the core's seeded generator. No constructor is exposed:
     // it is handed out by the runner and is only usable for the duration of the one call it was

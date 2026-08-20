@@ -28,6 +28,7 @@ __all__ = [
     "gradient",
     "hessian",
     "mcmc_posterior",
+    "bootstrap_custom",
     "Rng",
 ]
 
@@ -545,6 +546,214 @@ def mcmc_posterior(
     return _mcmc_unflatten(
         _core.callback_mcmc(json.dumps(options), log_likelihood, proposal, gradient)
     )
+
+
+_CI_METHODS = ("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa")
+
+
+def _check_bootstrap_fn(f: object, name: str, signature: str) -> None:
+    """Internal: the function check every bootstrap delegate shares, naming the argument AND its
+    signature -- a wrong argument order is the likeliest mistake on this surface and nothing
+    downstream can detect it. Kept in step with corehydror's bootstrap_check_fn."""
+    if not callable(f):
+        raise TypeError(f"`{name}` must be a function taking {signature}")
+
+
+def bootstrap_custom(
+    data: Sequence[float],
+    resample: Callable,
+    fit: Callable,
+    statistic: Callable,
+    jackknife: Callable | None = None,
+    replicates: int = 1000,
+    alpha: float = 0.1,
+    ci_method: str = "Percentile",
+    seed: int = 12345,
+    parameters: Sequence[float] | None = None,
+    inner_replicates: int | None = None,
+) -> dict:
+    """Bootstrap your own statistic.
+
+    Runs the ported Numerics bootstrap against resampling, fitting and statistic functions you
+    write. This is the class upstream exposes as four delegates -- ``ResampleFunction``,
+    ``FitFunction``, ``StatisticFunction`` and ``JackknifeFunction`` -- so any quantity you can
+    compute from a fitted parameter set can be given a confidence interval, not just the built-in
+    distribution quantiles :func:`corehydropy.bootstrap_analysis` covers.
+
+    Getting an argument order wrong is the likeliest mistake here, and the C++ side cannot tell a
+    swapped pair from a deliberate one, so each signature is given exactly:
+
+    ``resample(data, parameters, rng)``
+        Returns one bootstrap sample. ``data`` is the original sample, ``parameters`` is the
+        current parameter list, and ``rng`` is a :class:`corehydropy.Rng` handle on THIS
+        replicate's generator -- draw from it with ``rng.uniform()`` and ``rng.integers()``, not
+        with :mod:`random` or :mod:`numpy.random`, or the seeded run stops being reproducible and
+        stops agreeing with R. The returned sample need not be the same length as ``data``.
+    ``fit(data)``
+        Returns the parameters fitted to ``data``: one number per parameter, the same count every
+        time.
+    ``statistic(parameters)``
+        Returns the numbers to put intervals on, computed from a fitted parameter vector: one or
+        more, the same count every time.
+    ``jackknife(data, index)``
+        Returns ``data`` with observation ``index`` left out. ``index`` counts from 0, matching the
+        ported delegate, so the Python spelling is ``data[:index] + data[index + 1:]``. Only the
+        ``"BCa"`` method uses it; every other method ignores it.
+
+    Parameters
+    ----------
+    data : array_like
+        The original sample: non-empty and finite.
+    resample, fit, statistic : callable
+        The three required functions, with the signatures above.
+    jackknife : callable, optional
+        The leave-one-out function, required by ``ci_method="BCa"`` and unused by every other
+        method.
+    replicates : int
+        Number of bootstrap replicates.
+    alpha : float
+        The interval's total tail probability: 0.1 gives a 90% interval, ``alpha / 2`` in each
+        tail.
+    ci_method : {"Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa"}
+        ``"Normal"`` and ``"BootstrapT"`` work on the ported cube-root transform of the statistic;
+        ``"BootstrapT"`` runs the studentized workflow, which nests ``inner_replicates`` further
+        resample-and-fit pairs inside every replicate.
+    seed : int
+        PRNG seed; 12345 is the C# default.
+    parameters : array_like, optional
+        The original parameter vector the replicates are compared against. Left unset, ``fit(data)``
+        is used, which is what the bootstrap ordinarily means by it.
+    inner_replicates : int, optional
+        Inner replicates for ``ci_method="BootstrapT"``, ignored by every other method. Left unset,
+        the ported default (300) applies.
+
+    Returns
+    -------
+    dict
+        Per statistic: ``estimate`` (the statistic of ``parameters``, not a bootstrap average),
+        ``lower``, ``upper``, ``standard_error``, ``mean`` (the mean over valid replicates, so
+        ``mean - estimate`` is the bias estimate) and ``valid_count``; the same first three for the
+        fitted parameters as ``parameter_estimate``, ``parameter_lower`` and ``parameter_upper``;
+        and ``replicates``, ``failed_replicates``, ``alpha`` and ``ci_method``.
+
+    Notes
+    -----
+    **How many times your functions are called.** ``replicates`` calls of each of ``resample``,
+    ``fit`` and ``statistic``, plus one extra ``statistic`` call to learn how many values it
+    returns and one ``fit`` call when ``parameters`` is not supplied. A failed replicate is retried
+    up to 20 times, and ``"BCa"`` adds one ``jackknife`` + ``fit`` + ``statistic`` per observation.
+    ``"BootstrapT"`` is the expensive one: it multiplies the resample and fit counts by
+    ``inner_replicates``, so the ported defaults (10,000 x 300) would be three million crossings
+    back into Python. Start small.
+
+    **Reproducing a run in R.** The draws come from the core's seeded Mersenne Twister, so an
+    identical ``bootstrap_custom()`` call in R resamples the identical observations. The numbers
+    your functions compute from them are your own Python code, though, and Python and R do not
+    guarantee identical rounding for the same formula: arithmetic (``+ - * /``) is
+    IEEE-deterministic and does reproduce, while ``log``, ``exp`` and friends come from each
+    platform's math library. Note also that R's ``sum()`` and ``mean()`` accumulate in extended
+    precision where Python's do not, so a plain loop is the portable spelling on both sides.
+
+    See Also
+    --------
+    corehydropy.bootstrap_analysis : the built-in parametric bootstrap of a fitted distribution's
+        quantiles.
+    corehydropy.Rng : the generator handle ``resample`` is given.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> x = [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7]
+    >>> def resample(data, parameters, rng):
+    ...     return [data[k] for k in rng.integers(len(data), 0, len(data))]
+    >>> def fit(data):
+    ...     acc = 0.0
+    ...     for xi in data:
+    ...         acc += xi
+    ...     return [acc / len(data)]
+    >>> res = ch.bootstrap_custom(x, resample, fit, lambda p: p, replicates=500, seed=12345)
+    >>> bool(res["lower"][0] < res["estimate"][0] < res["upper"][0])
+    True
+    """
+    point = np.asarray(data, dtype=float).ravel()
+    if point.size == 0 or not np.all(np.isfinite(point)):
+        raise ValueError("`data` must be a non-empty numeric vector of finite values")
+    _check_bootstrap_fn(resample, "resample", "(data, parameters, rng)")
+    _check_bootstrap_fn(fit, "fit", "(data)")
+    _check_bootstrap_fn(statistic, "statistic", "(parameters)")
+    if jackknife is not None:
+        _check_bootstrap_fn(jackknife, "jackknife", "(data, index)")
+    if ci_method not in _CI_METHODS:
+        raise ValueError(f"unknown ci_method '{ci_method}'; use one of {_CI_METHODS}")
+    # Refused HERE rather than after the run: the ported class checks it inside
+    # GetConfidenceIntervals, by which point every replicate has already called back into Python.
+    # The core repeats this check for all four runners; the wording is the same in both packages.
+    if ci_method == "BCa" and jackknife is None:
+        raise ValueError(
+            "the BCa confidence interval method requires a `jackknife` function, called with "
+            "(data, index); supply one or choose another `ci_method`"
+        )
+    if int(replicates) < 1:
+        raise ValueError("`replicates` must be a single positive whole number")
+    if not 0.0 < float(alpha) < 1.0:
+        raise ValueError("`alpha` must be a single number between 0 and 1")
+    if seed is None:
+        raise TypeError("`seed` must not be None")
+
+    options: dict = {
+        "data": point.tolist(),
+        "replicates": int(replicates),
+        "alpha": float(alpha),
+        "ci_method": ci_method,
+        "seed": int(seed),
+    }
+    if parameters is not None:
+        theta = np.asarray(parameters, dtype=float).ravel()
+        if theta.size == 0 or not np.all(np.isfinite(theta)):
+            raise ValueError(
+                "`parameters` must be a non-empty numeric vector of finite values, or None"
+            )
+        options["parameters"] = theta.tolist()
+    if inner_replicates is not None:
+        if int(inner_replicates) < 1:
+            raise ValueError("`inner_replicates` must be a single positive whole number")
+        options["inner_replicates"] = int(inner_replicates)
+
+    res = _core.callback_bootstrap(
+        json.dumps(options), resample, fit, statistic, jackknife
+    )
+    return _bootstrap_unflatten(res, ci_method)
+
+
+def _bootstrap_unflatten(res: dict, ci_method: str) -> dict:
+    """Internal: slice the flat callback result back by name. The layout is documented in
+    ``core/include/corehydro/numerics/support/callback/bootstrap.hpp``, and ``corehydror``'s own
+    ``bootstrap_unflatten()`` reads it identically."""
+    n_statistics, n_parameters = (int(v) for v in res["dims"])
+    values = list(res["values"])
+    index = {name: i for i, name in enumerate(res["names"])}
+
+    def block(prefix, count):
+        return np.asarray([values[index[f"{prefix}[{j}]"]] for j in range(count)], dtype=float)
+
+    return {
+        "estimate": block("statistic", n_statistics),
+        "lower": block("statistic_lower", n_statistics),
+        "upper": block("statistic_upper", n_statistics),
+        "standard_error": block("statistic_se", n_statistics),
+        "mean": block("statistic_mean", n_statistics),
+        "valid_count": block("statistic_valid", n_statistics).astype(int),
+        # The parameter block is always a percentile interval, whatever `ci_method` asks for: the
+        # ported GetConfidenceIntervals applies the requested method to the STATISTICS and takes
+        # plain percentiles of the fitted parameters.
+        "parameter_estimate": block("parameter", n_parameters),
+        "parameter_lower": block("parameter_lower", n_parameters),
+        "parameter_upper": block("parameter_upper", n_parameters),
+        "replicates": int(values[index["replicates"]]),
+        "failed_replicates": int(values[index["failed_replicates"]]),
+        "alpha": float(values[index["alpha"]]),
+        "ci_method": ci_method,
+    }
 
 
 def _prior_specs(priors) -> list:

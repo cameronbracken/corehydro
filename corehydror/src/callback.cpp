@@ -184,6 +184,81 @@ std::function<std::vector<double>(const std::vector<double>&, samp::MersenneTwis
     };
 }
 
+// --- the bootstrap delegates ----------------------------------------------------------------
+//
+// NA/NaN IS TREATED DIFFERENTLY BY THE TWO SHAPES BELOW, on purpose, and corehydropy's glue draws
+// the same line for the same reason.
+//
+//   - A delegate returning DATA (resample, jackknife) refuses NA/NaN by name. The ported
+//     Bootstrap has no finiteness check on data at all, so an NA -- which is what R hands back for
+//     an index past the end of a vector, the commonest mistake on this surface -- would sail into
+//     the user's OWN fit function and surface there, two calls from where it was made.
+//   - A delegate returning NUMBERS the ported class tests for itself (fit, statistic) passes NA
+//     through untouched. `HasExpectedFiniteParameterValues` and `ValidateStatistics` exist
+//     precisely to read a non-finite value as "this replicate failed" and retry it; refusing it
+//     here would steal a documented upstream behaviour and turn a legitimately hard resample into
+//     a hard error.
+//
+// f(data, parameters, rng) -> data. Upstream's `Func<TData, ParameterSet, Random, TData>`. The
+// handle is built by make_rng_handle() above -- the same one the Gibbs proposal is given -- and the
+// scope is a local of this lambda, so it is invalidated the moment the callback returns, by a
+// normal return or by an unwind.
+std::function<std::vector<double>(const std::vector<double>&, const std::vector<double>&,
+                                  samp::MersenneTwister&)>
+as_resample_fn(function f) {
+    return [f](const std::vector<double>& data, const std::vector<double>& p,
+               samp::MersenneTwister& prng) mutable {
+        writable::doubles d(static_cast<R_xlen_t>(data.size()));
+        for (std::size_t i = 0; i < data.size(); ++i) d[static_cast<R_xlen_t>(i)] = data[i];
+        writable::doubles par(static_cast<R_xlen_t>(p.size()));
+        for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
+
+        sup::RngScope scope(prng);
+        sexp handle = make_rng_handle(scope.handle());
+
+        sexp out = f(d, par, handle);
+        doubles v = as_doubles(out);
+        std::vector<double> result(v.begin(), v.end());
+        for (double value : result)
+            if (ISNAN(value))
+                throw std::runtime_error(
+                    "the resample function returned NA or NaN rather than a number; in R, reading "
+                    "past the end of a vector gives NA, and rng_integers() draws on [0, n), so an "
+                    "index off it needs + 1 before it subscripts a vector");
+        return result;
+    };
+}
+
+// f(data, index) -> data. Upstream's `Func<TData, int, TData>`, called with `index` counting from
+// 0 (both packages say so by name). Refuses NA/NaN for the reason above.
+std::function<std::vector<double>(const std::vector<double>&, int)> as_jackknife_fn(function f) {
+    return [f](const std::vector<double>& data, int index) mutable {
+        writable::doubles d(static_cast<R_xlen_t>(data.size()));
+        for (std::size_t i = 0; i < data.size(); ++i) d[static_cast<R_xlen_t>(i)] = data[i];
+        sexp out = f(d, writable::integers({index}));
+        doubles v = as_doubles(out);
+        std::vector<double> result(v.begin(), v.end());
+        for (double value : result)
+            if (ISNAN(value))
+                throw std::runtime_error(
+                    "the jackknife function returned NA or NaN rather than a number; `index` "
+                    "counts from 0, so the sample without it is data[-(index + 1)] -- note that "
+                    "data[-index] is data[0], the empty vector, when index is 0");
+        return result;
+    };
+}
+
+// f(x) -> numbers, the shape both the fit (data -> parameters) and the statistic (parameters ->
+// statistics) take. NA passes through: see the note above.
+std::function<std::vector<double>(const std::vector<double>&)> as_numbers_fn(function f) {
+    return [f](const std::vector<double>& x) mutable {
+        writable::doubles arg(static_cast<R_xlen_t>(x.size()));
+        for (std::size_t i = 0; i < x.size(); ++i) arg[static_cast<R_xlen_t>(i)] = x[i];
+        doubles v = as_doubles(f(arg));
+        return std::vector<double>(v.begin(), v.end());
+    };
+}
+
 list pack(const sup::CallbackResult& r) {
     writable::doubles values(static_cast<R_xlen_t>(r.values.size()));
     for (std::size_t i = 0; i < r.values.size(); ++i)
@@ -234,6 +309,26 @@ list ch_callback_mcmc_(std::string options_json, function f, sexp proposal, sexp
     if (!Rf_isNull(proposal)) cbs.vector_rng = as_rng_fn(function(proposal));
     if (!Rf_isNull(gradient)) cbs.vector_vector = as_vector_vector_fn(function(gradient));
     return pack(sup::run_callback("mcmc", "sample", options_json, cbs));
+}
+
+// Runs the callback runner's "bootstrap" group against the four delegates upstream's
+// `Bootstrap<TData>` takes as public properties: `resample(data, parameters, rng)`, `fit(data)`,
+// `statistic(parameters)` and, for the BCa method alone, `jackknife(data, index)`. `jackknife` may
+// be NULL; every other argument is required. The flat result is the layout documented in
+// numerics/support/callback/bootstrap.hpp; R/callback.R's bootstrap_custom() reads it back by name.
+//
+// The resample delegate is handed a handle on the replicate's own generator, so a seeded run stays
+// reproducible and agrees with the identical run in Python. INTERRUPTS behave exactly as this
+// file's header describes for the samplers, and for the same reason.
+[[cpp11::register]]
+list ch_callback_bootstrap_(std::string options_json, function resample, function fit,
+                            function statistic, sexp jackknife) {
+    sup::CallbackSet cbs;
+    cbs.data_rng = as_resample_fn(resample);
+    cbs.data_vector = as_numbers_fn(fit);
+    cbs.vector_vector = as_numbers_fn(statistic);
+    if (!Rf_isNull(jackknife)) cbs.data_index = as_jackknife_fn(function(jackknife));
+    return pack(sup::run_callback("bootstrap", "run", options_json, cbs));
 }
 
 // Seeds a generator, hands `f` a handle on it together with the `parameters` vector from the

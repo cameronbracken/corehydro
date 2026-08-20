@@ -96,6 +96,7 @@
 #include "corehydro/numerics/math/special/factorial.hpp"
 #include "corehydro/numerics/math/special/gamma.hpp"
 #include "corehydro/numerics/sampling/bootstrap/bootstrap.hpp"
+#include "corehydro/numerics/sampling/bootstrap/ci_method_names.hpp"
 #include "corehydro/numerics/sampling/bootstrap/model_registry.hpp"
 #include "corehydro/numerics/sampling/mcmc/arwmh.hpp"
 #include "corehydro/numerics/sampling/mcmc/demcz.hpp"
@@ -1811,6 +1812,43 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
             }
             return std::vector<double>{0.2 * acc};
         };
+    } else if (name == "Resample_Iid") {
+        // The bootstrap catalog (fixtures/callback/bootstrap.json), upstream's four
+        // Bootstrap<TData> delegate shapes. Every one is arithmetic and comparisons only, and the
+        // mean is summed in an explicit loop rather than through any accumulate helper: R's sum()
+        // and mean() accumulate in extended precision, and one differing bit in a fitted mean moves
+        // a percentile. The resample draws every index through the HANDLE, exactly as a user's own
+        // resample function does.
+        cbs.data_rng = [](const std::vector<double>& data, const std::vector<double>&,
+                          bfsamp::MersenneTwister& prng) {
+            tbx::RngScope scope(prng);
+            const int n = static_cast<int>(data.size());
+            std::vector<double> out;
+            out.reserve(data.size());
+            for (int k : scope.handle()->integers(n, 0, n))
+                out.push_back(data[static_cast<std::size_t>(k)]);
+            return out;
+        };
+    } else if (name == "Fit_Mean") {
+        cbs.data_vector = [](const std::vector<double>& data) {
+            double acc = 0.0;
+            for (double x : data) acc += x;
+            return std::vector<double>{acc / static_cast<double>(data.size())};
+        };
+    } else if (name == "Stat_Identity") {
+        cbs.vector_vector = [](const std::vector<double>& p) { return p; };
+    } else if (name == "Stat_MeanAndSquare") {
+        cbs.vector_vector = [](const std::vector<double>& p) {
+            return std::vector<double>{p[0], p[0] * p[0]};
+        };
+    } else if (name == "Jack_LeaveOneOut") {
+        cbs.data_index = [](const std::vector<double>& data, int index) {
+            std::vector<double> out;
+            out.reserve(data.size() - 1);
+            for (std::size_t i = 0; i < data.size(); ++i)
+                if (static_cast<int>(i) != index) out.push_back(data[i]);
+            return out;
+        };
     } else if (name == "Rng_Uniform") {
         // The rng catalog (fixtures/callback/rng_handle.json). Each of these takes the handle the
         // runner hands it -- the C++ analogue of the R closure calling rng_uniform() and the Python
@@ -1861,6 +1899,11 @@ static void run_callback_kind(const json& spec) {
             callback_fixture_set(construct["proposal"].get<std::string>(), cbs);
         if (construct.contains("gradient"))
             callback_fixture_set(construct["gradient"].get<std::string>(), cbs);
+        // The bootstrap group's other three delegates, resolved out of the same catalog (its
+        // `callback` key names the resample, the one delegate handed the generator). `jackknife` is
+        // absent for every method but BCa, which is what "no jackknife" means.
+        for (const char* key : {"fit", "statistic", "jackknife"})
+            if (construct.contains(key)) callback_fixture_set(construct[key].get<std::string>(), cbs);
         json options = construct.contains("options") ? construct["options"] : json::object();
         tbx::CallbackResult r =
             tbx::run_callback(construct["group"].get<std::string>(),
@@ -2601,14 +2644,6 @@ static void run_mcmc_sampler(const json& spec) {
 // ci_method/alpha; every assertion in the case reads that single cached (bootstrap, results)
 // pair. See fixtures/README.md's bootstrap schema.
 
-static bfsamp::BootstrapCIMethod parse_ci_method(const std::string& s) {
-    if (s == "Percentile") return bfsamp::BootstrapCIMethod::Percentile;
-    if (s == "BiasCorrected") return bfsamp::BootstrapCIMethod::BiasCorrected;
-    if (s == "BCa") return bfsamp::BootstrapCIMethod::BCa;
-    if (s == "Normal") return bfsamp::BootstrapCIMethod::Normal;
-    if (s == "BootstrapT") return bfsamp::BootstrapCIMethod::BootstrapT;
-    throw std::runtime_error("unknown bootstrap ci_method: " + s);
-}
 
 struct BootstrapCase {
     bfsamp::Bootstrap<std::vector<double>> boot;
@@ -2639,7 +2674,7 @@ static BootstrapCase build_and_run_bootstrap(const json& construct, const json& 
     else
         throw std::runtime_error("unknown bootstrap run kind: " + run);
 
-    auto method = parse_ci_method(construct["ci_method"].get<std::string>());
+    auto method = bfsamp::parse_bootstrap_ci_method(construct["ci_method"].get<std::string>());
     double alpha = construct.value("alpha", 0.1);
     bfsamp::BootstrapResults results = boot.get_confidence_intervals(method, alpha);
 

@@ -528,6 +528,26 @@ callback_fixture_function <- function(name) {
       }
       0.2 * acc
     },
+    # The bootstrap catalog (fixtures/callback/bootstrap.json), upstream's four Bootstrap<TData>
+    # delegate shapes. Every one is arithmetic and comparisons only, and the mean is summed in an
+    # explicit `for` loop rather than with sum() or mean(): both accumulate in extended precision in
+    # R where C++, Python and C# accumulate in double, and one differing bit in a fitted mean moves
+    # a percentile. The resample draws every index through the HANDLE, exactly as a user's own
+    # resample function does; rng_integers draws on [0, n) counting from 0, so the index is shifted
+    # by one for R's own 1-based subscript.
+    Resample_Iid = function(data, parameters, rng) {
+      data[rng_integers(rng, length(data), 0, length(data)) + 1L]
+    },
+    Fit_Mean = function(data) {
+      acc <- 0
+      for (x in data) acc <- acc + x
+      acc / length(data)
+    },
+    Stat_Identity = function(parameters) parameters,
+    Stat_MeanAndSquare = function(parameters) c(parameters[1], parameters[1] * parameters[1]),
+    # `index` counts from 0, as the ported delegate does, so the sample without it is
+    # data[-(index + 1)] -- data[-index] is data[0], the empty vector, when index is 0.
+    Jack_LeaveOneOut = function(data, index) data[-(index + 1)],
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1763,8 +1783,8 @@ test_that("oracle fixtures validate", {
       ns <- asNamespace("corehydror")
       for (case in spec$cases) {
         construct <- case$construct
-        # Only "math", "rng" and "mcmc" have R glue so far; the bootstrap/gmm groups arrive with
-        # their own entry points in later tasks.
+        # Only "math", "rng", "mcmc" and "bootstrap" have R glue so far; the gmm group arrives with
+        # its own entry point in a later task.
         opts <- callback_options_json(ns, construct$options)
         fn <- callback_fixture_function(construct$callback)
         r <- if (identical(construct$group, "math")) {
@@ -1786,6 +1806,21 @@ test_that("oracle fixtures validate", {
             callback_fixture_function(construct$gradient)
           }
           ns$ch_callback_mcmc_(opts, fn, proposal, gradient)
+        } else if (identical(construct$group, "bootstrap")) {
+          # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
+          # counterpart of the mcmc group's log-likelihood -- and the other three have keys of
+          # their own. An absent `jackknife` stays NULL, which is what every method but BCa means.
+          jackknife <- if (is.null(construct$jackknife)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$jackknife)
+          }
+          ns$ch_callback_bootstrap_(
+            opts, fn,
+            callback_fixture_function(construct$fit),
+            callback_fixture_function(construct$statistic),
+            jackknife
+          )
         } else {
           stop(sprintf("unknown callback fixture group: %s", construct$group))
         }

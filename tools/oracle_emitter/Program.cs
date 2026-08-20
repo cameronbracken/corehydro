@@ -1032,6 +1032,142 @@ static HMC.Gradient? CallbackGradientFunction(string name) => name switch
     _ => null
 };
 
+// The callback surface, Task 6: the bootstrap-group catalog for fixtures/callback/bootstrap.json.
+// These are the four C# delegates the REAL Numerics `Bootstrap<double[]>` is driven with --
+// upstream's own `ResampleFunction` / `FitFunction` / `StatisticFunction` / `JackknifeFunction`
+// properties -- and the counterpart of the native closures the C++/R/Python fixture runners write
+// for the same names.
+//
+// All four are built from `+ - * /` and comparisons alone, with the mean summed in an explicit loop
+// rather than through LINQ's Average(): R's sum()/mean() accumulate in extended precision where the
+// other three languages accumulate in double, and one differing bit in a fitted mean moves a
+// percentile. They are also pure functions of their arguments, which matters here and nowhere else
+// in this file: C#'s Bootstrap.Run drives them from a Parallel.For.
+static Func<double[], ParameterSet, Random, double[]>? CallbackResampleFunction(string name) => name switch
+{
+    // The ordinary nonparametric resample: n draws of data[prng.Next(0, n)], every index off the
+    // generator the replicate hands in (which is the whole point of the delegate's signature).
+    "Resample_Iid" => (data, parameters, prng) =>
+    {
+        var v = new double[data.Length];
+        for (int i = 0; i < v.Length; i++) v[i] = data[prng.Next(0, data.Length)];
+        return v;
+    },
+    _ => null
+};
+static Func<double[], ParameterSet>? CallbackFitFunction(string name) => name switch
+{
+    // A one-parameter model whose fit is the sample mean. NaN fitness matches what the C++ runner
+    // and both glues construct; nothing in the bootstrap reads it.
+    "Fit_Mean" => data =>
+    {
+        double acc = 0d;
+        foreach (double x in data) acc += x;
+        return new ParameterSet(new[] { acc / data.Length }, double.NaN);
+    },
+    _ => null
+};
+static Func<ParameterSet, double[]>? CallbackStatisticFunction(string name) => name switch
+{
+    "Stat_Identity" => ps => (double[])ps.Values.Clone(),
+    "Stat_MeanAndSquare" => ps => new[] { ps.Values[0], ps.Values[0] * ps.Values[0] },
+    _ => null
+};
+static Func<double[], int, double[]>? CallbackJackknifeFunction(string name) => name switch
+{
+    // The leave-one-out sample ComputeAccelerationConstants needs for BCa. `index` counts from 0,
+    // as upstream's own delegate does.
+    "Jack_LeaveOneOut" => (data, index) =>
+    {
+        var v = new double[data.Length - 1];
+        int at = 0;
+        for (int i = 0; i < data.Length; i++)
+            if (i != index) v[at++] = data[i];
+        return v;
+    },
+    _ => null
+};
+
+// Builds + configures + runs one callback-group bootstrap case, mirroring callback/bootstrap.hpp's
+// run_bootstrap() decision for decision: theta-hat is the `parameters` option or the fit of the
+// original data, the ci_method picks the workflow (BootstrapT is the studentized one, everything
+// else the regular Run), and an absent key leaves the C# class's OWN default in force.
+static (double[] values, string[] names, int[] dims) RunCallbackBootstrap(
+    JsonElement options,
+    Func<double[], ParameterSet, Random, double[]> resample,
+    Func<double[], ParameterSet> fit,
+    Func<ParameterSet, double[]> statistic,
+    Func<double[], int, double[]>? jackknife)
+{
+    bool Has(string key) => options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
+    double Num(string key, double dflt) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+            ? ParseNum(v) : dflt;
+
+    if (!Has("data")) throw new Exception("bootstrap/run requires the option 'data'");
+    double[] data = options.GetProperty("data").EnumerateArray().Select(ParseNum).ToArray();
+    string ciName = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("ci_method", out var ciEl)
+        ? ciEl.GetString()! : "Percentile";
+    var method = ParseBootstrapCIMethod(ciName);
+    double alpha = Num("alpha", 0.1);
+
+    ParameterSet original = Has("parameters")
+        ? new ParameterSet(options.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray(),
+                           double.NaN)
+        : fit(data);
+
+    var boot = new Bootstrap<double[]>(data, original)
+    {
+        ResampleFunction = resample,
+        FitFunction = fit,
+        StatisticFunction = statistic
+    };
+    if (jackknife != null)
+    {
+        boot.JackknifeFunction = jackknife;
+        // Not a user callback on this surface: TData is a double[], so its length IS the sample
+        // size (see callback/bootstrap.hpp).
+        boot.SampleSizeFunction = d => d.Length;
+    }
+    if (Has("replicates")) boot.Replicates = (int)Num("replicates", 0);
+    if (Has("seed")) boot.PRNGSeed = (int)Num("seed", 0);
+    if (Has("prng_seed")) boot.PRNGSeed = (int)Num("prng_seed", 0);
+    if (Has("max_retries")) boot.MaxRetries = (int)Num("max_retries", 0);
+    if (Has("inner_replicates")) boot.InnerReplicates = (int)Num("inner_replicates", 0);
+
+    if (method == BootstrapCIMethod.BootstrapT) boot.RunWithStudentizedBootstrap();
+    else boot.Run();
+    var results = boot.GetConfidenceIntervals(method, alpha);
+
+    // The layout callback/bootstrap.hpp's bootstrap_flatten() documents.
+    var values = new List<double>();
+    var names = new List<string>();
+    void Push(string name, double value) { names.Add(name); values.Add(value); }
+    void PushBlock(string label, BootstrapStatisticResult[] block)
+    {
+        for (int i = 0; i < block.Length; i++)
+        {
+            string ix = $"[{i}]";
+            Push(label + ix, block[i].PopulationEstimate);
+            Push(label + "_lower" + ix, block[i].LowerCI);
+            Push(label + "_upper" + ix, block[i].UpperCI);
+            Push(label + "_se" + ix, block[i].StandardError);
+            Push(label + "_mean" + ix, block[i].Mean);
+            Push(label + "_valid" + ix, block[i].ValidCount);
+        }
+    }
+
+    Push("replicates", boot.Replicates);
+    Push("failed_replicates", results.FailedReplicates);
+    Push("alpha", results.Alpha);
+    PushBlock("statistic", results.StatisticResults);
+    PushBlock("parameter", results.ParameterResults);
+
+    return (values.ToArray(), names.ToArray(),
+            new[] { results.StatisticResults.Length, results.ParameterResults.Length });
+}
+
 // Builds the prior list a callback-group mcmc case names, from the same {"family", "parameters"}
 // spec grammar dist_spec.hpp builds from on the C++ side.
 static List<IUnivariateDistribution> CallbackMcmcPriors(JsonElement options)
@@ -4976,7 +5112,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             string caseName = c.GetProperty("name").GetString()!;
             var construct = c.GetProperty("construct");
             string group = construct.GetProperty("group").GetString()!;
-            if (group != "math" && group != "rng" && group != "mcmc")
+            if (group != "math" && group != "rng" && group != "mcmc" && group != "bootstrap")
                 throw new Exception($"unknown callback fixture group: {group}");
             string method = construct.GetProperty("method").GetString()!;
             string callbackName = construct.GetProperty("callback").GetString()!;
@@ -5028,6 +5164,30 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 var sampler = BuildAndSampleCallbackMcmc(options, new LogLikelihood(f), proposalFn,
                                                           gradientFn);
                 (values, valueNames, dims) = FlattenCallbackMcmc(sampler);
+            }
+            else if (group == "bootstrap")
+            {
+                if (method != "run") throw new Exception($"unknown bootstrap fixture method: {method}");
+                // `callback` names the RESAMPLE delegate -- the one handed the generator, this
+                // group's counterpart of the mcmc group's log-likelihood -- and the other three
+                // have keys of their own. An absent `jackknife` means every method but BCa.
+                var resampleFn = CallbackResampleFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a resample function");
+                string fitName = construct.GetProperty("fit").GetString()!;
+                var fitFn = CallbackFitFunction(fitName)
+                    ?? throw new Exception($"callback '{fitName}' is not a fit function");
+                string statName = construct.GetProperty("statistic").GetString()!;
+                var statFn = CallbackStatisticFunction(statName)
+                    ?? throw new Exception($"callback '{statName}' is not a statistic function");
+                Func<double[], int, double[]>? jackFn = null;
+                if (construct.TryGetProperty("jackknife", out var jackEl))
+                {
+                    string jn = jackEl.GetString()!;
+                    jackFn = CallbackJackknifeFunction(jn)
+                        ?? throw new Exception($"callback '{jn}' is not a jackknife function");
+                }
+                (values, valueNames, dims) =
+                    RunCallbackBootstrap(options, resampleFn, fitFn, statFn, jackFn);
             }
             else if (group == "rng")
             {

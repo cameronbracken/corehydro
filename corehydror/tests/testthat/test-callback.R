@@ -711,3 +711,227 @@ test_that("each delegate is refused by the samplers that have no use for it", {
     "`gradient` must be a function"
   )
 })
+
+# --- bootstrap_custom, the four bootstrap delegates ------------------------------------------
+#
+# The model throughout is the plainest one there is: an iid resample of a fixed sample, fitted by
+# its mean. Written with `+ - * /` and an explicit loop rather than mean(), which accumulates in
+# extended precision, so the identical call in Python resamples AND computes the identical numbers.
+# The C#-pinned oracle for this same model lives in fixtures/callback/bootstrap.json.
+boot_data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+
+boot_resample <- function(data, parameters, rng) {
+  # rng_integers draws on [0, n), counting from 0 as the ported delegate does, so the index is
+  # shifted by one for R's own 1-based subscript.
+  data[rng_integers(rng, length(data), 0, length(data)) + 1L]
+}
+
+boot_fit <- function(data) {
+  acc <- 0
+  for (x in data) acc <- acc + x
+  acc / length(data)
+}
+
+boot_statistic <- function(parameters) parameters
+
+boot_jackknife <- function(data, index) data[-(index + 1)]
+
+boot_sample_mean <- function() {
+  acc <- 0
+  for (x in boot_data) acc <- acc + x
+  acc / length(boot_data)
+}
+
+test_that("bootstrap_custom brackets the sample mean", {
+  res <- bootstrap_custom(
+    data = boot_data, resample = boot_resample, fit = boot_fit, statistic = boot_statistic,
+    replicates = 500, seed = 12345
+  )
+  expect_true(res$lower[[1]] < boot_sample_mean() && boot_sample_mean() < res$upper[[1]])
+  # The point estimate is the statistic of the ORIGINAL fit, not a bootstrap average.
+  expect_equal(res$estimate[[1]], boot_sample_mean())
+  expect_identical(res$failed_replicates, 0L)
+  expect_identical(res$valid_count[[1]], 500L)
+})
+
+test_that("two seeded bootstrap_custom runs are identical, and the resample draws off the core stream", {
+  run <- function(seed) {
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, fit = boot_fit, statistic = boot_statistic,
+      replicates = 200, seed = seed
+    )$lower[[1]]
+  }
+  expect_identical(run(12345), run(12345))
+  # A different seed is a different interval, which is what says the resample is drawing off the
+  # generator the run seeded rather than off R's own.
+  expect_false(identical(run(12345), run(999)))
+})
+
+test_that("ci_method = BCa without a jackknife is refused, and before any resampling happens", {
+  calls <- 0L
+  counting_resample <- function(data, parameters, rng) {
+    calls <<- calls + 1L
+    boot_resample(data, parameters, rng)
+  }
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = counting_resample, fit = boot_fit, statistic = boot_statistic,
+      replicates = 500, seed = 12345, ci_method = "BCa"
+    ),
+    "jackknife"
+  )
+  # The ported class only checks this inside GetConfidenceIntervals, i.e. after every replicate has
+  # already called back into R. Zero resample calls is the proof that this one comes first.
+  expect_identical(calls, 0L)
+})
+
+test_that("an error raised inside each of the four delegates reaches the caller", {
+  # One test per delegate: a guard wired for one and missing on another is exactly the shape of bug
+  # a four-callback surface invites, and a test that only makes `fit` throw cannot catch it.
+  expect_error(
+    bootstrap_custom(boot_data, function(data, parameters, rng) stop("my own resample error"),
+                     boot_fit, boot_statistic, replicates = 20, seed = 12345),
+    "my own resample error"
+  )
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, function(data) stop("my own fit error"),
+                     boot_statistic, replicates = 20, seed = 12345),
+    "my own fit error"
+  )
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit,
+                     function(parameters) stop("my own statistic error"),
+                     replicates = 20, seed = 12345),
+    "my own statistic error"
+  )
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                     jackknife = function(data, index) stop("my own jackknife error"),
+                     replicates = 20, seed = 12345, ci_method = "BCa"),
+    "my own jackknife error"
+  )
+})
+
+test_that("every confidence interval method runs and brackets the estimate", {
+  for (method in c("Percentile", "BiasCorrected", "Normal", "BCa")) {
+    res <- bootstrap_custom(
+      data = boot_data, resample = boot_resample, fit = boot_fit, statistic = boot_statistic,
+      jackknife = boot_jackknife, replicates = 200, seed = 12345, ci_method = method
+    )
+    expect_true(res$lower[[1]] < res$upper[[1]])
+    expect_equal(res$estimate[[1]], boot_sample_mean())
+    expect_identical(res$ci_method, method)
+  }
+  # BootstrapT runs the studentized workflow, which nests `inner_replicates` more resample+fit
+  # pairs inside every replicate -- so it is driven small here on purpose.
+  res <- bootstrap_custom(
+    data = boot_data, resample = boot_resample, fit = boot_fit, statistic = boot_statistic,
+    replicates = 40, inner_replicates = 20, seed = 12345, ci_method = "BootstrapT"
+  )
+  expect_true(res$lower[[1]] < res$upper[[1]])
+})
+
+test_that("a statistic of more than one value is labelled per statistic", {
+  res <- bootstrap_custom(
+    data = boot_data, resample = boot_resample, fit = boot_fit,
+    statistic = function(parameters) c(parameters[1], parameters[1] * parameters[1]),
+    replicates = 200, seed = 12345
+  )
+  expect_length(res$estimate, 2L)
+  expect_equal(res$estimate[[2]], boot_sample_mean()^2)
+  expect_true(res$lower[[2]] < res$upper[[2]])
+})
+
+test_that("wrong-shaped returns are refused by name", {
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, function(data) c(1, 2), boot_statistic,
+                     replicates = 20, seed = 12345, parameters = 5),
+    "must return one value per parameter"
+  )
+  expect_error(
+    bootstrap_custom(boot_data, function(data, parameters, rng) numeric(0), boot_fit,
+                     boot_statistic, replicates = 20, seed = 12345),
+    "resample function must return at least one value"
+  )
+  # A jackknife that drops nothing. The ported BCa would answer it with 0/0 and a NaN interval
+  # rather than an error, so the guarded delegate names it instead.
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                     jackknife = function(data, index) data,
+                     replicates = 20, seed = 12345, ci_method = "BCa"),
+    "must return fewer values than it was given"
+  )
+  # The 0-based index trap, in the spelling R invites: `data[-index]` is `data[0]`, the EMPTY
+  # vector, when index is 0 -- and for every later index it silently drops the wrong observation.
+  # The empty half is caught by name; the off-by-one half is why both packages document the base.
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                     jackknife = function(data, index) data[-index],
+                     replicates = 20, seed = 12345, ci_method = "BCa"),
+    "jackknife function must return at least one value"
+  )
+})
+
+test_that("a resample or jackknife returning NA is refused, and a fit or statistic returning NA is not", {
+  # The split is deliberate and matches corehydropy's converters exactly. Data has no non-finite
+  # meaning, and reading past the end of a vector in R gives NA rather than an error, so an NA
+  # sample would surface inside the user's OWN fit two calls later.
+  expect_error(
+    bootstrap_custom(boot_data, function(data, parameters, rng) c(data[1], NA), boot_fit,
+                     boot_statistic, replicates = 20, seed = 12345),
+    "resample function returned NA or NaN"
+  )
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                     jackknife = function(data, index) c(NA, data[-(index + 1)]),
+                     replicates = 20, seed = 12345, ci_method = "BCa"),
+    "jackknife function returned NA or NaN"
+  )
+  # A fit or a statistic is different: the ported class tests those for finiteness itself and reads
+  # a non-finite value as "this replicate failed", retries it, and reports the count. Refusing it
+  # here would steal that behaviour, so an all-NA fit is a run of failed replicates, not an error.
+  failing <- bootstrap_custom(
+    boot_data, boot_resample, function(data) NA_real_, boot_statistic,
+    replicates = 5, seed = 12345, parameters = 5
+  )
+  expect_identical(failing$failed_replicates, 5L)
+  expect_identical(failing$valid_count[[1]], 0L)
+})
+
+test_that("bootstrap_custom refuses arguments that are not what they claim", {
+  expect_error(bootstrap_custom(numeric(0), boot_resample, boot_fit, boot_statistic),
+               "`data` must be a non-empty numeric vector")
+  expect_error(bootstrap_custom(boot_data, "nope", boot_fit, boot_statistic),
+               "`resample` must be a function taking \\(data, parameters, rng\\)")
+  expect_error(bootstrap_custom(boot_data, boot_resample, "nope", boot_statistic),
+               "`fit` must be a function taking \\(data\\)")
+  expect_error(bootstrap_custom(boot_data, boot_resample, boot_fit, "nope"),
+               "`statistic` must be a function taking \\(parameters\\)")
+  expect_error(bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                                jackknife = "nope"),
+               "`jackknife` must be a function taking \\(data, index\\)")
+  expect_error(bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                                replicates = 0),
+               "`replicates` must be a single positive whole number")
+  expect_error(bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic, alpha = 1),
+               "`alpha` must be a single number between 0 and 1")
+  expect_error(bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                                ci_method = "Nope"),
+               "'arg' should be one of")
+})
+
+test_that("a handle leaked out of a resample callback is dead afterwards", {
+  # The same lifetime guarantee the Gibbs proposal's handle carries, at the second site that hands
+  # one out: the borrow is invalidated when the callback returns, so a stored handle raises rather
+  # than reading freed memory.
+  leaked <- NULL
+  bootstrap_custom(
+    boot_data,
+    function(data, parameters, rng) {
+      leaked <<- rng
+      boot_resample(data, parameters, rng)
+    },
+    boot_fit, boot_statistic, replicates = 5, seed = 12345
+  )
+  expect_error(rng_uniform(leaked, 1), "no longer valid")
+})

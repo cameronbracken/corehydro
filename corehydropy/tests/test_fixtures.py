@@ -1787,6 +1787,21 @@ def _callback_fixture_function(name):
         return _mcmc_quartic_kernel
     if name == "Grad_QuarticKernel":
         return _mcmc_quartic_gradient
+    # The bootstrap catalog (fixtures/callback/bootstrap.json), upstream's four Bootstrap<TData>
+    # delegate shapes. Every one is arithmetic and comparisons only, and the mean is summed in an
+    # explicit loop rather than through statistics.mean(): R's own sum()/mean() accumulate in
+    # extended precision, and one differing bit in a fitted mean moves a percentile. The resample
+    # draws every index through the HANDLE, exactly as a user's own resample function does.
+    if name == "Resample_Iid":
+        return _boot_resample_iid
+    if name == "Fit_Mean":
+        return _boot_fit_mean
+    if name == "Stat_Identity":
+        return _boot_stat_identity
+    if name == "Stat_MeanAndSquare":
+        return _boot_stat_mean_and_square
+    if name == "Jack_LeaveOneOut":
+        return _boot_jack_leave_one_out
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1870,6 +1885,31 @@ def _mcmc_quartic_gradient(p):
     return [0.2 * acc]
 
 
+def _boot_resample_iid(data, parameters, rng):
+    # rng.integers draws on [0, n), counting from 0 exactly as the ported delegate does.
+    return [data[k] for k in rng.integers(len(data), 0, len(data))]
+
+
+def _boot_fit_mean(data):
+    acc = 0.0
+    for x in data:
+        acc += x
+    return [acc / len(data)]
+
+
+def _boot_stat_identity(parameters):
+    return parameters
+
+
+def _boot_stat_mean_and_square(parameters):
+    return [parameters[0], parameters[0] * parameters[0]]
+
+
+def _boot_jack_leave_one_out(data, index):
+    # `index` counts from 0, as the ported delegate does.
+    return list(data[:index]) + list(data[index + 1:])
+
+
 def _rng_warmup_1000(parameters, rng):
     rng.uniform(1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
     return rng.uniform(10)
@@ -1877,8 +1917,8 @@ def _rng_warmup_1000(parameters, rng):
 
 def _run_callback_case(case):
     construct = case["construct"]
-    # Only "math", "rng" and "mcmc" have Python glue so far; the bootstrap/gmm groups arrive with
-    # their own entry points in later tasks.
+    # Only "math", "rng", "mcmc" and "bootstrap" have Python glue so far; the gmm group arrives
+    # with its own entry point in a later task.
     options_json = json.dumps(construct.get("options", {}))
     fn = _callback_fixture_function(construct["callback"])
     if construct["group"] == "math":
@@ -1896,6 +1936,20 @@ def _run_callback_case(case):
             _callback_fixture_function(construct["gradient"]) if "gradient" in construct else None
         )
         r = _core.callback_mcmc(options_json, fn, proposal, gradient)
+    elif construct["group"] == "bootstrap":
+        # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
+        # counterpart of the mcmc group's log-likelihood -- and the other three have keys of their
+        # own. An absent `jackknife` stays None, which is what every method but BCa means.
+        jackknife = (
+            _callback_fixture_function(construct["jackknife"]) if "jackknife" in construct else None
+        )
+        r = _core.callback_bootstrap(
+            options_json,
+            fn,
+            _callback_fixture_function(construct["fit"]),
+            _callback_fixture_function(construct["statistic"]),
+            jackknife,
+        )
     else:
         raise KeyError(f"unknown callback fixture group: {construct['group']}")
     for a in case["assertions"]:

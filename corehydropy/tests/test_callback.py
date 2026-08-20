@@ -734,3 +734,200 @@ def test_each_delegate_is_refused_by_the_samplers_that_have_no_use_for_it():
         ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="Gibbs", proposal="nope")
     with pytest.raises(TypeError, match="`gradient` must be a function"):
         ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="HMC", gradient="nope")
+
+
+# --- bootstrap_custom, the four bootstrap delegates -------------------------------------------
+#
+# The model throughout is the plainest one there is: an iid resample of a fixed sample, fitted by
+# its mean. Written with `+ - * /` and an explicit loop rather than statistics.mean(), so the
+# identical call in R resamples AND computes the identical numbers. The C#-pinned oracle for this
+# same model lives in fixtures/callback/bootstrap.json.
+_BOOT_DATA = [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7]
+
+
+def _boot_resample(data, parameters, rng):
+    # rng.integers draws on [0, n), counting from 0 exactly as the ported delegate does.
+    return [data[k] for k in rng.integers(len(data), 0, len(data))]
+
+
+def _boot_fit(data):
+    acc = 0.0
+    for x in data:
+        acc += x
+    return [acc / len(data)]
+
+
+def _boot_statistic(parameters):
+    return parameters
+
+
+def _boot_jackknife(data, index):
+    return list(data[:index]) + list(data[index + 1:])
+
+
+def _boot_sample_mean():
+    acc = 0.0
+    for x in _BOOT_DATA:
+        acc += x
+    return acc / len(_BOOT_DATA)
+
+
+def test_bootstrap_custom_brackets_the_sample_mean():
+    res = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic, replicates=500, seed=12345
+    )
+    assert res["lower"][0] < _boot_sample_mean() < res["upper"][0]
+    # The point estimate is the statistic of the ORIGINAL fit, not a bootstrap average.
+    assert res["estimate"][0] == pytest.approx(_boot_sample_mean(), rel=1e-15)
+    assert res["failed_replicates"] == 0
+    assert res["valid_count"][0] == 500
+
+
+def test_two_seeded_bootstrap_runs_are_identical_and_the_resample_draws_off_the_core_stream():
+    def run(seed):
+        return ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic, replicates=200, seed=seed
+        )["lower"][0]
+
+    assert run(12345) == run(12345)
+    # A different seed is a different interval, which is what says the resample is drawing off the
+    # generator the run seeded rather than off Python's own.
+    assert run(12345) != run(999)
+
+
+def test_bca_without_a_jackknife_is_refused_before_any_resampling_happens():
+    calls = []
+
+    def counting_resample(data, parameters, rng):
+        calls.append(1)
+        return _boot_resample(data, parameters, rng)
+
+    with pytest.raises(ValueError, match="jackknife"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, counting_resample, _boot_fit, _boot_statistic,
+            replicates=500, seed=12345, ci_method="BCa",
+        )
+    # The ported class only checks this inside GetConfidenceIntervals, i.e. after every replicate
+    # has already called back into Python. Zero resample calls is the proof that this comes first.
+    assert calls == []
+
+
+def test_an_error_raised_inside_each_of_the_four_delegates_reaches_the_caller():
+    # One test per delegate: a guard wired for one and missing on another is exactly the shape of
+    # bug a four-callback surface invites, and a test that only makes `fit` throw cannot catch it.
+    with pytest.raises(ValueError, match="my own error"):
+        ch.bootstrap_custom(_BOOT_DATA, _boom, _boot_fit, _boot_statistic,
+                            replicates=20, seed=12345)
+    with pytest.raises(ValueError, match="my own error"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boom, _boot_statistic,
+                            replicates=20, seed=12345)
+    with pytest.raises(ValueError, match="my own error"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boom,
+                            replicates=20, seed=12345)
+    with pytest.raises(ValueError, match="my own error"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            jackknife=_boom, replicates=20, seed=12345, ci_method="BCa")
+
+
+@pytest.mark.parametrize("ci_method", ["Percentile", "BiasCorrected", "Normal", "BCa"])
+def test_every_confidence_interval_method_runs_and_brackets_the_estimate(ci_method):
+    res = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic, jackknife=_boot_jackknife,
+        replicates=200, seed=12345, ci_method=ci_method,
+    )
+    assert res["lower"][0] < res["upper"][0]
+    assert res["estimate"][0] == pytest.approx(_boot_sample_mean(), rel=1e-15)
+    assert res["ci_method"] == ci_method
+
+
+def test_bootstrap_t_runs_the_studentized_workflow():
+    # BootstrapT nests `inner_replicates` more resample+fit pairs inside every replicate, so it is
+    # driven small here on purpose.
+    res = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+        replicates=40, inner_replicates=20, seed=12345, ci_method="BootstrapT",
+    )
+    assert res["lower"][0] < res["upper"][0]
+
+
+def test_a_statistic_of_more_than_one_value_is_labelled_per_statistic():
+    res = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, _boot_fit, lambda p: [p[0], p[0] * p[0]],
+        replicates=200, seed=12345,
+    )
+    assert len(res["estimate"]) == 2
+    assert res["estimate"][1] == pytest.approx(_boot_sample_mean() ** 2, rel=1e-15)
+    assert res["lower"][1] < res["upper"][1]
+
+
+def test_wrong_shaped_returns_are_refused_by_name():
+    with pytest.raises(ValueError, match="must return one value per parameter"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, lambda data: [1.0, 2.0], _boot_statistic,
+                            replicates=20, seed=12345, parameters=[5.0])
+    with pytest.raises(ValueError, match="resample function must return at least one value"):
+        ch.bootstrap_custom(_BOOT_DATA, lambda data, parameters, rng: [], _boot_fit,
+                            _boot_statistic, replicates=20, seed=12345)
+    # A jackknife that drops nothing. The ported BCa would answer it with 0/0 and a NaN interval
+    # rather than an error, so the guarded delegate names it instead.
+    with pytest.raises(ValueError, match="must return fewer values than it was given"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            jackknife=lambda data, index: list(data),
+                            replicates=20, seed=12345, ci_method="BCa")
+
+
+def test_a_resample_or_jackknife_returning_nan_is_refused_and_a_fit_or_statistic_is_not():
+    # The split is deliberate and matches corehydror's converters exactly. Data has no non-finite
+    # meaning, so a nan sample would surface inside the user's OWN fit two calls later.
+    with pytest.raises(RuntimeError, match="resample function returned nan"):
+        ch.bootstrap_custom(_BOOT_DATA, lambda data, parameters, rng: [data[0], float("nan")],
+                            _boot_fit, _boot_statistic, replicates=20, seed=12345)
+    with pytest.raises(RuntimeError, match="jackknife function returned nan"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            jackknife=lambda data, index: [float("nan")] + _boot_jackknife(data, index),
+                            replicates=20, seed=12345, ci_method="BCa")
+    # A fit or a statistic is different: the ported class tests those for finiteness itself and
+    # reads a non-finite value as "this replicate failed", retries it, and reports the count.
+    # Refusing it here would steal that behaviour, so an all-nan fit is a run of failed replicates.
+    failing = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, lambda data: [float("nan")], _boot_statistic,
+        replicates=5, seed=12345, parameters=[5.0],
+    )
+    assert failing["failed_replicates"] == 5
+    assert failing["valid_count"][0] == 0
+
+
+def test_bootstrap_custom_refuses_arguments_that_are_not_what_they_claim():
+    with pytest.raises(ValueError, match="`data` must be a non-empty numeric vector"):
+        ch.bootstrap_custom([], _boot_resample, _boot_fit, _boot_statistic)
+    with pytest.raises(TypeError, match=r"`resample` must be a function taking \(data, parameters, rng\)"):
+        ch.bootstrap_custom(_BOOT_DATA, "nope", _boot_fit, _boot_statistic)
+    with pytest.raises(TypeError, match=r"`fit` must be a function taking \(data\)"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, "nope", _boot_statistic)
+    with pytest.raises(TypeError, match=r"`statistic` must be a function taking \(parameters\)"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, "nope")
+    with pytest.raises(TypeError, match=r"`jackknife` must be a function taking \(data, index\)"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            jackknife="nope")
+    with pytest.raises(ValueError, match="`replicates` must be a single positive whole number"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic, replicates=0)
+    with pytest.raises(ValueError, match="`alpha` must be a single number between 0 and 1"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic, alpha=1.0)
+    with pytest.raises(ValueError, match="unknown ci_method"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            ci_method="Nope")
+
+
+def test_a_handle_leaked_out_of_a_resample_callback_is_dead_afterwards():
+    # The same lifetime guarantee the Gibbs proposal's handle carries, at the second site that
+    # hands one out: the borrow is invalidated when the callback returns, so a stored handle raises
+    # rather than reading freed memory.
+    leaked = []
+
+    def leaking_resample(data, parameters, rng):
+        leaked.append(rng)
+        return _boot_resample(data, parameters, rng)
+
+    ch.bootstrap_custom(_BOOT_DATA, leaking_resample, _boot_fit, _boot_statistic,
+                        replicates=5, seed=12345)
+    with pytest.raises(RuntimeError, match="no longer valid"):
+        leaked[0].uniform(1)

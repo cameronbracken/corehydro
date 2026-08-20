@@ -55,6 +55,7 @@ from .optim import OptimResult, optim_maximize, optim_minimize
 from .callback import (
     QuadratureResult,
     Rng,
+    bootstrap_custom,
     derivative,
     gradient,
     hessian,
@@ -266,6 +267,7 @@ __all__ = [
     "latin_hypercube",
     "mcmc_sample",
     "mcmc_posterior",
+    "bootstrap_custom",
     "AnalysisData",
     "analysis_data",
     "analysis_data_summary",

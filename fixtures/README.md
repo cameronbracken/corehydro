@@ -1833,6 +1833,27 @@ ported bound-aware finite-difference default in force, which `hmc_gaussian_kerne
 pins beside `hmc_gaussian_kernel_analytic_gradient`). Both catalogs live in the same fixture's
 `callbacks` block as the log-densities, under the `Prop_`/`Grad_` prefixes.
 
+The `"bootstrap"` group has one method, `run`, and drives upstream's own four delegate properties
+on `Bootstrap<TData>` (`ResampleFunction`, `FitFunction`, `StatisticFunction`,
+`JackknifeFunction`) with `TData` instantiated as a vector of doubles. It is the one group whose
+`construct` names FOUR callbacks: `callback` is the RESAMPLE delegate -- the one handed a borrowed
+handle on the replicate's generator, this group's counterpart of the mcmc group's log-likelihood --
+and `fit`, `statistic` and `jackknife` name the rest, under the `Resample_`/`Fit_`/`Stat_`/`Jack_`
+prefixes. `jackknife` is optional and used by the `BCa` method alone; a case without it is every
+other method. The `options` carry a REQUIRED `data` array (the original sample), plus `replicates`,
+`seed`, `alpha`, `ci_method`, `parameters` (theta-hat, defaulting to `fit(data)`),
+`inner_replicates` and `max_retries`, each optional and each leaving the ported default in force
+when absent. `ci_method` picks the workflow as well as the interval: `BootstrapT` runs
+`RunWithStudentizedBootstrap()`, everything else `Run()`. The result is fully named --
+`replicates`, `failed_replicates`, `alpha`, then `statistic[i]` (the population estimate) with
+`statistic_lower[i]`/`statistic_upper[i]`/`statistic_se[i]`/`statistic_mean[i]`/`statistic_valid[i]`
+beside it, then the same for `parameter[j]` -- with `dims = {n_statistics, n_parameters}`, so cases
+assert by `"named"` and by `"dim"`. `fixtures/callback/bootstrap.json` is the one file of this
+group and every value in it is `EMITTER-READ`, with one documented exception to the file's 1e-12
+tolerance: the `BCa` case is pinned at 1e-6 because C#'s acceleration constant is a
+`Tools.ParallelAdd` reduction that is not reproducible run-to-run in the real library, exactly as
+`fixtures/sampling/bootstrap.json`'s own `bca` case records.
+
 ### `toolbox_cross_language`
 
 One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose

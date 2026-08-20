@@ -482,6 +482,200 @@ mcmc_posterior <- function(
   mcmc_unflatten(ch_callback_mcmc_(to_spec_json(opts), log_likelihood, proposal, gradient))
 }
 
+#' Bootstrap your own statistic
+#'
+#' Runs the ported Numerics bootstrap against resampling, fitting and statistic functions you
+#' write. This is the class upstream exposes as four delegates -- `ResampleFunction`,
+#' `FitFunction`, `StatisticFunction` and `JackknifeFunction` -- so any quantity you can compute
+#' from a fitted parameter set can be given a confidence interval, not just the built-in
+#' distribution quantiles [bootstrap_analysis()] covers.
+#'
+#' @section The four functions:
+#' Getting an argument order wrong is the likeliest mistake here, and the C++ side cannot tell a
+#' swapped pair from a deliberate one, so each signature is given exactly:
+#'
+#' \describe{
+#'   \item{`resample(data, parameters, rng)`}{Returns one bootstrap sample. `data` is the original
+#'     sample, `parameters` is the current parameter vector, and `rng` is a handle on THIS
+#'     replicate's generator -- draw from it with [rng_uniform()] and [rng_integers()], not with
+#'     [stats::runif()] or [base::sample()], or the seeded run stops being reproducible and stops
+#'     agreeing with Python. The returned sample need not be the same length as `data`.}
+#'   \item{`fit(data)`}{Returns the parameter vector fitted to `data`: one number per parameter,
+#'     the same count every time.}
+#'   \item{`statistic(parameters)`}{Returns the numbers to put intervals on, computed from a fitted
+#'     parameter vector: one or more, the same count every time.}
+#'   \item{`jackknife(data, index)`}{Returns `data` with observation `index` left out. `index`
+#'     counts from 0, matching the ported delegate, so the R spelling is `data[-(index + 1)]` --
+#'     `data[-index]` returns the sample untouched at `index = 0` and is refused by name. Only the
+#'     `"BCa"` method uses it; every other method ignores it.}
+#' }
+#'
+#' @param data the original sample: a non-empty numeric vector.
+#' @param resample,fit,statistic the three required functions, with the signatures above.
+#' @param jackknife the leave-one-out function, required by `ci_method = "BCa"` and unused by every
+#'   other method. `NULL` by default.
+#' @param replicates number of bootstrap replicates.
+#' @param alpha the interval's total tail probability: `0.1` gives a 90% interval, `alpha / 2` in
+#'   each tail.
+#' @param ci_method one of `"Percentile"` (the default), `"BiasCorrected"`, `"Normal"`,
+#'   `"BootstrapT"` or `"BCa"`. `"Normal"` and `"BootstrapT"` work on the ported cube-root
+#'   transform of the statistic; `"BootstrapT"` runs the studentized workflow, which nests
+#'   `inner_replicates` further resample-and-fit pairs inside every replicate.
+#' @param seed PRNG seed; `12345` is the C# default.
+#' @param parameters the original parameter vector the replicates are compared against. `NULL`, the
+#'   default, uses `fit(data)`, which is what the bootstrap ordinarily means by it.
+#' @param inner_replicates inner replicates for `ci_method = "BootstrapT"`, ignored by every other
+#'   method. `NULL` leaves the ported default (300) in force.
+#' @return A list with, per statistic, `estimate` (the statistic of `parameters`, not a bootstrap
+#'   average), `lower`, `upper`, `standard_error`, `mean` (the mean over valid replicates, so
+#'   `mean - estimate` is the bias estimate) and `valid_count`; the same first three for the fitted
+#'   parameters as `parameter_estimate`, `parameter_lower` and `parameter_upper`; and
+#'   `replicates`, `failed_replicates`, `alpha` and `ci_method`.
+#' @section How many times your functions are called:
+#' `replicates` calls of each of `resample`, `fit` and `statistic`, plus one extra `statistic` call
+#' to learn how many values it returns and one `fit` call when `parameters` is not supplied. A
+#' failed replicate is retried up to 20 times, and `"BCa"` adds one `jackknife` + `fit` +
+#' `statistic` per observation. `"BootstrapT"` is the expensive one: it multiplies the resample and
+#' fit counts by `inner_replicates`, so the ported defaults (10,000 x 300) would be three million
+#' crossings back into R. Start small.
+#' @section Reproducing a run in Python:
+#' The draws come from the core's seeded Mersenne Twister, so an identical `bootstrap_custom()`
+#' call in Python resamples the identical observations. The numbers your functions compute from
+#' them are your own R code, though, and R and Python do not guarantee identical rounding for the
+#' same formula: arithmetic (`+ - * /`) is IEEE-deterministic and does reproduce, while `log`,
+#' `exp` and friends come from each platform's math library. Note also that R's `sum()` and
+#' `mean()` accumulate in extended precision where Python does not, so an explicit loop is the
+#' portable spelling.
+#' @seealso [bootstrap_analysis()] for the built-in parametric bootstrap of a fitted distribution's
+#'   quantiles, and [rng_uniform()] for drawing inside `resample`.
+#' @examples
+#' \donttest{
+#' x <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+#' # An ordinary iid bootstrap of the mean. rng_integers() draws on [0, n), counting from 0, so
+#' # the index is shifted by one for R.
+#' res <- bootstrap_custom(
+#'   data = x,
+#'   resample = function(data, parameters, rng) {
+#'     data[rng_integers(rng, length(data), 0, length(data)) + 1L]
+#'   },
+#'   fit = function(data) {
+#'     acc <- 0
+#'     for (xi in data) acc <- acc + xi
+#'     acc / length(data)
+#'   },
+#'   statistic = function(parameters) parameters,
+#'   replicates = 500, seed = 12345
+#' )
+#' c(res$lower, res$estimate, res$upper)
+#' }
+#' @export
+bootstrap_custom <- function(
+  data,
+  resample,
+  fit,
+  statistic,
+  jackknife = NULL,
+  replicates = 1000,
+  alpha = 0.1,
+  ci_method = c("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa"),
+  seed = 12345,
+  parameters = NULL,
+  inner_replicates = NULL
+) {
+  if (!is.numeric(data) || length(data) == 0L || !all(is.finite(data))) {
+    stop("`data` must be a non-empty numeric vector of finite values", call. = FALSE)
+  }
+  bootstrap_check_fn(resample, "resample", "(data, parameters, rng)")
+  bootstrap_check_fn(fit, "fit", "(data)")
+  bootstrap_check_fn(statistic, "statistic", "(parameters)")
+  if (!is.null(jackknife)) bootstrap_check_fn(jackknife, "jackknife", "(data, index)")
+  ci_method <- match.arg(ci_method)
+  # Refused HERE rather than after the run: the ported class checks it inside
+  # GetConfidenceIntervals, by which point every replicate has already called back into R. The
+  # core repeats this check for all four runners; the wording is the same in both packages.
+  if (identical(ci_method, "BCa") && is.null(jackknife)) {
+    stop("the BCa confidence interval method requires a `jackknife` function, called with ",
+         "(data, index); supply one or choose another `ci_method`", call. = FALSE)
+  }
+  if (!is.numeric(replicates) || length(replicates) != 1L || replicates < 1) {
+    stop("`replicates` must be a single positive whole number", call. = FALSE)
+  }
+  if (!is.numeric(alpha) || length(alpha) != 1L || alpha <= 0 || alpha >= 1) {
+    stop("`alpha` must be a single number between 0 and 1", call. = FALSE)
+  }
+  if (is.null(seed)) {
+    stop("`seed` must not be NULL", call. = FALSE)
+  }
+
+  opts <- list(
+    data = spec_array(as.double(data)),
+    replicates = as.integer(replicates),
+    alpha = as.double(alpha),
+    ci_method = ci_method,
+    seed = as.integer(seed)
+  )
+  if (!is.null(parameters)) {
+    if (!is.numeric(parameters) || length(parameters) == 0L || !all(is.finite(parameters))) {
+      stop("`parameters` must be a non-empty numeric vector of finite values, or NULL",
+           call. = FALSE)
+    }
+    opts$parameters <- spec_array(as.double(parameters))
+  }
+  if (!is.null(inner_replicates)) {
+    if (!is.numeric(inner_replicates) || length(inner_replicates) != 1L || inner_replicates < 1) {
+      stop("`inner_replicates` must be a single positive whole number", call. = FALSE)
+    }
+    opts$inner_replicates <- as.integer(inner_replicates)
+  }
+
+  res <- ch_callback_bootstrap_(to_spec_json(opts), resample, fit, statistic, jackknife)
+  bootstrap_unflatten(res, ci_method)
+}
+
+# Internal: the function check every bootstrap delegate shares, naming the argument AND its
+# signature -- a wrong argument order is the likeliest mistake on this surface and nothing
+# downstream can detect it. Kept in step with corehydropy's _check_bootstrap_fn.
+bootstrap_check_fn <- function(f, name, signature) {
+  if (!is.function(f)) {
+    stop(sprintf("`%s` must be a function taking %s", name, signature), call. = FALSE)
+  }
+}
+
+# Internal: slice the flat callback result back by name. The layout is documented in
+# core/include/corehydro/numerics/support/callback/bootstrap.hpp, and corehydropy's own
+# _bootstrap_unflatten() reads it identically.
+bootstrap_unflatten <- function(res, ci_method) {
+  values <- as.double(unlist(res$values))
+  nms <- as.character(unlist(res$names))
+  dims <- as.integer(unlist(res$dims))
+  n_stats <- dims[[1]]
+  n_params <- dims[[2]]
+
+  by_name <- function(name) as.double(values[[match(name, nms)]])
+  block <- function(prefix, count) {
+    as.double(values[match(sprintf("%s[%d]", prefix, seq_len(count) - 1L), nms)])
+  }
+
+  list(
+    estimate = block("statistic", n_stats),
+    lower = block("statistic_lower", n_stats),
+    upper = block("statistic_upper", n_stats),
+    standard_error = block("statistic_se", n_stats),
+    mean = block("statistic_mean", n_stats),
+    valid_count = as.integer(block("statistic_valid", n_stats)),
+    # The parameter block is always a percentile interval, whatever `ci_method` asks for: the
+    # ported GetConfidenceIntervals applies the requested method to the STATISTICS and takes plain
+    # percentiles of the fitted parameters.
+    parameter_estimate = block("parameter", n_params),
+    parameter_lower = block("parameter_lower", n_params),
+    parameter_upper = block("parameter_upper", n_params),
+    replicates = as.integer(by_name("replicates")),
+    failed_replicates = as.integer(by_name("failed_replicates")),
+    alpha = by_name("alpha"),
+    ci_method = ci_method
+  )
+}
+
 # Internal: accept either a list of distribution() objects or a single one, and refuse anything
 # else by name. The length of this list IS the parameter count, so a wrong one is the likeliest
 # user error here and the C++ side cannot tell it from an intentional model.

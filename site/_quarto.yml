@@ -183,6 +183,7 @@ quartodoc:
     - title: Uncertainty and diagnostics
       contents:
         - bootstrap_analysis
+        - bootstrap_custom
         - estimation_diagnostics
         - prior_predictive_check
         - posterior_predictive_check

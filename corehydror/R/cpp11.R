@@ -36,6 +36,10 @@ ch_callback_mcmc_ <- function(options_json, f, proposal, gradient) {
   .Call(`_corehydror_ch_callback_mcmc_`, options_json, f, proposal, gradient)
 }
 
+ch_callback_bootstrap_ <- function(options_json, resample, fit, statistic, jackknife) {
+  .Call(`_corehydror_ch_callback_bootstrap_`, options_json, resample, fit, statistic, jackknife)
+}
+
 ch_rng_probe_ <- function(options_json, f) {
   .Call(`_corehydror_ch_rng_probe_`, options_json, f)
 }

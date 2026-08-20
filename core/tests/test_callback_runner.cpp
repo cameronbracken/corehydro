@@ -627,10 +627,349 @@ int main() {
             "unknown MCMC sampler");
     }
 
-    // The two groups Tasks 6 and 7 fill in are reachable but explicitly unimplemented.
+    // --- bootstrap group --------------------------------------------------------------------
+    //
+    // Analytic/structural properties only (the repo convention for a ctest); the C#-pinned oracle
+    // values for this group live in fixtures/callback/bootstrap.json. The model throughout is the
+    // plainest one there is -- an iid resample of a fixed dataset, fitted by its mean -- written
+    // with `+ - * /` and an explicit loop, so every runner agrees bit for bit.
+    {
+        const std::vector<double> data = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+        double sample_mean = 0.0;
+        for (double x : data) sample_mean += x;
+        sample_mean /= static_cast<double>(data.size());
+
+        sup::CallbackSet cbs;
+        cbs.data_rng = [](const std::vector<double>& d, const std::vector<double>&,
+                          corehydro::numerics::sampling::MersenneTwister& prng) {
+            sup::RngScope scope(prng);
+            const int n = static_cast<int>(d.size());
+            std::vector<double> out;
+            out.reserve(d.size());
+            for (int k : scope.handle()->integers(n, 0, n))
+                out.push_back(d[static_cast<std::size_t>(k)]);
+            return out;
+        };
+        cbs.data_vector = [](const std::vector<double>& d) {
+            double acc = 0.0;
+            for (double x : d) acc += x;
+            return std::vector<double>{acc / static_cast<double>(d.size())};
+        };
+        cbs.vector_vector = [](const std::vector<double>& p) { return p; };
+        cbs.data_index = [](const std::vector<double>& d, int index) {
+            std::vector<double> out;
+            out.reserve(d.size() - 1);
+            for (std::size_t i = 0; i < d.size(); ++i)
+                if (static_cast<int>(i) != index) out.push_back(d[i]);
+            return out;
+        };
+
+        const std::string options =
+            R"({"data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7], "replicates": 200,
+                "seed": 12345, "alpha": 0.1, "ci_method": "Percentile"})";
+        sup::CallbackResult r1 = sup::run_callback("bootstrap", "run", options, cbs);
+        sup::CallbackResult r2 = sup::run_callback("bootstrap", "run", options, cbs);
+        CHECK_EQ(r1.values, r2.values);  // a seeded run is deterministic
+        CHECK_EQ(r1.status, std::string("Success"));
+
+        auto named = [](const sup::CallbackResult& r, const std::string& want) {
+            for (std::size_t i = 0; i < r.names.size(); ++i)
+                if (r.names[i] == want) return r.values.at(i);
+            throw std::runtime_error("no result named " + want);
+        };
+        // The interval brackets the sample mean, which is what a bootstrap of the mean is for.
+        CHECK_TRUE(named(r1, "statistic_lower[0]") < sample_mean);
+        CHECK_TRUE(sample_mean < named(r1, "statistic_upper[0]"));
+        CHECK_NEAR(named(r1, "statistic[0]"), sample_mean, 1e-12);
+        CHECK_EQ(named(r1, "failed_replicates"), 0.0);
+        CHECK_EQ(named(r1, "replicates"), 200.0);
+        // dims = {n_statistics, n_parameters}.
+        CHECK_EQ(r1.dims.size(), std::size_t{2});
+        CHECK_EQ(r1.dims.at(0), 1);
+        CHECK_EQ(r1.dims.at(1), 1);
+        // Every CI method runs, and the four that need no extra machinery agree on the point
+        // estimate while differing on the bounds.
+        for (const char* ci : {"Percentile", "BiasCorrected", "Normal", "BCa"}) {
+            std::string opts =
+                R"({"data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7], "replicates": 200,
+                    "seed": 12345, "alpha": 0.1, "ci_method": ")" +
+                std::string(ci) + R"("})";
+            sup::CallbackResult r = sup::run_callback("bootstrap", "run", opts, cbs);
+            CHECK_NEAR(named(r, "statistic[0]"), sample_mean, 1e-12);
+            CHECK_TRUE(named(r, "statistic_lower[0]") < named(r, "statistic_upper[0]"));
+        }
+        // BootstrapT runs the studentized workflow instead of the regular one, so it is driven
+        // with a small inner count -- every inner replicate is another crossing into the host.
+        {
+            sup::CallbackResult r = sup::run_callback(
+                "bootstrap", "run",
+                R"({"data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7], "replicates": 40,
+                    "inner_replicates": 20, "seed": 12345, "alpha": 0.1,
+                    "ci_method": "BootstrapT"})",
+                cbs);
+            CHECK_TRUE(named(r, "statistic_lower[0]") < named(r, "statistic_upper[0]"));
+        }
+
+        // A statistic of more than one value is labelled and bounded per statistic.
+        {
+            sup::CallbackSet two = cbs;
+            two.vector_vector = [](const std::vector<double>& p) {
+                return std::vector<double>{p[0], p[0] * p[0]};
+            };
+            sup::CallbackResult r = sup::run_callback("bootstrap", "run", options, two);
+            CHECK_EQ(r.dims.at(0), 2);
+            CHECK_NEAR(named(r, "statistic[1]"), sample_mean * sample_mean, 1e-12);
+            CHECK_TRUE(named(r, "statistic_lower[1]") < named(r, "statistic_upper[1]"));
+        }
+
+        // `parameters` supplied explicitly is used as the original parameter set rather than
+        // fitting the original data -- and the population estimate says so.
+        {
+            sup::CallbackResult r = sup::run_callback(
+                "bootstrap", "run",
+                R"({"data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7], "replicates": 50,
+                    "seed": 12345, "parameters": [7.0]})",
+                cbs);
+            CHECK_EQ(named(r, "statistic[0]"), 7.0);
+        }
+
+        // BCa needs the jackknife delegate, and the refusal must come BEFORE the first replicate
+        // rather than after minutes of computation: the ported class only checks it inside
+        // GetConfidenceIntervals, i.e. after the whole run. The resample counter is the proof.
+        {
+            int resample_calls = 0;
+            sup::CallbackSet no_jackknife;
+            no_jackknife.data_rng = [&resample_calls](
+                                        const std::vector<double>& d, const std::vector<double>&,
+                                        corehydro::numerics::sampling::MersenneTwister&) {
+                ++resample_calls;
+                return d;
+            };
+            no_jackknife.data_vector = cbs.data_vector;
+            no_jackknife.vector_vector = cbs.vector_vector;
+            CHECK_THROWS_MSG(
+                sup::run_callback("bootstrap", "run",
+                                  R"({"data": [4.1, 5.2, 4.8, 5.5], "replicates": 200,
+                                      "seed": 12345, "ci_method": "BCa"})",
+                                  no_jackknife),
+                "jackknife");
+            CHECK_EQ(resample_calls, 0);
+        }
+
+        // A host exception inside EACH of the four delegates reaches the caller. One test per
+        // delegate: a guard wired for one and missing on another is exactly the shape of bug a
+        // wrapper this wide invites, and a test that only makes `fit` throw cannot catch it.
+        {
+            sup::CallbackSet t = cbs;
+            t.data_rng = [](const std::vector<double>&, const std::vector<double>&,
+                            corehydro::numerics::sampling::MersenneTwister&)
+                -> std::vector<double> { throw HostError(); };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "host language error");
+        }
+        {
+            sup::CallbackSet t = cbs;
+            t.data_vector = [](const std::vector<double>&) -> std::vector<double> {
+                throw HostError();
+            };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "host language error");
+        }
+        {
+            sup::CallbackSet t = cbs;
+            t.vector_vector = [](const std::vector<double>&) -> std::vector<double> {
+                throw HostError();
+            };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "host language error");
+        }
+        {
+            // The jackknife is only entered on the BCa path, so this is the one arm that needs
+            // its own CI method to be reached at all.
+            sup::CallbackSet t = cbs;
+            t.data_index = [](const std::vector<double>&, int) -> std::vector<double> {
+                throw HostError();
+            };
+            CHECK_THROWS_MSG(
+                sup::run_callback("bootstrap", "run",
+                                  R"({"data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7],
+                                      "replicates": 50, "seed": 12345, "ci_method": "BCa"})",
+                                  t),
+                "host language error");
+        }
+
+        // --- one abort state across all four delegates -------------------------------------
+        //
+        // THE property the shared state buys, and nothing else in this file proves it for this
+        // group: once ANY delegate throws, none of the other three may be entered again, because
+        // the ported bootstrap does not know it is unwinding and would otherwise re-enter the host
+        // with an unwind already pending. Each block below makes ONE delegate throw and gives
+        // ANOTHER a body that reports being entered afterwards -- so a guard given a private abort
+        // state fails here loudly, with the re-entry message rather than the host one.
+        {
+            // resample throws; fit reports re-entry.
+            bool aborted = false;
+            sup::CallbackSet t = cbs;
+            t.data_rng = [&aborted](const std::vector<double>&, const std::vector<double>&,
+                                    corehydro::numerics::sampling::MersenneTwister&)
+                -> std::vector<double> {
+                aborted = true;
+                throw HostError();
+            };
+            t.data_vector = [&aborted, &cbs](const std::vector<double>& d) {
+                if (aborted) throw std::runtime_error("the fit function was re-entered after the abort");
+                return cbs.data_vector(d);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "host language error");
+        }
+        {
+            // fit throws; the statistic reports re-entry.
+            bool aborted = false;
+            sup::CallbackSet t = cbs;
+            t.data_vector = [&aborted](const std::vector<double>&) -> std::vector<double> {
+                aborted = true;
+                throw HostError();
+            };
+            t.vector_vector = [&aborted](const std::vector<double>& p) {
+                if (aborted)
+                    throw std::runtime_error("the statistic function was re-entered after the abort");
+                return p;
+            };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "host language error");
+        }
+        {
+            // The statistic throws on its SECOND call (the first is the ported class's own
+            // original-parameter evaluation, before any replicate); resample reports re-entry.
+            int statistic_calls = 0;
+            bool aborted = false;
+            sup::CallbackSet t = cbs;
+            t.vector_vector = [&statistic_calls, &aborted](const std::vector<double>& p)
+                -> std::vector<double> {
+                if (++statistic_calls > 1) {
+                    aborted = true;
+                    throw HostError();
+                }
+                return p;
+            };
+            t.data_rng = [&aborted, &cbs](const std::vector<double>& d, const std::vector<double>& p,
+                                          corehydro::numerics::sampling::MersenneTwister& prng) {
+                if (aborted)
+                    throw std::runtime_error("the resample function was re-entered after the abort");
+                return cbs.data_rng(d, p, prng);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "host language error");
+        }
+        {
+            // jackknife throws; fit reports re-entry (the BCa acceleration loop calls it next).
+            bool aborted = false;
+            sup::CallbackSet t = cbs;
+            t.data_index = [&aborted](const std::vector<double>&, int) -> std::vector<double> {
+                aborted = true;
+                throw HostError();
+            };
+            t.data_vector = [&aborted, &cbs](const std::vector<double>& d) {
+                if (aborted) throw std::runtime_error("the fit function was re-entered after the abort");
+                return cbs.data_vector(d);
+            };
+            CHECK_THROWS_MSG(
+                sup::run_callback("bootstrap", "run",
+                                  R"({"data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7],
+                                      "replicates": 50, "seed": 12345, "ci_method": "BCa"})",
+                                  t),
+                "host language error");
+        }
+
+        // Wrong-shaped returns are refused by name rather than left to corrupt a result two calls
+        // later. Each check lives inside the guarded function, so it aborts the run exactly as a
+        // host-language error does.
+        {
+            // A fit wider than the parameter set it is fitted against. The parameter count comes
+            // from `parameters` when the caller supplies one, so this is the realistic spelling of
+            // the mismatch: theta-hat of one width, a fit of another.
+            sup::CallbackSet t = cbs;
+            t.data_vector = [](const std::vector<double>&) {
+                return std::vector<double>{1.0, 2.0};
+            };
+            CHECK_THROWS_MSG(
+                sup::run_callback("bootstrap", "run",
+                                  R"({"data": [4.1, 5.2, 4.8, 5.5], "replicates": 20,
+                                      "seed": 12345, "parameters": [5.0]})",
+                                  t),
+                "must return one value per parameter");
+        }
+        {
+            // And a fit whose width CHANGES between calls, which is the only way the derived
+            // theta-hat path (no `parameters` key) can disagree with itself.
+            int fit_calls = 0;
+            sup::CallbackSet t = cbs;
+            t.data_vector = [&fit_calls, &cbs](const std::vector<double>& d) {
+                if (++fit_calls > 1) return std::vector<double>{1.0, 2.0};
+                return cbs.data_vector(d);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "must return one value per parameter");
+        }
+        {
+            sup::CallbackSet t = cbs;
+            t.data_rng = [](const std::vector<double>&, const std::vector<double>&,
+                            corehydro::numerics::sampling::MersenneTwister&) {
+                return std::vector<double>{};
+            };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "resample function must return at least one value");
+        }
+        {
+            sup::CallbackSet t = cbs;
+            t.vector_vector = [](const std::vector<double>&) { return std::vector<double>{}; };
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", options, t),
+                             "statistic function must return at least one value");
+        }
+        {
+            // A jackknife that drops nothing. The ported BCa would divide 0 by 0 and report a
+            // NaN interval; this names it instead.
+            sup::CallbackSet t = cbs;
+            t.data_index = [](const std::vector<double>& d, int) { return d; };
+            CHECK_THROWS_MSG(
+                sup::run_callback("bootstrap", "run",
+                                  R"({"data": [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7],
+                                      "replicates": 50, "seed": 12345, "ci_method": "BCa"})",
+                                  t),
+                "must return fewer values than it was given");
+        }
+
+        // Dispatch and validation errors.
+        {
+            sup::CallbackSet empty;
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "nope", "{}", cbs),
+                             "unknown bootstrap method");
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", "{}", empty),
+                             "requires a resample function");
+            sup::CallbackSet resample_only;
+            resample_only.data_rng = cbs.data_rng;
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", "{}", resample_only),
+                             "requires a fit function");
+            sup::CallbackSet no_statistic;
+            no_statistic.data_rng = cbs.data_rng;
+            no_statistic.data_vector = cbs.data_vector;
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", "{}", no_statistic),
+                             "requires a statistic function");
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", "{}", cbs),
+                             "requires the option 'data'");
+            CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", R"({"data": []})", cbs),
+                             "at least one value");
+            CHECK_THROWS_MSG(
+                sup::run_callback("bootstrap", "run",
+                                  R"({"data": [1.0, 2.0], "ci_method": "Nope"})", cbs),
+                "unknown bootstrap ci_method");
+        }
+    }
+
+    // The group Task 7 fills in is reachable but explicitly unimplemented.
     {
         sup::CallbackSet cbs;
-        CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", "{}", cbs), "Task 6");
         CHECK_THROWS_MSG(sup::run_callback("gmm", "estimate", "{}", cbs), "Task 7");
     }
 
