@@ -179,6 +179,7 @@ quartodoc:
     - title: MCMC
       contents:
         - mcmc_sample
+        - mcmc_posterior
     - title: Uncertainty and diagnostics
       contents:
         - bootstrap_analysis

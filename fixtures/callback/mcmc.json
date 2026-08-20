@@ -1,0 +1,113 @@
+{
+  "kind": "callback",
+  "source": "Numerics/Sampling/MCMC/Base/MCMCSampler.cs (the delegate constructor) @ 2a0357a",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"mcmc\", method \"sample\", against the log-likelihood named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. This is upstream's OWN constructor, MCMCSampler(List<IUnivariateDistribution> priorDistributions, LogLikelihood logLikelihoodFunction): the model registry under sampling/mcmc/ that the `mcmc_sampler` kind drives is corehydro fixture scaffolding, while these cases pass their own priors and their own delegate, exactly as a C# caller would. EVERY expected value here is EMITTER-READ: no upstream test samples these models, so the oracle is the real Numerics sampler driven by tools/oracle_emitter with the equivalent C# delegate, never a value computed by this repo's own C++. Both catalog log-densities are built from + - * / alone, with the summation written as an explicit loop rather than any language's sum(): a Markov chain amplifies one differing bit into a different chain outright (one flipped accept-or-reject changes every state after it), so a transcendental call -- or R's extended-precision sum() -- would make these oracles a coincidence of one platform's math library rather than a reproducible fact. The result layout (a named summary block, then the draws row-major by [chain][draw][parameter], with dims = {n_summary, n_chains, n_draws, n_parameters}) is documented in core/include/corehydro/numerics/support/callback/mcmc.hpp; the `named` assertions below read the summary block by label rather than by an index that shifts with the chain and parameter counts.",
+  "callbacks": {
+    "Mcmc_GaussianKernel": "f(mu) = -0.5 * sum((x - mu)^2) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition: a unit-variance Gaussian kernel with no normalizing term, one parameter]",
+    "Mcmc_LinearKernel": "f(a, b) = -0.5 * sum((y - a - b*t)^2) over t = {1..8}, y = {2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1}  [corehydro addition: the same kernel over the residuals of a straight line, two parameters]"
+  },
+  "cases": [
+    {
+      "name": "rwmh_gaussian_kernel_randomize",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_GaussianKernel",
+        "options": {
+          "sampler": "RWMH",
+          "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+          "iterations": 300, "warmup": 100, "chains": 2, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize", "proposal_sigma": "identity"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 5.053479081800376, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.ParameterResults[0].SummaryStatistics.Mean off the driven C# RWMH" },
+        { "method": "named", "name": "posterior_sd[0]", "expected": 0.3434981512169895, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.StandardDeviation" },
+        { "method": "named", "name": "posterior_median[0]", "expected": 5.036173900649139, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.Median" },
+        { "method": "named", "name": "posterior_lower_ci[0]", "expected": 4.297682347291781, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.LowerCI" },
+        { "method": "named", "name": "posterior_upper_ci[0]", "expected": 5.468352731411024, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.UpperCI" },
+        { "method": "named", "name": "map[0]", "expected": 4.98803227481712, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]. Randomize initialization runs no optimizer, so this is the best state the chain itself reached" },
+        { "method": "named", "name": "map_fitness", "expected": -0.05035806611513237, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Fitness, i.e. the user log-density at that state" },
+        { "method": "named", "name": "acceptance_rate[0]", "expected": 0.49142857142857144, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]. A per-chain accept count is the sharpest single test that the C# and the port took the SAME accept-or-reject decision at every one of the iterations" },
+        { "method": "named", "name": "acceptance_rate[1]", "expected": 0.4, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[1]" },
+        { "method": "named", "name": "rhat[0]", "expected": 1.0088723505625583, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.Rhat (Gelman-Rubin)" },
+        { "method": "named", "name": "ess[0]", "expected": 27.476758097629958, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.ESS" },
+        { "method": "value", "args": [11], "expected": 5.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MarkovChains[0][0].Values[0], the first entry of the draw block that follows the 11-value summary block. Exactly 5, and not by luck: Randomize initialization seeds the population with the mean of the priors first, Uniform(0, 10) has mean 5, and that state also happens to be the best of the initial population for this data" },
+        { "method": "value", "args": [161], "expected": 4.682910544746855, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][150].Values[0], a mid-chain state. This is the assertion a single flipped accept-or-reject anywhere in the first 150 iterations would break, which no summary statistic guarantees on its own" },
+        { "method": "value", "args": [610], "expected": 5.3408359385517175, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[1][299].Values[0], the last state of the SECOND chain -- the far end of the draw block, so the block's row-major [chain][draw][parameter] order is pinned as well as its contents" },
+        { "method": "dim", "args": [0], "expected": 11, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_summary = 1 + n_chains + 8 * n_parameters = 1 + 2 + 8" },
+        { "method": "dim", "args": [1], "expected": 2, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_chains" },
+        { "method": "dim", "args": [2], "expected": 300, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_draws, one per iteration" },
+        { "method": "dim", "args": [3], "expected": 1, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_parameters, the length of the priors list" }
+      ]
+    },
+    {
+      "name": "rwmh_gaussian_kernel_map",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_GaussianKernel",
+        "options": {
+          "sampler": "RWMH",
+          "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+          "iterations": 300, "warmup": 100, "chains": 2, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "MAP"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "map[0]", "expected": 4.999999533547282, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the MAP initialization path, which reaches the user log-density through DifferentialEvolution BEFORE the first chain iteration. `proposal_sigma` is deliberately absent here so the C# class's own all-zero default is exercised, which is only usable because InitializeCustomSettings overwrites it with the Fisher-information covariance. NOTE what this case does NOT assert, and why: the posterior mean, spread and median of a MAP-INITIALIZED chain reproduce C#-vs-C++ only to about 1e-12 relative (measured: mean 9e-14, median 1.4e-13, sd 3.8e-12), because the RWMH proposal covariance here is an INVERTED numerical Hessian and its last bits differ, moving every proposal by that much. The accept-or-reject decisions do not move -- both acceptance rates below match exactly -- so the divergence is drift in the state values, not a different chain. Those summaries are therefore pinned on the Randomize case above, where nothing passes through a matrix inverse and every one of them reproduces exactly. No tolerance is loosened here and no oracle_skip is used; the assertion is simply not made where it would not be honest" },
+        { "method": "named", "name": "map_fitness", "expected": -0.05000000000054394, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Fitness. The analytic maximum of this kernel is -0.05 at mu = 5, which the optimizer finds to 1e-11 -- the pinned value is the optimizer's, not the analytic one" },
+        { "method": "named", "name": "acceptance_rate[0]", "expected": 0.6371428571428571, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]. This is the assertion that carries the case: an accept count matching exactly means the C# and the port took the SAME accept-or-reject decision at all 300 iterations of this chain, off a proposal covariance built from an inverted numerical Hessian" },
+        { "method": "named", "name": "acceptance_rate[1]", "expected": 0.5314285714285715, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[1], the same for the second chain" }
+      ]
+    },
+    {
+      "name": "arwmh_gaussian_kernel_randomize",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_GaussianKernel",
+        "options": {
+          "sampler": "ARWMH",
+          "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+          "iterations": 300, "warmup": 100, "chains": 2, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.9482092514171345, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: a second sampler arm, so the group's dispatch is pinned and not just RWMH's" },
+        { "method": "named", "name": "posterior_sd[0]", "expected": 0.3976873082147035, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "map[0]", "expected": 4.994435163061497, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "acceptance_rate[1]", "expected": 0.6828571428571428, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" }
+      ]
+    },
+    {
+      "name": "demcz_linear_kernel_randomize",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_LinearKernel",
+        "options": {
+          "sampler": "DEMCz",
+          "priors": [
+            { "family": "Uniform", "parameters": [-5.0, 5.0] },
+            { "family": "Uniform", "parameters": [0.0, 5.0] }
+          ],
+          "iterations": 300, "warmup": 100, "chains": 3, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 0.32526871867483836, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the intercept. A two-parameter case, so the prior list's length really is the parameter count the delegate is called with" },
+        { "method": "named", "name": "posterior_mean[1]", "expected": 1.968966604877649, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the slope" },
+        { "method": "named", "name": "posterior_sd[1]", "expected": 0.1282319326404794, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "map[0]", "expected": 0.09292785441717748, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "map[1]", "expected": 1.9744058708220267, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "map_fitness", "expected": -0.11762547033323505, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "rhat[1]", "expected": 1.0108072063912357, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "dim", "args": [0], "expected": 20, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_summary = 1 + 3 chains + 8 * 2 parameters" },
+        { "method": "dim", "args": [3], "expected": 2, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_parameters" }
+      ]
+    }
+  ]
+}

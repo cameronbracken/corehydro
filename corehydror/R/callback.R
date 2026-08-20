@@ -266,6 +266,201 @@ rng_is_whole <- function(x) {
     x == trunc(x) && abs(x) <= .Machine$integer.max
 }
 
+#' Sample your own posterior by MCMC
+#'
+#' Runs any of the ported MCMC samplers against a log-likelihood you write and priors you
+#' choose. This is the constructor the upstream C# library itself exposes,
+#' `MCMCSampler(priorDistributions, logLikelihoodFunction)`: [mcmc_sample()] can only fit a
+#' built-in distribution family under uniform priors spanning its parameter constraints, while
+#' this function takes any model you can write down.
+#'
+#' `log_likelihood` is called with one numeric vector, as long as `priors`, and must return a
+#' single number. Following the upstream contract, it should return the log of the data
+#' likelihood PLUS the log prior density; the `priors` list is used for the feasible parameter
+#' bounds and for chain initialization, and is never added to your value behind your back. A
+#' parameter outside its prior's support is rejected before your function sees it, so a flat
+#' (uniform) prior needs no term of its own.
+#'
+#' @param log_likelihood a function taking a numeric parameter vector and returning a single
+#'   number.
+#' @param priors a list of [distribution()] objects, one per parameter, in the order
+#'   `log_likelihood` reads them. A single distribution is accepted for a one-parameter model.
+#' @param sampler one of `"RWMH"` (the default), `"ARWMH"`, `"DEMCz"`, `"DEMCzs"`, `"HMC"`,
+#'   `"NUTS"`, or `"SNIS"`. `"Gibbs"` needs a proposal function and is not available yet.
+#' @param iterations iterations per chain (sampler default if `NULL`). `"SNIS"` needs at least
+#'   10000: its ported validation requires `iterations` to be at least the output length, and the
+#'   output length keeps its default of 10000 here.
+#' @param warmup warm-up iterations discarded from each chain (sampler default if `NULL`). When
+#'   `iterations` is given and `warmup` is not, half of `iterations` is used, matching
+#'   [mcmc_sample()]. `"SNIS"` is the exception: its ported validation rejects any warm-up at all,
+#'   so none is derived for it.
+#' @param chains number of chains (sampler default if `NULL`). `"DEMCz"` and `"DEMCzs"` require
+#'   at least three; `"SNIS"` draws independently and runs one.
+#' @param thinning thinning interval (sampler default if `NULL`).
+#' @param seed PRNG seed; `12345` is the C# default.
+#' @param initialize chain initialization: `"MAP"` (from the posterior-mode estimate, the C#
+#'   default) or `"Randomize"` (draws from the priors).
+#' @return A list with the same fields [mcmc_sample()] returns: `parameters` (parameter names,
+#'   `p1`, `p2`, ... since your model names nothing), `chains` (a list of one
+#'   draws-by-parameters matrix per chain), `acceptance_rates`, `map`, `map_fitness`,
+#'   `posterior_mean`, `posterior_sd`, `posterior_median`, `posterior_lower_ci`,
+#'   `posterior_upper_ci`, `rhat`, and `ess`.
+#' @section Reproducing a run in Python:
+#' A seeded [mcmc_sample()] run is bit-identical between R and Python, because every arithmetic
+#' operation happens in the shared C++ core. That guarantee is WEAKER here, and it is worth
+#' stating plainly. The draws still come from the core's seeded Mersenne Twister, but the
+#' log-density is your own R code, and R and Python do not guarantee identical rounding for the
+#' same formula. MCMC amplifies a single differing bit far harder than an optimizer does: one
+#' flipped accept-or-reject changes every state after it, so the two chains diverge outright
+#' rather than drift apart slowly.
+#'
+#' A seeded run reproduces across the two languages if and only if your function returns
+#' bit-identical values. Arithmetic (`+ - * /`) is IEEE-deterministic and does reproduce; `log`,
+#' `exp`, `gamma` and friends come from each platform's own math library and are not guaranteed
+#' to. Note also that R's `sum()` accumulates in extended precision while Python's does not, so
+#' an explicit loop or `Reduce()` is the portable spelling.
+#' @section Performance:
+#' Every evaluation calls back into R, and there are far more of them than `iterations` suggests:
+#' the count is `(iterations + output_length / chains) * thinning * chains`, and the ported
+#' defaults are 4 chains, a thinning interval of 20 and an output length of 10,000. So
+#' `iterations = 10000` is a million crossings, not ten thousand.
+#'
+#' That is affordable. Measured here, `iterations = 10000` over a 50-point Gaussian log-density
+#' took 4.5 seconds, against 4.9 seconds for the [mcmc_sample()] call in the same units -- the
+#' callback path is not the slower one, because `mcmc_sample()`'s built-in log-likelihood rebuilds
+#' a distribution object on every evaluation while a small R closure does not. The crossing itself
+#' costs about 4 microseconds: the same closure called a million times directly from R takes 0.3
+#' seconds, so roughly 4 of the 4.5 seconds is the boundary and not your code.
+#'
+#' Two settings dominate the count and neither is obvious. `thinning` multiplies it, so
+#' `thinning = 1` turned the same run into 0.26 seconds. And `initialize = "MAP"`, the C# default,
+#' runs the DifferentialEvolution optimizer over your function before the first chain iteration;
+#' `initialize = "Randomize"` skips the optimizer.
+#' @section Interrupting a long run:
+#' Ctrl-C returns control with an interrupt condition, but not instantly. The ported samplers have
+#' no cancellation hook, so the chain runs to the end of its loop -- rejecting every remaining
+#' point without calling your function again -- before the interrupt surfaces. Measured on a
+#' 100,000-iteration chain: 4.2 seconds from Ctrl-C to the prompt.
+#' @seealso [mcmc_sample()] for a built-in family under constraint-based priors, which is faster
+#'   and bit-identical across languages.
+#' @examples
+#' \donttest{
+#' set.seed(1)
+#' x <- rnorm(50, mean = 5)
+#' ll <- function(p) -0.5 * sum((x - p[1])^2)
+#' fit <- mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))),
+#'                       iterations = 500, seed = 12345)
+#' fit$posterior_mean
+#' }
+#' @export
+mcmc_posterior <- function(
+  log_likelihood,
+  priors,
+  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS"),
+  iterations = NULL,
+  warmup = NULL,
+  chains = NULL,
+  thinning = NULL,
+  seed = 12345,
+  initialize = c("MAP", "Randomize")
+) {
+  if (!is.function(log_likelihood)) {
+    stop("`log_likelihood` must be a function taking a parameter vector and returning a single number",
+         call. = FALSE)
+  }
+  sampler <- match.arg(sampler)
+  initialize <- match.arg(initialize)
+  priors <- mcmc_prior_list(priors)
+
+  opts <- list(
+    sampler = sampler,
+    initialize = initialize,
+    seed = as.integer(seed),
+    priors = unname(priors)
+  )
+  if (!is.null(iterations)) {
+    opts$iterations <- as.integer(iterations)
+    # The sampler requires warmup <= iterations / 2; when only iterations is given, follow
+    # mcmc_sample()'s rule. SNIS is the exception: its ported ValidateSettings rejects ANY
+    # warm-up, so an auto-derived one would turn a legal call into an error.
+    if (is.null(warmup) && !identical(sampler, "SNIS")) {
+      warmup <- max(50L, as.integer(iterations) %/% 2L)
+    }
+  }
+  if (!is.null(warmup)) opts$warmup <- as.integer(warmup)
+  if (!is.null(chains)) {
+    if (identical(sampler, "SNIS") && as.integer(chains) != 1L) {
+      stop("SNIS draws independently rather than running Markov chains; it supports `chains = 1` only",
+           call. = FALSE)
+    }
+    opts$chains <- as.integer(chains)
+  }
+  if (!is.null(thinning)) opts$thinning <- as.integer(thinning)
+  if (identical(sampler, "RWMH")) {
+    # The RWMH constructor takes a proposal covariance, and the ported default is all zeros,
+    # which is only usable when MAP initialization overwrites it before the first iteration.
+    # Identity is what mcmc_sample() sets for the same reason.
+    opts$proposal_sigma <- "identity"
+  }
+
+  mcmc_unflatten(ch_callback_mcmc_(to_spec_json(opts), log_likelihood))
+}
+
+# Internal: accept either a list of distribution() objects or a single one, and refuse anything
+# else by name. The length of this list IS the parameter count, so a wrong one is the likeliest
+# user error here and the C++ side cannot tell it from an intentional model.
+mcmc_prior_list <- function(priors) {
+  if (inherits(priors, "corehydro_dist")) priors <- list(priors)
+  if (!is.list(priors) || length(priors) == 0L ||
+      !all(vapply(priors, inherits, logical(1), "corehydro_dist"))) {
+    stop("`priors` must be a non-empty list of distribution() objects, one per parameter",
+         call. = FALSE)
+  }
+  priors
+}
+
+# Internal: slice the flat callback result back into the shape mcmc_sample() returns. The layout
+# is documented in core/include/corehydro/numerics/support/callback/mcmc.hpp -- a named summary
+# block, then the draws row-major by [chain][draw][parameter] -- and corehydropy's own
+# _mcmc_unflatten() reads it identically.
+mcmc_unflatten <- function(res) {
+  dims <- as.integer(unlist(res$dims))
+  n_summary <- dims[[1]]
+  n_chains <- dims[[2]]
+  n_draws <- dims[[3]]
+  p <- dims[[4]]
+  values <- as.double(unlist(res$values))
+  nms <- as.character(unlist(res$names))
+
+  by_name <- function(name) as.double(values[[match(name, nms)]])
+  per_parameter <- function(prefix) {
+    as.double(values[match(sprintf("%s[%d]", prefix, seq_len(p) - 1L), nms)])
+  }
+
+  draws <- values[seq.int(n_summary + 1L, length.out = n_chains * n_draws * p)]
+  chains <- lapply(seq_len(n_chains), function(k) {
+    block <- draws[seq.int((k - 1L) * n_draws * p + 1L, length.out = n_draws * p)]
+    matrix(block, nrow = n_draws, ncol = p, byrow = TRUE)
+  })
+
+  list(
+    parameters = paste0("p", seq_len(p)),
+    chains = chains,
+    acceptance_rates = as.double(values[match(
+      sprintf("acceptance_rate[%d]", seq_len(n_chains) - 1L), nms
+    )]),
+    map = per_parameter("map"),
+    map_fitness = by_name("map_fitness"),
+    posterior_mean = per_parameter("posterior_mean"),
+    posterior_sd = per_parameter("posterior_sd"),
+    posterior_median = per_parameter("posterior_median"),
+    posterior_lower_ci = per_parameter("posterior_lower_ci"),
+    posterior_upper_ci = per_parameter("posterior_upper_ci"),
+    rhat = per_parameter("rhat"),
+    ess = per_parameter("ess")
+  )
+}
+
 # Internal, test-only: seed a generator, hand `f` a handle on it, return what `f` drew. `f` takes
 # (parameters, rng), the Gibbs proposal's own signature, so what the fixtures prove here about the
 # handle carries over to the samplers. Not exported -- a user reaches the handle through a real

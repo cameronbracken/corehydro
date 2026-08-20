@@ -309,3 +309,128 @@ test_that("a non-finite point is rejected by name, the same way Python rejects i
   # derivative()'s scalar point already had the finite check; it stays.
   expect_error(derivative(function(x) x^3, Inf), "single finite number")
 })
+
+# --- mcmc_posterior ------------------------------------------------------------------------
+
+# The Gaussian kernel the fixture catalog uses, written the same way: arithmetic only, summed in
+# an explicit loop rather than through sum(), which accumulates in extended precision in R alone.
+mcmc_gaussian_kernel <- function(p) {
+  data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+  acc <- 0
+  for (x in data) acc <- acc + (x - p[1]) * (x - p[1])
+  -0.5 * acc
+}
+
+test_that("mcmc_posterior recovers the mean of a user-written Gaussian posterior", {
+  fit <- mcmc_posterior(
+    mcmc_gaussian_kernel, list(distribution("Uniform", c(0, 10))),
+    iterations = 300, warmup = 100, chains = 2, thinning = 1, seed = 12345,
+    initialize = "Randomize"
+  )
+  expect_equal(fit$posterior_mean[[1]], 5.0, tolerance = 0.2)
+  expect_equal(fit$map[[1]], 5.0, tolerance = 0.2)
+  # The full mcmc_sample() shape, so a user can move between the two functions.
+  expect_named(fit, names(mcmc_sample(c(4.9, 5.1, 5.0, 5.2, 4.8), "Normal", iterations = 200)))
+  expect_equal(fit$parameters, "p1")
+  expect_length(fit$chains, 2L)
+  expect_equal(dim(fit$chains[[1]]), c(300L, 1L))
+  expect_length(fit$acceptance_rates, 2L)
+})
+
+test_that("two seeded mcmc_posterior runs are identical", {
+  args <- list(
+    mcmc_gaussian_kernel, list(distribution("Uniform", c(0, 10))),
+    iterations = 300, warmup = 100, chains = 2, thinning = 1, seed = 12345,
+    initialize = "Randomize"
+  )
+  expect_identical(do.call(mcmc_posterior, args), do.call(mcmc_posterior, args))
+  # A different seed is a different chain, so the equality above is not vacuous.
+  other <- do.call(mcmc_posterior, utils::modifyList(args, list(seed = 999)))
+  expect_false(identical(other$chains, do.call(mcmc_posterior, args)$chains))
+})
+
+test_that("a two-parameter model reads its priors in order", {
+  # The prior list's length IS the parameter count, and the order is the order the log-likelihood
+  # indexes. A straight line through eight points, intercept then slope.
+  ll <- function(p) {
+    t <- c(1, 2, 3, 4, 5, 6, 7, 8)
+    y <- c(2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1)
+    acc <- 0
+    for (i in seq_along(t)) {
+      residual <- y[i] - p[1] - p[2] * t[i]
+      acc <- acc + residual * residual
+    }
+    -0.5 * acc
+  }
+  fit <- mcmc_posterior(
+    ll, list(distribution("Uniform", c(-5, 5)), distribution("Uniform", c(0, 5))),
+    sampler = "DEMCz", iterations = 300, warmup = 100, chains = 3, thinning = 1, seed = 12345,
+    initialize = "Randomize"
+  )
+  expect_equal(fit$parameters, c("p1", "p2"))
+  expect_equal(fit$map[[1]], 0.1, tolerance = 0.5)
+  expect_equal(fit$map[[2]], 2.0, tolerance = 0.2)
+})
+
+test_that("an error raised inside the log-likelihood reaches the caller", {
+  # On BOTH initialization paths, and they fail differently underneath: "Randomize" never throws
+  # of its own accord (-infinity is a legal, always rejected fitness, so the chain runs to
+  # completion), while "MAP" hands DifferentialEvolution nothing but -infinity and can throw from
+  # its own internals first. Only the guard makes the user's own message win in both.
+  for (init in c("Randomize", "MAP")) {
+    expect_error(
+      mcmc_posterior(
+        function(p) stop("my own error"), list(distribution("Uniform", c(0, 10))),
+        iterations = 100, warmup = 50, chains = 2, thinning = 1, seed = 12345,
+        initialize = init
+      ),
+      "my own error"
+    )
+  }
+})
+
+test_that("mcmc_posterior refuses a prior list that is not one", {
+  ll <- mcmc_gaussian_kernel
+  expect_error(mcmc_posterior(ll, list()), "non-empty list of distribution\\(\\) objects")
+  expect_error(mcmc_posterior(ll, "Uniform"), "non-empty list of distribution\\(\\) objects")
+  expect_error(mcmc_posterior(ll, list(distribution("Uniform", c(0, 10)), 3)),
+               "non-empty list of distribution\\(\\) objects")
+  expect_error(mcmc_posterior("not a function", list(distribution("Uniform", c(0, 10)))),
+               "`log_likelihood` must be a function")
+  expect_error(
+    mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "Gibbs"),
+    "'arg' should be one of"
+  )
+  # A single distribution is accepted for a one-parameter model.
+  fit <- mcmc_posterior(ll, distribution("Uniform", c(0, 10)), iterations = 100, warmup = 50,
+                        chains = 2, thinning = 1, seed = 12345, initialize = "Randomize")
+  expect_equal(fit$parameters, "p1")
+})
+
+test_that("a log-likelihood indexing past its priors fails by name", {
+  # The likeliest user error on this surface: three parameters written, one prior given. R hands
+  # back NA rather than raising, so the message has to come from the glue's own return check -- Python
+  # raises IndexError of its own accord, and this is what keeps the two packages in step.
+  expect_error(
+    mcmc_posterior(
+      function(p) -0.5 * (p[1] * p[1] + p[2] * p[2]), list(distribution("Uniform", c(0, 10))),
+      iterations = 100, warmup = 50, chains = 2, thinning = 1, seed = 12345,
+      initialize = "Randomize"
+    ),
+    "returned NA or NaN rather than a number"
+  )
+})
+
+test_that("SNIS is refused the settings its own ported validation refuses", {
+  ll <- mcmc_gaussian_kernel
+  expect_error(
+    mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "SNIS", chains = 4),
+    "supports `chains = 1` only"
+  )
+  # And it runs when left alone: no auto-derived warm-up, because its ValidateSettings rejects any.
+  # Its other ported rule is `Iterations >= OutputLength`, and OutputLength is not a setting this
+  # surface exposes, so 10000 is the smallest iteration count SNIS accepts here.
+  fit <- mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "SNIS",
+                        iterations = 10000, seed = 12345, initialize = "Randomize")
+  expect_equal(fit$posterior_mean[[1]], 5.0, tolerance = 0.5)
+})

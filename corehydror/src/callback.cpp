@@ -2,6 +2,26 @@
 // serializable data through ch_toolbox_run_, every verb here takes a live R function, so it goes
 // through callback_runner.hpp and its guard. Mirrors corehydropy's src/bindings/callback.cpp
 // call for call.
+//
+// INTERRUPTS, measured rather than assumed (Task 4, mcmc_posterior). Ctrl-C during a long chain
+// returns control to the prompt with an `interrupt` condition, and no R_CheckUserInterrupt() call
+// is needed in this file to get it. R's own eval() checks for a pending interrupt every thousand
+// evaluations, so any callback that evaluates R code at all -- which every callback does -- is a
+// check point. R raises the interrupt inside the closure, cpp11 turns it into a C++ exception at
+// the call below, GuardedCall latches it, and run_callback rethrows it inside this same protected
+// frame, exactly as it does a user's own stop(). Verified over a pseudo-terminal against a real
+// interactive session: an added cpp11::safe[R_CheckUserInterrupt]() changed neither the outcome
+// nor the timing, so it was taken back out.
+//
+// What Ctrl-C is NOT is instant, and that is worth knowing before reporting a hang. The ported
+// samplers have no cancellation hook (the C# CancellationTokenSource is a documented omission of
+// this port), so after the latch the chain still runs to the end of its loop -- every remaining
+// point rejected without re-entering R -- before the exception surfaces. Measured on a 100,000-
+// iteration single chain at the default thinning: control came back 4.2 seconds after Ctrl-C, out
+// of a 10-second run. Python behaves the same way and for the same reason -- CPython raises
+// KeyboardInterrupt inside the callback, pybind11 hands it over as py::error_already_set, and the
+// guard carries it out -- and is quicker to unwind: 0.3 seconds after SIGINT on a 200,000-
+// iteration chain. Neither language hangs and neither segfaults.
 // Core headers are vendored under src/corehydro_core/include (a symlink into core/; regenerate real files with tools/materialize_core.py).
 #include <cpp11.hpp>
 
@@ -44,6 +64,17 @@ std::function<double(const std::vector<double>&)> as_vector_scalar_fn(function f
             throw std::runtime_error(
                 "the function must return a single number; got a value of length " +
                 std::to_string(static_cast<long long>(v.size())));
+        // NA and NaN are refused; +/-Inf is NOT. An infinite log-density is the ordinary way to
+        // say "this parameter is impossible" and every sampler treats it as a rejected point, but
+        // NA is never an answer -- it is R telling you the arithmetic had a hole in it. The
+        // commonest hole on this surface is a log-likelihood reading p[3] when the prior list has
+        // two entries: R returns NA where Python raises IndexError, so without this check the same
+        // mistake is a clear error in one package and a silently motionless chain in the other.
+        // corehydropy's as_vector_scalar_fn refuses nan for the same reason.
+        if (ISNAN(v[0]))
+            throw std::runtime_error(
+                "the function returned NA or NaN rather than a number; in R, reading past the end "
+                "of a vector gives NA, so check the length of the vector it was passed");
         return v[0];
     };
 }
@@ -134,6 +165,21 @@ list ch_callback_math_(std::string method, std::string options_json, function f)
     else
         cbs.vector_scalar = as_vector_scalar_fn(f);
     return pack(sup::run_callback("math", method, options_json, cbs));
+}
+
+// Runs the callback runner's "mcmc" group against an R log-likelihood: `f` is called with the
+// whole parameter vector and must return a single number, exactly as upstream's own
+// `LogLikelihood` delegate does. The flat result is the layout documented in
+// numerics/support/callback/mcmc.hpp; R/callback.R's mcmc_posterior() slices it back into the
+// list mcmc_sample() returns.
+//
+// INTERRUPTS. Ctrl-C during a long chain returns control with an interrupt condition, and not
+// instantly -- both halves of that are measured and explained in this file's header note.
+[[cpp11::register]]
+list ch_callback_mcmc_(std::string options_json, function f) {
+    sup::CallbackSet cbs;
+    cbs.vector_scalar = as_vector_scalar_fn(f);
+    return pack(sup::run_callback("mcmc", "sample", options_json, cbs));
 }
 
 // Seeds a generator, hands `f` a handle on it together with the `parameters` vector from the

@@ -58,6 +58,7 @@ from .callback import (
     derivative,
     gradient,
     hessian,
+    mcmc_posterior,
     quadrature,
     root_find,
 )
@@ -264,6 +265,7 @@ __all__ = [
     "plotting_positions",
     "latin_hypercube",
     "mcmc_sample",
+    "mcmc_posterior",
     "AnalysisData",
     "analysis_data",
     "analysis_data_summary",

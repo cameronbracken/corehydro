@@ -1757,6 +1757,14 @@ def _callback_fixture_function(name):
         # subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
         # bit and the evaluation count is a real oracle.
         return lambda x: 1.0 / (1.0 + 1.0e4 * x * x)
+    # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
+    # sum in an explicit loop rather than through sum(): a Markov chain turns one differing bit
+    # into a different chain outright, so the four runners have to agree to the last bit for these
+    # oracles to mean anything. See the fixture's own note.
+    if name == "Mcmc_GaussianKernel":
+        return _mcmc_gaussian_kernel
+    if name == "Mcmc_LinearKernel":
+        return _mcmc_linear_kernel
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1778,6 +1786,24 @@ def _callback_fixture_function(name):
     raise KeyError(f"unknown callback fixture callback: {name}")
 
 
+def _mcmc_gaussian_kernel(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        acc += (x - p[0]) * (x - p[0])
+    return -0.5 * acc
+
+
+def _mcmc_linear_kernel(p):
+    t = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)
+    y = (2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1)
+    acc = 0.0
+    for i in range(len(t)):
+        residual = y[i] - p[0] - p[1] * t[i]
+        acc += residual * residual
+    return -0.5 * acc
+
+
 def _rng_warmup_1000(parameters, rng):
     rng.uniform(1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
     return rng.uniform(10)
@@ -1785,7 +1811,7 @@ def _rng_warmup_1000(parameters, rng):
 
 def _run_callback_case(case):
     construct = case["construct"]
-    # Only "math" and "rng" have Python glue so far; the mcmc/bootstrap/gmm groups arrive with
+    # Only "math", "rng" and "mcmc" have Python glue so far; the bootstrap/gmm groups arrive with
     # their own entry points in later tasks.
     options_json = json.dumps(construct.get("options", {}))
     fn = _callback_fixture_function(construct["callback"])
@@ -1793,12 +1819,21 @@ def _run_callback_case(case):
         r = _core.callback_math(construct["method"], options_json, fn)
     elif construct["group"] == "rng":
         r = _core.rng_probe(options_json, fn)
+    elif construct["group"] == "mcmc":
+        r = _core.callback_mcmc(options_json, fn)
     else:
         raise KeyError(f"unknown callback fixture group: {construct['group']}")
     for a in case["assertions"]:
         index = a["args"][0] if "args" in a else 0
         if a["method"] == "value":
             _check(r["values"][index], a)
+        elif a["method"] == "named":
+            # By label, not position: the mcmc group's summary block is long and its indices
+            # shift with the chain and parameter counts.
+            names = list(r["names"])
+            if a["name"] not in names:
+                raise KeyError(f"callback: no result named '{a['name']}'")
+            _check(r["values"][names.index(a["name"])], a)
         elif a["method"] == "dim":
             _check(float(r["dims"][index]), a)
         elif a["method"] == "status":

@@ -1739,7 +1739,7 @@ or `"status"` (the exact `OptimizationStatus` name).
 
 The ported routines whose input is a live host-language function rather than serializable data,
 run through the shared callback runner (`numerics/support/callback_runner.hpp`) and its exception
-guard. `construct` names a `group` (`"math"` and `"rng"` so far -- `"mcmc"`, `"bootstrap"` and
+guard. `construct` names a `group` (`"math"`, `"rng"` and `"mcmc"` so far -- `"bootstrap"` and
 `"gmm"` follow), a `method`, a `callback` (a NAMED built-in each of the four runners writes itself as a
 native closure: a C++ lambda, an R closure, a Python lambda, a C# delegate), and an `options`
 object passed through verbatim as the runner's options JSON. The catalog names are documented in
@@ -1770,7 +1770,8 @@ runners; `--dump` is supported.
 ```
 
 Assertion `method` is `"value"` (`args: [index]` into the flat result -- a matrix is flattened
-row-major), `"dim"` (`args: [index]` into the result's `dims`), or `"status"`. `dims` takes one of
+row-major), `"named"` (`name: "<label>"`, resolved through the result's `names`), `"dim"`
+(`args: [index]` into the result's `dims`), or `"status"`. `dims` takes one of
 three shapes: empty when the group reports no shape (a scalar result, or a plain vector whose
 length is the number of values -- `math/root_find`, `math/derivative`), `{n}` for an explicitly
 shaped vector (`math/gradient`), and `{rows, cols}` for a row-major matrix (`math/hessian`). A
@@ -1803,6 +1804,24 @@ seeds 12345 and reads `NextDouble`/`Next`. Because the handle borrows the genera
 only, there is nothing for a fixture to assert about its expiry -- that half is asserted in each
 package's own tests (`corehydror/tests/testthat/test-callback.R`,
 `corehydropy/tests/test_callback.py`).
+
+The `"mcmc"` group has one method, `sample`, and drives upstream's own delegate constructor,
+`MCMCSampler(List<IUnivariateDistribution> priorDistributions, LogLikelihood
+logLikelihoodFunction)` -- the model registry the `mcmc_sampler` kind builds against is corehydro
+scaffolding, while these cases pass their own priors and their own delegate as a C# caller would.
+Its `options` carry a `sampler` name, a REQUIRED `priors` array in the same distribution-spec
+grammar `dist_spec.hpp` builds from, the five short user-facing settings (`iterations`, `warmup`,
+`chains`, `thinning`, `seed`), `initialize`, and any of the sampler's own setting names; an absent
+key leaves the ported default in force. The result is the one place `values` is only PARTLY named:
+a summary block (`map_fitness`, `acceptance_rate[c]`, then `map[j]`/`posterior_mean[j]`/
+`posterior_sd[j]`/`posterior_median[j]`/`posterior_lower_ci[j]`/`posterior_upper_ci[j]`/`rhat[j]`/
+`ess[j]`) followed by the raw draws row-major by `[chain][draw][parameter]`, with
+`dims = {n_summary, n_chains, n_draws, n_parameters}`. That is why the `"named"` assertion method
+exists: the summary indices shift with the chain and parameter counts, so `"posterior_mean[0]"`
+says what it pins where `12` does not. `fixtures/callback/mcmc.json` is the one file of this group
+and every value in it is `EMITTER-READ`; both its catalog log-densities are built from `+ - * /`
+alone and sum in an explicit loop, because a Markov chain turns one differing bit into a different
+chain outright (R's `sum()` accumulates in extended precision, so it is specifically avoided).
 
 ### `toolbox_cross_language`
 

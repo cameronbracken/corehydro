@@ -909,6 +909,174 @@ static Func<double[], Random, double[]>? CallbackRngFunction(string name) => nam
     _ => null
 };
 
+// The callback surface, Task 4: the mcmc-group catalog for fixtures/callback/mcmc.json. These are
+// the C# `LogLikelihood` delegates the REAL Numerics samplers are constructed with -- upstream's
+// own `MCMCSampler(List<IUnivariateDistribution>, LogLikelihood)` constructor -- and the
+// counterpart of the native closures the C++/R/Python fixture runners write for the same names.
+//
+// BOTH are deliberately built from `+ - * /` alone, with the summation written as an explicit
+// loop rather than any language's sum(): a Markov chain amplifies one differing bit into a
+// different chain outright (one flipped accept/reject changes every state after it), so a
+// transcendental call, or R's extended-precision `sum()`, would make these oracles a coincidence
+// of one platform's math library rather than a reproducible fact. The datasets are inlined here
+// exactly as they are in the other three runners.
+// (The datasets are built inside each delegate rather than held in fields: this file is a C#
+// top-level program, which has no place to declare one.)
+static Func<double[], double>? CallbackMcmcFunction(string name) => name switch
+{
+    // One parameter: the Gaussian kernel -0.5 * sum((x - mu)^2), unit variance, no normalizer.
+    "Mcmc_GaussianKernel" => p =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data) acc += (x - p[0]) * (x - p[0]);
+        return -0.5 * acc;
+    },
+    // Two parameters: the same kernel over the residuals of a straight line, y = a + b * t.
+    "Mcmc_LinearKernel" => p =>
+    {
+        double[] t = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+        double[] y = { 2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1 };
+        double acc = 0d;
+        for (int i = 0; i < t.Length; i++)
+        {
+            double residual = y[i] - p[0] - p[1] * t[i];
+            acc += residual * residual;
+        }
+        return -0.5 * acc;
+    },
+    _ => null
+};
+
+// Builds the prior list a callback-group mcmc case names, from the same {"family", "parameters"}
+// spec grammar dist_spec.hpp builds from on the C++ side.
+static List<IUnivariateDistribution> CallbackMcmcPriors(JsonElement options)
+{
+    if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty("priors", out var pel))
+        throw new Exception("mcmc/sample requires the option 'priors'");
+    var priors = new List<IUnivariateDistribution>();
+    foreach (var spec in pel.EnumerateArray())
+    {
+        var dist = UnivariateDistributionFactory.CreateDistribution(
+            Enum.Parse<UnivariateDistributionType>(spec.GetProperty("family").GetString()!));
+        dist.SetParameters(spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray());
+        priors.Add(dist);
+    }
+    if (priors.Count == 0) throw new Exception("mcmc/sample requires at least one prior distribution");
+    return priors;
+}
+
+// Builds + configures + samples one sampler from a callback-group mcmc case's options, mirroring
+// mcmc_run.hpp's build_sampler() arm for arm (the five short user-facing keys plus the sampler's
+// own setting names; an absent key leaves the C# class's OWN default in force).
+static MCMCSampler BuildAndSampleCallbackMcmc(JsonElement options, LogLikelihood logLikelihood)
+{
+    var priors = CallbackMcmcPriors(options);
+    int d = priors.Count;
+    bool Has(string key) => options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
+    double Num(string key, double dflt) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+            ? ParseNum(v) : dflt;
+    string? Str(string key) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+            ? v.GetString() : null;
+    // The short key wins where both exist, matching callback/mcmc.hpp's read order.
+    bool HasEither(string shortKey, string longKey) => Has(shortKey) || Has(longKey);
+    int IntEither(string shortKey, string longKey, int dflt) =>
+        Has(shortKey) ? (int)Num(shortKey, dflt) : (int)Num(longKey, dflt);
+
+    string samplerType = Str("sampler") ?? "RWMH";
+    MCMCSampler sampler = samplerType switch
+    {
+        "RWMH" => new RWMH(priors, logLikelihood,
+            Str("proposal_sigma") switch
+            {
+                null => new Matrix(d),
+                "zeros" => new Matrix(d),
+                "identity" => Matrix.Identity(d),
+                var s => throw new Exception($"unknown proposal_sigma sentinel: {s}")
+            }),
+        "HMC" => new HMC(priors, logLikelihood, stepSize: Num("step_size", 0.1),
+                          steps: (int)Num("steps", 50)),
+        "NUTS" => new NUTS(priors, logLikelihood, stepSize: Num("step_size", 0.1),
+                            maxTreeDepth: (int)Num("max_tree_depth", 10)),
+        "ARWMH" => new ARWMH(priors, logLikelihood),
+        "SNIS" => new SNIS(priors, logLikelihood),
+        "DEMCz" => new DEMCz(priors, logLikelihood),
+        "DEMCzs" => new DEMCzs(priors, logLikelihood),
+        _ => throw new Exception($"unknown MCMC sampler '{samplerType}'")
+    };
+
+    if (Str("initialize") is string init) sampler.Initialize = ParseInitialize(init);
+    if (HasEither("seed", "prng_seed")) sampler.PRNGSeed = IntEither("seed", "prng_seed", 12345);
+    if (Has("initial_iterations")) sampler.InitialIterations = (int)Num("initial_iterations", 0);
+    if (HasEither("warmup", "warmup_iterations"))
+        sampler.WarmupIterations = IntEither("warmup", "warmup_iterations", 0);
+    if (Has("iterations")) sampler.Iterations = (int)Num("iterations", 0);
+    if (HasEither("chains", "number_of_chains"))
+        sampler.NumberOfChains = IntEither("chains", "number_of_chains", 0);
+    if (HasEither("thinning", "thinning_interval"))
+        sampler.ThinningInterval = IntEither("thinning", "thinning_interval", 0);
+    if (Has("output_length")) sampler.OutputLength = (int)Num("output_length", 0);
+    if (sampler is ARWMH arwmhC)
+    {
+        if (Has("scale")) arwmhC.Scale = Num("scale", 0);
+        if (Has("beta")) arwmhC.Beta = Num("beta", 0);
+    }
+    if (sampler is DEMCz demczC)
+    {
+        if (Has("jump")) demczC.Jump = Num("jump", 0);
+        if (Has("jump_threshold")) demczC.JumpThreshold = Num("jump_threshold", 0);
+        if (Has("noise")) demczC.Noise = Num("noise", 0);
+    }
+    if (sampler is DEMCzs demczsC)
+    {
+        if (Has("jump")) demczsC.Jump = Num("jump", 0);
+        if (Has("jump_threshold")) demczsC.JumpThreshold = Num("jump_threshold", 0);
+        if (Has("snooker_threshold")) demczsC.SnookerThreshold = Num("snooker_threshold", 0);
+        if (Has("noise")) demczsC.Noise = Num("noise", 0);
+    }
+    if (sampler is NUTS nutsC && Has("adapt_mass_matrix"))
+        nutsC.AdaptMassMatrix = options.GetProperty("adapt_mass_matrix").GetBoolean();
+
+    sampler.Sample();
+    return sampler;
+}
+
+// Flattens a finished run into the layout callback/mcmc.hpp's mcmc_flatten() documents: a named
+// summary block, then the draws row-major by [chain][draw][parameter].
+static (double[] values, string[] names, int[] dims) FlattenCallbackMcmc(MCMCSampler sampler)
+{
+    var results = new MCMCResults(sampler);
+    int chains = sampler.NumberOfChains, p = sampler.NumberOfParameters;
+    var values = new List<double>();
+    var names = new List<string>();
+    void Push(string name, double value) { names.Add(name); values.Add(value); }
+    void PushEach(string label, Func<int, double> read, int count)
+    {
+        for (int j = 0; j < count; j++) Push($"{label}[{j}]", read(j));
+    }
+
+    Push("map_fitness", results.MAP.Fitness);
+    PushEach("acceptance_rate", j => sampler.AcceptanceRates[j], chains);
+    PushEach("map", j => results.MAP.Values[j], p);
+    PushEach("posterior_mean", j => results.ParameterResults[j].SummaryStatistics.Mean, p);
+    PushEach("posterior_sd", j => results.ParameterResults[j].SummaryStatistics.StandardDeviation, p);
+    PushEach("posterior_median", j => results.ParameterResults[j].SummaryStatistics.Median, p);
+    PushEach("posterior_lower_ci", j => results.ParameterResults[j].SummaryStatistics.LowerCI, p);
+    PushEach("posterior_upper_ci", j => results.ParameterResults[j].SummaryStatistics.UpperCI, p);
+    PushEach("rhat", j => results.ParameterResults[j].SummaryStatistics.Rhat, p);
+    PushEach("ess", j => results.ParameterResults[j].SummaryStatistics.ESS, p);
+    int nSummary = values.Count;
+
+    int draws = sampler.MarkovChains[0].Count;
+    for (int c = 0; c < chains; c++)
+        for (int i = 0; i < draws; i++)
+            for (int j = 0; j < p; j++) values.Add(sampler.MarkovChains[c][i].Values[j]);
+
+    return (values.ToArray(), names.ToArray(), new[] { nSummary, chains, draws, p });
+}
+
 // numerical_derivative fixture args convention -- MUST mirror
 // numerical_derivative_parse()/gradient_element()/hessian_element() in
 // core/tests/test_fixtures.cpp exactly.
@@ -4717,7 +4885,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             string caseName = c.GetProperty("name").GetString()!;
             var construct = c.GetProperty("construct");
             string group = construct.GetProperty("group").GetString()!;
-            if (group != "math" && group != "rng")
+            if (group != "math" && group != "rng" && group != "mcmc")
                 throw new Exception($"unknown callback fixture group: {group}");
             string method = construct.GetProperty("method").GetString()!;
             string callbackName = construct.GetProperty("callback").GetString()!;
@@ -4735,12 +4903,24 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
 
             double[] values;
             int[] dims;
+            // Set by the mcmc arm, which is the one group whose result is partly NAMED (see
+            // callback/mcmc.hpp's layout note); every other arm leaves it empty and its cases
+            // assert by index.
+            string[] valueNames = Array.Empty<string>();
             // Only quadrature has a C# class with a status to read (AdaptiveGaussKronrod over the
             // Integrator base). Brent and NumericalDerivative are static methods with none, so
             // their arms leave this at the "Success" the C++ runner unconditionally reports for
             // them -- see the status assertion below.
             string statusName = "Success";
-            if (group == "rng")
+            if (group == "mcmc")
+            {
+                if (method != "sample") throw new Exception($"unknown mcmc fixture method: {method}");
+                var f = CallbackMcmcFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an mcmc log-likelihood");
+                var sampler = BuildAndSampleCallbackMcmc(options, new LogLikelihood(f));
+                (values, valueNames, dims) = FlattenCallbackMcmc(sampler);
+            }
+            else if (group == "rng")
             {
                 if (method != "probe") throw new Exception($"unknown rng fixture method: {method}");
                 var f = CallbackRngFunction(callbackName)
@@ -4844,17 +5024,28 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     else { fail++; failures.Add($"{where}: expected {expected} got {statusName}"); }
                     continue;
                 }
+                // `named` reads a value by the label the group gave it rather than by position,
+                // because the mcmc group's summary block is long and its indices shift with the
+                // chain and parameter counts -- "posterior_mean[0]" says what it pins; "12" does
+                // not. Every runner resolves it the same way.
                 double actual = am switch
                 {
                     "value" => values[index],
                     "dim" => dims[index],
+                    "named" => values[Array.IndexOf(valueNames, asrt.GetProperty("name").GetString()!) is int ni && ni >= 0
+                        ? ni
+                        : throw new Exception($"{where}: no result named '{asrt.GetProperty("name").GetString()}'")],
                     _ => throw new Exception($"unknown callback fixture assertion method: {am}")
                 };
                 if (dump)
                 {
                     var dumpArgs = asrt.TryGetProperty("args", out var aEl)
                         ? aEl.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
-                    DumpLine("callback", caseName, am, dumpArgs, () => (object)actual);
+                    if (am == "named")
+                        DumpLine("callback", caseName, asrt.GetProperty("name").GetString()!,
+                                 Array.Empty<JsonElement>(), () => (object)actual);
+                    else
+                        DumpLine("callback", caseName, am, dumpArgs, () => (object)actual);
                     continue;
                 }
                 if (Compare(actual, asrt)) pass++;

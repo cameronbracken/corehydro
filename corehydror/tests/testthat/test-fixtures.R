@@ -449,6 +449,26 @@ callback_fixture_function <- function(name) {
     # branch of the recursion. Written with `x * x` rather than `x^2`, arithmetic only, so all
     # four runners agree bit for bit and the evaluation count is a real oracle.
     Quad_Peak = function(x) 1 / (1 + 1e4 * x * x),
+    # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
+    # sum in an explicit `for` loop rather than through sum(): R's sum() accumulates in extended
+    # precision where C++, Python and C# accumulate in double, and a Markov chain turns one
+    # differing bit into a different chain outright. See the fixture's own note.
+    Mcmc_GaussianKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) acc <- acc + (x - p[1]) * (x - p[1])
+      -0.5 * acc
+    },
+    Mcmc_LinearKernel = function(p) {
+      t <- c(1, 2, 3, 4, 5, 6, 7, 8)
+      y <- c(2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1)
+      acc <- 0
+      for (i in seq_along(t)) {
+        residual <- y[i] - p[1] - p[2] * t[i]
+        acc <- acc + residual * residual
+      }
+      -0.5 * acc
+    },
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -470,12 +490,27 @@ callback_fixture_function <- function(name) {
 
 # `construct$options` was parsed with simplifyVector = FALSE, so a JSON array leaf is an R list of
 # scalars; re-flattened here so a length-1 array survives as a JSON array, not an auto-unboxed
-# scalar.
+# scalar. Recursive because the mcmc group's options carry strings (the sampler name) and an array
+# of prior OBJECTS beside their numbers.
+callback_options_value <- function(ns, v) {
+  if (is.list(v)) {
+    nms <- names(v)
+    if (!is.null(nms) && all(nzchar(nms))) {
+      return(lapply(v, function(e) callback_options_value(ns, e)))
+    }
+    if (all(vapply(v, function(e) !is.list(e) && is.numeric(e) && length(e) == 1L, logical(1)))) {
+      return(ns$spec_array(vapply(v, as.double, numeric(1))))
+    }
+    return(lapply(v, function(e) callback_options_value(ns, e)))
+  }
+  if (is.character(v)) return(as.character(v))
+  if (is.logical(v)) return(as.logical(v))
+  as.double(v)
+}
+
 callback_options_json <- function(ns, options) {
   if (is.null(options) || length(options) == 0L) return("{}")
-  ns$to_spec_json(lapply(options, function(v) {
-    if (is.list(v)) ns$spec_array(vapply(v, as.double, numeric(1))) else as.double(v)
-  }))
+  ns$to_spec_json(lapply(options, function(v) callback_options_value(ns, v)))
 }
 
 # toolbox [group, data, options; assertions carry method/index/label/select]: every Numerics
@@ -1669,7 +1704,7 @@ test_that("oracle fixtures validate", {
       ns <- asNamespace("corehydror")
       for (case in spec$cases) {
         construct <- case$construct
-        # Only "math" and "rng" have R glue so far; the mcmc/bootstrap/gmm groups arrive with
+        # Only "math", "rng" and "mcmc" have R glue so far; the bootstrap/gmm groups arrive with
         # their own entry points in later tasks.
         opts <- callback_options_json(ns, construct$options)
         fn <- callback_fixture_function(construct$callback)
@@ -1677,6 +1712,8 @@ test_that("oracle fixtures validate", {
           ns$ch_callback_math_(construct$method, opts, fn)
         } else if (identical(construct$group, "rng")) {
           ns$ch_rng_probe_(opts, fn)
+        } else if (identical(construct$group, "mcmc")) {
+          ns$ch_callback_mcmc_(opts, fn)
         } else {
           stop(sprintf("unknown callback fixture group: %s", construct$group))
         }
@@ -1684,6 +1721,12 @@ test_that("oracle fixtures validate", {
           idx <- if (is.null(a$args)) 1L else a$args[[1]] + 1L
           if (identical(a$method, "value")) {
             check_assertion(r$values[[idx]], a)
+          } else if (identical(a$method, "named")) {
+            # By label, not position: the mcmc group's summary block is long and its indices
+            # shift with the chain and parameter counts.
+            at <- match(a$name, as.character(unlist(r$names)))
+            if (is.na(at)) stop(sprintf("callback: no result named '%s'", a$name))
+            check_assertion(r$values[[at]], a)
           } else if (identical(a$method, "dim")) {
             check_assertion(as.double(r$dims[[idx]]), a)
           } else if (identical(a$method, "status")) {

@@ -112,12 +112,21 @@ std::function<double(double)> as_scalar_fn(py::function f) {
 std::function<double(const std::vector<double>&)> as_vector_scalar_fn(py::function f) {
     return [f](const std::vector<double>& p) -> double {
         py::object out = f(p);
+        double value;
         try {
-            return out.cast<double>();
+            value = out.cast<double>();
         } catch (const py::cast_error&) {
             throw std::runtime_error("the function must return a single number; got " +
                                      std::string(py::str(out)));
         }
+        // nan is refused; +/-inf is NOT. An infinite log-density is the ordinary way to say "this
+        // parameter is impossible" and every sampler treats it as a rejected point, but a nan is
+        // never an answer. corehydror's as_vector_scalar_fn refuses NA and NaN the same way, which
+        // is what keeps a mistake from being a clear error in one package and a silently
+        // motionless chain in the other.
+        if (std::isnan(value))
+            throw std::runtime_error("the function returned nan rather than a number");
+        return value;
     };
 }
 
@@ -148,6 +157,32 @@ void register_callback(py::module_& m) {
             return pack(sup::run_callback("math", method, options_json, cbs));
         },
         py::arg("method"), py::arg("options_json"), py::arg("f"));
+
+    // Runs the callback runner's "mcmc" group against a Python log-likelihood: `f` is called with
+    // the whole parameter vector as a list and must return a single number, exactly as upstream's
+    // own `LogLikelihood` delegate does. The flat result is the layout documented in
+    // numerics/support/callback/mcmc.hpp; corehydropy.callback's mcmc_posterior() slices it back
+    // into the dict mcmc_sample() returns.
+    //
+    // INTERRUPTS, measured rather than assumed (Task 4). Ctrl-C during a long chain returns
+    // control with a KeyboardInterrupt: CPython raises it at the `f(p)` call above, pybind11 turns
+    // it into a py::error_already_set, and GuardedCall latches it for run_callback to rethrow --
+    // the same path a genuine Python exception takes, so no extra check is needed here. It is not
+    // instant, though, and that is worth knowing before reporting a hang: the ported samplers have
+    // no cancellation hook (the C# CancellationTokenSource is a documented omission of this port),
+    // so after the latch the chain still runs to the end of its loop with every remaining point
+    // rejected -- without re-entering Python -- before the exception surfaces. Measured on a
+    // 200,000-iteration single chain at the default thinning: 0.3 seconds from the signal to the
+    // KeyboardInterrupt reaching the caller. corehydror's src/callback.cpp header carries the R
+    // half of the same measurement.
+    m.def(
+        "callback_mcmc",
+        [](const std::string& options_json, py::function f) {
+            sup::CallbackSet cbs;
+            cbs.vector_scalar = as_vector_scalar_fn(f);
+            return pack(sup::run_callback("mcmc", "sample", options_json, cbs));
+        },
+        py::arg("options_json"), py::arg("f"));
 
     // The handle a callback is given on the core's seeded generator. No constructor is exposed:
     // it is handed out by the runner and is only usable for the duration of the one call it was

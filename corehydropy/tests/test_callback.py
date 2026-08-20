@@ -360,3 +360,128 @@ def test_a_handle_leaked_out_of_a_callback_that_then_raises_is_dead():
         leaked["rng"].uniform(1)
     with pytest.raises(RuntimeError, match="no longer valid"):
         leaked["rng"].integers(1, 0, 2)
+
+
+# --- mcmc_posterior --------------------------------------------------------------------------
+
+
+def _gaussian_kernel(p):
+    """The Gaussian kernel the fixture catalog uses, written the same way: arithmetic only,
+    summed in an explicit loop rather than through sum()."""
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        acc += (x - p[0]) * (x - p[0])
+    return -0.5 * acc
+
+
+_ONE_PRIOR = [ch.Distribution("Uniform", [0.0, 10.0])]
+
+
+def _run(**kwargs):
+    args = dict(
+        iterations=300, warmup=100, chains=2, thinning=1, seed=12345, initialize="Randomize"
+    )
+    args.update(kwargs)
+    return ch.mcmc_posterior(_gaussian_kernel, [ch.Distribution("Uniform", [0.0, 10.0])], **args)
+
+
+def test_mcmc_posterior_recovers_the_mean_of_a_user_written_posterior():
+    fit = _run()
+    assert fit["posterior_mean"][0] == pytest.approx(5.0, abs=0.2)
+    assert fit["map"][0] == pytest.approx(5.0, abs=0.2)
+    # The full mcmc_sample() shape, so a user can move between the two functions.
+    assert list(fit) == list(ch.mcmc_sample([4.9, 5.1, 5.0, 5.2, 4.8], "Normal", iterations=200))
+    assert fit["parameters"] == ["p1"]
+    assert len(fit["chains"]) == 2
+    assert fit["chains"][0].shape == (300, 1)
+    assert len(fit["acceptance_rates"]) == 2
+
+
+def test_two_seeded_mcmc_posterior_runs_are_identical():
+    a, b = _run(), _run()
+    assert (a["chains"][0] == b["chains"][0]).all()
+    assert a["map_fitness"] == b["map_fitness"]
+    # A different seed is a different chain, so the equality above is not vacuous.
+    assert not (_run(seed=999)["chains"][0] == a["chains"][0]).all()
+
+
+def test_a_two_parameter_model_reads_its_priors_in_order():
+    # The prior list's length IS the parameter count, and the order is the order the
+    # log-likelihood indexes. A straight line through eight points, intercept then slope.
+    def ll(p):
+        t = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)
+        y = (2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1)
+        acc = 0.0
+        for i in range(len(t)):
+            residual = y[i] - p[0] - p[1] * t[i]
+            acc += residual * residual
+        return -0.5 * acc
+
+    fit = ch.mcmc_posterior(
+        ll,
+        [ch.Distribution("Uniform", [-5.0, 5.0]), ch.Distribution("Uniform", [0.0, 5.0])],
+        sampler="DEMCz", iterations=300, warmup=100, chains=3, thinning=1, seed=12345,
+        initialize="Randomize",
+    )
+    assert fit["parameters"] == ["p1", "p2"]
+    assert fit["map"][0] == pytest.approx(0.1, abs=0.5)
+    assert fit["map"][1] == pytest.approx(2.0, abs=0.2)
+
+
+@pytest.mark.parametrize("initialize", ["Randomize", "MAP"])
+def test_an_error_raised_inside_the_log_likelihood_reaches_the_caller(initialize):
+    # On BOTH initialization paths, and they fail differently underneath: "Randomize" never raises
+    # of its own accord (-infinity is a legal, always rejected fitness, so the chain runs to
+    # completion), while "MAP" hands DifferentialEvolution nothing but -infinity and can throw
+    # from its own internals first. Only the guard makes the user's own message win in both.
+    def boom(p):
+        raise ValueError("my own error")
+
+    with pytest.raises(ValueError, match="my own error"):
+        ch.mcmc_posterior(
+            boom, _ONE_PRIOR, iterations=100, warmup=50, chains=2, thinning=1, seed=12345,
+            initialize=initialize,
+        )
+
+
+def test_mcmc_posterior_refuses_a_prior_list_that_is_not_one():
+    with pytest.raises(TypeError, match="non-empty sequence of Distribution objects"):
+        ch.mcmc_posterior(_gaussian_kernel, [])
+    with pytest.raises(TypeError, match="non-empty sequence of Distribution objects"):
+        ch.mcmc_posterior(_gaussian_kernel, "Uniform")
+    with pytest.raises(TypeError, match="non-empty sequence of Distribution objects"):
+        ch.mcmc_posterior(_gaussian_kernel, [ch.Distribution("Uniform", [0.0, 10.0]), 3])
+    with pytest.raises(TypeError, match="`log_likelihood` must be a function"):
+        ch.mcmc_posterior("not a function", _ONE_PRIOR)
+    with pytest.raises(ValueError, match="unknown sampler"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="Gibbs")
+    # A single Distribution is accepted for a one-parameter model.
+    fit = ch.mcmc_posterior(
+        _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), iterations=100, warmup=50,
+        chains=2, thinning=1, seed=12345, initialize="Randomize",
+    )
+    assert fit["parameters"] == ["p1"]
+
+
+def test_a_log_likelihood_indexing_past_its_priors_fails_by_name():
+    # The likeliest user error on this surface: two parameters written, one prior given. Python
+    # raises IndexError of its own accord, and the guard has to carry it out intact.
+    with pytest.raises(IndexError):
+        ch.mcmc_posterior(
+            lambda p: -0.5 * (p[0] * p[0] + p[1] * p[1]), _ONE_PRIOR, iterations=100, warmup=50,
+            chains=2, thinning=1, seed=12345, initialize="Randomize",
+        )
+
+
+def test_snis_is_refused_the_settings_its_own_ported_validation_refuses():
+    with pytest.raises(ValueError, match="supports `chains=1` only"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="SNIS", chains=4)
+    # And it runs when left alone: no auto-derived warm-up, because its ValidateSettings rejects
+    # any. Its other ported rule is `Iterations >= OutputLength`, and OutputLength is not a
+    # setting this surface exposes, so 10,000 is the smallest iteration count SNIS accepts here.
+    fit = ch.mcmc_posterior(
+        _gaussian_kernel, _ONE_PRIOR, sampler="SNIS", iterations=10000, seed=12345,
+        initialize="Randomize",
+    )
+    assert fit["posterior_mean"][0] == pytest.approx(5.0, abs=0.5)

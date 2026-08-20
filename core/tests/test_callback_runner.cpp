@@ -3,6 +3,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "check.hpp"
@@ -253,10 +254,132 @@ int main() {
                          "requires the option 'upper'");
     }
 
-    // The three groups Tasks 4, 6 and 7 fill in are reachable but explicitly unimplemented.
+    // --- mcmc group -----------------------------------------------------------------------
+    //
+    // Analytic/structural properties only (the repo convention for a ctest); the C#-pinned
+    // oracle values for this group live in fixtures/callback/mcmc.json.
+    {
+        // A Gaussian log-density over five observations, and two chains recovering their mean.
+        // Written with `+ - * /` only so the run is IEEE-deterministic in every language -- see
+        // the cross-language note in R/callback.R's mcmc_posterior().
+        const std::vector<double> data = {4.9, 5.1, 5.0, 5.2, 4.8};
+        sup::CallbackSet cbs;
+        cbs.vector_scalar = [&data](const std::vector<double>& p) {
+            double acc = 0.0;
+            for (double x : data) acc += (x - p[0]) * (x - p[0]);
+            return -0.5 * acc;
+        };
+        const std::string options = R"({
+            "sampler": "RWMH", "iterations": 500, "warmup": 100, "chains": 2, "thinning": 1,
+            "seed": 12345, "output_length": 100, "initialize": "Randomize",
+            "proposal_sigma": "identity",
+            "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+        sup::CallbackResult r1 = sup::run_callback("mcmc", "sample", options, cbs);
+        sup::CallbackResult r2 = sup::run_callback("mcmc", "sample", options, cbs);
+        CHECK_EQ(r1.values, r2.values);  // a seeded run is deterministic
+        CHECK_EQ(r1.status, std::string("Success"));
+
+        // dims = {n_summary, n_chains, n_draws, n_parameters}; n_summary = 1 + chains + 8 * p.
+        CHECK_EQ(r1.dims.size(), std::size_t{4});
+        CHECK_EQ(r1.dims.at(0), 11);
+        CHECK_EQ(r1.dims.at(1), 2);
+        CHECK_EQ(r1.dims.at(2), 500);
+        CHECK_EQ(r1.dims.at(3), 1);
+        // The summary block is named and the draw block follows it unnamed.
+        CHECK_EQ(r1.names.size(), std::size_t{11});
+        CHECK_EQ(r1.names.at(0), std::string("map_fitness"));
+        CHECK_EQ(r1.values.size(), std::size_t{11} + 2 * 500 * 1);
+
+        // The posterior mean of mu lands on the data mean, 5.0.
+        std::size_t mean_at = 0;
+        for (std::size_t i = 0; i < r1.names.size(); ++i)
+            if (r1.names[i] == "posterior_mean[0]") mean_at = i;
+        CHECK_TRUE(mean_at > 0);
+        CHECK_NEAR(r1.values.at(mean_at), 5.0, 0.2);
+    }
+    {
+        // Every sampler the group builds runs against the same user log-likelihood. Gibbs is the
+        // one exception and says so: its proposal callback lands in the next task.
+        const std::vector<double> data = {4.9, 5.1, 5.0, 5.2, 4.8};
+        sup::CallbackSet cbs;
+        cbs.vector_scalar = [&data](const std::vector<double>& p) {
+            double acc = 0.0;
+            for (double x : data) acc += (x - p[0]) * (x - p[0]);
+            return -0.5 * acc;
+        };
+        // The chain count is not free to choose: the ported DEMCz/DEMCzs demand at least three,
+        // and SNIS draws independently rather than running chains at all (its constructor forces
+        // one chain and no warm-up, and its own ValidateSettings replaces the base class's).
+        const std::vector<std::pair<const char*, const char*>> samplers = {
+            {"RWMH", R"("chains": 2, "warmup": 50,)"},
+            {"ARWMH", R"("chains": 2, "warmup": 50,)"},
+            {"DEMCz", R"("chains": 3, "warmup": 50,)"},
+            {"DEMCzs", R"("chains": 3, "warmup": 50,)"},
+            {"HMC", R"("chains": 2, "warmup": 50,)"},
+            {"NUTS", R"("chains": 2, "warmup": 50,)"},
+            {"SNIS", R"("chains": 1,)"},
+        };
+        for (const auto& entry : samplers) {
+            const char* sampler = entry.first;
+            std::string options = std::string(R"({"sampler": ")") + sampler + R"(", )" +
+                                  entry.second +
+                                  R"( "iterations": 100,
+                                     "thinning": 1, "seed": 12345, "output_length": 100,
+                                     "initialize": "Randomize", "proposal_sigma": "identity",
+                                     "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+            sup::CallbackResult r = sup::run_callback("mcmc", "sample", options, cbs);
+            CHECK_EQ(r.dims.at(3), 1);
+            CHECK_TRUE(std::isfinite(r.values.at(0)));
+        }
+        CHECK_THROWS_MSG(
+            sup::run_callback("mcmc", "sample",
+                              R"({"sampler": "Gibbs", "iterations": 100, "warmup": 50,
+                                  "output_length": 100, "thinning": 1, "seed": 12345,
+                                  "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})",
+                              cbs),
+            "requires a proposal function");
+    }
+    {
+        // A host exception inside the log-likelihood reaches the caller on BOTH initialization
+        // paths, and they fail differently, which is why the guard is used in pairs. Under
+        // "Randomize" nothing throws at all: -infinity is a legal (always rejected) fitness, so
+        // the chain runs to completion and only the TRAILING rethrow catches the abort. Under
+        // "MAP" the DifferentialEvolution pass is handed nothing but -infinity and can throw from
+        // its own internals first, which the wrap catches.
+        sup::CallbackSet cbs;
+        cbs.vector_scalar = [](const std::vector<double>&) -> double { throw HostError(); };
+        for (const char* init : {"Randomize", "MAP"}) {
+            std::string options = std::string(R"({"sampler": "RWMH", "iterations": 100,
+                "warmup": 50, "chains": 2, "thinning": 1, "seed": 12345, "output_length": 100,
+                "proposal_sigma": "identity", "initialize": ")") + init +
+                                  R"(", "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+            CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", options, cbs),
+                             "host language error");
+        }
+    }
+    {
+        // Dispatch and validation errors.
+        sup::CallbackSet empty;
+        sup::CallbackSet cbs;
+        cbs.vector_scalar = [](const std::vector<double>& p) { return -p[0] * p[0]; };
+        CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", "{}", empty),
+                         "requires a log-likelihood function");
+        CHECK_THROWS_MSG(sup::run_callback("mcmc", "nope", "{}", cbs), "unknown mcmc method");
+        CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", "{}", cbs),
+                         "requires the option 'priors'");
+        CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", R"({"priors": []})", cbs),
+                         "at least one prior");
+        CHECK_THROWS_MSG(
+            sup::run_callback("mcmc", "sample",
+                              R"({"sampler": "Nope",
+                                  "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})",
+                              cbs),
+            "unknown MCMC sampler");
+    }
+
+    // The two groups Tasks 6 and 7 fill in are reachable but explicitly unimplemented.
     {
         sup::CallbackSet cbs;
-        CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", "{}", cbs), "Task 4");
         CHECK_THROWS_MSG(sup::run_callback("bootstrap", "run", "{}", cbs), "Task 6");
         CHECK_THROWS_MSG(sup::run_callback("gmm", "estimate", "{}", cbs), "Task 7");
     }

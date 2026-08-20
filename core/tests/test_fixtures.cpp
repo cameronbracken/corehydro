@@ -1719,6 +1719,28 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
         // subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
         // bit and the evaluation count is a real oracle. See the fixture's `callbacks` note.
         cbs.scalar = [](double x) { return 1.0 / (1.0 + 1.0e4 * x * x); };
+    } else if (name == "Mcmc_GaussianKernel") {
+        // The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only
+        // and sum in an explicit loop rather than through any accumulate helper: a Markov chain
+        // turns one differing bit into a different chain, so the four runners have to agree to
+        // the last bit for these oracles to mean anything. See the fixture's own note.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            double acc = 0.0;
+            for (double x : data) acc += (x - p[0]) * (x - p[0]);
+            return -0.5 * acc;
+        };
+    } else if (name == "Mcmc_LinearKernel") {
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double t[] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0};
+            const double y[] = {2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1};
+            double acc = 0.0;
+            for (std::size_t i = 0; i < 8; ++i) {
+                double residual = y[i] - p[0] - p[1] * t[i];
+                acc += residual * residual;
+            }
+            return -0.5 * acc;
+        };
     } else if (name == "Rng_Uniform") {
         // The rng catalog (fixtures/callback/rng_handle.json). Each of these takes the handle the
         // runner hands it -- the C++ analogue of the R closure calling rng_uniform() and the Python
@@ -1774,6 +1796,15 @@ static void run_callback_kind(const json& spec) {
                                 : std::size_t{0};
             if (method == "value") {
                 check_value(r.values.at(i), as, where);
+            } else if (method == "named") {
+                // Reads a value by the label the group gave it rather than by position: the mcmc
+                // group's summary block is long and its indices shift with the chain and
+                // parameter counts, so "posterior_mean[0]" says what it pins and "12" does not.
+                std::string want = as["name"].get<std::string>();
+                auto it = std::find(r.names.begin(), r.names.end(), want);
+                if (it == r.names.end())
+                    throw std::runtime_error(where + ": no result named '" + want + "'");
+                check_value(r.values.at(static_cast<std::size_t>(it - r.names.begin())), as, where);
             } else if (method == "dim") {
                 check_value(static_cast<double>(r.dims.at(i)), as, where);
             } else if (method == "status") {

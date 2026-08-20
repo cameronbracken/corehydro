@@ -18,8 +18,20 @@ from typing import Callable, Sequence
 import numpy as np
 
 from . import _core
+from .distributions import Distribution, _as_spec
 
-__all__ = ["root_find", "quadrature", "QuadratureResult", "derivative", "gradient", "hessian", "Rng"]
+__all__ = [
+    "root_find",
+    "quadrature",
+    "QuadratureResult",
+    "derivative",
+    "gradient",
+    "hessian",
+    "mcmc_posterior",
+    "Rng",
+]
+
+_SAMPLERS = ("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS")
 
 # The handle a callback is given on the core's seeded generator, defined in bindings/callback.cpp
 # (see its RngHandle). Re-exported here so a user can type-annotate a proposal or resample
@@ -317,6 +329,217 @@ def hessian(f: Callable[[Sequence[float]], float], x: Sequence[float]) -> np.nda
     options = {"point": point.tolist()}
     res = _core.callback_math("hessian", json.dumps(options), f)
     return np.asarray(res["values"], dtype=float).reshape(res["dims"])
+
+
+def mcmc_posterior(
+    log_likelihood: Callable,
+    priors,
+    sampler: str = "RWMH",
+    iterations: int | None = None,
+    warmup: int | None = None,
+    chains: int | None = None,
+    thinning: int | None = None,
+    seed: int = 12345,
+    initialize: str = "MAP",
+) -> dict:
+    """Sample your own posterior by MCMC.
+
+    Runs any of the ported MCMC samplers against a log-likelihood you write and priors you
+    choose. This is the constructor the upstream C# library itself exposes,
+    ``MCMCSampler(priorDistributions, logLikelihoodFunction)``:
+    :func:`corehydropy.mcmc_sample` can only fit a built-in distribution family under uniform
+    priors spanning its parameter constraints, while this function takes any model you can
+    write down.
+
+    ``log_likelihood`` is called with one list of floats, as long as ``priors``, and must
+    return a single number. Following the upstream contract, it should return the log of the
+    data likelihood PLUS the log prior density; the ``priors`` list is used for the feasible
+    parameter bounds and for chain initialization, and is never added to your value behind your
+    back. A parameter outside its prior's support is rejected before your function sees it, so
+    a flat (uniform) prior needs no term of its own.
+
+    Parameters
+    ----------
+    log_likelihood : callable
+        Takes a list of floats, returns one float.
+    priors : Distribution or sequence of Distribution
+        One prior per parameter, in the order ``log_likelihood`` reads them.
+    sampler : {"RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS"}
+        The MCMC sampler. ``"Gibbs"`` needs a proposal function and is not available yet.
+    iterations : int, optional
+        Iterations per chain (sampler default if omitted). ``"SNIS"`` needs at least 10000: its
+        ported validation requires ``iterations`` to be at least the output length, and the
+        output length keeps its default of 10000 here.
+    warmup : int, optional
+        Warm-up iterations discarded from each chain (sampler default if omitted). When
+        ``iterations`` is given and ``warmup`` is not, half of ``iterations`` is used, matching
+        :func:`corehydropy.mcmc_sample`. ``"SNIS"`` is the exception: its ported validation
+        rejects any warm-up at all, so none is derived for it.
+    chains : int, optional
+        Number of chains (sampler default if omitted). ``"DEMCz"`` and ``"DEMCzs"`` require at
+        least three; ``"SNIS"`` draws independently and runs one.
+    thinning : int, optional
+        Thinning interval (sampler default if omitted).
+    seed : int
+        PRNG seed; 12345 is the C# default.
+    initialize : {"MAP", "Randomize"}
+        Chain initialization: from the posterior-mode estimate (the C# default) or randomized
+        draws from the priors.
+
+    Returns
+    -------
+    dict
+        The same fields :func:`corehydropy.mcmc_sample` returns: ``parameters`` (parameter
+        names, ``p1``, ``p2``, ... since your model names nothing), ``chains`` (a list of one
+        ``(n_draws, n_params)`` array per chain), ``acceptance_rates``, ``map``,
+        ``map_fitness``, ``posterior_mean``, ``posterior_sd``, ``posterior_median``,
+        ``posterior_lower_ci``, ``posterior_upper_ci``, ``rhat``, and ``ess``.
+
+    Notes
+    -----
+    **Reproducing a run in R.** A seeded :func:`corehydropy.mcmc_sample` run is bit-identical
+    between Python and R, because every arithmetic operation happens in the shared C++ core.
+    That guarantee is WEAKER here, and it is worth stating plainly. The draws still come from
+    the core's seeded Mersenne Twister, but the log-density is your own Python code, and Python
+    and R do not guarantee identical rounding for the same formula. MCMC amplifies a single
+    differing bit far harder than an optimizer does: one flipped accept-or-reject changes every
+    state after it, so the two chains diverge outright rather than drift apart slowly.
+
+    A seeded run reproduces across the two languages if and only if your function returns
+    bit-identical values. Arithmetic (``+ - * /``) is IEEE-deterministic and does reproduce;
+    ``log``, ``exp``, ``gamma`` and friends come from each platform's own math library and are
+    not guaranteed to. Note also that R's ``sum()`` accumulates in extended precision while
+    Python's does not, so a plain loop is the portable spelling on both sides.
+
+    **Performance.** Every evaluation calls back into Python, and there are far more of them
+    than ``iterations`` suggests: the count is
+    ``(iterations + output_length / chains) * thinning * chains``, and the ported defaults are 4
+    chains, a thinning interval of 20 and an output length of 10,000. So ``iterations=10000`` is
+    a million crossings, not ten thousand.
+
+    That is affordable. Measured here, ``iterations=10000`` over a 50-point Gaussian
+    log-density took 1.3 seconds, against 0.7 seconds for the
+    :func:`corehydropy.mcmc_sample` call in the same units, so about twice as slow. The
+    crossing itself costs about 0.3 microseconds: the same function called a million times
+    directly from Python takes 1.0 second, so most of the 1.3 seconds is your own code, not the
+    boundary.
+
+    Two settings dominate the count and neither is obvious. ``thinning`` multiplies it, and
+    ``initialize="MAP"``, the C# default, runs the DifferentialEvolution optimizer over your
+    function before the first chain iteration; ``initialize="Randomize"`` skips the optimizer.
+
+    **Interrupting a long run.** Ctrl-C returns control with a ``KeyboardInterrupt``, but not
+    instantly. The ported samplers have no cancellation hook, so the chain runs to the end of
+    its loop -- rejecting every remaining point without calling your function again -- before
+    the interrupt surfaces. Measured on a 200,000-iteration chain: 0.3 seconds from the signal
+    to the exception reaching the caller.
+
+    See Also
+    --------
+    corehydropy.mcmc_sample : a built-in family under constraint-based priors, which is faster
+        and bit-identical across languages.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> data = [4.9, 5.1, 5.0, 5.2, 4.8]
+    >>> def ll(p):
+    ...     return -0.5 * sum((x - p[0]) * (x - p[0]) for x in data)
+    >>> fit = ch.mcmc_posterior(ll, [ch.Distribution("Uniform", [0.0, 10.0])],
+    ...                         iterations=200, seed=12345)  # doctest: +SKIP
+    """
+    if not callable(log_likelihood):
+        raise TypeError(
+            "`log_likelihood` must be a function taking a parameter vector and returning a "
+            "single number"
+        )
+    if sampler not in _SAMPLERS:
+        raise ValueError(f"unknown sampler '{sampler}'; use one of {_SAMPLERS}")
+    if initialize not in ("MAP", "Randomize"):
+        raise ValueError('`initialize` must be "MAP" or "Randomize"')
+
+    options: dict = {
+        "sampler": sampler,
+        "initialize": initialize,
+        "seed": int(seed),
+        "priors": _prior_specs(priors),
+    }
+    if iterations is not None:
+        options["iterations"] = int(iterations)
+        # The sampler requires warmup <= iterations / 2; when only iterations is given, follow
+        # mcmc_sample()'s rule. SNIS is the exception: its ported ValidateSettings rejects ANY
+        # warm-up, so an auto-derived one would turn a legal call into an error.
+        if warmup is None and sampler != "SNIS":
+            warmup = max(50, int(iterations) // 2)
+    if warmup is not None:
+        options["warmup"] = int(warmup)
+    if chains is not None:
+        if sampler == "SNIS" and int(chains) != 1:
+            raise ValueError(
+                "SNIS draws independently rather than running Markov chains; it supports "
+                "`chains=1` only"
+            )
+        options["chains"] = int(chains)
+    if thinning is not None:
+        options["thinning"] = int(thinning)
+    if sampler == "RWMH":
+        # The RWMH constructor takes a proposal covariance, and the ported default is all zeros,
+        # which is only usable when MAP initialization overwrites it before the first iteration.
+        # Identity is what mcmc_sample() sets for the same reason.
+        options["proposal_sigma"] = "identity"
+
+    return _mcmc_unflatten(_core.callback_mcmc(json.dumps(options), log_likelihood))
+
+
+def _prior_specs(priors) -> list:
+    """Internal: accept either a sequence of Distribution objects or a single one, and refuse
+    anything else by name. The length of this list IS the parameter count, so a wrong one is the
+    likeliest user error here and the C++ side cannot tell it from an intentional model."""
+    if isinstance(priors, Distribution):
+        priors = [priors]
+    specs = list(priors) if not isinstance(priors, (str, bytes)) else []
+    if not specs or not all(isinstance(d, Distribution) for d in specs):
+        raise TypeError(
+            "`priors` must be a non-empty sequence of Distribution objects, one per parameter"
+        )
+    return [_as_spec(d) for d in specs]
+
+
+def _mcmc_unflatten(res: dict) -> dict:
+    """Internal: slice the flat callback result back into the shape mcmc_sample() returns. The
+    layout is documented in ``core/include/corehydro/numerics/support/callback/mcmc.hpp`` -- a
+    named summary block, then the draws row-major by [chain][draw][parameter] -- and
+    ``corehydror``'s own ``mcmc_unflatten()`` reads it identically."""
+    n_summary, n_chains, n_draws, p = (int(v) for v in res["dims"])
+    values = list(res["values"])
+    names = list(res["names"])
+    index = {name: i for i, name in enumerate(names)}
+
+    def per_parameter(prefix):
+        return np.asarray([values[index[f"{prefix}[{j}]"]] for j in range(p)], dtype=float)
+
+    draws = np.asarray(values[n_summary:], dtype=float)
+    chains = [
+        draws[k * n_draws * p : (k + 1) * n_draws * p].reshape(n_draws, p)
+        for k in range(n_chains)
+    ]
+
+    return {
+        "parameters": [f"p{j + 1}" for j in range(p)],
+        "chains": chains,
+        "acceptance_rates": np.asarray(
+            [values[index[f"acceptance_rate[{k}]"]] for k in range(n_chains)], dtype=float
+        ),
+        "map": per_parameter("map"),
+        "map_fitness": values[index["map_fitness"]],
+        "posterior_mean": per_parameter("posterior_mean"),
+        "posterior_sd": per_parameter("posterior_sd"),
+        "posterior_median": per_parameter("posterior_median"),
+        "posterior_lower_ci": per_parameter("posterior_lower_ci"),
+        "posterior_upper_ci": per_parameter("posterior_upper_ci"),
+        "rhat": per_parameter("rhat"),
+        "ess": per_parameter("ess"),
+    }
 
 
 def _rng_probe(seed: float, parameters: Sequence[float], f: Callable) -> list:
