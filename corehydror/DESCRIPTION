@@ -1,6 +1,6 @@
 Package: corehydror
 Title: Bayesian Flood-Frequency and Extreme-Value Analysis
-Version: 0.6.0
+Version: 0.7.0
 Authors@R:
     person("Cam", "Bracken", email = "cameron.bracken@pm.me", role = c("aut", "cre"))
 Description: R bindings to a shared C++ port of the USACE-RMC Numerics and

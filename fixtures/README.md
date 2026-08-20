@@ -1878,6 +1878,45 @@ just-identified method-of-moments fit of a Normal, whose GMM optimum IS the samp
 population variance. `j_stat` is deliberately NOT asserted anywhere in that file -- see its own
 `reference` field for the measurements behind that decision.
 
+### `callback_cross_language`
+
+One purpose-built fixture (`fixtures/callback/callback_cross_language.json`), not a general-purpose
+kind: its single case nests an `"mcmc"` and a `"bootstrap"` sub-block, each shaped exactly like a
+`callback`-kind case's `construct`/`assertions`, so ONE fixture drives a seeded posterior and a
+seeded bootstrap interval through all four runners together. It is the callback layer's counterpart
+to `toolbox_cross_language` below and to `fixtures/estimation/fit_cross_language.json`, and the
+only fixture in the repository whose EVERY assertion is `"mode": "abs", "tol": 0`, i.e. bit
+equality rather than a tolerance.
+
+Bit equality is reachable there and not everywhere, and the difference matters when adding a case.
+R and Python agree bit for bit on every callback case in that directory, because both drive the
+same compiled core; they agree with the real C# library only where the arithmetic producing the
+number lives in the CALLBACK rather than in the compiled core, since clang and gcc contract
+`a*b + c` into a fused multiply-add by default and .NET does not. The Gibbs case qualifies: its
+recorded states are exact full-conditional draws evaluated in the host language, and its posterior
+mean, median and MAP are a plain sum, an order statistic and a maximum over those states.
+`posterior_sd` and `ess` do not, because they accumulate `d*d` inside the core, so they are absent
+from the file rather than pinned at a loosened tolerance. Both callbacks are arithmetic only, with
+every summation written as an explicit loop; see the fixture's own `reference` field.
+
+`core/CMakeLists.txt` passes `-ffp-contract=off` to `test_fixtures` on non-MSVC compilers for the
+same reason: that file's callback catalog is written as C++ lambdas standing in for the R closures,
+Python functions and C# delegates the other three runners write for the same names, and a
+contracted lambda computes a different function from the one the fixture names.
+
+```jsonc
+{
+  "kind": "callback_cross_language",
+  "cases": [
+    {
+      "name": "gibbs_posterior_and_mean_bootstrap_short_exact",
+      "mcmc":      { "construct": { ... }, "assertions": [ ... ] },
+      "bootstrap": { "construct": { ... }, "assertions": [ ... ] }
+    }
+  ]
+}
+```
+
 ### `toolbox_cross_language`
 
 One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose

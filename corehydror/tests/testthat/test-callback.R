@@ -1171,6 +1171,15 @@ test_that("print() shows the J-statistic only where it means something", {
   over <- fit_gmm_moments(gmm_moments3, c(5, 0.5), c(0, 0.001), c(10, 10), length(gmm_data))
   expect_output(print(over), sprintf("j-statistic: %g", over$j_stat))
   expect_output(print(over), "p-value")
+
+  # Non-zero degrees of freedom is not on its own enough: the residual covariance can be singular
+  # enough that inverting it raises, in which case the ported post_process() reports NaN. "nan" on
+  # that line says less than saying so, so the display is gated on isfinite() as well as on the
+  # degrees of freedom.
+  uncomputable <- over
+  uncomputable$j_stat <- NaN
+  expect_output(print(uncomputable), "j-statistic: could not be computed for this fit")
+  expect_false(any(grepl("nan", capture.output(print(uncomputable)), fixed = TRUE)))
 })
 
 test_that("two fit_gmm_moments runs are identical: there is no generator in this fit", {

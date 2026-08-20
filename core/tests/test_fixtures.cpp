@@ -15,10 +15,12 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -153,10 +155,17 @@ static void check_value(double actual, const json& as, const std::string& where)
     } else {
         throw std::runtime_error("unknown comparison mode: " + mode);
     }
-    if (ok)
+    if (ok) {
         chtest::report_pass();
-    else
-        chtest::report_fail(__FILE__, __LINE__, where + ": value mismatch");
+    } else {
+        // The actual is printed at full precision because a mismatch here is usually a question of
+        // HOW FAR off, not whether: a fixture pinned at tol 0 and one pinned at rel 1e-12 fail the
+        // same way, and only the digits distinguish a real divergence from a last-ulp one.
+        std::ostringstream msg;
+        msg << where << ": value mismatch, expected " << as["expected"] << ", got "
+            << std::setprecision(17) << actual;
+        chtest::report_fail(__FILE__, __LINE__, msg.str());
+    }
 }
 
 static void check_bool(bool actual, const json& as, const std::string& where) {
@@ -1967,62 +1976,85 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
     }
 }
 
+// One callback case: build the delegate set the group needs out of the catalog above, run it, and
+// apply the case's assertions. Factored out of run_callback_kind so run_callback_cross_language_kind
+// (below) can drive the identical path for each of its nested sub-blocks -- the cross-language
+// fixture nests two blocks of this exact shape and must not grow an evaluation path of its own.
+static void run_one_callback_case(const std::string& where_prefix, const json& construct,
+                                  const json& assertions) {
+    tbx::CallbackSet cbs;
+    callback_fixture_set(construct["callback"].get<std::string>(), cbs);
+    // The two other delegates the mcmc group's samplers take, each resolved out of the same
+    // catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys leave the set's members
+    // empty, which is what "no proposal" and "the ported default gradient" mean.
+    if (construct.contains("proposal"))
+        callback_fixture_set(construct["proposal"].get<std::string>(), cbs);
+    if (construct.contains("gradient"))
+        callback_fixture_set(construct["gradient"].get<std::string>(), cbs);
+    // The bootstrap group's other three delegates and the gmm group's two optional ones,
+    // resolved out of the same catalog (each group's `callback` key names its own required
+    // delegate: the resample, or the moment conditions). An absent key means that delegate is
+    // not supplied, which is what "no jackknife", "the ported numerical Jacobian" and "no
+    // penalty" mean.
+    for (const char* key : {"fit", "statistic", "jackknife", "jacobian", "penalty"})
+        if (construct.contains(key)) callback_fixture_set(construct[key].get<std::string>(), cbs);
+    json options = construct.contains("options") ? construct["options"] : json::object();
+    tbx::CallbackResult r =
+        tbx::run_callback(construct["group"].get<std::string>(),
+                          construct["method"].get<std::string>(), options.dump(), cbs);
+    for (const auto& as : assertions) {
+        std::string method = as["method"].get<std::string>();
+        std::string where = where_prefix + "/" + method;
+        std::size_t i = as.contains("args") ? static_cast<std::size_t>(as["args"][0].get<int>())
+                                            : std::size_t{0};
+        if (method == "value") {
+            check_value(r.values.at(i), as, where);
+        } else if (method == "named") {
+            // Reads a value by the label the group gave it rather than by position: the mcmc
+            // group's summary block is long and its indices shift with the chain and parameter
+            // counts, so "posterior_mean[0]" says what it pins and "12" does not.
+            std::string want = as["name"].get<std::string>();
+            auto it = std::find(r.names.begin(), r.names.end(), want);
+            if (it == r.names.end())
+                throw std::runtime_error(where + ": no result named '" + want + "'");
+            check_value(r.values.at(static_cast<std::size_t>(it - r.names.begin())), as, where);
+        } else if (method == "dim") {
+            check_value(static_cast<double>(r.dims.at(i)), as, where);
+        } else if (method == "status") {
+            if (r.status == as["expected"].get<std::string>())
+                chtest::report_pass();
+            else
+                chtest::report_fail(__FILE__, __LINE__,
+                                    where + ": expected status " +
+                                        as["expected"].get<std::string>() + ", got " + r.status);
+        } else {
+            throw std::runtime_error("unknown callback fixture assertion method: " + method);
+        }
+    }
+}
+
 static void run_callback_kind(const json& spec) {
     for (const auto& c : spec["cases"]) {
+        run_one_callback_case("callback/" + c["name"].get<std::string>(), c["construct"],
+                              c["assertions"]);
+    }
+}
+
+// --- callback_cross_language path (Task 8) -----------------------------------------------
+//
+// fixtures/callback/callback_cross_language.json's one case nests two sub-blocks -- "mcmc" and
+// "bootstrap", each shaped exactly like a "callback"-kind case's construct/assertions -- under one
+// case name, because the file's job is proving both reproduce identically across languages in ONE
+// guarantee rather than two separate files. Reuses run_one_callback_case verbatim; no new
+// evaluation logic, just the nesting. The assertions there are spelled mode "abs" with tol 0, so
+// this runner's agreement with the R, Python and C# ones is bit equality rather than a tolerance.
+static void run_callback_cross_language_kind(const json& spec) {
+    for (const auto& c : spec["cases"]) {
         std::string name = c["name"].get<std::string>();
-        const json& construct = c["construct"];
-        tbx::CallbackSet cbs;
-        callback_fixture_set(construct["callback"].get<std::string>(), cbs);
-        // The two other delegates the mcmc group's samplers take, each resolved out of the same
-        // catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys leave the set's members
-        // empty, which is what "no proposal" and "the ported default gradient" mean.
-        if (construct.contains("proposal"))
-            callback_fixture_set(construct["proposal"].get<std::string>(), cbs);
-        if (construct.contains("gradient"))
-            callback_fixture_set(construct["gradient"].get<std::string>(), cbs);
-        // The bootstrap group's other three delegates, resolved out of the same catalog (its
-        // `callback` key names the resample, the one delegate handed the generator). `jackknife` is
-        // absent for every method but BCa, which is what "no jackknife" means.
-        // The bootstrap group's other three delegates and the gmm group's two optional ones,
-        // resolved out of the same catalog (each group's `callback` key names its own required
-        // delegate: the resample, or the moment conditions). An absent key means that delegate is
-        // not supplied, which is what "no jackknife", "the ported numerical Jacobian" and "no
-        // penalty" mean.
-        for (const char* key : {"fit", "statistic", "jackknife", "jacobian", "penalty"})
-            if (construct.contains(key)) callback_fixture_set(construct[key].get<std::string>(), cbs);
-        json options = construct.contains("options") ? construct["options"] : json::object();
-        tbx::CallbackResult r =
-            tbx::run_callback(construct["group"].get<std::string>(),
-                              construct["method"].get<std::string>(), options.dump(), cbs);
-        for (const auto& as : c["assertions"]) {
-            std::string method = as["method"].get<std::string>();
-            std::string where = "callback/" + name + "/" + method;
-            std::size_t i = as.contains("args")
-                                ? static_cast<std::size_t>(as["args"][0].get<int>())
-                                : std::size_t{0};
-            if (method == "value") {
-                check_value(r.values.at(i), as, where);
-            } else if (method == "named") {
-                // Reads a value by the label the group gave it rather than by position: the mcmc
-                // group's summary block is long and its indices shift with the chain and
-                // parameter counts, so "posterior_mean[0]" says what it pins and "12" does not.
-                std::string want = as["name"].get<std::string>();
-                auto it = std::find(r.names.begin(), r.names.end(), want);
-                if (it == r.names.end())
-                    throw std::runtime_error(where + ": no result named '" + want + "'");
-                check_value(r.values.at(static_cast<std::size_t>(it - r.names.begin())), as, where);
-            } else if (method == "dim") {
-                check_value(static_cast<double>(r.dims.at(i)), as, where);
-            } else if (method == "status") {
-                if (r.status == as["expected"].get<std::string>())
-                    chtest::report_pass();
-                else
-                    chtest::report_fail(__FILE__, __LINE__,
-                                        where + ": expected status " +
-                                            as["expected"].get<std::string>() + ", got " + r.status);
-            } else {
-                throw std::runtime_error("unknown callback fixture assertion method: " + method);
-            }
+        for (const char* sub : {"mcmc", "bootstrap"}) {
+            const json& block = c[sub];
+            run_one_callback_case("callback_cross_language/" + name + "/" + sub, block["construct"],
+                                  block["assertions"]);
         }
     }
 }
@@ -3845,6 +3877,8 @@ int main(int argc, char** argv) {
             run_optimizer_kind(spec);
         } else if (kind == "callback") {
             run_callback_kind(spec);
+        } else if (kind == "callback_cross_language") {
+            run_callback_cross_language_kind(spec);
         } else if (kind == "toolbox_cross_language") {
             run_toolbox_cross_language_kind(spec);
         } else if (kind == "univariate_distribution") {

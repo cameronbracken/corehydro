@@ -1088,6 +1088,30 @@ static Func<double[], int, double[]>? CallbackJackknifeFunction(string name) => 
     _ => null
 };
 
+// Flattens a callback fixture file into the (caseName, subLabel, subCase) triples its one branch
+// below drives. A "callback"-kind case IS its own single sub-block, so it yields one triple with an
+// empty label; a "callback_cross_language"-kind case nests two blocks -- "mcmc" and "bootstrap" --
+// each shaped exactly like a "callback"-kind case's construct/assertions, so it yields two. The
+// branch body is then written once and reached identically by both kinds, which is what keeps the
+// cross-language fixture from growing an evaluation path of its own.
+static IEnumerable<(string caseName, string subLabel, JsonElement subCase)> CallbackSubCases(
+    JsonElement root, string kind)
+{
+    foreach (var c in root.GetProperty("cases").EnumerateArray())
+    {
+        string caseName = c.GetProperty("name").GetString()!;
+        if (kind == "callback")
+        {
+            yield return (caseName, "", c);
+        }
+        else
+        {
+            foreach (string sub in new[] { "mcmc", "bootstrap" })
+                yield return (caseName, sub, c.GetProperty(sub));
+        }
+    }
+}
+
 // Builds + configures + runs one callback-group bootstrap case, mirroring callback/bootstrap.hpp's
 // run_bootstrap() decision for decision: theta-hat is the `parameters` option or the fit of the
 // original data, the ci_method picks the workflow (BootstrapT is the studentized one, everything
@@ -5257,11 +5281,16 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
     // dispatch: construct carries group/method/callback/options; assertions carry
     // value (`args: [index]` into the flat result), dim (`args: [index]` into {rows, cols}), or
     // status. The hessian result is flattened row-major, exactly as the C++ runner flattens it.
-    if (kindStr == "callback")
+    //
+    // The same branch drives "callback_cross_language" (Task 8), whose one case nests an "mcmc" and
+    // a "bootstrap" sub-block, each shaped exactly like a "callback"-kind case: CallbackSubCases
+    // above flattens both kinds into the same triples, so the cross-language fixture reuses this
+    // evaluation path verbatim rather than growing one of its own.
+    if (kindStr == "callback" || kindStr == "callback_cross_language")
     {
-        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        foreach (var (caseName, subLabel, c) in CallbackSubCases(root, kindStr))
         {
-            string caseName = c.GetProperty("name").GetString()!;
+            string dumpTarget = subLabel.Length == 0 ? "callback" : $"callback_cross_language/{subLabel}";
             var construct = c.GetProperty("construct");
             string group = construct.GetProperty("group").GetString()!;
             if (group != "math" && group != "rng" && group != "mcmc" && group != "bootstrap" &&
@@ -5453,7 +5482,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
             {
                 string am = asrt.GetProperty("method").GetString()!;
-                string where = $"callback/{caseName}/{am}";
+                string where = $"{dumpTarget}/{caseName}/{am}";
                 int index = asrt.TryGetProperty("args", out var argsEl) ? argsEl[0].GetInt32() : 0;
                 if (am == "status")
                 {
@@ -5466,7 +5495,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     // reports for them. A later group with a real status must set `statusName` in
                     // its own arm the same way the quadrature arm does.
                     string expected = asrt.GetProperty("expected").GetString()!;
-                    if (dump) { DumpLine("callback", caseName, am, Array.Empty<JsonElement>(), () => (object)statusName); continue; }
+                    if (dump) { DumpLine(dumpTarget, caseName, am, Array.Empty<JsonElement>(), () => (object)statusName); continue; }
                     if (expected == statusName) pass++;
                     else { fail++; failures.Add($"{where}: expected {expected} got {statusName}"); }
                     continue;
@@ -5489,10 +5518,10 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     var dumpArgs = asrt.TryGetProperty("args", out var aEl)
                         ? aEl.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
                     if (am == "named")
-                        DumpLine("callback", caseName, asrt.GetProperty("name").GetString()!,
+                        DumpLine(dumpTarget, caseName, asrt.GetProperty("name").GetString()!,
                                  Array.Empty<JsonElement>(), () => (object)actual);
                     else
-                        DumpLine("callback", caseName, am, dumpArgs, () => (object)actual);
+                        DumpLine(dumpTarget, caseName, am, dumpArgs, () => (object)actual);
                     continue;
                 }
                 if (Compare(actual, asrt)) pass++;

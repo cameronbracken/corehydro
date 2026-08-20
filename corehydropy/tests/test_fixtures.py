@@ -2057,6 +2057,18 @@ def _run_callback_case(case):
             raise KeyError(f"unknown callback fixture assertion method: {a['method']}")
 
 
+# callback_cross_language [one case nests "mcmc" and "bootstrap", each shaped exactly like a
+# "callback"-kind case's construct/assertions]: fixtures/callback/callback_cross_language.json's
+# one case asserts a seeded posterior and a seeded bootstrap interval TOGETHER, because the file's
+# job is proving both reproduce identically across languages in one guarantee rather than two.
+# Reuses _run_callback_case verbatim; no new evaluation logic, just the nesting. Its assertions are
+# spelled mode "abs" with tol 0, i.e. bit equality with the C++, R and C# runners rather than a
+# tolerance.
+def _run_callback_cross_language_case(case):
+    for sub in ("mcmc", "bootstrap"):
+        _run_callback_case(case[sub])
+
+
 # toolbox_cross_language [one case nests "optimizer" (shaped like an "optimizer"-kind
 # construct/assertions), "sobol" and "stratify" (each shaped like a "toolbox"-kind
 # group-"sampling" case's options/assertions)]: fixtures/toolbox/toolbox_cross_language.json's
@@ -2121,6 +2133,7 @@ def _load_cases():
             "toolbox",
             "optimizer",
             "callback",
+            "callback_cross_language",
             "toolbox_cross_language",
         ):
             continue
@@ -2152,6 +2165,10 @@ def test_fixture_case(kind, target, datasets, case):
 
     if kind == "callback":
         _run_callback_case(case)
+        return
+
+    if kind == "callback_cross_language":
+        _run_callback_cross_language_case(case)
         return
 
     if kind == "toolbox_cross_language":

@@ -1861,9 +1861,24 @@ test_that("oracle fixtures validate", {
       }
       next
     }
-    if (identical(spec$kind, "callback")) {
+    if (identical(spec$kind, "callback") ||
+          identical(spec$kind, "callback_cross_language")) {
       ns <- asNamespace("corehydror")
+      # A "callback"-kind case IS its own single block; a "callback_cross_language"-kind case
+      # (fixtures/callback/callback_cross_language.json) nests two -- "mcmc" and "bootstrap" --
+      # each shaped exactly like a "callback"-kind case's construct/assertions, so the one body
+      # below drives both kinds and the cross-language fixture grows no evaluation path of its own.
+      # Its assertions are spelled mode "abs" with tol 0, i.e. bit equality with the C++, Python and
+      # C# runners rather than a tolerance.
+      blocks <- list()
       for (case in spec$cases) {
+        if (identical(spec$kind, "callback")) {
+          blocks[[length(blocks) + 1L]] <- case
+        } else {
+          for (sub in c("mcmc", "bootstrap")) blocks[[length(blocks) + 1L]] <- case[[sub]]
+        }
+      }
+      for (case in blocks) {
         construct <- case$construct
         # Every group has its own R entry point: ch_callback_math_, ch_rng_probe_,
         # ch_callback_mcmc_, ch_callback_gmm_ and ch_callback_bootstrap_.

@@ -7,6 +7,143 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-20
+
+The callback layer. Five upstream classes are delegate-driven by design, and until now both
+packages could reach them only through internal registries, so the model always had to be one the
+port already knew how to build. A user's own R or Python function can now drive them directly:
+a log-likelihood, a Gibbs proposal, an HMC/NUTS gradient, the four bootstrap delegates, and a set
+of GMM moment conditions. One shared header carries the whole surface,
+`numerics/support/callback_runner.hpp`, dispatching to one standalone-compiling header per group
+(`callback/math.hpp`, `mcmc.hpp`, `bootstrap.hpp`, `gmm.hpp`, `rng.hpp`), driven identically by
+the cpp11 glue, the pybind11 glue, the C++ fixture runner, and the dotnet oracle emitter, so a
+fixture case, an oracle replay, and a user's `mcmc_posterior()` call are the same code path.
+
+Every crossing of the host-language boundary goes through `numerics/support/callback_guard.hpp`.
+An exception raised inside an R or Python callback cannot travel through the ported C# algorithm
+that called it, because that algorithm has its own catch-all, so the guard latches the first host
+exception, substitutes a sentinel, and rethrows once the ported call has unwound. Guards that
+belong to one run share an abort state, which is what stops a latched log-likelihood from letting
+the sampler re-enter the host through the proposal with an unwind already pending.
+
+### Added
+
+- **`mcmc_posterior()`** -- sample a posterior whose likelihood is not in the package, over
+  priors you choose. This is upstream's own `MCMCSampler(priorDistributions, logLikelihood)`
+  constructor. All EIGHT ported samplers are reachable, including **Gibbs**, which neither
+  package could run before: Gibbs needs a model-specific conditional proposal, and there was no
+  way to pass one. HMC and NUTS take an optional analytic `gradient` beside it; left unset, the
+  ported bound-aware finite-difference default still applies.
+- **`bootstrap_custom()`** -- a confidence interval on any statistic you can compute from a fitted
+  parameter set, over all four upstream delegates (`resample`, `fit`, `statistic`, `jackknife`)
+  and all five interval methods (Percentile, BiasCorrected, Normal, BootstrapT, BCa), plus
+  `inner_replicates` for the studentized method and `max_retries` for the failed-replicate loop.
+- **`fit_gmm_moments()`** -- fit moment conditions you write, reaching
+  `GeneralizedMethodOfMoments`'s second (delegate) constructor. `fit_gmm()` reaches the first,
+  whose `IGMMModel` interface has exactly one implementation, so it could fit a Bulletin 17C
+  flood-frequency model and nothing else. Returns the same `corehydro_fit` / `Fit` object
+  `fit_gmm()` does, with an optional analytic `jacobian` and `penalty`.
+- **`root_find()`, `derivative()`, `gradient()`, `hessian()`, `quadrature()`** -- Brent root
+  finding, numerical differentiation, and adaptive Gauss-Kronrod integration over a plain R or
+  Python function. R's `gradient()` and `hessian()` collide with `numDeriv` and `pracma`, so the
+  documentation calls them `corehydror::gradient()`.
+- **A handle on the core's seeded generator**, passed to the callbacks that need randomness (the
+  bootstrap resample and the Gibbs proposal). R gets `rng_uniform()` and `rng_integers()`; Python
+  gets an `Rng` class that users cannot construct. Drawing from `runif()`, `sample()` or
+  `numpy.random` instead would leave the seeded run unreproducible, so the handle is the only way
+  a callback should get a random number. It borrows the generator for one call and invalidates on
+  return, so a stored handle raises instead of reading freed memory.
+- Two worked example pairs: a custom posterior (a hand-written likelihood through
+  `mcmc_posterior()`, with the trace, R-hat and posterior summary, and Gibbs over an exact
+  conditional proposal) and a custom bootstrap (a statistic the package does not provide, through
+  `bootstrap_custom()`).
+- A cross-language digest fixture (`fixtures/callback/callback_cross_language.json`, a new
+  `callback_cross_language` fixture kind) nesting one seeded Gibbs posterior and one seeded
+  bootstrap interval under a single case, asserted at **zero tolerance** rather than a relative
+  one, so all four runners are held to bit equality on the callback path.
+
+### Fixed
+
+- **`Numerics/Mathematics/Integration/AdaptiveGaussKronrod` was a minimal port**, carrying only
+  what `VonMises::CDF` needed. It now derives from a ported `Integrator` base with settings,
+  status and function-evaluation counting, and reports its standard error, which the earlier port
+  computed and dropped.
+- **The R RNG handle could be handed a foreign external pointer and crash the session.**
+  `borrow_from()` accepted any `EXTPTRSXP` and cast it, but every package that hands R a pointer
+  produces that same SEXP type, so an `Rcpp::XPtr`, or the address slot of a registered native
+  routine, was cast and dereferenced, segfaulting and aborting R. The pointer now carries a
+  `corehydro_rng` tag that R code cannot forge, and the tag is required before the cast.
+- **`rng_integers()` had signed integer overflow on a wide span.** `max - min` was forwarded to
+  the generator unchecked, so a range above `int.MaxValue` wrapped negative and returned
+  -208904155 in both languages instead of raising. The span is taken in int64 now, in the handle
+  and in the ported generator, reproducing C#'s own throw.
+- **The optimizer and callback guards' abort flag was private to each guard**, so the promise that
+  one run can never raise a second host exception held only for a single callback. Guards that
+  belong to one run now share a `CallbackAbortState`, which keeps the FIRST exception rather than
+  the last, and every drive site rethrows off that shared state rather than off whichever guard
+  happens to be asked.
+- **A NaN return from the Gibbs proposal was accepted in both languages** and surfaced two calls
+  downstream inside the user's own log-likelihood, because the proposal goes through a different
+  converter from the gradient and neither language checked there. Both refuse it by name now, as
+  does a NaN gradient in Python, which R already refused.
+- **The `bootstrap_custom()` jackknife help text claimed `data[-index]` returns the sample
+  untouched at index 0.** In R that spelling is `data[-0]`, which is the empty vector. Corrected
+  in the roxygen block, in a user-visible error string, and in the tests.
+- **The J statistic is no longer printed where it cannot be trusted.** At zero over-identifying
+  degrees of freedom the residual covariance it is scaled by is theoretically zero, so the number
+  is whatever inverting a numerically singular matrix returned; `print()` / `summary()` name the
+  reason instead. The same line is now gated on the statistic being finite, so a fit whose
+  covariance could not be inverted reports that rather than printing `nan`. The field itself is
+  untouched on both fits.
+- An R log-likelihood returning `NA`, the shape a model indexing past its priors takes where
+  Python raises `IndexError`, is refused by name in both packages instead of walking a motionless
+  chain. A `NULL`/`None` seed is refused by name rather than failing inside the JSON builder. A
+  fractional callback count and a whole number spelled as a float are now accepted and refused
+  identically in the two languages.
+- `QuadratureResult` in Python could not be pickled or deep-copied: it is a `float` subclass whose
+  `__new__` takes three arguments, which the default protocol cannot rebuild. `__getnewargs__`
+  restores both round trips, matching `OptimResult`.
+- Both wrappers wrote every option key on every call for `root_find`, `derivative` and
+  `quadrature`, duplicating the C# defaults and defeating the documented rule that an absent key
+  leaves the ported default in force. A key is sent only when the caller supplies it now.
+- The `mcmc_sampler` fixture kind carried a third copy of the sampler-construction switch beside
+  the two glues. It now calls the shared builder in
+  `numerics/sampling/mcmc/support/mcmc_run.hpp`, so the registry path and the callback path build
+  and report a run through the same code.
+- The C++ fixture runner is compiled with `-ffp-contract=off` on non-MSVC compilers. Its fixture
+  callback catalog is written as C++ lambdas standing in for the R closures, Python functions and
+  C# delegates the other three runners write for the same names, and clang and gcc contract
+  `a*b + c` into a fused multiply-add by default, so those lambdas were computing a different
+  function from the one the fixture names. MSVC needs no flag: `/fp:precise` does not contract.
+
+### Documentation
+
+- **An entry in `docs/upstream-csharp-issues.md` for the over-identified GMM J statistic.**
+  `fit_gmm_moments()` produced the first over-identified GMM fit either package could run, and the
+  statistic does not reproduce against the real C# library: `J = 214.59` there against
+  `J = -129.46` here, from parameters agreeing to 2e-11. It structurally cannot. The moment
+  residual covariance `V = S - D(D'S^-1 D)^-1 D'` has rank exactly `q - p` for any `q` and `p`, so
+  it is singular whether the fit is over-identified or not, and `V.inverse()` amplifies the
+  optimizer's 1e-8 convergence tolerance rather than any property of the data. The port's inputs
+  are correct: `g' V^+ g` through a pseudo-inverse gives 2.3466, matching the textbook
+  `n g' S^-1 g` on the same fit. The remedy belongs upstream, in the inversion.
+- `site/status.qmd` corrected and brought to v0.7.0. The `Sampling.MCMC` row said seven of eight
+  samplers were exposed; all eight are. The multivariate `Distributions` and
+  `Distributions.Copulas` rows still said "Internal" although both have been public since v0.5.0.
+  No row is marked "Internal" any more.
+- `site/examples/25-estimation-methods` no longer prints the J statistic of its zero-degrees-of-
+  freedom Bulletin 17C fit as a result, and no longer pins it in the reproduction check.
+- Reference entries for every new R export and Python name in `corehydror/_pkgdown.yml` and the
+  `quartodoc.sections` of `site/_quarto.yml`.
+
+### Validation
+
+ctest 87/87; oracle gate 5426 reproduced, 0 failed, 11 skipped (the documented GEV standard-error
+set, unchanged); testthat 6144/0; pytest 1487 passed. `R CMD check --as-cran` holds at three NOTEs
+(the CRAN-incoming non-FOSS-license note, the long-path note listing vendored core headers, and a
+local HTML-tidy-version note) with no WARNING. The cross-language fixture passes at zero tolerance
+in all four runners, with no `oracle_skip` and no loosened tolerance anywhere in the branch.
+
 ## [0.6.0] - 2026-08-13
 
 The numerics toolbox layer. Every general-purpose Numerics utility that is not itself a
@@ -427,7 +564,8 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/cameronbracken/corehydro/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cameronbracken/corehydro/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cameronbracken/corehydro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cameronbracken/corehydro/compare/v0.3.0...v0.4.0

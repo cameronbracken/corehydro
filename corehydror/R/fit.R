@@ -784,6 +784,29 @@ gmm_degree_of_freedom <- function(x) {
   if (isTRUE(is.na(x$j_stat_pval))) 0L else NA_integer_
 }
 
+# Internal: why this GMM fit's J-statistic should not be printed, or NULL when it should be.
+#
+# Two reasons, and they are different failures. At ZERO over-identifying degrees of freedom -- which
+# every fit_gmm() fit is, Bulletin 17C being structurally just-identified, and which a
+# fit_gmm_moments() fit is whenever q == p -- the residual covariance J is scaled by is theoretically
+# zero, so the number is whatever inverting a numerically singular matrix happened to give (see
+# docs/upstream-csharp-issues.md and fixtures/callback/gmm.json for the measured spread). Printing it
+# would put a meaningless figure in front of a reader with no way to know it is meaningless. Separately,
+# the residual covariance can be singular enough that inverting it RAISES, in which case the ported
+# post_process() reports NaN and there is no statistic at all: printing "j-statistic: nan" says less
+# than saying so. `$j_stat` itself is untouched in both cases and still on the fit for anyone who
+# wants it.
+gmm_j_stat_note <- function(x) {
+  dof <- gmm_degree_of_freedom(x)
+  if (!is.na(dof) && dof == 0L) {
+    return("not interpretable at 0 degrees of freedom")
+  }
+  if (is.null(x$j_stat) || !is.finite(x$j_stat)) {
+    return("could not be computed for this fit")
+  }
+  NULL
+}
+
 #' @export
 print.corehydro_fit <- function(x, ...) {
   cat(sprintf("<corehydro_fit> %s (%s)\n", x$method, x$status))
@@ -800,24 +823,14 @@ print.corehydro_fit <- function(x, ...) {
   }
   if (!is.null(x$dic)) cat(sprintf("  dic: %g\n", x$dic))
   if (!is.null(x$j_stat_pval)) {
-    # The J-statistic is only interpretable at NON-ZERO degrees of freedom. At zero -- which every
-    # fit_gmm() fit is, Bulletin 17C being structurally just-identified, and which a
-    # fit_gmm_moments() fit is whenever q == p -- the residual covariance J is scaled by is
-    # theoretically zero, so the number is whatever inverting a numerically singular matrix
-    # happened to give (see fixtures/callback/gmm.json for the measured spread). Printing it there
-    # would put a meaningless figure in front of a reader with no way to know it is meaningless.
-    # `$j_stat` itself is untouched and still on the fit for anyone who wants it.
-    dof <- gmm_degree_of_freedom(x)
-    if (is.na(dof) || dof > 0L) {
+    note <- gmm_j_stat_note(x)
+    if (is.null(note)) {
       cat(sprintf(
         "  j-statistic: %g   p-value: %s   gmm iterations: %d\n",
         x$j_stat, format(x$j_stat_pval), x$gmm_iterations
       ))
     } else {
-      cat(sprintf(
-        "  j-statistic: not interpretable at 0 degrees of freedom   gmm iterations: %d\n",
-        x$gmm_iterations
-      ))
+      cat(sprintf("  j-statistic: %s   gmm iterations: %d\n", note, x$gmm_iterations))
     }
   }
   if (x$method %in% c("MaximumLikelihood", "MaximumAPosteriori")) {

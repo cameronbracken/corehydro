@@ -29,6 +29,8 @@ here.
 | 09 | Statistics toolbox | [Python](09-statistics/python.ipynb) | [R](09-statistics/r.qmd) |
 | 12 | Model evaluation | [Python](12-model-evaluation/python.ipynb) | [R](12-model-evaluation/r.qmd) |
 | 13 | A custom objective | [Python](13-custom-objective/python.ipynb) | [R](13-custom-objective/r.qmd) |
+| 14 | A custom posterior | [Python](14-custom-posterior/python.ipynb) | [R](14-custom-posterior/r.qmd) |
+| 15 | A custom bootstrap | [Python](15-custom-bootstrap/python.ipynb) | [R](15-custom-bootstrap/r.qmd) |
 | 20 | Bayesian regression | [Python](20-bayesian-regression/python.ipynb) | [R](20-bayesian-regression/r.qmd) |
 | 21 | Flood frequency analysis | [Python](21-flood-frequency/python.ipynb) | [R](21-flood-frequency/r.qmd) |
 | 22 | Reliability analysis | [Python](22-reliability/python.ipynb) | [R](22-reliability/r.qmd) |

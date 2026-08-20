@@ -318,28 +318,38 @@ class Fit:
         # correctly counts six.
         bits = [f"{len(self.parameter_names)} parameters"]
         if self.method == "GMM":
-            if self._j_stat_is_interpretable():
+            if self._j_stat_note() is None:
                 bits.append(f"j-stat={self.j_stat:g}")
         else:
             bits.append(f"log-likelihood={self.log_likelihood:g}")
         return f"<Fit {self.method} ({self.status}): {', '.join(bits)}>"
 
-    def _j_stat_is_interpretable(self) -> bool:
-        """Internal: whether this GMM fit's J-statistic is worth printing.
+    def _j_stat_note(self) -> str | None:
+        """Internal: why this GMM fit's J-statistic should not be printed, or None when it should be.
 
-        Only at NON-ZERO over-identifying degrees of freedom. At zero -- which every
-        :func:`fit_gmm` fit is, Bulletin 17C being structurally just-identified, and which a
-        `fit_gmm_moments` fit is whenever q == p -- the residual covariance J is scaled by is
-        theoretically zero, so the number is whatever inverting a numerically singular matrix
-        happened to give (see ``fixtures/callback/gmm.json`` for the measured spread). ``.j_stat``
-        itself is untouched and still on the fit for anyone who wants it. Kept in step with
-        corehydror's ``gmm_degree_of_freedom()``: the model path does not carry
-        ``degree_of_freedom``, and a ``None`` p-value says the same thing, since the ported
-        ``post_process()`` writes NaN there exactly when the degrees of freedom are zero.
+        Two reasons, and they are different failures. At ZERO over-identifying degrees of freedom
+        -- which every :func:`fit_gmm` fit is, Bulletin 17C being structurally just-identified, and
+        which a `fit_gmm_moments` fit is whenever q == p -- the residual covariance J is scaled by
+        is theoretically zero, so the number is whatever inverting a numerically singular matrix
+        happened to give (see ``docs/upstream-csharp-issues.md`` and ``fixtures/callback/gmm.json``
+        for the measured spread). Separately, that covariance can be singular enough that inverting
+        it RAISES, in which case the ported ``post_process()`` reports NaN and there is no statistic
+        at all: printing ``j-statistic: nan`` says less than saying so. ``.j_stat`` itself is
+        untouched in both cases and still on the fit for anyone who wants it.
+
+        Kept in step with corehydror's ``gmm_degree_of_freedom()`` / ``gmm_j_stat_note()``: the
+        model path does not carry ``degree_of_freedom``, and a ``None`` p-value says the same thing,
+        since the ported ``post_process()`` writes NaN there exactly when the degrees of freedom are
+        zero.
         """
-        if self.degree_of_freedom is not None:
-            return self.degree_of_freedom > 0
-        return self.j_stat_pval is not None
+        dof = self.degree_of_freedom
+        if dof is None:
+            dof = 0 if self.j_stat_pval is None else None
+        if dof is not None and dof == 0:
+            return "not interpretable at 0 degrees of freedom"
+        if self.j_stat is None or not math.isfinite(self.j_stat):
+            return "could not be computed for this fit"
+        return None
 
     def summary(self) -> str:
         """A multi-line text summary, mirroring R's ``print.corehydro_fit``/``summary.corehydro_fit``.
@@ -362,17 +372,15 @@ class Fit:
         if self.dic is not None:
             lines.append(f"dic: {self.dic:g}")
         if self.method == "GMM":
-            if self._j_stat_is_interpretable():
+            note = self._j_stat_note()
+            if note is None:
                 pval = "NA" if self.j_stat_pval is None else f"{self.j_stat_pval:g}"
                 lines.append(
                     f"j-statistic: {self.j_stat:g}   p-value: {pval}   "
                     f"gmm iterations: {self.gmm_iterations}"
                 )
             else:
-                lines.append(
-                    "j-statistic: not interpretable at 0 degrees of freedom   "
-                    f"gmm iterations: {self.gmm_iterations}"
-                )
+                lines.append(f"j-statistic: {note}   gmm iterations: {self.gmm_iterations}")
         if self.method in ("MaximumLikelihood", "MaximumAPosteriori"):
             lines.append(f"converged: {self.converged}   function evaluations: {self.function_evaluations}")
         else:

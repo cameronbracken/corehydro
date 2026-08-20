@@ -1131,6 +1131,15 @@ def test_the_j_statistic_is_summarized_only_where_it_means_something():
     assert "p-value" in over.summary()
     assert "j-stat=" in repr(over)
 
+    # Non-zero degrees of freedom is not on its own enough: the residual covariance can be singular
+    # enough that inverting it raises, in which case the ported post_process() reports NaN. "nan" on
+    # that line says less than saying so, so the display is gated on isfinite() as well as on the
+    # degrees of freedom. corehydror's print.corehydro_fit is gated the same way.
+    over.j_stat = float("nan")
+    assert "j-statistic: could not be computed for this fit" in over.summary()
+    assert "nan" not in over.summary()
+    assert "j-stat=" not in repr(over)
+
 
 def test_a_gmm_moments_fit_carries_the_same_gmm_bookkeeping_r_does():
     # corehydror's fit_gmm_moments() puts $degree_of_freedom and $number_of_moment_conditions on

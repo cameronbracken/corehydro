@@ -1880,6 +1880,54 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
 
 ---
 
+## ROBUSTNESS (not a port defect) — the over-identified GMM J-statistic inverts a matrix that is singular by construction, so it does not reproduce C#-vs-C++
+
+- **Where:** `RMC.BestFit/Estimation/GeneralizedMethodOfMoments.cs` @ c2e6192,
+  `GetMomentResidualCovariance` (lines 945-975) and `PostProcess` (the `var Vinv = V.Inverse();`
+  at line 2511); the port at
+  `core/include/corehydro/estimation/generalized_method_of_moments.hpp:1295-1322`.
+- **What:** the moment residual covariance is `V = S - D(D'S^-1 D)^-1 D'`. Multiplying it on both
+  sides by `S^(-1/2)` gives `S^(-1/2) V S^(-1/2) = I - P`, with `P` a projection of rank `p`, so
+  `rank(V) = q - p` EXACTLY. V is singular for any q and p; over-identifying merely moves the rank
+  from 0 to 1, it does not make V invertible. `PostProcess` then forms Hansen's J as `g' V^-1 g` by
+  calling `V.Inverse()` on that matrix. What the inverse amplifies is the optimizer's
+  first-order-condition residual, which is a convergence TOLERANCE of 1e-8, not floating-point
+  rounding, so the reported J describes which optimizer ran rather than how well the model fits.
+- **Not a transcription difference:** the C# method and the ported one are line-identical, and both
+  inverses are LU. The divergence below is not something a closer transcription could remove.
+- **Evidence (measured at the fitted parameters of the over-identified fixture case):** V has
+  singular values `[1.9e-02, 9.8e-19, 2.3e-19]`, numerical rank 1, and condition number 8.1e16.
+  Perturbing S or D by 1e-11 swings J across +892 / -1061 / +668 / -820. The real C# library returns
+  `J = 214.59` with a p-value of 0 where the shared core returns `J = -129.46` with a p-value of 1,
+  from parameters that agree to 2e-11; the core alone spans -129.46, 1.2e+08, 1268.6 and 3.8e+06
+  across its four optimizers, on parameters agreeing to 1e-5.
+- **Decisive evidence that the port's inputs are correct:** replacing the inverse with a
+  Moore-Penrose pseudo-inverse gives `g' V^+ g = 2.3466`, matching the textbook
+  `n * g' S^-1 g = 2.3466` on the same fit. S, D and g are therefore all correct in the port; only
+  the inversion of a rank-deficient V is at fault.
+- **Relation to the just-identified case:** `q == p` is the degenerate end of the same fact,
+  `rank(V) = 0`, and there `j_stat_pval` is correctly NaN because the degrees of freedom are zero.
+  That case, and why Bulletin 17C can never leave it, is the DESIGN NOTE entry above
+  ("Bulletin17CDistribution GMM is always just-identified, so the J-stat specification test is
+  unreachable"); this entry is the over-identified half of it, reachable only through the
+  user-written moment conditions of `fit_gmm_moments()`.
+- **Port handling:** mirrored faithfully, no divergence. `fixtures/callback/gmm.json`'s
+  `over_identified_three_moments` case pins the parameters, standard errors, covariance, degrees of
+  freedom and the iteration bookkeeping (13 assertions, every one EMITTER-READ from the real C#
+  library) and deliberately leaves `j_stat` and `j_stat_pval` UNASSERTED, with no `oracle_skip` and
+  no loosened tolerance, because there is no honest value to loosen towards. Both packages'
+  `print()` / `summary()` decline to display the J statistic at zero degrees of freedom, and also
+  when the statistic is not finite, which is what the ported `post_process()` reports when
+  inverting V raises outright.
+- **Suggested C# fix:** compute J through a pseudo-inverse of V, or equivalently as
+  `n * g' S^-1 g`, in place of the `V.Inverse()` call in `PostProcess`. Either form is stable
+  against the rank deficiency V carries by construction, and both reproduce across compilers and
+  optimizers.
+- **Status: open upstream.** Found in v0.7.0 by the first over-identified GMM fit either package
+  could run, since `fit_gmm()` reaches only Bulletin 17C. Not reported to RMC yet.
+
+---
+
 ## Reconciliation pass, July 2026 upstream sync (a2c4dbf/fc28c0c to 2a0357a/c2e6192)
 
 Every entry above was re-checked against the shipped source at the new pins. This is the summary;
