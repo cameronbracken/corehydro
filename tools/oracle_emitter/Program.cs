@@ -957,6 +957,30 @@ static Func<double[], double>? CallbackMcmcFunction(string name) => name switch
             if (x - p[0] > 1d || p[0] - x > 1d) return double.NegativeInfinity;
         return 0d;
     },
+    // Task-5 review fix, coverage finding: unlike Mcmc_GaussianKernel, whose derivative
+    // sum(x - mu) is LINEAR in mu (so its third derivative is zero and the ported
+    // central-difference default agrees with the analytic gradient to rounding, ~4e-16), this
+    // kernel's derivative is CUBIC in mu, so the central-difference truncation error is real rather
+    // than rounding -- the analytic and default gradients genuinely disagree, which is what a
+    // supplied-vs-ignored gradient regression needs to be caught by the oracle gate. The 0.05
+    // coefficient is load-bearing, not decorative: measured by brute-force sweep (a coefficient of
+    // 1 over the same data), an unscaled quartic makes HMC's leapfrog trajectory genuinely CHAOTIC
+    // over 200 iterations -- the analytic and default gradients then diverge at the ~0.3% level, the
+    // same order this fixture's own cross-language divergence measured at that scale, so no fixed
+    // tolerance could pin it. At 0.05 the divergence is small and smooth (~3e-8 relative, four
+    // orders past the file's 1e-12 tolerance) rather than chaotic, which is what keeps the case
+    // usable as an oracle at all.
+    "Mcmc_QuarticKernel" => p =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data)
+        {
+            double d = x - p[0];
+            acc += d * d * d * d;
+        }
+        return -0.05d * acc;
+    },
     _ => null
 };
 
@@ -992,6 +1016,18 @@ static HMC.Gradient? CallbackGradientFunction(string name) => name switch
         double acc = 0d;
         foreach (double x in data) acc += x - parameters[0];
         return new Vector(new[] { acc });
+    },
+    // The analytic derivative of Mcmc_QuarticKernel, d/dmu = 0.05 * 4 * sum((x - mu)^3).
+    "Grad_QuarticKernel" => parameters =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data)
+        {
+            double d = x - parameters[0];
+            acc += d * d * d;
+        }
+        return new Vector(new[] { 0.2d * acc });
     },
     _ => null
 };

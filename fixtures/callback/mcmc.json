@@ -7,7 +7,9 @@
     "Mcmc_LinearKernel": "f(a, b) = -0.5 * sum((y - a - b*t)^2) over t = {1..8}, y = {2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1}  [corehydro addition: the same kernel over the residuals of a straight line, two parameters]",
     "Mcmc_UniformWidthKernel": "f(mu) = 0 when every |x - mu| <= 1 over x = {4.9, 5.1, 5.0, 5.2, 4.8}, else -infinity  [corehydro addition: the log-likelihood of x_i ~ Uniform(mu - 1, mu + 1) with the normalizing term dropped, one parameter. Chosen for the Gibbs case because THIS model's full conditional is itself uniform, so its proposal is an exact conditional draw written with arithmetic and comparisons alone -- a Gaussian conditional would need Box-Muller or an inverse normal CDF, i.e. transcendentals, and those do not reproduce bit for bit across four languages]",
     "Prop_UniformConditional": "proposal(parameters, prng) = lo + prng.NextDouble() * (hi - lo), lo = max(x) - 1 = 4.2, hi = min(x) + 1 = 5.8  [corehydro addition, upstream's Gibbs.Proposal(double[], Random) shape: the EXACT full conditional of Mcmc_UniformWidthKernel under a flat prior, so every recorded state is an independent Uniform(4.2, 5.8) draw -- mean exactly 5, sd 1.6/sqrt(12) = 0.4619. One NextDouble per call, off the generator the sampler hands in]",
-    "Grad_GaussianKernel": "gradient(mu) = sum(x - mu) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition, upstream's HMC.Gradient(IList<double>) shape: the analytic derivative of Mcmc_GaussianKernel, one parameter]"
+    "Grad_GaussianKernel": "gradient(mu) = sum(x - mu) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition, upstream's HMC.Gradient(IList<double>) shape: the analytic derivative of Mcmc_GaussianKernel, one parameter]",
+    "Mcmc_QuarticKernel": "f(mu) = -0.05 * sum((x - mu)^4) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition, a quartic kernel over the same data as Mcmc_GaussianKernel, one parameter. Chosen for the gradient-discrimination case (Task 5 review fix): Mcmc_GaussianKernel's derivative sum(x - mu) is LINEAR in mu, so its third derivative is zero and the ported central-difference default agrees with the analytic gradient to rounding (~4e-16), which means that pair alone cannot tell a supplied gradient from a silently ignored one. This kernel's derivative is CUBIC in mu, so the central-difference truncation error is real rather than rounding, and the analytic (Grad_QuarticKernel) and default gradients genuinely produce different chains. The 0.05 coefficient is load-bearing: an unscaled quartic (coefficient 1) makes HMC's leapfrog trajectory genuinely CHAOTIC over 200 iterations, where the analytic-vs-default divergence saturates around 0.3% rather than scaling with the (tiny) truncation error, which is exactly the kind of divergence no fixed tolerance can pin -- measured by a brute-force coefficient sweep before this fixture was written. At 0.05 the divergence is small and smooth (~3e-8 relative), safely past the file's 1e-12 tolerance without entering that regime]",
+    "Grad_QuarticKernel": "gradient(mu) = 0.05 * 4 * sum((x - mu)^3) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition, upstream's HMC.Gradient(IList<double>) shape: the analytic derivative of Mcmc_QuarticKernel, one parameter]"
   },
   "cases": [
     {
@@ -181,7 +183,7 @@
         }
       },
       "assertions": [
-        { "method": "named", "name": "posterior_mean[0]", "expected": 4.999418060989313, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the SAME run as hmc_gaussian_kernel_analytic_gradient with the `gradient` key removed, so what it pins is the OPTIONALITY of that delegate: an absent gradient must select the ported bound-aware finite-difference gradient of SafeLogLikelihood, which is what C# does with `gradientFunction: null`. Read the two cases together and note how CLOSE they land -- 4.999418060989313 against ...311, agreeing to about 4e-16 relative. That is not a coincidence and it is not the delegate being ignored: the central difference of a QUADRATIC log-density is exact up to rounding, so the ported default and the analytic formula genuinely compute the same number here. It follows that this pair cannot, on its own, tell a supplied gradient from an ignored one; that is asserted in each package's own tests instead (a deliberately wrong gradient produces a visibly different chain), and what these two cases pin is that BOTH paths reproduce the C# run" },
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.999418060989313, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the SAME run as hmc_gaussian_kernel_analytic_gradient with the `gradient` key removed, so what it pins is the OPTIONALITY of that delegate: an absent gradient must select the ported bound-aware finite-difference gradient of SafeLogLikelihood, which is what C# does with `gradientFunction: null`. Read the two cases together and note how CLOSE they land -- 4.999418060989313 against ...311, agreeing to about 4e-16 relative. That is not a coincidence and it is not the delegate being ignored: the central difference of a QUADRATIC log-density is exact up to rounding, so the ported default and the analytic formula genuinely compute the same number here. It follows that this pair cannot, on its own, tell a supplied gradient from an ignored one; that is asserted in each package's own tests instead (a deliberately wrong gradient produces a visibly different chain), and what these two cases pin is that BOTH paths reproduce the C# run. hmc_quartic_kernel_analytic_gradient below (Task 5 review fix, coverage finding) is the case that DOES discriminate: its kernel's derivative is cubic rather than linear, so the central-difference truncation error is real and the analytic and default gradients genuinely disagree there" },
         { "method": "named", "name": "posterior_sd[0]", "expected": 0.4338909459907582, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.StandardDeviation" },
         { "method": "named", "name": "acceptance_rate[0]", "expected": 1.0, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]" },
         { "method": "value", "args": [111], "expected": 5.07502026726938, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][100].Values[0], a mid-chain state" }
@@ -205,6 +207,29 @@
         { "method": "named", "name": "posterior_mean[0]", "expected": 4.998909978154603, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the second sampler that takes a gradient, so the delegate's dispatch is pinned for both arms and not just HMC's" },
         { "method": "named", "name": "map[0]", "expected": 5.000409011728744, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]" },
         { "method": "value", "args": [111], "expected": 5.467371912706708, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][100].Values[0], a mid-chain state" }
+      ]
+    },
+    {
+      "name": "hmc_quartic_kernel_analytic_gradient",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_QuarticKernel",
+        "gradient": "Grad_QuarticKernel",
+        "options": {
+          "sampler": "HMC",
+          "priors": [{ "family": "Uniform", "parameters": [2.0, 8.0] }],
+          "iterations": 200, "warmup": 50, "chains": 2, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.805424611623527, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.Mean off the driven C# HMC constructed with a caller-supplied gradientFunction. Task-5 review fix, coverage finding: hmc_gaussian_kernel_analytic_gradient/hmc_gaussian_kernel_default_gradient are the same run with and without `gradient`, but that pair's kernel has a LINEAR derivative, so the ported central-difference default agrees with the analytic gradient to rounding (~4e-16) and the pair cannot tell a supplied gradient from an ignored one -- a regression that silently dropped the `gradient` key would pass the oracle gate undetected. This case's kernel (Mcmc_QuarticKernel) has a CUBIC derivative, so the two paths genuinely diverge; see this repo's Task-5 fix-round-1 report for the measured discrimination against the default-gradient run of this same model" },
+        { "method": "named", "name": "posterior_sd[0]", "expected": 0.9128396888970541, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.StandardDeviation" },
+        { "method": "named", "name": "map[0]", "expected": 4.989297954429643, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]" },
+        { "method": "named", "name": "acceptance_rate[0]", "expected": 1.0, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]. HMC's leapfrog integration calls the gradient once per step, so an accept count matching exactly means every one of those calls returned the same value in C# and in the port" },
+        { "method": "value", "args": [11], "expected": 4.084281384143274, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][0].Values[0]" },
+        { "method": "value", "args": [111], "expected": 6.337074300512387, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][100].Values[0], a mid-chain state" }
       ]
     }
   ]

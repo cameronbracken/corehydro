@@ -74,6 +74,17 @@ using CallbackAbortStatePtr = std::shared_ptr<CallbackAbortState>;
 // Builds the state a group hands to every guard it constructs.
 inline CallbackAbortStatePtr make_abort_state() { return std::make_shared<CallbackAbortState>(); }
 
+// Rethrows the first exception latched into a SHARED abort state directly, without going through
+// any one guard. Asking a guard's own `rethrow_if_aborted()` works only because every guard in a
+// shared-state group reads the same `error` -- correct today, but it makes correctness depend on
+// WHICH guard happens to be asked, a trap for the next guard added to a group. A drive site with
+// more than one live guard over one shared state (mcmc's log-likelihood/proposal/gradient trio, for
+// instance) should call this on the state itself instead of picking one guard to stand in for the
+// group. A null `state` has nothing latched, so it rethrows nothing.
+inline void rethrow_if_aborted(const CallbackAbortStatePtr& state) {
+    if (state && state->error) std::rethrow_exception(state->error);
+}
+
 template <typename TResult, typename... TArgs>
 class GuardedCall {
    public:

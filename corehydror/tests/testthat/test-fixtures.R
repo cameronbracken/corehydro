@@ -496,6 +496,38 @@ callback_fixture_function <- function(name) {
       for (x in data) acc <- acc + (x - p[1])
       acc
     },
+    # Task-5 review fix, coverage finding: unlike Mcmc_GaussianKernel, whose derivative
+    # sum(x - mu) is LINEAR in mu (so its third derivative is zero and the ported
+    # central-difference default agrees with the analytic gradient to rounding, ~4e-16), this
+    # kernel's derivative is CUBIC in mu, so the central-difference truncation error is real rather
+    # than rounding -- the analytic and default gradients genuinely disagree, which is what a
+    # supplied-vs-ignored gradient regression needs to be caught by the oracle gate. The 0.05
+    # coefficient is load-bearing, not decorative: measured by brute-force sweep (a coefficient of
+    # 1 over the same data), an unscaled quartic makes HMC's leapfrog trajectory genuinely CHAOTIC
+    # over 200 iterations -- the analytic and default gradients then diverge at the ~0.3% level, the
+    # same order this fixture's own cross-language divergence measured at that scale, so no fixed
+    # tolerance could pin it. At 0.05 the divergence is small and smooth (~3e-8 relative, four
+    # orders past the file's 1e-12 tolerance) rather than chaotic, which is what keeps the case
+    # usable as an oracle at all.
+    Mcmc_QuarticKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) {
+        d <- x - p[1]
+        acc <- acc + d * d * d * d
+      }
+      -0.05 * acc
+    },
+    # The analytic derivative of Mcmc_QuarticKernel, d/dmu = 0.05 * 4 * sum((x - mu)^3).
+    Grad_QuarticKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) {
+        d <- x - p[1]
+        acc <- acc + d * d * d
+      }
+      0.2 * acc
+    },
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which

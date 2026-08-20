@@ -157,6 +157,12 @@ sexp make_rng_handle(const sup::RngBorrowPtr& borrow) {
 // Wraps `f` as the (parameters, generator) callback the rng/mcmc/bootstrap groups call. The scope
 // is a local of this lambda, so the handle it hands R is invalidated the moment the callback
 // returns -- by a normal return or by an unwind, since a destructor runs either way.
+//
+// Review fix (Task 5, finding 1): refuses NA/NaN by name, same wording as_vector_vector_fn uses,
+// for the same reason -- a Gibbs proposal (the caller this shape serves today) that returns NaN
+// would otherwise be accepted unconditionally by Gibbs and corrupt the chain silently rather than
+// failing loudly. The check lives HERE rather than duplicated per call site because every caller
+// of this shape (the Gibbs proposal today, a bootstrap resample in Task 6) shares the mistake.
 std::function<std::vector<double>(const std::vector<double>&, samp::MersenneTwister&)> as_rng_fn(
     function f) {
     return [f](const std::vector<double>& p, samp::MersenneTwister& prng) mutable {
@@ -168,7 +174,13 @@ std::function<std::vector<double>(const std::vector<double>&, samp::MersenneTwis
 
         sexp out = f(par, handle);
         doubles v = as_doubles(out);
-        return std::vector<double>(v.begin(), v.end());
+        std::vector<double> result(v.begin(), v.end());
+        for (double value : result)
+            if (ISNAN(value))
+                throw std::runtime_error(
+                    "the function returned NA or NaN rather than a number; in R, reading past the "
+                    "end of a vector gives NA, so check the length of the vector it was passed");
+        return result;
     };
 }
 

@@ -601,6 +601,20 @@ def test_a_proposal_returning_the_wrong_number_of_values_is_refused_by_name():
         )
 
 
+def test_a_proposal_returning_nan_is_refused():
+    # Review fix (Task 5, finding 1): as_vector_vector_fn (corehydropy/src/bindings/callback.cpp)
+    # converts BOTH the Gibbs proposal and the HMC/NUTS gradient, and used to have no NaN check at
+    # all, while its R twin (corehydror/src/callback.cpp) has always rejected NA/NaN by name. A
+    # proposal returning nan was therefore a clear error in R and a silently garbage chain in
+    # Python. +/-inf is deliberately NOT refused here (see the gradient case below) -- only nan is.
+    with pytest.raises(RuntimeError, match="returned nan rather than a number"):
+        ch.mcmc_posterior(
+            _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]),
+            sampler="Gibbs", proposal=lambda parameters, rng: [float("nan")],
+            iterations=100, warmup=50, thinning=1, seed=12345, initialize="Randomize",
+        )
+
+
 @pytest.mark.parametrize("initialize", ["Randomize", "MAP"])
 def test_an_error_raised_inside_the_proposal_reaches_the_caller(initialize):
     # The proposal's OWN guard, which no log-likelihood test can prove: it runs beside the
@@ -692,6 +706,21 @@ def test_a_gradient_returning_the_wrong_number_of_values_is_refused_by_name():
         ch.mcmc_posterior(
             _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler="HMC",
             gradient=lambda p: [1.0, 2.0], iterations=100, warmup=50, chains=2, thinning=1,
+            seed=12345, initialize="Randomize",
+        )
+
+
+@pytest.mark.parametrize("sampler", ["HMC", "NUTS"])
+def test_a_gradient_returning_nan_is_refused(sampler):
+    # Review fix (Task 5, finding 1): mirrors as_vector_scalar_fn's own std::isnan loop (which
+    # already refused a nan LOG-LIKELIHOOD) so the vector-returning converter refuses a nan
+    # ELEMENT too, for parity with corehydror's as_vector_vector_fn, which has always rejected
+    # NA/NaN. +/-inf is deliberately NOT refused: an out-of-support log-density legitimately
+    # returns -inf and every sampler treats it as a rejected point, but nan is never an answer.
+    with pytest.raises(RuntimeError, match="returned nan rather than a number"):
+        ch.mcmc_posterior(
+            _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler=sampler,
+            gradient=lambda p: [float("nan")], iterations=100, warmup=50, chains=2, thinning=1,
             seed=12345, initialize="Randomize",
         )
 

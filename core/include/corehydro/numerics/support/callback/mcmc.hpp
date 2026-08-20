@@ -290,15 +290,18 @@ inline CallbackResult run_mcmc(const std::string& method, const JsonValue& o,
         [&log_likelihood](const std::vector<double>& p) { return log_likelihood(p); },
         mcmc_settings(o), callbacks);
 
-    // See the file header on why BOTH halves are load-bearing here. Any guard in the group
-    // rethrows the group's first exception, so the log-likelihood's is the one asked.
+    // See the file header on why BOTH halves are load-bearing here. Rethrown off the shared
+    // `abort` state directly (callback_guard.hpp's free `rethrow_if_aborted`) rather than off any
+    // one guard's own method, so this drive site does not depend on WHICH of the three guards it
+    // happens to ask -- all three share `abort`, but that should not be a fact a caller here needs
+    // to know.
     try {
         sampler->sample();
     } catch (...) {
-        log_likelihood.rethrow_if_aborted();
+        rethrow_if_aborted(abort);
         throw;
     }
-    log_likelihood.rethrow_if_aborted();
+    rethrow_if_aborted(abort);
 
     return mcmc_flatten(chmcmc::collect_run(*sampler));
 }

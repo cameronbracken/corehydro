@@ -568,6 +568,23 @@ test_that("a proposal returning the wrong number of values is refused by name", 
   )
 })
 
+test_that("a proposal returning NaN is refused", {
+  # Review fix (Task 5, finding 1): as_vector_vector_fn (this file) has always rejected NA/NaN by
+  # name; corehydropy's twin (as_vector_vector_fn in corehydropy/src/bindings/callback.cpp) had no
+  # such check for the vector-returning converter it shares between the gradient and the Gibbs
+  # proposal, so the same mistake was a clear error here and a silently garbage chain in Python.
+  # This test asserts the R side of that symmetric refusal stays in place; +/-Inf is deliberately
+  # NOT refused (see the gradient test below) -- only NA/NaN is.
+  expect_error(
+    mcmc_posterior(
+      mcmc_uniform_width_kernel, distribution("Uniform", c(0, 10)),
+      sampler = "Gibbs", proposal = function(parameters, rng) NaN,
+      iterations = 100, warmup = 50, thinning = 1, seed = 12345, initialize = "Randomize"
+    ),
+    "returned NA or NaN rather than a number"
+  )
+})
+
 test_that("an error raised inside the proposal reaches the caller, on both init paths", {
   # The proposal's OWN guard, which no log-likelihood test can prove: it runs beside the
   # log-likelihood on a SHARED abort state, so the first throw -- whichever callback it comes
@@ -652,6 +669,23 @@ test_that("a gradient returning the wrong number of values, or raising, is refus
         "my own gradient error"
       )
     }
+  }
+})
+
+test_that("a gradient returning NaN is refused, for both samplers that take one", {
+  # Review fix (Task 5, finding 1): this file's as_vector_vector_fn has always rejected NA/NaN by
+  # name; corehydropy's twin had no such check until this review round, so a gradient returning
+  # nan was a clear error here and a silently garbage chain in Python. +/-Inf is deliberately NOT
+  # refused -- only NA/NaN is; see the proposal test above for the same distinction.
+  for (sampler in c("HMC", "NUTS")) {
+    expect_error(
+      mcmc_posterior(
+        mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)), sampler = sampler,
+        gradient = function(p) NaN, iterations = 100, warmup = 50, chains = 2,
+        thinning = 1, seed = 12345, initialize = "Randomize"
+      ),
+      "returned NA or NaN rather than a number"
+    )
   }
 })
 

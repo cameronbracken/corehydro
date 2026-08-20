@@ -89,17 +89,29 @@ const char* kBadBounds = "`min` and `max` must each be a single finite whole num
 // Wraps `f` as the (parameters, generator) callback the rng/mcmc/bootstrap groups call. The scope
 // is a local of this lambda, so the handle it hands Python is invalidated the moment the callback
 // returns -- by a normal return or by an unwind, since a destructor runs either way.
+//
+// Review fix (Task 5, finding 1): refuses a nan element by name, same wording as_vector_vector_fn
+// uses, for the same reason -- a Gibbs proposal (the caller this shape serves today) that returns
+// nan would otherwise be accepted unconditionally by Gibbs and corrupt the chain silently rather
+// than failing loudly. The check lives HERE rather than duplicated per call site because every
+// caller of this shape (the Gibbs proposal today, a bootstrap resample in Task 6) shares the
+// mistake.
 std::function<std::vector<double>(const std::vector<double>&, samp::MersenneTwister&)> as_rng_fn(
     py::function f) {
     return [f](const std::vector<double>& p, samp::MersenneTwister& prng) {
         sup::RngScope scope(prng);
         py::object out = f(p, RngHandle(scope.handle()));
+        std::vector<double> result;
         try {
-            return out.cast<std::vector<double>>();
+            result = out.cast<std::vector<double>>();
         } catch (const py::cast_error&) {
             throw std::runtime_error("the function must return a sequence of numbers; got " +
                                      std::string(py::str(out)));
         }
+        for (double value : result)
+            if (std::isnan(value))
+                throw std::runtime_error("the function returned nan rather than a number");
+        return result;
     };
 }
 
@@ -119,18 +131,28 @@ std::function<double(double)> as_scalar_fn(py::function f) {
     };
 }
 
-// f(theta) -> vector, the shape the HMC/NUTS gradient callback takes. The length is checked in the
-// core (against the prior count, which is the only place that knows it); here the only job is
-// refusing something that is not a sequence of numbers at all.
+// f(theta) -> vector, the shape the HMC/NUTS gradient callback and the Gibbs proposal take. The
+// length is checked in the core (against the prior count, which is the only place that knows it);
+// here the job is refusing something that is not a sequence of numbers at all, and refusing a nan
+// element for the same reason as_vector_scalar_fn refuses a nan result: corehydror's twin
+// (as_vector_vector_fn in corehydror/src/callback.cpp) rejects NA/NaN by name already, so without
+// this check a gradient or proposal returning nan is a clear error in R and a silently garbage
+// chain in Python. +/-inf is NOT refused here, matching as_vector_scalar_fn and the R twin -- an
+// infinite element is not this callback's own error to raise.
 std::function<std::vector<double>(const std::vector<double>&)> as_vector_vector_fn(py::function f) {
     return [f](const std::vector<double>& p) -> std::vector<double> {
         py::object out = f(p);
+        std::vector<double> result;
         try {
-            return out.cast<std::vector<double>>();
+            result = out.cast<std::vector<double>>();
         } catch (const py::cast_error&) {
             throw std::runtime_error("the function must return a sequence of numbers; got " +
                                      std::string(py::str(out)));
         }
+        for (double value : result)
+            if (std::isnan(value))
+                throw std::runtime_error("the function returned nan rather than a number");
+        return result;
     };
 }
 

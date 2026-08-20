@@ -1777,6 +1777,16 @@ def _callback_fixture_function(name):
     # (parameters) -> vector, upstream's HMC.Gradient shape: d/dmu of Mcmc_GaussianKernel.
     if name == "Grad_GaussianKernel":
         return _mcmc_gaussian_gradient
+    # Task-5 review fix, coverage finding: unlike Mcmc_GaussianKernel, whose derivative
+    # sum(x - mu) is LINEAR in mu (so its third derivative is zero and the ported
+    # central-difference default agrees with the analytic gradient to rounding, ~4e-16), this
+    # kernel's derivative is CUBIC in mu, so the central-difference truncation error is real rather
+    # than rounding -- the analytic and default gradients genuinely disagree, which is what a
+    # supplied-vs-ignored gradient regression needs to be caught by the oracle gate.
+    if name == "Mcmc_QuarticKernel":
+        return _mcmc_quartic_kernel
+    if name == "Grad_QuarticKernel":
+        return _mcmc_quartic_gradient
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1837,6 +1847,27 @@ def _mcmc_gaussian_gradient(p):
     for x in data:
         acc += x - p[0]
     return [acc]
+
+
+def _mcmc_quartic_kernel(p):
+    # Coefficient 0.05 is load-bearing, not decorative: see the note in the R/C++ twins -- an
+    # unscaled quartic makes HMC's leapfrog trajectory genuinely chaotic over 200 iterations, and
+    # 0.05 keeps the analytic-vs-default gradient divergence small and smooth instead.
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        d = x - p[0]
+        acc += d * d * d * d
+    return -0.05 * acc
+
+
+def _mcmc_quartic_gradient(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        d = x - p[0]
+        acc += d * d * d
+    return [0.2 * acc]
 
 
 def _rng_warmup_1000(parameters, rng):
