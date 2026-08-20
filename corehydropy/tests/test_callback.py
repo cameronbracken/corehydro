@@ -1164,10 +1164,74 @@ def test_the_analytic_jacobian_and_the_penalty_both_reach_the_estimator():
     analytic = _gmm_fit(jacobian=_gmm_jacobian)
     assert analytic.parameters["p1"] == pytest.approx(mu, rel=1e-9)
     assert analytic.parameters["p2"] == pytest.approx(sigma2, rel=1e-9)
+    # NOTE what this does NOT prove. _gmm_moments is quadratic in mu and linear in sigma2, so its
+    # Jacobian is linear and the ported central difference computes it exactly; the two fits agree
+    # to 5.4e-13 whether the delegate is used or ignored. The test that the delegate's RETURN is
+    # used is the cubic one below, whose oracle is fixtures/callback/gmm.json's
+    # analytic_jacobian_cubic.
+    assert analytic.covariance == pytest.approx(_gmm_fit().covariance, rel=1e-9)
     # A ridge penalty pulling sigma2 towards 1 moves the estimate off the closed form. An ignored
     # penalty delegate would return the unpenalized answer, which is what this compares against.
     penalized = _gmm_fit(penalty=lambda p: 0.5 * (p[1] - 1.0) * (p[1] - 1.0))
     assert _gmm_fit().parameters["p2"] < penalized.parameters["p2"] < 1.0
+
+
+# The CUBIC-JACOBIAN model, the one that can tell an analytic Jacobian from the ported numerical
+# one. theta = (mu, sigma) matched on the first and fourth central moments of a Normal, over the
+# same eight observations with the decimal point moved two places: dg2/dsigma = -1200 t^3 is cubic,
+# and a central difference is exact only up to a quadratic derivative. The C#-pinned oracle for this
+# exact fit is fixtures/callback/gmm.json's analytic_jacobian_cubic.
+_GMM_SMALL_DATA = (0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+
+
+def _gmm_moments4(p):
+    n = float(len(_GMM_SMALL_DATA))
+    t = p[1] * 100.0
+    t4 = 3.0 * t * t * t * t
+    g0 = g1 = s00 = s01 = s11 = 0.0
+    for x in _GMM_SMALL_DATA:
+        a = x - p[0]
+        u = a * 100.0
+        b = u * u * u * u - t4
+        g0 += a
+        g1 += b
+        s00 += a * a
+        s01 += a * b
+        s11 += b * b
+    return ([g0 / n, g1 / n], [[s00 / n, s01 / n], [s01 / n, s11 / n]])
+
+
+def _gmm_jacobian4(p):
+    acc = 0.0
+    for x in _GMM_SMALL_DATA:
+        u = (x - p[0]) * 100.0
+        acc += u * u * u
+    t = p[1] * 100.0
+    return [[-1.0, 0.0], [-400.0 * acc / 8.0, -1200.0 * t * t * t]]
+
+
+def test_an_analytic_jacobian_the_numerical_one_cannot_reproduce_changes_the_answer():
+    args = (_gmm_moments4, [0.05, 0.005], [0.0, 1e-4], [0.5, 0.5], 8)
+    numerical = ch.fit_gmm_moments(*args)
+    analytic = ch.fit_gmm_moments(*args, jacobian=_gmm_jacobian4)
+
+    # Both fits land on the closed form: the root is the sample mean and
+    # (mean((x - mu)^4) / 3)^(1/4), and both Jacobians point downhill to it. The PARAMETERS are not
+    # what discriminates.
+    fourth = sum((x - 0.0495) ** 4 for x in _GMM_SMALL_DATA) / 8.0
+    assert analytic.parameters["p1"] == pytest.approx(0.0495, rel=1e-8)
+    assert analytic.parameters["p2"] == pytest.approx((fourth / 3.0) ** 0.25, rel=1e-8)
+
+    # The SANDWICH is. D enters the bread D'WD, so a Jacobian the central difference cannot
+    # reproduce moves the standard errors and the covariance by far more than the 1e-7 the fixture
+    # pins them at: measured here, 6.2e-04 on the sigma standard error and 1.2e-03 on its variance.
+    se_a, se_n = analytic.standard_errors, numerical.standard_errors
+    assert abs(se_a["p2"] - se_n["p2"]) / se_a["p2"] > 1e-4
+    va, vn = analytic.covariance[1][1], numerical.covariance[1][1]
+    assert abs(va - vn) / va > 1e-3
+    # The mu column of the Jacobian is exact either way (dg1/dmu = -1), so its standard error does
+    # not move. That is the control: the difference above is the cubic column, not a wandering fit.
+    assert se_a["p1"] == pytest.approx(se_n["p1"], rel=1e-9)
 
 
 def test_every_strategy_fit_gmm_moments_accepts_finds_the_same_optimum():
@@ -1257,6 +1321,54 @@ def test_an_error_raised_inside_each_of_the_three_gmm_delegates_reaches_the_call
         _gmm_fit(jacobian=boom_jacobian)
     with pytest.raises(ValueError, match="penalty boom"):
         _gmm_fit(penalty=boom_penalty)
+
+
+def test_an_error_raised_in_the_post_processing_re_entry_reports_the_users_message():
+    # post_process() recomputes S, the Jacobian and g at the fitted parameters AFTER the fit itself
+    # has finished, so it is a THIRD place the moment function is entered -- and its own throw is
+    # deliberately swallowed there, so an uncomputable J-statistic does not fail an otherwise exact
+    # fit. An error raised for the first time inside that re-entry must still surface with the
+    # user's own wording, not the ported "Singular matrix in LU decomposition" the guard's
+    # zero-moment sentinel provokes one line later. corehydror's suite pins the same thing.
+    #
+    # The raise goes on the LAST call a clean run makes, which is inside post_process by
+    # construction: nothing but post_process runs after the fit, and it does call the function
+    # (measured against the estimator for this fit: 115 calls in estimate(), 14 more in
+    # post_process()). Raising one call later never fires, which is what pins the count.
+    args = ([5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    counted = []
+
+    def counting(p):
+        counted.append(1)
+        return _gmm_moments(p)
+
+    ch.fit_gmm_moments(counting, *args)
+    total = len(counted)
+    assert total > 1
+
+    calls = []
+
+    def boom_at_total(p):
+        calls.append(1)
+        if len(calls) == total:
+            raise ValueError("boom in post-processing")
+        return _gmm_moments(p)
+
+    with pytest.raises(ValueError, match="boom in post-processing"):
+        ch.fit_gmm_moments(boom_at_total, *args)
+
+    later = []
+
+    def boom_after_total(p):
+        later.append(1)
+        if len(later) == total + 1:
+            raise ValueError("never reached")
+        return _gmm_moments(p)
+
+    mu, sigma2 = _gmm_closed_form()
+    never = ch.fit_gmm_moments(boom_after_total, *args)
+    assert never.parameters["p1"] == pytest.approx(mu, rel=1e-9)
+    assert never.parameters["p2"] == pytest.approx(sigma2, rel=1e-9)
 
 
 def boom_jacobian(p):

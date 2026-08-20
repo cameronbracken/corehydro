@@ -1071,13 +1071,95 @@ int main() {
         CHECK_EQ(named(r1, "number_of_moment_conditions"), 2.0);
 
         // The analytic Jacobian replaces the ported numerical one, and lands on the same optimum
-        // -- the closed form is the same whichever way the gradient was computed.
+        // -- the closed form is the same whichever way the gradient was computed. NOTE what this
+        // does NOT prove: these moment conditions are quadratic in mu and linear in sigma2, so
+        // their Jacobian is linear and a central difference reproduces it exactly. Discarding the
+        // delegate's return moves the fit by 5.4e-13. The block after this one is the one that
+        // discriminates.
         {
             sup::CallbackSet t = cbs;
             t.vector_matrix = jacobian;
             sup::CallbackResult r = sup::run_callback("gmm", "fit", options, t);
             CHECK_NEAR(named(r, "parameter[0]"), mean_hat, 1e-6);
             CHECK_NEAR(named(r, "parameter[1]"), variance_hat, 1e-6);
+            sup::CallbackResult n = sup::run_callback("gmm", "fit", options, cbs);
+            CHECK_NEAR(named(r, "standard_error[0]"), named(n, "standard_error[0]"), 1e-11);
+        }
+
+        // A CUBIC Jacobian, which the ported central difference CANNOT reproduce. theta =
+        // (mu, sigma) matched on the first and fourth central moments of a Normal, over the same
+        // eight observations with the decimal point moved two places:
+        //   g = [mean(x - mu), mean(u^4) - 3 t^4],  u = 100 (x - mu),  t = 100 sigma
+        // so dg2/dsigma = -1200 t^3. A central difference is exact for a linear or quadratic
+        // derivative and carries an h^2/6 f''' truncation error for a cubic one, and the ported
+        // step h = 1e-4 (|theta| + 1) is coarse next to a fitted sigma of 0.00404 -- which is what
+        // turns that error into something a tolerance can see. The C#-pinned oracle for this exact
+        // fit is fixtures/callback/gmm.json's analytic_jacobian_cubic.
+        {
+            const double small[] = {0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047};
+            std::vector<double> sd(small, small + 8);
+            auto moments4 = [sd](const std::vector<double>& p) {
+                const double t = p[1] * 100.0;
+                const double t4 = 3.0 * t * t * t * t;
+                double g0 = 0.0, g1 = 0.0, s00 = 0.0, s01 = 0.0, s11 = 0.0;
+                for (double x : sd) {
+                    double a = x - p[0];
+                    double u = a * 100.0;
+                    double b = u * u * u * u - t4;
+                    g0 += a;
+                    g1 += b;
+                    s00 += a * a;
+                    s01 += a * b;
+                    s11 += b * b;
+                }
+                sup::MomentConditionReturn out;
+                out.g = {g0 / 8.0, g1 / 8.0};
+                out.s = {s00 / 8.0, s01 / 8.0, s01 / 8.0, s11 / 8.0};
+                out.s_rows = 2;
+                out.s_cols = 2;
+                return out;
+            };
+            auto jacobian4 = [sd](const std::vector<double>& p) {
+                double acc = 0.0;
+                for (double x : sd) {
+                    double u = (x - p[0]) * 100.0;
+                    acc += u * u * u;
+                }
+                const double t = p[1] * 100.0;
+                return std::make_pair(
+                    std::vector<double>{-1.0, 0.0, -400.0 * acc / 8.0, -1200.0 * t * t * t},
+                    std::vector<int>{2, 2});
+            };
+            const std::string opts4 =
+                R"({"initial": [0.05, 0.005], "lower": [0.0, 0.0001], "upper": [0.5, 0.5],
+                    "sample_size": 8})";
+            sup::CallbackSet nt;
+            nt.moment_conditions = moments4;
+            sup::CallbackSet at = nt;
+            at.vector_matrix = jacobian4;
+            sup::CallbackResult n = sup::run_callback("gmm", "fit", opts4, nt);
+            sup::CallbackResult a = sup::run_callback("gmm", "fit", opts4, at);
+
+            // Both reach the same root: the sample mean and (mean((x - mu)^4) / 3)^(1/4). The
+            // parameters are NOT what discriminates -- both Jacobians point downhill to it.
+            double m4 = 0.0;
+            for (double x : sd) {
+                double u = (x - 0.0495) * 100.0;
+                m4 += u * u * u * u;
+            }
+            CHECK_NEAR(named(a, "parameter[0]"), 0.0495, 1e-9);
+            CHECK_NEAR(named(a, "parameter[1]"), std::pow(m4 / 8.0 / 3.0, 0.25) / 100.0, 1e-10);
+
+            // The SANDWICH is: D enters the bread D'WD. Measured, 6.2e-04 on the sigma standard
+            // error and 1.2e-03 on its variance -- thousands of times the 1e-7 the fixture pins
+            // them at, where the linear-Jacobian case above moves by 5.4e-13.
+            double se_a = named(a, "standard_error[1]"), se_n = named(n, "standard_error[1]");
+            CHECK_TRUE(std::abs(se_a - se_n) / se_a > 1e-4);
+            double v_a = named(a, "covariance[1,1]"), v_n = named(n, "covariance[1,1]");
+            CHECK_TRUE(std::abs(v_a - v_n) / v_a > 1e-3);
+            // The mu column is exact either way (dg1/dmu = -1), so its standard error does not
+            // move. The control: what moved above is the cubic column, not a wandering fit.
+            CHECK_NEAR(named(a, "standard_error[0]"), named(n, "standard_error[0]"), 1e-12);
         }
 
         // A penalty pulling sigma2 towards 1 moves the estimate away from the closed form and
@@ -1210,6 +1292,50 @@ int main() {
                 return moments(p);
             };
             CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+        }
+        {
+            // AND throwing inside the POST-PROCESSING re-entry, which is a different drive site
+            // again: post_process() recomputes S, the Jacobian and g at the fitted parameters
+            // AFTER estimate() has returned, and its own throw is swallowed so an uncomputable
+            // J-statistic does not fail an otherwise exact fit. A host error raised for the first
+            // time in there must still reach the caller with the USER's message, not the ported
+            // "Singular matrix in LU decomposition" that the guard's zero-moment sentinel provokes
+            // one line later.
+            //
+            // The throw is placed on the LAST call a clean run makes, which is inside post_process
+            // by construction: post_process is the only thing that runs after estimate(), and it
+            // does call the delegate. `total + 1` never fires, which is what pins `total` as the
+            // whole count and so the throw above as the final call rather than an arbitrary one.
+            // Measured directly against the estimator for this fit: estimate() makes 115 delegate
+            // calls and post_process() a further 14, so call `total` is 14 calls past the boundary.
+            int counted = 0;
+            sup::CallbackSet c = cbs;
+            c.moment_conditions = [&counted, moments](const std::vector<double>& p) {
+                ++counted;
+                return moments(p);
+            };
+            sup::CallbackResult clean = sup::run_callback("gmm", "fit", options, c);
+            CHECK_EQ(clean.status, std::string("Success"));
+            const int total = counted;
+            CHECK_TRUE(total > 1);
+
+            int calls = 0;
+            sup::CallbackSet t = cbs;
+            t.moment_conditions = [&calls, total, moments](const std::vector<double>& p)
+                -> sup::MomentConditionReturn {
+                if (++calls == total) throw HostError();
+                return moments(p);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+
+            calls = 0;
+            sup::CallbackSet u = cbs;
+            u.moment_conditions = [&calls, total, moments](const std::vector<double>& p)
+                -> sup::MomentConditionReturn {
+                if (++calls == total + 1) throw HostError();
+                return moments(p);
+            };
+            CHECK_EQ(sup::run_callback("gmm", "fit", options, u).status, std::string("Success"));
         }
         {
             sup::CallbackSet t = cbs;

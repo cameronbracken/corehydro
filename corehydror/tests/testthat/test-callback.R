@@ -1193,12 +1193,79 @@ test_that("the analytic jacobian and the penalty both reach the estimator", {
   plain <- gmm_fit_it()
   analytic <- gmm_fit_it(jacobian = gmm_jacobian)
   expect_equal(unname(coef(analytic)), gmm_closed_form(), tolerance = 1e-9)
+  # NOTE what this pair does NOT prove. gmm_moments is quadratic in mu and linear in sigma2, so its
+  # Jacobian is linear and the ported central difference computes it exactly; the two fits agree to
+  # 5.4e-13 whether the delegate is used or ignored. The test that the delegate's RETURN is used is
+  # the cubic one below, and fixtures/callback/gmm.json's analytic_jacobian_cubic is its oracle.
+  expect_equal(unname(vcov(analytic)), unname(vcov(plain)), tolerance = 1e-9)
 
   # A ridge penalty pulling sigma2 towards 1 moves the estimate off the closed form. An ignored
   # penalty delegate would return the unpenalized answer, which is what this compares against.
   penalized <- gmm_fit_it(penalty = function(p) 0.5 * (p[2] - 1) * (p[2] - 1))
   expect_true(coef(penalized)[["p2"]] > coef(plain)[["p2"]])
   expect_true(coef(penalized)[["p2"]] < 1)
+})
+
+# The CUBIC-JACOBIAN model, the one that can tell an analytic Jacobian from the ported numerical
+# one. theta = (mu, sigma) matched on the first and fourth central moments of a Normal, over the
+# same eight observations with the decimal point moved two places: dg2/dsigma = -1200 t^3 is cubic,
+# and a central difference is exact only up to a quadratic derivative. The C#-pinned oracle for
+# this exact fit is fixtures/callback/gmm.json's analytic_jacobian_cubic.
+gmm_small_data <- c(0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+
+gmm_moments4 <- function(p) {
+  n <- length(gmm_small_data)
+  t <- p[2] * 100
+  t4 <- 3 * t * t * t * t
+  g0 <- 0
+  g1 <- 0
+  s00 <- 0
+  s01 <- 0
+  s11 <- 0
+  for (x in gmm_small_data) {
+    a <- x - p[1]
+    u <- a * 100
+    b <- u * u * u * u - t4
+    g0 <- g0 + a
+    g1 <- g1 + b
+    s00 <- s00 + a * a
+    s01 <- s01 + a * b
+    s11 <- s11 + b * b
+  }
+  list(g = c(g0 / n, g1 / n), s = matrix(c(s00 / n, s01 / n, s01 / n, s11 / n), nrow = 2, ncol = 2))
+}
+
+gmm_jacobian4 <- function(p) {
+  acc <- 0
+  for (x in gmm_small_data) {
+    u <- (x - p[1]) * 100
+    acc <- acc + u * u * u
+  }
+  t <- p[2] * 100
+  matrix(c(-1, -400 * acc / 8, 0, -1200 * t * t * t), nrow = 2, ncol = 2)
+}
+
+test_that("an analytic jacobian the numerical one cannot reproduce changes the answer", {
+  numerical <- fit_gmm_moments(gmm_moments4, c(0.05, 0.005), c(0, 1e-4), c(0.5, 0.5), 8)
+  analytic <- fit_gmm_moments(gmm_moments4, c(0.05, 0.005), c(0, 1e-4), c(0.5, 0.5), 8,
+                              jacobian = gmm_jacobian4)
+
+  # Both fits land on the closed form: the root is the sample mean and (mean((x - mu)^4) / 3)^(1/4),
+  # and both Jacobians point downhill to it. The PARAMETERS are not what discriminates.
+  expect_equal(coef(analytic)[["p1"]], 0.0495, tolerance = 1e-8)
+  expect_equal(coef(analytic)[["p2"]], (sum((gmm_small_data - 0.0495)^4) / 8 / 3)^0.25,
+               tolerance = 1e-8)
+
+  # The SANDWICH is. D enters the bread D'WD, so a Jacobian the central difference cannot reproduce
+  # moves the standard errors and the covariance by far more than the 1e-7 the fixture pins them
+  # at: measured here, 6.2e-04 on the sigma standard error and 1.2e-03 on its variance.
+  se_a <- sqrt(diag(vcov(analytic)))
+  se_n <- sqrt(diag(vcov(numerical)))
+  expect_gt(abs(se_a[[2]] - se_n[[2]]) / se_a[[2]], 1e-4)
+  expect_gt(abs(vcov(analytic)[2, 2] - vcov(numerical)[2, 2]) / vcov(analytic)[2, 2], 1e-3)
+  # The mu column of the Jacobian is exact either way (dg1/dmu = -1), so its standard error does
+  # not move. That is the control: the difference above is the cubic column, not a fit that wandered.
+  expect_equal(se_a[[1]], se_n[[1]], tolerance = 1e-9)
 })
 
 test_that("every strategy fit_gmm_moments accepts finds the same optimum", {
@@ -1301,6 +1368,52 @@ test_that("an error raised inside each of the three delegates reaches the caller
     gmm_fit_it(penalty = function(p) stop("penalty boom")),
     "penalty boom"
   )
+})
+
+test_that("an error raised in the post-processing re-entry still reports the user's message", {
+  # post_process() recomputes S, the Jacobian and g at the fitted parameters AFTER the fit itself
+  # has finished, so it is a THIRD place the moment function is entered -- and its own throw is
+  # deliberately swallowed there, so that an uncomputable J-statistic does not fail an otherwise
+  # exact fit. An error raised for the first time inside that re-entry must still surface with the
+  # user's own wording, not the ported "Singular matrix in LU decomposition" the guard's
+  # zero-moment sentinel provokes one line later.
+  #
+  # The throw goes on the LAST call a clean run makes, which is inside post_process by
+  # construction: nothing but post_process runs after the fit, and it does call the function
+  # (measured against the estimator for this fit: 115 calls in estimate(), 14 more in
+  # post_process()). Throwing one call later never fires, which is what pins the count.
+  calls <- 0
+  counting <- function(p) {
+    calls <<- calls + 1
+    gmm_moments(p)
+  }
+  fit_gmm_moments(counting, c(5, 0.5), c(0, 0.001), c(10, 10), 8)
+  total <- calls
+  expect_gt(total, 1)
+
+  calls <- 0
+  expect_error(
+    fit_gmm_moments(
+      function(p) {
+        calls <<- calls + 1
+        if (calls == total) stop("boom in post-processing")
+        gmm_moments(p)
+      },
+      c(5, 0.5), c(0, 0.001), c(10, 10), 8
+    ),
+    "boom in post-processing"
+  )
+
+  calls <- 0
+  never <- fit_gmm_moments(
+    function(p) {
+      calls <<- calls + 1
+      if (calls == total + 1) stop("never reached")
+      gmm_moments(p)
+    },
+    c(5, 0.5), c(0, 0.001), c(10, 10), 8
+  )
+  expect_equal(unname(coef(never)), gmm_closed_form(), tolerance = 1e-9)
 })
 
 test_that("NA is refused in s and the jacobian, and allowed in g and the penalty", {

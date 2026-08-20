@@ -47,6 +47,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 
 namespace corehydro::numerics::support {
@@ -81,8 +82,19 @@ inline CallbackAbortStatePtr make_abort_state() { return std::make_shared<Callba
 // more than one live guard over one shared state (mcmc's log-likelihood/proposal/gradient trio, for
 // instance) should call this on the state itself instead of picking one guard to stand in for the
 // group. A null `state` has nothing latched, so it rethrows nothing.
+//
+// KEYED ON `aborted`, NOT ON `error`. `std::current_exception()` is allowed to return null (it does
+// for a foreign exception no C++ runtime can capture), and a guard that latched a null one has
+// still fed its ported consumer nothing but the sentinel from that point on. Reading `error` alone
+// would let such a run return a sentinel-poisoned result as if it were a finished fit, which is the
+// wrong-answer mode this whole file exists to prevent -- so an abort with nothing stored raises by
+// name instead.
 inline void rethrow_if_aborted(const CallbackAbortStatePtr& state) {
-    if (state && state->error) std::rethrow_exception(state->error);
+    if (!state || !state->aborted) return;
+    if (state->error) std::rethrow_exception(state->error);
+    throw std::runtime_error(
+        "a callback aborted the run without leaving an exception to report; every value after that "
+        "point came from the guard's sentinel, so the result is not usable");
 }
 
 template <typename TResult, typename... TArgs>
@@ -108,6 +120,15 @@ class GuardedCall {
 
     TResult operator()(TArgs... args) {
         if (state_->aborted) return sentinel_;
+        // An empty Function is a DRIVE-SITE mistake, not a host-language error. Left to the try
+        // below it would latch `std::bad_function_call` into the shared state and reach the user as
+        // though their own callback had thrown it, with no hint that the group had simply failed to
+        // gate the call on the callback being supplied. Raised BEFORE the try so it cannot latch.
+        // A group that constructs a guard over an optional callback (gmm's jacobian, for one) must
+        // still gate the drive site on that callback existing; this only makes the omission say so.
+        if (!fn_)
+            throw std::logic_error(
+                "a guarded callback was invoked but no host function was supplied for it");
         try {
             TResult v = fn_(std::forward<TArgs>(args)...);
             ++call_count_;
@@ -120,10 +141,9 @@ class GuardedCall {
 
     // True once ANY guard sharing this guard's state has latched.
     bool aborted() const { return state_->aborted; }
-    // Rethrows the first exception latched by any guard sharing this guard's state.
-    void rethrow_if_aborted() const {
-        if (state_->error) std::rethrow_exception(state_->error);
-    }
+    // Rethrows the first exception latched by any guard sharing this guard's state. Keyed on the
+    // abort flag rather than on the stored exception, for the reason the free function above gives.
+    void rethrow_if_aborted() const { support::rethrow_if_aborted(state_); }
     // Calls that actually completed in THIS guard's host function. Excludes short-circuited calls.
     int call_count() const { return call_count_; }
     // The state to hand the group's other guards.

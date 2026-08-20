@@ -1207,6 +1207,13 @@ static (double[] values, string[] names, int[] dims) RunCallbackBootstrap(
 // readonly` field is not legal.
 static double[] CallbackGmmData() => new[] { 4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7 };
 
+// The same eight observations with the decimal point moved two places, so the fitted scale
+// parameter is small (0.00404) next to the ported numerical Jacobian's step h = 1e-4 (|theta| + 1).
+// That is what makes the analytic and numerical Jacobians of the fourth-moment condition below
+// genuinely disagree; see the fixture's note on Mom_NormalFourthMoment.
+static double[] CallbackGmmSmallScaleData() =>
+    new[] { 0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047 };
+
 static MomentConditionFunction? CallbackMomentConditionFunction(string name) => name switch
 {
     "Mom_NormalMeanVariance" => parameters =>
@@ -1247,6 +1254,28 @@ static MomentConditionFunction? CallbackMomentConditionFunction(string name) => 
                                     { s02 / n, s12 / n, s22 / n } });
         return (g, s);
     },
+    // theta = (mu, sigma), matched on the FIRST and FOURTH central moments of a Normal:
+    //   g = [mean(x - mu), mean(u^4) - 3 t^4]   with u = 100 (x - mu) and t = 100 sigma
+    // so dg2/dsigma = -1200 t^3 is CUBIC in the parameter. A central difference is EXACT for a
+    // linear or quadratic derivative and is not for a cubic one, which is the whole point of this
+    // member of the catalog -- see Jac_NormalFourthMoment.
+    "Mom_NormalFourthMoment" => parameters =>
+    {
+        double n = 8d;
+        double t = parameters[1] * 100d;
+        double t4 = 3d * t * t * t * t;
+        double g0 = 0d, g1 = 0d, s00 = 0d, s01 = 0d, s11 = 0d;
+        foreach (double x in CallbackGmmSmallScaleData())
+        {
+            double a = x - parameters[0];
+            double u = a * 100d;
+            double b = u * u * u * u - t4;
+            g0 += a; g1 += b; s00 += a * a; s01 += a * b; s11 += b * b;
+        }
+        var g = new Vector(new[] { g0 / n, g1 / n });
+        var s = new Matrix(new[,] { { s00 / n, s01 / n }, { s01 / n, s11 / n } });
+        return (g, s);
+    },
     _ => null
 };
 
@@ -1259,6 +1288,19 @@ static JacobianFunction? CallbackJacobianFunction(string name) => name switch
         double acc = 0d;
         foreach (double x in CallbackGmmData()) acc += x - parameters[0];
         return new[,] { { -1d, 0d }, { -2d * acc / 8d, -1d } };
+    },
+    // The analytic Jacobian of Mom_NormalFourthMoment, one ROW per moment condition:
+    // dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3), dg2/dsigma = -1200 t^3.
+    "Jac_NormalFourthMoment" => parameters =>
+    {
+        double acc = 0d;
+        foreach (double x in CallbackGmmSmallScaleData())
+        {
+            double u = (x - parameters[0]) * 100d;
+            acc += u * u * u;
+        }
+        double t = parameters[1] * 100d;
+        return new[,] { { -1d, 0d }, { -400d * acc / 8d, -1200d * t * t * t } };
     },
     _ => null
 };

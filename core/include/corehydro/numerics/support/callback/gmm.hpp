@@ -89,6 +89,19 @@
 // callback_guard.hpp states for every drive site, it costs one branch, and a future sentinel or
 // option combination that makes estimate() fail is exactly what it is there for.
 //
+// THE POST-PROCESSING CALL IS A SECOND DRIVE SITE, and an easy one to miss: post_process()
+// recomputes S, the Jacobian and g at the fitted parameters, so it re-enters the user's moment
+// conditions AFTER estimate() has returned, and its own throw is swallowed just below. It carries
+// the same abort check for the same reason. What the tests DO pin there is the observable promise
+// -- a moment function that throws for the first time inside that re-entry surfaces the user's own
+// message, not the ported "Singular matrix in LU decomposition" the sentinel provokes (see
+// core/tests/test_callback_runner.cpp and both package suites, which throw on the LAST call a
+// clean run makes and so land inside post_process by construction). What they do NOT pin is the
+// abort check inside the catch itself: every exception the guards can latch is a std::exception, so
+// the old narrower `catch (const std::exception&)` reached the trailing rethrow anyway and reported
+// the same message. The check is the contract, not a fix for a reachable wrong answer, and saying
+// so is better than implying a test discriminates it.
+//
 // Result layout, all of it named (`dims` is `{p, p}`, the covariance's shape):
 //
 //   parameter[j], standard_error[j]                 -- BestParameterSet.Values, GetStandardErrors()
@@ -319,8 +332,16 @@ inline CallbackResult run_gmm(const std::string& method, const JsonValue& o,
     bool jstat_computed = true;
     try {
         gmm.post_process(/*use_sandwich=*/true, /*compute_jstat=*/true);
-    } catch (const std::exception&) {
-        // Deliberately silent, in the ported class's own idiom (its GetCovariance and
+    } catch (...) {
+        // `catch (...)` WITH the abort check, not `catch (const std::exception&)` without it. This
+        // is the one drive site in the file that RE-ENTERS the user's moment conditions after
+        // estimate() has returned -- post_process recomputes S, the Jacobian and g at the fitted
+        // parameters -- so it is a place a host-language error can be raised for the first time,
+        // and callback_guard.hpp's contract says a drive site that can latch must consult the latch
+        // before it swallows anything. Without the check the swallow below is the last word on any
+        // exception this frame does not recognize as a std::exception.
+        rethrow_if_aborted(abort);
+        // Otherwise deliberately silent, in the ported class's own idiom (its GetCovariance and
         // MinimizeWithFallback swallow the same way). The flag is load-bearing rather than
         // decorative: the ported members initialize to 0.0, not NaN (C# `JStat { get; } = 0`), so
         // WITHOUT it a J-statistic that could not be computed would be reported as a p-value of

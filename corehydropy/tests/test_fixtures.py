@@ -1817,6 +1817,12 @@ def _callback_fixture_function(name):
     # that reaches the chi-squared p-value branch of the J-statistic.
     if name == "Mom_NormalThreeMoments":
         return _gmm_moment_conditions_three
+    # The CUBIC-JACOBIAN member of the same catalog, and the one case in the file whose analytic
+    # Jacobian is distinguishable from the ported numerical one.
+    if name == "Mom_NormalFourthMoment":
+        return _gmm_moment_conditions_fourth
+    if name == "Jac_NormalFourthMoment":
+        return _gmm_jacobian_fourth
     if name == "Jac_NormalMeanVariance":
         return _gmm_jacobian
     if name == "Pen_SigmaTowardsOne":
@@ -1966,6 +1972,42 @@ def _gmm_moment_conditions_three(p):
         [g0 / n, g1 / n, g2 / n],
         [[s00 / n, s01 / n, s02 / n], [s01 / n, s11 / n, s12 / n], [s02 / n, s12 / n, s22 / n]],
     )
+
+
+def _gmm_moment_conditions_fourth(p):
+    # theta = (mu, sigma), matched on the FIRST and FOURTH central moments of a Normal:
+    #   g = [mean(x - mu), mean(u^4) - 3 t^4],  u = 100 (x - mu),  t = 100 sigma
+    # so dg2/dsigma = -1200 t^3 is CUBIC in the parameter. The eight observations are the ones the
+    # rest of the catalog uses with the decimal point moved two places, which is what makes the
+    # fitted sigma (0.00404) small next to the ported numerical Jacobian's step h = 1e-4
+    # (|theta| + 1).
+    data = (0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+    n = 8.0
+    t = p[1] * 100.0
+    t4 = 3.0 * t * t * t * t
+    g0 = g1 = s00 = s01 = s11 = 0.0
+    for x in data:
+        a = x - p[0]
+        u = a * 100.0
+        b = u * u * u * u - t4
+        g0 += a
+        g1 += b
+        s00 += a * a
+        s01 += a * b
+        s11 += b * b
+    return ([g0 / n, g1 / n], [[s00 / n, s01 / n], [s01 / n, s11 / n]])
+
+
+def _gmm_jacobian_fourth(p):
+    # One ROW per moment condition: dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3),
+    # dg2/dsigma = -1200 t^3.
+    data = (0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+    acc = 0.0
+    for x in data:
+        u = (x - p[0]) * 100.0
+        acc += u * u * u
+    t = p[1] * 100.0
+    return [[-1.0, 0.0], [-400.0 * acc / 8.0, -1200.0 * t * t * t]]
 
 
 def _gmm_jacobian(p):

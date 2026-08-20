@@ -1921,6 +1921,56 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
             out.s_cols = 3;
             return out;
         };
+    } else if (name == "Mom_NormalFourthMoment") {
+        // The CUBIC-JACOBIAN member of the same catalog, and the one case in the file whose
+        // analytic Jacobian is distinguishable from the ported numerical one. theta = (mu, sigma),
+        // matched on the first and fourth central moments of a Normal:
+        //   g = [mean(x - mu), mean(u^4) - 3 t^4],  u = 100 (x - mu),  t = 100 sigma
+        // so dg2/dsigma = -1200 t^3 is cubic in the parameter, where every other case in the file
+        // has a Jacobian that is linear in it. The eight observations are the ones above with the
+        // decimal point moved two places, which is what makes the fitted sigma (0.00404) small next
+        // to the numerical Jacobian's step h = 1e-4 (|theta| + 1); the factors of 100 write the
+        // fourth-moment condition on the same order of magnitude as the first, which GMM is
+        // invariant to because W = S^-1 absorbs it.
+        cbs.moment_conditions = [](const std::vector<double>& p) {
+            const double data[] = {0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047};
+            const double n = 8.0;
+            const double t = p[1] * 100.0;
+            const double t4 = 3.0 * t * t * t * t;
+            double g0 = 0.0, g1 = 0.0, s00 = 0.0, s01 = 0.0, s11 = 0.0;
+            for (double x : data) {
+                double a = x - p[0];
+                double u = a * 100.0;
+                double b = u * u * u * u - t4;
+                g0 += a;
+                g1 += b;
+                s00 += a * a;
+                s01 += a * b;
+                s11 += b * b;
+            }
+            tbx::MomentConditionReturn out;
+            out.g = {g0 / n, g1 / n};
+            out.s = {s00 / n, s01 / n, s01 / n, s11 / n};  // row-major, symmetric
+            out.s_rows = 2;
+            out.s_cols = 2;
+            return out;
+        };
+    } else if (name == "Jac_NormalFourthMoment") {
+        // The analytic Jacobian of Mom_NormalFourthMoment, row-major 2 x 2 (one ROW per moment
+        // condition): dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3), dg2/dsigma =
+        // -1200 t^3.
+        cbs.vector_matrix = [](const std::vector<double>& p) {
+            const double data[] = {0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047};
+            double acc = 0.0;
+            for (double x : data) {
+                double u = (x - p[0]) * 100.0;
+                acc += u * u * u;
+            }
+            const double t = p[1] * 100.0;
+            return std::make_pair(
+                std::vector<double>{-1.0, 0.0, -400.0 * acc / 8.0, -1200.0 * t * t * t},
+                std::vector<int>{2, 2});
+        };
     } else if (name == "Jac_NormalMeanVariance") {
         // The analytic Jacobian of Mom_NormalMeanVariance, row-major 2 x 2 (one ROW per moment
         // condition): dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.

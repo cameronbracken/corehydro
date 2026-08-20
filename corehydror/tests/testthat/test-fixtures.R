@@ -619,6 +619,52 @@ callback_fixture_function <- function(name) {
         )
       )
     },
+    # The CUBIC-JACOBIAN member of the same catalog, and the one case in the file whose analytic
+    # Jacobian is distinguishable from the ported numerical one. theta = (mu, sigma), matched on
+    # the first and fourth central moments of a Normal:
+    #   g = [mean(x - mu), mean(u^4) - 3 t^4],  u = 100 (x - mu),  t = 100 sigma
+    # so dg2/dsigma = -1200 t^3 is cubic in the parameter, where every other case in the file has a
+    # Jacobian linear in it. The eight observations are the ones above with the decimal point moved
+    # two places, which is what makes the fitted sigma (0.00404) small next to the numerical
+    # Jacobian's step h = 1e-4 (|theta| + 1).
+    Mom_NormalFourthMoment = function(p) {
+      data <- c(0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+      n <- 8
+      t <- p[2] * 100
+      t4 <- 3 * t * t * t * t
+      g0 <- 0
+      g1 <- 0
+      s00 <- 0
+      s01 <- 0
+      s11 <- 0
+      for (x in data) {
+        a <- x - p[1]
+        u <- a * 100
+        b <- u * u * u * u - t4
+        g0 <- g0 + a
+        g1 <- g1 + b
+        s00 <- s00 + a * a
+        s01 <- s01 + a * b
+        s11 <- s11 + b * b
+      }
+      list(
+        g = c(g0 / n, g1 / n),
+        # matrix() fills COLUMN-major; this one is symmetric, and the glue transposes anyway.
+        s = matrix(c(s00 / n, s01 / n, s01 / n, s11 / n), nrow = 2, ncol = 2)
+      )
+    },
+    # The analytic Jacobian of Mom_NormalFourthMoment, one ROW per moment condition:
+    # dg1/dmu = -1, dg1/dsigma = 0, dg2/dmu = -400 mean(u^3), dg2/dsigma = -1200 t^3.
+    Jac_NormalFourthMoment = function(p) {
+      data <- c(0.041, 0.052, 0.048, 0.055, 0.049, 0.051, 0.053, 0.047)
+      acc <- 0
+      for (x in data) {
+        u <- (x - p[1]) * 100
+        acc <- acc + u * u * u
+      }
+      t <- p[2] * 100
+      matrix(c(-1, -400 * acc / 8, 0, -1200 * t * t * t), nrow = 2, ncol = 2)
+    },
     # The analytic Jacobian of Mom_NormalMeanVariance, one ROW per moment condition:
     # dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.
     Jac_NormalMeanVariance = function(p) {
