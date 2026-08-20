@@ -116,6 +116,23 @@ sup::RngBorrowPtr& borrow_from(sexp handle) {
     return *p;
 }
 
+// THE one place a handle is built, so no caller can forget the tag. A handle without it is
+// refused by borrow_from() above -- correctly, but the failure lands on the user as "must be a
+// random number generator handle" for a handle we ourselves handed them, which is a confusing way
+// to learn that a new verb's glue omitted one line. Every group that hands R a generator (rng,
+// mcmc's Gibbs proposal, and the bootstrap delegates in Task 6) calls this rather than building
+// its own external pointer.
+sexp make_rng_handle(const sup::RngBorrowPtr& borrow) {
+    external_pointer<sup::RngBorrowPtr> ptr(new sup::RngBorrowPtr(borrow));
+    sexp handle(ptr);
+    // The tag borrow_from() requires. A symbol is a permanent SEXP, so the check there is a
+    // pointer comparison against this same object.
+    R_SetExternalPtrTag(handle, rng_tag());
+    sexp cls(Rf_mkString("corehydro_rng"));
+    Rf_setAttrib(handle, R_ClassSymbol, cls);
+    return handle;
+}
+
 // Wraps `f` as the (parameters, generator) callback the rng/mcmc/bootstrap groups call. The scope
 // is a local of this lambda, so the handle it hands R is invalidated the moment the callback
 // returns -- by a normal return or by an unwind, since a destructor runs either way.
@@ -126,13 +143,7 @@ std::function<std::vector<double>(const std::vector<double>&, samp::MersenneTwis
         for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
 
         sup::RngScope scope(prng);
-        external_pointer<sup::RngBorrowPtr> ptr(new sup::RngBorrowPtr(scope.handle()));
-        sexp handle(ptr);
-        // The tag borrow_from() requires. A symbol is a permanent SEXP, so the check there is a
-        // pointer comparison against this same object.
-        R_SetExternalPtrTag(handle, rng_tag());
-        sexp cls(Rf_mkString("corehydro_rng"));
-        Rf_setAttrib(handle, R_ClassSymbol, cls);
+        sexp handle = make_rng_handle(scope.handle());
 
         sexp out = f(par, handle);
         doubles v = as_doubles(out);

@@ -218,12 +218,34 @@ test_that("an external pointer from somewhere else is refused instead of crashin
   expect_identical(typeof(foreign), "externalptr")
   expect_error(rng_uniform(foreign, 1), "random number generator handle")
   expect_error(rng_integers(foreign, 1, 0, 2), "random number generator handle")
-  # A null external pointer is refused too, by the address check behind the tag check.
+  # A bare external pointer is refused too. Note WHICH check refuses it: `new("externalptr")` has
+  # no tag, so it never reaches the null-address check -- the tag check turns it away first, and
+  # the message is the same "not a handle" one.
   null_ptr <- methods::new("externalptr")
   expect_error(rng_uniform(null_ptr, 1), "random number generator handle")
   # A forged class attribute buys nothing: the class is for print/inherits, never for dispatch.
   fake <- structure(list(), class = "corehydro_rng")
   expect_error(rng_uniform(fake, 1), "random number generator handle")
+})
+
+test_that("a serialized handle comes back tagged but null, and says it is expired", {
+  # THE null-address branch, which nothing else reaches: R serializes an external pointer by
+  # writing its tag and dropping its address, so a round-tripped handle is the one object that
+  # carries our tag AND a null address. It is a realistic way to get one, too -- saveRDS() on an
+  # environment that captured a handle, or a handle sent to a parallel worker. The address check
+  # behind the tag check is what stands between that and a cast of NULL, and the message it gives
+  # is the expired-handle sentence rather than the not-a-handle one, because the object really was
+  # ours.
+  ns <- asNamespace("corehydror")
+  handle <- NULL
+  ns$rng_probe(1, 1, function(parameters, rng) {
+    handle <<- rng
+    rng_uniform(rng, 1)
+  })
+  round_trip <- unserialize(serialize(handle, NULL))
+  expect_identical(typeof(round_trip), "externalptr")
+  expect_error(rng_uniform(round_trip, 1), "no longer valid")
+  expect_error(rng_integers(round_trip, 1, 0, 2), "no longer valid")
 })
 
 test_that("a range wider than an int32 span is an error, not an overflowed draw", {
@@ -267,6 +289,21 @@ test_that("a fractional count is refused rather than truncated, as Python refuse
   # A whole number spelled as a double is still a whole number -- in R every literal is one.
   drawn <- ns$rng_probe(1, 1, function(parameters, rng) rng_uniform(rng, 2.0))
   expect_length(drawn, 2)
+})
+
+test_that("the int-min bound is the same in both packages", {
+  # rng_is_whole() tests `abs(x) <= .Machine$integer.max`, which is 2147483647, so R refuses
+  # -2147483648 -- and Python used to accept it, making the same call legal in one package and an
+  # error in the other. The Python twin asserts the same boundary from its side.
+  ns <- asNamespace("corehydror")
+  expect_error(
+    ns$rng_probe(1, 1, function(parameters, rng) rng_integers(rng, 1, -2147483648, -2147483000)),
+    "single finite whole number"
+  )
+  drawn <- ns$rng_probe(
+    1, 1, function(parameters, rng) rng_integers(rng, 1, -2147483647, -2147483000)
+  )
+  expect_true(drawn >= -2147483647 && drawn < -2147483000)
 })
 
 test_that("a handle leaked out of a callback that then raises is dead", {

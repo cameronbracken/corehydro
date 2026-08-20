@@ -56,7 +56,14 @@ class RngHandle {
 // in both. The rule now is one sentence in both languages: a whole number is accepted however it
 // is spelled (3 or 3.0), and anything with a fraction is refused by the name of the argument.
 int as_whole_number(const py::object& v, const char* message) {
-    constexpr double kIntMin = -2147483648.0, kIntMax = 2147483647.0;
+    // The accepted magnitude is |value| <= 2147483647, NOT the full int32 range. R's own
+    // rng_is_whole() tests `abs(x) <= .Machine$integer.max`, which is 2147483647, so R refuses
+    // -2147483648 -- and Python used to accept it, making `integers(1, -2147483648, -2147483000)`
+    // a legal call in one package and an error in the other. The bound is symmetric here for
+    // exactly that reason, and it applies to the __index__ path below as well as the float one:
+    // a Python `int` of -2147483648 casts to `int` without complaint and would otherwise slip
+    // past the float check that catches the same value written as a literal -2147483648.0.
+    constexpr double kIntMin = -2147483647.0, kIntMax = 2147483647.0;
     if (py::isinstance<py::bool_>(v)) throw py::type_error(message);
     if (py::isinstance<py::float_>(v)) {
         const double d = v.cast<double>();
@@ -65,11 +72,14 @@ int as_whole_number(const py::object& v, const char* message) {
         return static_cast<int>(d);
     }
     if (!PyIndex_Check(v.ptr())) throw py::type_error(message);
+    int out;
     try {
-        return v.cast<int>();
+        out = v.cast<int>();
     } catch (const py::cast_error&) {
         throw py::type_error(message);
     }
+    if (static_cast<double>(out) < kIntMin) throw py::type_error(message);
+    return out;
 }
 
 // Worded exactly as corehydror's R checks are, so a caller cannot tell which language refused.

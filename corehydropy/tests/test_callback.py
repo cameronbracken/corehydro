@@ -322,6 +322,22 @@ def test_a_range_wider_than_an_int32_span_is_an_error_not_an_overflowed_draw():
         )
 
 
+def test_the_int_min_bound_is_the_same_in_both_packages():
+    # R's rng_is_whole() tests `abs(x) <= .Machine$integer.max` (2147483647), so R refuses
+    # -2147483648 -- and Python accepted it, making `integers(1, -2147483648, -2147483000)` a
+    # legal call in one package and an error in the other. Both refuse it now, written as an int
+    # and as a float, because the int path (__index__) casts it happily and needs its own bound.
+    with pytest.raises(TypeError, match="single finite whole number"):
+        _rng_probe(1, [1], lambda parameters, rng: rng.integers(1, -2147483648, -2147483000))
+    with pytest.raises(TypeError, match="single finite whole number"):
+        _rng_probe(1, [1], lambda parameters, rng: rng.integers(1, -2147483648.0, -2147483000))
+    # One below the bound is still fine, so this is a boundary and not a blanket refusal.
+    drawn = _rng_probe(
+        1, [1], lambda parameters, rng: [float(v) for v in rng.integers(1, -2147483647, -2147483000)]
+    )
+    assert -2147483647 <= drawn[0] < -2147483000
+
+
 def test_a_fractional_count_is_refused_rather_than_truncated_as_r_refuses_it():
     # R would happily make 2.7 into 2 while Python raised its own overload dump, so the same call
     # meant different things in the two packages and neither message named the argument. Both now
