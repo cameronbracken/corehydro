@@ -364,6 +364,7 @@ class Fit:
         Model
             Same object as :attr:`model`.
         """
+        self._require_model("to_model()")
         return self.model
 
     def to_json(self) -> str:
@@ -378,7 +379,21 @@ class Fit:
         str
             The fitted model spec as JSON.
         """
+        self._require_model("to_json()")
         return self.model.to_json()
+
+    def _require_model(self, verb: str) -> None:
+        """Internal: refuse the two model verbs on a fit that has no model.
+
+        Only `fit_gmm_moments` produces one: it fits user-written moment conditions through the
+        C# GeneralizedMethodOfMoments delegate constructor, where there is no distribution at all.
+        Named here rather than left to raise ``AttributeError: 'NoneType' has no attribute``.
+        """
+        if self.model is None:
+            raise ValueError(
+                f"{verb} needs a fit built from a model; a fit_gmm_moments() fit has only your "
+                "moment conditions, not a distribution"
+            )
 
     def diagnostics(self) -> dict:
         """Estimation diagnostics off this fit. See :func:`fit_diagnostics`."""
@@ -601,28 +616,68 @@ def _new_fit_bayesian(
     )
 
 
-def _new_fit_gmm(result: dict, base_spec: dict, dataset, construct_json: str) -> Fit:
-    """Build a ``Fit`` from a `fit_run` result for the GMM target -- the covariance stack (same
-    shape as `_new_fit`'s, GMM's own sandwich covariance rather than a Hessian) plus the
-    GMM-specific bookkeeping (J-statistic, iteration/convergence counters).
-    """
-    base = _new_fit_base(result, base_spec, dataset, construct_json)
-    names = base["parameter_names"]
-    covariance = _name_square(result["covariance"])
-    correlation = _name_square(result["correlation"])
-    standard_errors = dict(zip(names, result["standard_errors"])) if result["standard_errors"] else None
-    j_stat_pval = _none_if_nan(result["j_stat_pval"])
+def _gmm_fit_fields(result: dict, names: list) -> dict:
+    """Everything a GMM fit carries beyond the common field set -- the covariance stack (same shape
+    as `_new_fit`'s, GMM's own sandwich covariance rather than a Hessian) plus the GMM-specific
+    bookkeeping (J-statistic, iteration/convergence counters).
 
-    return Fit(
-        **base,
-        covariance=covariance,
-        standard_errors=standard_errors,
-        correlation=correlation,
+    Shared by the two verbs that produce a GMM fit: :func:`_new_fit_gmm` below (:func:`fit_gmm`, a
+    bulletin17c model through `fit_run`) and :func:`_new_fit_gmm_moments` (`fit_gmm_moments`,
+    user-written moment conditions through `callback_gmm`). The two reach the SAME C++ estimator by
+    its two constructors, so the fields they report are the same fields and are assembled here once.
+
+    ``j_stat_pval`` is NaN whenever the fit is just-identified (q == p): zero degrees of freedom
+    leaves no over-identifying restriction to test. Reported as ``None``, Python's spelling of "not
+    available" on this class (see :func:`_none_if_nan`).
+    """
+    return dict(
+        covariance=_name_square(result["covariance"]),
+        standard_errors=(
+            dict(zip(names, result["standard_errors"])) if result["standard_errors"] else None
+        ),
+        correlation=_name_square(result["correlation"]),
         j_stat=result["j_stat"],
-        j_stat_pval=j_stat_pval,
+        j_stat_pval=_none_if_nan(result["j_stat_pval"]),
         gmm_iterations=result["gmm_iterations"],
         converged_within_tolerance=result["converged_within_tolerance"],
         optimizer_fallback_count=result["optimizer_fallback_count"],
+    )
+
+
+def _new_fit_gmm(result: dict, base_spec: dict, dataset, construct_json: str) -> Fit:
+    """Build a ``Fit`` from a `fit_run` result for the GMM target."""
+    base = _new_fit_base(result, base_spec, dataset, construct_json)
+    return Fit(**base, **_gmm_fit_fields(result, base["parameter_names"]))
+
+
+def _new_fit_gmm_moments(result: dict) -> Fit:
+    """Build a ``Fit`` from a `callback_gmm` result -- the same GMM estimator fitted through its
+    delegate constructor instead of a model.
+
+    Everything the model path takes from the model is absent by construction and is ``None`` here:
+    ``.model``, ``._spec``, ``._dataset`` and ``._construct_json``. That is what
+    :func:`fit_diagnostics` and :func:`quantile_variance` test for before they try to rerun a
+    construct that does not exist (both need a distribution; moment conditions are not one).
+    Parameters are named ``p1..pn``, matching :func:`mcmc_posterior`: a model you write down
+    yourself names nothing.
+    """
+    names = list(result["parameter_names"])
+    return Fit(
+        method="GMM",
+        parameters=dict(zip(names, result["parameters"])),
+        parameter_names=names,
+        log_likelihood=None,
+        prior_log_likelihood=float("nan"),
+        aic=None,
+        bic=None,
+        nobs=result["nobs"],
+        converged=result["converged"],
+        status=result["status"],
+        model=None,
+        spec=None,
+        dataset=None,
+        construct_json=None,
+        **_gmm_fit_fields(result, names),
     )
 
 
@@ -1037,6 +1092,15 @@ def fit_diagnostics(fit: Fit) -> dict:
             f"fit_diagnostics needs a fit_map(), fit_bayesian(), or fit_gmm() result; got a "
             f"{fit.method} fit"
         )
+    # A fit_gmm_moments() fit is a GMM fit with no model behind it, so there is no construct to
+    # rerun through the C++ diagnostics entry point. Refused by name rather than left to fail
+    # three layers down on a None construct.
+    if fit._construct_json is None:
+        raise ValueError(
+            "fit_diagnostics needs a fit built from a model; a fit_gmm_moments() fit has only "
+            "your moment conditions, and the GMM diagnostics are computed from a model's "
+            "per-observation moment contributions"
+        )
     d = _fit_diagnostics_core(fit.method, fit._construct_json, fit._dataset)
     d["cooks_distance"] = np.asarray(d["cooks_distance"])
     d["leverage"] = np.asarray(d["leverage"])
@@ -1081,4 +1145,11 @@ def quantile_variance(fit: Fit, aep: float) -> float:
     """
     if not isinstance(fit, Fit) or fit.method != "GMM":
         raise ValueError("quantile_variance needs a fit_gmm() result")
+    # See fit_diagnostics() above: a fit_gmm_moments() fit has no distribution to take a quantile
+    # of.
+    if fit._construct_json is None:
+        raise ValueError(
+            "quantile_variance needs a fit_gmm() fit of a bulletin17c model; a fit_gmm_moments() "
+            "fit has no distribution to take a quantile of"
+        )
     return _fit_quantile_variance_core(fit._construct_json, fit._dataset, float(aep))

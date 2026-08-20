@@ -7,9 +7,11 @@
 #include <pybind11/stl.h>
 
 #include <cmath>
+#include <cstddef>
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "bindings.hpp"
@@ -249,6 +251,145 @@ std::function<std::vector<double>(const std::vector<double>&)> as_numbers_fn(py:
     return [f, what](const std::vector<double>& x) { return as_number_list(f(x), what); };
 }
 
+// --- the gmm delegates ------------------------------------------------------------------------
+//
+// The moment condition function returns TWO things at once -- upstream's `(Vector G, Matrix S)`
+// tuple -- so the return shape is the mistake this surface invites, and it is checked here by name
+// rather than left to produce a covariance matrix quietly built out of a moment vector. The Python
+// spelling is the tuple `(g, s)` or a dict with keys `g` and `s`; corehydror accepts a list with
+// those two names and raises the same sentence.
+//
+// nan IS TREATED DIFFERENTLY BY THE PIECES BELOW, on purpose, drawn by what each value MEANS to
+// the ported estimator (the same rule the bootstrap delegates above follow, and corehydror's glue
+// draws it identically):
+//
+//   - `g` and the penalty pass nan through. `Q()` ends with `is_finite(qv) ? qv : double.max`: a
+//     non-finite quadratic form is the ported estimator's own way of learning that a corner of the
+//     parameter box is infeasible, and refusing it here would turn a hard trial point into a hard
+//     error.
+//   - `s` and the jacobian refuse it by name. Nothing in the ported class tests either for
+//     finiteness, so a nan there flows silently into the weighting matrix or the sandwich
+//     covariance and comes back as a fitted number with no warning attached to it.
+const char* kMomentShape =
+    "the moment condition function must return the tuple (g, s) -- or a dict with keys 'g' and "
+    "'s' -- where 'g' is the moment vector and 's' is the weighting matrix";
+
+// A matrix flattened ROW-MAJOR, with its shape. A sequence of rows (a list of lists, or a 2-D
+// numpy array) is the ordinary spelling and is already row-major. A bare number, or a sequence
+// holding exactly one, is accepted as the 1 x 1 matrix a one-moment-condition model has --
+// corehydror accepts a length-1 numeric with no `dim` for the same case. Anything else is refused
+// naming the element it came from.
+std::pair<std::vector<double>, std::vector<int>> row_major_matrix(const py::object& value,
+                                                                 const std::string& what) {
+    std::vector<std::vector<double>> rows;
+    bool nested = true;
+    try {
+        rows = value.cast<std::vector<std::vector<double>>>();
+    } catch (const py::cast_error&) {
+        nested = false;
+    }
+    if (!nested) {
+        std::vector<double> flat;
+        try {
+            flat = value.cast<std::vector<double>>();
+        } catch (const py::cast_error&) {
+            try {
+                flat = {value.cast<double>()};
+            } catch (const py::cast_error&) {
+                throw std::runtime_error(what + " must be a matrix -- a sequence of rows; got " +
+                                         std::string(py::str(value)));
+            }
+        }
+        if (flat.size() != 1)
+            throw std::runtime_error(
+                what + " must be a matrix -- a sequence of ROWS, not a flat sequence of " +
+                std::to_string(flat.size()) + " numbers");
+        rows = {flat};
+    }
+    if (rows.empty()) throw std::runtime_error(what + " must have at least one row; it was empty");
+    const std::size_t cols = rows[0].size();
+    std::vector<double> out;
+    out.reserve(rows.size() * cols);
+    for (const std::vector<double>& row : rows) {
+        if (row.size() != cols)
+            throw std::runtime_error(what + " must be rectangular; its first row holds " +
+                                     std::to_string(cols) + " values and another holds " +
+                                     std::to_string(row.size()));
+        for (double x : row) {
+            if (std::isnan(x))
+                throw std::runtime_error(what +
+                                         " returned nan rather than a number; nothing in the "
+                                         "estimator checks it, so it would reach the fitted "
+                                         "standard errors without a word");
+            out.push_back(x);
+        }
+    }
+    return {out, std::vector<int>{static_cast<int>(rows.size()), static_cast<int>(cols)}};
+}
+
+// f(parameters) -> (g, s). Upstream's
+// `(Vector G, Matrix S) MomentConditionFunction(double[] parameters)`.
+std::function<sup::MomentConditionReturn(const std::vector<double>&)> as_moment_conditions_fn(
+    py::function f) {
+    return [f](const std::vector<double>& p) {
+        py::object out = f(p);
+        py::object g_object, s_object;
+        if (py::isinstance<py::dict>(out)) {
+            py::dict d = out.cast<py::dict>();
+            if (!d.contains("g") || !d.contains("s")) throw std::runtime_error(kMomentShape);
+            g_object = d["g"];
+            s_object = d["s"];
+        } else {
+            // PySequence_Check rather than a cast: `out.cast<py::sequence>()` raises pybind11's own
+            // TypeError for a non-sequence, which would escape past the check below and reach the
+            // user as "Object of type 'float' is not an instance of 'sequence'" instead of the one
+            // sentence that names both elements.
+            if (!PySequence_Check(out.ptr())) throw std::runtime_error(kMomentShape);
+            py::sequence pair = out.cast<py::sequence>();
+            if (py::len(pair) != 2) throw std::runtime_error(kMomentShape);
+            g_object = pair[0];
+            s_object = pair[1];
+        }
+
+        sup::MomentConditionReturn result;
+        try {
+            result.g = g_object.cast<std::vector<double>>();  // nan passes: see the note above
+        } catch (const py::cast_error&) {
+            throw std::runtime_error(
+                "the moment condition function's 'g' (the moment vector) must be a sequence of "
+                "numbers; got " +
+                std::string(py::str(g_object)));
+        }
+        auto s = row_major_matrix(
+            s_object, "the moment condition function's 's' (the weighting matrix)");
+        result.s = s.first;
+        result.s_rows = s.second[0];
+        result.s_cols = s.second[1];
+        return result;
+    };
+}
+
+// f(parameters) -> a q x p matrix. Upstream's `double[,] JacobianFunction(double[])`.
+std::function<std::pair<std::vector<double>, std::vector<int>>(const std::vector<double>&)>
+as_matrix_fn(py::function f, std::string what) {
+    return [f, what](const std::vector<double>& p) { return row_major_matrix(f(p), what); };
+}
+
+// f(parameters) -> one number. The shape as_vector_scalar_fn already serves -- except that this one
+// must let nan through (see the note above the gmm delegates), so it is its own small lambda rather
+// than a reuse that would quietly refuse it.
+std::function<double(const std::vector<double>&)> as_penalty_fn(py::function f) {
+    return [f](const std::vector<double>& p) -> double {
+        py::object out = f(p);
+        try {
+            return out.cast<double>();
+        } catch (const py::cast_error&) {
+            throw std::runtime_error("the penalty function must return a single number; got " +
+                                     std::string(py::str(out)));
+        }
+    };
+}
+
 py::dict pack(const sup::CallbackResult& r) {
     py::dict out;
     out["values"] = r.values;
@@ -342,6 +483,33 @@ void register_callback(py::module_& m) {
         },
         py::arg("options_json"), py::arg("resample"), py::arg("fit"), py::arg("statistic"),
         py::arg("jackknife") = py::none());
+
+    // Runs the callback runner's "gmm" group against the delegates upstream's
+    // `GeneralizedMethodOfMoments` takes in its delegate-based constructor (C# 143):
+    // `moment_conditions(parameters)`, returning the tuple `(g, s)` -- the moment vector and the
+    // weighting matrix -- plus the optional `jacobian(parameters)` (a q x p matrix) and
+    // `penalty(parameters)` (one number). Either optional argument may be None. The flat result is
+    // the layout documented in numerics/support/callback/gmm.hpp; corehydropy.callback's
+    // fit_gmm_moments() reads it back by name into the same Fit object fit_gmm() returns.
+    //
+    // There is no generator on this surface and no RNG anywhere in the fit, so a repeated call
+    // returns the identical numbers. INTERRUPTS behave exactly as the mcmc note above describes,
+    // and for the same reason.
+    m.def(
+        "callback_gmm",
+        [](const std::string& options_json, py::function moment_conditions, py::object jacobian,
+           py::object penalty) {
+            sup::CallbackSet cbs;
+            cbs.moment_conditions = as_moment_conditions_fn(moment_conditions);
+            if (!jacobian.is_none())
+                cbs.vector_matrix =
+                    as_matrix_fn(jacobian.cast<py::function>(), "the jacobian function");
+            if (!penalty.is_none())
+                cbs.vector_scalar = as_penalty_fn(penalty.cast<py::function>());
+            return pack(sup::run_callback("gmm", "fit", options_json, cbs));
+        },
+        py::arg("options_json"), py::arg("moment_conditions"), py::arg("jacobian") = py::none(),
+        py::arg("penalty") = py::none());
 
     // The handle a callback is given on the core's seeded generator. No constructor is exposed:
     // it is handed out by the runner and is only usable for the duration of the one call it was

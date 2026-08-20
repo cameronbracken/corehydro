@@ -40,6 +40,10 @@ ch_callback_bootstrap_ <- function(options_json, resample, fit, statistic, jackk
   .Call(`_corehydror_ch_callback_bootstrap_`, options_json, resample, fit, statistic, jackknife)
 }
 
+ch_callback_gmm_ <- function(options_json, moment_conditions, jacobian, penalty) {
+  .Call(`_corehydror_ch_callback_gmm_`, options_json, moment_conditions, jacobian, penalty)
+}
+
 ch_rng_probe_ <- function(options_json, f) {
   .Call(`_corehydror_ch_rng_probe_`, options_json, f)
 }

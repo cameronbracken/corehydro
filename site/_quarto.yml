@@ -152,6 +152,7 @@ quartodoc:
       contents:
         - fit_bayesian
         - fit_gmm
+        - fit_gmm_moments
         - fit_diagnostics
         - quantile_variance
     - title: Frequency analysis

@@ -29,6 +29,7 @@ __all__ = [
     "hessian",
     "mcmc_posterior",
     "bootstrap_custom",
+    "fit_gmm_moments",
     "Rng",
 ]
 
@@ -549,6 +550,250 @@ def mcmc_posterior(
 
 
 _CI_METHODS = ("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa")
+
+
+def fit_gmm_moments(
+    moment_conditions: Callable,
+    initial: Sequence[float],
+    lower: Sequence[float] | None = None,
+    upper: Sequence[float] | None = None,
+    sample_size: int | None = None,
+    jacobian: Callable | None = None,
+    penalty: Callable | None = None,
+    optimizer: str = "BFGS",
+    strategy: str = "Iterative",
+    max_gmm_iterations: int = 0,
+):
+    """Fit your own moment conditions by the generalized method of moments.
+
+    Estimates parameters by GMM against moment conditions you write. This is the constructor the
+    upstream C# library itself exposes, ``GeneralizedMethodOfMoments(momentConditionFunction,
+    ...)``: :func:`~corehydropy.fit_gmm` can only fit a :func:`~corehydropy.model_bulletin17c`
+    model (the single implementation of the ``IGMMModel`` interface it takes), while this function
+    takes any moment conditions you can write down.
+
+    The moment condition function
+    -----------------------------
+    ``moment_conditions(parameters)`` is called with one list of numbers, as long as `initial`, and
+    must return **two things**: the tuple ``(g, s)``, or a dict with keys ``"g"`` and ``"s"``.
+
+    - ``g`` is the sample mean of the moment conditions at those parameters: a sequence of q
+      numbers, one per moment condition. GMM drives this towards zero.
+    - ``s`` is their covariance: a q by q **matrix**, written as a sequence of ROWS (a list of
+      lists, or a 2-D numpy array). In two-step and iterative GMM the optimal weighting matrix is
+      its inverse.
+
+    Both are required and both are checked by name, because returning the wrong thing here is the
+    likeliest mistake on this surface. A two-parameter method-of-moments fit of a Normal, whose
+    answer is the sample mean and the population variance::
+
+        def moments(p):
+            a = [xi - p[0] for xi in x]
+            b = [ai * ai - p[1] for ai in a]
+            n = len(x)
+            mean = lambda v: sum(v) / n
+            return ([mean(a), mean(b)],
+                    [[mean([ai * ai for ai in a]), mean([ai * bi for ai, bi in zip(a, b)])],
+                     [mean([ai * bi for ai, bi in zip(a, b)]), mean([bi * bi for bi in b])]])
+
+    ``q`` (the number of moment conditions) is measured by calling your function once at `initial`,
+    so there is no argument to get wrong. When q equals the number of parameters the fit is
+    just-identified and ``.j_stat_pval`` comes back ``None`` -- see Returns.
+
+    Parameters
+    ----------
+    moment_conditions : callable
+        The required function described above.
+    initial : sequence of float
+        Starting values, one per parameter. Its length IS the parameter count.
+    lower, upper : sequence of float
+        Parameter bounds, the same length as `initial`, with every starting value inside them. Both
+        are required despite the ``None`` default: every optimizer this dispatches to takes a box,
+        and the numerical Jacobian's step selection is bounds-aware.
+    sample_size : int
+        The number of observations behind the moment conditions. Required, and only you know it:
+        your function hands over averages, not data. The sandwich covariance divides by it, so the
+        standard errors scale as ``1 / sqrt(sample_size)``.
+    jacobian : callable, optional
+        An analytic Jacobian of the moment conditions, called as ``jacobian(parameters)`` and
+        returning a q by p matrix -- one ROW per moment condition, one COLUMN per parameter.
+        ``None``, the default, uses the ported bounds-aware finite-difference Jacobian, which costs
+        two extra `moment_conditions` calls per parameter per gradient.
+    penalty : callable, optional
+        A penalty added to the GMM objective, called as ``penalty(parameters)`` and returning one
+        number. Ridge-type regularization, and the only way to fit a model with more parameters
+        than moment conditions (which is otherwise refused as under-identified). Return ``0.0`` for
+        no penalty. Note the ported half-quadratic convention: with a penalty the objective is
+        ``0.5 * g'Wg + penalty``, so a penalty should carry its own ``1/2``.
+    optimizer : str, default "BFGS"
+        One of ``"BFGS"`` (matching ``GeneralizedMethodOfMoments``'s own class default),
+        ``"NelderMead"``, ``"Brent"``, ``"Powell"``, ``"DifferentialEvolution"``,
+        ``"MultilevelSingleLinkage"``.
+    strategy : {"Iterative", "OneStep", "TwoStep"}, default "Iterative"
+        GMM estimation strategy. ``"OneStep"`` is refused for an over-identified problem, matching
+        the estimator.
+    max_gmm_iterations : int, default 0
+        Maximum number of GMM iterations; ``0`` keeps the estimator's own default cap.
+
+    Returns
+    -------
+    Fit
+        The same object :func:`~corehydropy.fit_gmm` returns, with ``.method == "GMM"``, so
+        ``.parameters``, ``.covariance``, ``repr()`` and ``.summary()`` behave identically.
+        Parameters are named ``p1``, ``p2``, ... since your moment conditions name nothing. Method
+        of moments computes no likelihood surface, so ``.log_likelihood``, ``.aic`` and ``.bic``
+        are ``None`` and ``.confint()`` raises, as they do for :func:`~corehydropy.fit_gmm`.
+        ``.j_stat`` is Hansen's J and ``.j_stat_pval`` its p-value, which is ``None`` whenever the
+        fit is just-identified (as many moment conditions as parameters): zero degrees of freedom
+        leaves no over-identifying restriction to test. ``.j_stat`` itself is then not
+        interpretable either and should not be read as a goodness-of-fit number: the residual
+        covariance it is scaled by is theoretically zero, so the value is whatever inverting a
+        numerically singular matrix gives (measured on one two-parameter problem across four
+        optimizers, all agreeing on the parameters to 1e-9: -1.3e-09, 8.6e+19, -7.7e-15, and
+        0.126). Where it cannot be computed at all it comes back ``nan`` rather than failing the
+        fit.
+        :func:`~corehydropy.fit_diagnostics` and :func:`~corehydropy.quantile_variance` are not
+        available for this fit -- both need the model a `fit_gmm` fit carries.
+
+    Notes
+    -----
+    There is no random number generator anywhere in this fit, so a repeated call returns the
+    identical numbers. Across languages the guarantee is the usual one for this surface: the
+    optimizer arithmetic all happens in the shared C++ core, but ``g`` and ``s`` are computed by
+    your own Python code, and R and Python do not guarantee identical rounding for the same
+    formula. Arithmetic (``+ - * /``) is IEEE-deterministic and does reproduce; ``log``, ``exp``
+    and friends come from each platform's math library. R's ``sum()`` and ``mean()`` accumulate in
+    extended precision where Python's do not, so an explicit loop is the portable spelling.
+
+    See Also
+    --------
+    corehydropy.fit_gmm : the Bulletin 17C flood-frequency fit.
+    corehydropy.optim_minimize : a plain bounded optimization of your own objective.
+    corehydropy.fit_mle : likelihood-based fitting.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> x = [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7]
+    >>> def moments(p):
+    ...     n = len(x)
+    ...     a = [xi - p[0] for xi in x]
+    ...     b = [ai * ai - p[1] for ai in a]
+    ...     saa = sbb = sab = 0.0
+    ...     for ai, bi in zip(a, b):
+    ...         saa += ai * ai
+    ...         sab += ai * bi
+    ...         sbb += bi * bi
+    ...     return ([sum(a) / n, sum(b) / n],
+    ...             [[saa / n, sab / n], [sab / n, sbb / n]])
+    >>> f = ch.fit_gmm_moments(moments, initial=[5.0, 0.5], lower=[0.0, 0.001],
+    ...                        upper=[10.0, 10.0], sample_size=len(x))
+    >>> round(f.parameters["p1"], 6), round(f.parameters["p2"], 6)
+    (4.95, 0.165)
+    >>> f.j_stat_pval is None  # just-identified, so there is nothing to test
+    True
+    """
+    from .fit import _KNOWN_GMM_STRATEGIES, _KNOWN_OPTIMIZERS, _new_fit_gmm_moments
+
+    if not callable(moment_conditions):
+        raise TypeError(
+            "`moment_conditions` must be a function taking (parameters) and returning the tuple "
+            "(g, s) -- the moment vector and the weighting matrix"
+        )
+    if jacobian is not None and not callable(jacobian):
+        raise TypeError("`jacobian` must be a function taking (parameters) and returning a matrix")
+    if penalty is not None and not callable(penalty):
+        raise TypeError(
+            "`penalty` must be a function taking (parameters) and returning a single number"
+        )
+    start = np.asarray(initial, dtype=float).ravel()
+    if start.size == 0 or not np.all(np.isfinite(start)):
+        raise ValueError("`initial` must be a non-empty sequence of finite numbers")
+    # Required despite the None default, exactly as optim_minimize()'s bounds are: the estimator
+    # has no unbounded form (see this function's `lower`/`upper` documentation).
+    if lower is None or upper is None:
+        raise ValueError(
+            "fit_gmm_moments() needs `lower` and `upper` bounds: the GMM optimizer takes a box "
+            "and the numerical Jacobian's step selection is bounds-aware"
+        )
+    lo = np.asarray(lower, dtype=float).ravel()
+    hi = np.asarray(upper, dtype=float).ravel()
+    if not np.all(np.isfinite(lo)) or not np.all(np.isfinite(hi)):
+        raise ValueError("`lower` and `upper` must be sequences of finite numbers")
+    if lo.size != start.size or hi.size != start.size:
+        raise ValueError(
+            f"`initial`, `lower` and `upper` must be the same length; they are {start.size}, "
+            f"{lo.size} and {hi.size}"
+        )
+    if sample_size is None or float(sample_size) < 1 or not np.isfinite(float(sample_size)):
+        raise ValueError(
+            "`sample_size` must be a single positive whole number: the number of observations "
+            "behind your moment conditions, which the sandwich covariance divides by"
+        )
+    optimizer = str(optimizer)
+    if optimizer not in _KNOWN_OPTIMIZERS:
+        raise ValueError(
+            f"unknown optimizer '{optimizer}'; expected one of {', '.join(_KNOWN_OPTIMIZERS)}"
+        )
+    strategy = str(strategy)
+    if strategy not in _KNOWN_GMM_STRATEGIES:
+        raise ValueError(
+            f"unknown GMM estimation strategy '{strategy}'; expected one of "
+            f"{', '.join(_KNOWN_GMM_STRATEGIES)}"
+        )
+
+    options: dict = {
+        "initial": start.tolist(),
+        "lower": lo.tolist(),
+        "upper": hi.tolist(),
+        "sample_size": int(sample_size),
+        "optimizer": optimizer,
+        "strategy": strategy,
+    }
+    if int(max_gmm_iterations) > 0:
+        options["max_gmm_iterations"] = int(max_gmm_iterations)
+
+    res = _core.callback_gmm(json.dumps(options), moment_conditions, jacobian, penalty)
+    return _new_fit_gmm_moments(_gmm_unflatten(res))
+
+
+def _gmm_unflatten(res: dict) -> dict:
+    """Internal: slice the flat callback result back into the field set `_new_fit_gmm_moments()`
+    reads -- the same names `fit_run` returns for the GMM target, so both feed the one shared
+    `_gmm_fit_fields()` builder in fit.py. The layout is documented in
+    ``core/include/corehydro/numerics/support/callback/gmm.hpp``, and ``corehydror``'s own
+    ``gmm_unflatten()`` reads it identically."""
+    p = int(res["dims"][0])
+    values = list(res["values"])
+    index = {name: i for i, name in enumerate(res["names"])}
+
+    def block(prefix):
+        return [values[index[f"{prefix}[{j}]"]] for j in range(p)]
+
+    # A p x p matrix read back by the label on every entry rather than by slicing a range: the
+    # bindings and the fixture runners all address this result by name, and a matrix is the one
+    # place an off-by-one slice would still look plausible.
+    def square(prefix):
+        return [[values[index[f"{prefix}[{i},{j}]"]] for j in range(p)] for i in range(p)]
+
+    return {
+        "method": "GMM",
+        "parameters": block("parameter"),
+        "parameter_names": [f"p{j + 1}" for j in range(p)],
+        "standard_errors": block("standard_error"),
+        "covariance": square("covariance"),
+        "correlation": square("correlation"),
+        "j_stat": values[index["j_stat"]],
+        "j_stat_pval": values[index["j_stat_pval"]],
+        "degree_of_freedom": int(values[index["degree_of_freedom"]]),
+        "gmm_iterations": int(values[index["gmm_iterations"]]),
+        "converged_within_tolerance": values[index["converged_within_tolerance"]] == 1.0,
+        "optimizer_fallback_count": int(values[index["optimizer_fallback_count"]]),
+        "number_of_moment_conditions": int(values[index["number_of_moment_conditions"]]),
+        "nobs": int(values[index["sample_size"]]),
+        "converged": res["status"] == "Success",
+        "status": res["status"],
+    }
 
 
 def _check_bootstrap_fn(f: object, name: str, signature: str) -> None:

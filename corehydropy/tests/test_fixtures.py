@@ -1802,6 +1802,19 @@ def _callback_fixture_function(name):
         return _boot_stat_mean_and_square
     if name == "Jack_LeaveOneOut":
         return _boot_jack_leave_one_out
+    # The gmm catalog (fixtures/callback/gmm.json), upstream's three delegate shapes from
+    # GeneralizedMethodOfMoments's delegate constructor. The model is the just-identified
+    # two-parameter method-of-moments fit of a Normal: theta = (mu, sigma2), whose unique root --
+    # and so the GMM optimum, since q = p makes g = 0 attainable -- is the sample mean and the
+    # population variance. Arithmetic and an explicit loop only, never sum()/mean(): R accumulates
+    # both in extended precision where the other three languages accumulate in double, and one
+    # differing bit moves a fitted parameter.
+    if name == "Mom_NormalMeanVariance":
+        return _gmm_moment_conditions
+    if name == "Jac_NormalMeanVariance":
+        return _gmm_jacobian
+    if name == "Pen_SigmaTowardsOne":
+        return _gmm_penalty
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1910,6 +1923,37 @@ def _boot_jack_leave_one_out(data, index):
     return list(data[:index]) + list(data[index + 1:])
 
 
+def _gmm_moment_conditions(p):
+    data = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+    n = 8.0
+    g0 = g1 = s00 = s01 = s11 = 0.0
+    for x in data:
+        a = x - p[0]
+        b = a * a - p[1]
+        g0 += a
+        g1 += b
+        s00 += a * a
+        s01 += a * b
+        s11 += b * b
+    return ([g0 / n, g1 / n], [[s00 / n, s01 / n], [s01 / n, s11 / n]])
+
+
+def _gmm_jacobian(p):
+    # One ROW per moment condition: dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu),
+    # dg2/dsigma2 = -1.
+    data = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+    acc = 0.0
+    for x in data:
+        acc += x - p[0]
+    return [[-1.0, 0.0], [-2.0 * acc / 8.0, -1.0]]
+
+
+def _gmm_penalty(p):
+    # A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the ported half-quadratic
+    # convention expects.
+    return 0.5 * (p[1] - 1.0) * (p[1] - 1.0)
+
+
 def _rng_warmup_1000(parameters, rng):
     rng.uniform(1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
     return rng.uniform(10)
@@ -1917,8 +1961,8 @@ def _rng_warmup_1000(parameters, rng):
 
 def _run_callback_case(case):
     construct = case["construct"]
-    # Only "math", "rng", "mcmc" and "bootstrap" have Python glue so far; the gmm group arrives
-    # with its own entry point in a later task.
+    # Every group has its own Python entry point: callback_math, rng_probe, callback_mcmc,
+    # callback_gmm and callback_bootstrap.
     options_json = json.dumps(construct.get("options", {}))
     fn = _callback_fixture_function(construct["callback"])
     if construct["group"] == "math":
@@ -1936,6 +1980,18 @@ def _run_callback_case(case):
             _callback_fixture_function(construct["gradient"]) if "gradient" in construct else None
         )
         r = _core.callback_mcmc(options_json, fn, proposal, gradient)
+    elif construct["group"] == "gmm":
+        # `callback` names the MOMENT CONDITION function -- this group's required delegate, its
+        # counterpart of the mcmc group's log-likelihood -- and the two optional ones have keys of
+        # their own. An absent key stays None, which is what "the ported numerical Jacobian" and
+        # "no penalty" mean.
+        jacobian = (
+            _callback_fixture_function(construct["jacobian"]) if "jacobian" in construct else None
+        )
+        penalty = (
+            _callback_fixture_function(construct["penalty"]) if "penalty" in construct else None
+        )
+        r = _core.callback_gmm(options_json, fn, jacobian, penalty)
     elif construct["group"] == "bootstrap":
         # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
         # counterpart of the mcmc group's log-likelihood -- and the other three have keys of their

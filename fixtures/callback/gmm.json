@@ -1,0 +1,284 @@
+{
+  "kind": "callback",
+  "source": "RMC-BestFit/src/RMC.BestFit/Estimation/GeneralizedMethodOfMoments.cs (the delegate constructor, C# 143, and the three delegates it takes) @ c2e6192",
+  "reference": "RMC.BestFit @ c2e6192. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"gmm\", method \"fit\", against the delegates named by `construct.callback` (the moment conditions), `construct.jacobian` and `construct.penalty` -- each a function the four runners write themselves as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case crosses the real host-language boundary. This is upstream's OWN API: GeneralizedMethodOfMoments has TWO constructors, one taking an IGMMModel (C# 106) and one taking these delegates directly (C# 143), and `IGMMModel` has exactly one implementation -- Bulletin17CDistribution -- so until this group existed the packages could fit an LP3 flood-frequency model by GMM and nothing else. EVERY expected value here is EMITTER-READ: no upstream test fits this model, so the oracle is the real RMC.BestFit GeneralizedMethodOfMoments driven by tools/oracle_emitter with the equivalent C# delegates, never a value computed by this repo's own C++. Every catalog callback is built from + - * / alone, with each summation written as an explicit loop rather than any language's sum(), mean() or Average(): R's sum() and mean() accumulate in extended precision where C++, Python and C# accumulate in double, and one differing bit moves a fitted parameter. THE MODEL is the just-identified two-parameter method-of-moments fit of a Normal -- theta = (mu, sigma2), g = [mean(x - mu), mean((x - mu)^2 - sigma2)] -- chosen because its GMM optimum has a CLOSED FORM: q = p makes g(theta-hat) = 0 attainable, and the unique root is the sample mean (4.95) and the population variance (0.165) of the eight observations. So the parameter assertions are checkable arithmetic, not a regression against whatever the optimizer happened to return. j_stat is NOT asserted anywhere in this file, deliberately: on a just-identified fit the moment residual covariance V = S - D(D'S^-1 D)^-1 D' is THEORETICALLY ZERO, so g' V^-1 g is whatever inverting a numerically singular matrix happens to give. Measured on this exact problem across the four optimizers -- all converging to the same parameters to 1e-9 -- it is -1.3e-09, 8.6e+19, -7.7e-15 and 0.126, and under NelderMead it THROWS outright from R and Python (where callback/gmm.hpp reports NaN rather than failing an otherwise exact fit) while returning a number from the C++ fixture runner, whose compiled callback contracts `a * a - theta` into an FMA. fixtures/estimation/gmm_bulletin17c_smoke.json's |J| < 1e-3 check holds only because its far messier real-data V carries real noise; on this deliberately clean synthetic problem any bound would be a fiction. j_stat_pval is NaN because the degrees of freedom q - p = 0: a just-identified fit has no over-identifying restriction left over to test its own specification with. That is correct, not a defect (see docs/upstream-csharp-issues.md). Tolerances follow fixtures/README.md's policy: optimizer-dependent parameters rel 1e-8, finite-difference-sensitive standard_error/covariance/correlation rel 1e-7. The result layout (parameter[j] / standard_error[j] / covariance[i,j] / correlation[i,j] / the J-statistic and bookkeeping scalars, dims = {p, p}) is documented in core/include/corehydro/numerics/support/callback/gmm.hpp; the `named` assertions below read it by label rather than by an index that shifts with the parameter count.",
+  "callbacks": {
+    "Mom_NormalMeanVariance": "moment_conditions(parameters) -> (g, s) with g = [mean(x - mu), mean((x - mu)^2 - sigma2)] and s = the 2 x 2 covariance of those two contributions, over x = [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7]; every sum an explicit loop  [corehydro addition, upstream's `(Vector G, Matrix S) MomentConditionFunction(double[])` shape: the textbook just-identified method-of-moments fit of a Normal, whose root is the sample mean and the population variance]",
+    "Jac_NormalMeanVariance": "jacobian(parameters) -> the analytic 2 x 2 dg/dtheta of Mom_NormalMeanVariance, one ROW per moment condition: [[-1, 0], [-2 mean(x - mu), -1]]  [corehydro addition, upstream's `double[,] JacobianFunction(double[])` shape: replaces the ported bounds-aware finite-difference Jacobian, so this case pins the analytic path rather than the numerical one]",
+    "Pen_SigmaTowardsOne": "penalty(parameters) -> 0.5 * (sigma2 - 1)^2  [corehydro addition, upstream's `double PenaltyFunction(double[])` shape: a ridge penalty carrying its own 1/2, as the half-quadratic convention in Q() expects. It pulls sigma2 away from the closed-form 0.165 and towards 1, which is what makes this case an oracle for the delegate being reached at all rather than a repeat of the first]"
+  },
+  "cases": [
+    {
+      "name": "just_identified_normal_bfgs",
+      "construct": {
+        "group": "gmm",
+        "method": "fit",
+        "callback": "Mom_NormalMeanVariance",
+        "options": {
+          "initial": [5.0, 0.5],
+          "lower": [0.0, 0.001],
+          "upper": [10.0, 10.0],
+          "sample_size": 8
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "parameter[0]",
+          "expected": 4.950000000000009,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: BestParameterSet.Values[0], mu. The closed form is the sample mean of the eight observations, 4.95"
+        },
+        {
+          "method": "named",
+          "name": "parameter[1]",
+          "expected": 0.16500000000001586,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: BestParameterSet.Values[1], sigma2. The closed form is the POPULATION variance (divided by n, not n - 1), 0.165"
+        },
+        {
+          "method": "named",
+          "name": "standard_error[0]",
+          "expected": 0.1436140661267076,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetStandardErrors()[0], the square root of the sandwich covariance diagonal -- finite-difference sensitive, since the Jacobian is numerical in this case"
+        },
+        {
+          "method": "named",
+          "name": "standard_error[1]",
+          "expected": 0.08096584928441687,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetStandardErrors()[1]"
+        },
+        {
+          "method": "named",
+          "name": "covariance[0,0]",
+          "expected": 0.020624999989446346,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetCovarianceMatrix()[0, 0]"
+        },
+        {
+          "method": "named",
+          "name": "covariance[0,1]",
+          "expected": -0.006328124995090398,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetCovarianceMatrix()[0, 1], the OFF-diagonal -- the one entry a row-major/column-major mix-up in either binding would move, and the reason the matrix is asserted by label rather than only on its diagonal"
+        },
+        {
+          "method": "named",
+          "name": "correlation[0,1]",
+          "expected": -0.5442221261224277,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetCorrelationMatrix()[0, 1]"
+        },
+        {
+          "method": "named",
+          "name": "j_stat_pval",
+          "expected": "nan",
+          "mode": "equal",
+          "source": "EMITTER-READ: JStatPval is NaN because the degrees of freedom q - p = 0. A just-identified fit has no over-identifying restriction left to test its own specification with -- correct, not a defect. J ITSELF IS DELIBERATELY NOT PINNED HERE, unlike fixtures/estimation/gmm_bulletin17c_smoke.json's |J| < 1e-3 check: on this deliberately clean synthetic problem g(theta-hat) is driven to zero so exactly that the residual covariance V is singular to the last bit, and whether inverting it returns cancellation noise or throws depends on the platform's rounding (measured: the same moment conditions under NelderMead throw from R and Python and do not from the C++ fixture runner, whose compiled callback contracts `a * a - theta` into an FMA). callback/gmm.hpp reports NaN when it throws rather than failing the fit, so the honest oracle is the p-value's structural NaN and the zero degrees of freedom below, not a noise value that a different compiler may not even produce"
+        },
+        {
+          "method": "named",
+          "name": "degree_of_freedom",
+          "expected": 0,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: DegreeOfFreedom = max(0, q - p), the reason the p-value above is NaN"
+        },
+        {
+          "method": "named",
+          "name": "gmm_iterations",
+          "expected": 2,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: GMMIterations under the default Iterative strategy"
+        },
+        {
+          "method": "named",
+          "name": "number_of_moment_conditions",
+          "expected": 2,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: q, MEASURED by probing the moment condition function once at the initial values rather than declared in the options -- all four runners take the same probe"
+        },
+        {
+          "method": "named",
+          "name": "sample_size",
+          "expected": 8,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: SampleSize, the n the sandwich covariance divides by"
+        },
+        {
+          "method": "status",
+          "expected": "Success",
+          "source": "EMITTER-READ: the final OptimizationStatus of the BFGS run"
+        },
+        {
+          "method": "dim",
+          "args": [0],
+          "expected": 2,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: the covariance is p x p"
+        }
+      ]
+    },
+    {
+      "name": "analytic_jacobian",
+      "construct": {
+        "group": "gmm",
+        "method": "fit",
+        "callback": "Mom_NormalMeanVariance",
+        "jacobian": "Jac_NormalMeanVariance",
+        "options": {
+          "initial": [5.0, 0.5],
+          "lower": [0.0, 0.001],
+          "upper": [10.0, 10.0],
+          "sample_size": 8
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "parameter[0]",
+          "expected": 4.950000000000009,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: the same closed-form mu, reached with the ANALYTIC Jacobian driving the BFGS gradient instead of the ported finite-difference one"
+        },
+        {
+          "method": "named",
+          "name": "parameter[1]",
+          "expected": 0.16500000000001586,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: the same closed-form sigma2"
+        },
+        {
+          "method": "named",
+          "name": "standard_error[0]",
+          "expected": 0.14361406612662994,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetStandardErrors()[0]. This is where the analytic Jacobian shows: the sandwich bread D'WD is built from D, so the standard errors here are the ones that would move if the jacobian delegate were ignored"
+        },
+        {
+          "method": "named",
+          "name": "standard_error[1]",
+          "expected": 0.08096584928441629,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetStandardErrors()[1]"
+        },
+        {
+          "method": "named",
+          "name": "covariance[0,1]",
+          "expected": -0.006328124995087217,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetCovarianceMatrix()[0, 1], the off-diagonal under the analytic Jacobian"
+        }
+      ]
+    },
+    {
+      "name": "penalty_towards_one",
+      "construct": {
+        "group": "gmm",
+        "method": "fit",
+        "callback": "Mom_NormalMeanVariance",
+        "penalty": "Pen_SigmaTowardsOne",
+        "options": {
+          "initial": [5.0, 0.5],
+          "lower": [0.0, 0.001],
+          "upper": [10.0, 10.0],
+          "sample_size": 8
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "parameter[0]",
+          "expected": 4.908399399057825,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: mu under the penalized fit. It moves too, off the unpenalized 4.95: the iterative strategy's weighting matrix W = S^-1 couples the two moment conditions, so a penalty on sigma2 shifts mu as well"
+        },
+        {
+          "method": "named",
+          "name": "parameter[1]",
+          "expected": 0.20636456809635292,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: sigma2, pulled off the closed-form 0.165 towards the penalty's target of 1. THE assertion for this case: an ignored penalty delegate would return 0.165 here"
+        },
+        {
+          "method": "named",
+          "name": "standard_error[1]",
+          "expected": 0.08023731733312318,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetStandardErrors()[1] under the penalized fit -- the penalty Hessian enters the sandwich bread AND (penalty_is_random defaulting to true) its meat"
+        }
+      ]
+    },
+    {
+      "name": "one_step_nelder_mead",
+      "construct": {
+        "group": "gmm",
+        "method": "fit",
+        "callback": "Mom_NormalMeanVariance",
+        "options": {
+          "initial": [5.0, 0.5],
+          "lower": [0.0, 0.001],
+          "upper": [10.0, 10.0],
+          "sample_size": 8,
+          "optimizer": "NelderMead",
+          "strategy": "OneStep"
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "parameter[0]",
+          "expected": 4.949999994898281,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: mu under the OneStep strategy (the identity weighting matrix, no second pass) and the NelderMead optimizer -- the two knobs this case exists to pin, since both parse through the same functions fit_gmm() uses"
+        },
+        {
+          "method": "named",
+          "name": "parameter[1]",
+          "expected": 0.16500000080454255,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: sigma2 under OneStep + NelderMead"
+        },
+        {
+          "method": "named",
+          "name": "gmm_iterations",
+          "expected": 1,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: GMMIterations. OneStep has no comparison pass at all, which is why converged_within_tolerance below is 0"
+        },
+        {
+          "method": "named",
+          "name": "converged_within_tolerance",
+          "expected": 0,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: ConvergedWithinTolerance, false for OneStep -- the T13-fixed flag is set only on the iterative loop's tolerance-convergence branch"
+        }
+      ]
+    }
+  ]
+}

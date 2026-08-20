@@ -1739,8 +1739,8 @@ or `"status"` (the exact `OptimizationStatus` name).
 
 The ported routines whose input is a live host-language function rather than serializable data,
 run through the shared callback runner (`numerics/support/callback_runner.hpp`) and its exception
-guard. `construct` names a `group` (`"math"`, `"rng"` and `"mcmc"` so far -- `"bootstrap"` and
-`"gmm"` follow), a `method`, a `callback` (a NAMED built-in each of the four runners writes itself as a
+guard. `construct` names a `group` (`"math"`, `"rng"`, `"mcmc"`, `"bootstrap"` or `"gmm"`), a
+`method`, a `callback` (a NAMED built-in each of the four runners writes itself as a
 native closure: a C++ lambda, an R closure, a Python lambda, a C# delegate), and an `options`
 object passed through verbatim as the runner's options JSON. The catalog names are documented in
 each fixture's own `callbacks` block; they are deliberately NOT the `optimizer` kind's names
@@ -1853,6 +1853,30 @@ group and every value in it is `EMITTER-READ`, with one documented exception to 
 tolerance: the `BCa` case is pinned at 1e-6 because C#'s acceleration constant is a
 `Tools.ParallelAdd` reduction that is not reproducible run-to-run in the real library, exactly as
 `fixtures/sampling/bootstrap.json`'s own `bca` case records.
+
+The `"gmm"` group has one method, `fit`, and drives upstream's own DELEGATE constructor on
+`GeneralizedMethodOfMoments` (C# 143) -- the one a C# caller uses to fit moment conditions of their
+own, as opposed to the `IGMMModel` constructor the `estimation`-kind `gmm` target drives, whose
+single implementation is `Bulletin17CDistribution`. `construct.callback` is the MOMENT CONDITION
+function, this group's required delegate and the counterpart of the mcmc group's log-likelihood,
+under the `Mom_` prefix; `construct.jacobian` (`Jac_`) and `construct.penalty` (`Pen_`) name the two
+optional ones, and an absent key means the ported bounds-aware finite-difference Jacobian and no
+penalty. The fourth C# delegate, `PointwiseMomentConditionFunction`, is deliberately not on this
+surface (its only consumer is the GMM Diagnostics region, reached through a model-based fit). The
+moment condition callback returns TWO things -- the moment vector `g` and the weighting matrix `s`
+-- spelled as a list in R, a tuple or dict in Python, a `(Vector G, Matrix S)` tuple in C#, and each
+runner's converter checks both by name. The `options` carry a REQUIRED `initial`, `lower`, `upper`
+and `sample_size`, plus optional `optimizer`, `strategy`, `max_gmm_iterations` and
+`number_of_moment_conditions` (a cross-check, not a declaration: q is MEASURED by probing the
+callback once at `initial`). The result is fully named -- `parameter[j]`, `standard_error[j]`,
+`covariance[i,j]`, `correlation[i,j]`, then `j_stat`, `j_stat_pval`, `degree_of_freedom`,
+`gmm_iterations`, `converged_within_tolerance`, `optimizer_fallback_count`, `sample_size`,
+`number_of_parameters`, `number_of_moment_conditions` -- with `dims = {p, p}`.
+`fixtures/callback/gmm.json` is the one file of this group and every value in it is `EMITTER-READ`.
+Its model is chosen so the oracle is checkable arithmetic rather than a regression: the
+just-identified method-of-moments fit of a Normal, whose GMM optimum IS the sample mean and the
+population variance. `j_stat` is deliberately NOT asserted anywhere in that file -- see its own
+`reference` field for the measurements behind that decision.
 
 ### `toolbox_cross_language`
 

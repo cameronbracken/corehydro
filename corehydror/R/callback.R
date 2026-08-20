@@ -646,6 +646,231 @@ bootstrap_custom <- function(
   bootstrap_unflatten(res, ci_method)
 }
 
+#' Fit your own moment conditions by GMM
+#'
+#' Estimates parameters by the generalized method of moments against moment conditions you write.
+#' This is the constructor the upstream C# library itself exposes,
+#' `GeneralizedMethodOfMoments(momentConditionFunction, ...)`: [fit_gmm()] can only fit a
+#' [model_bulletin17c()] model (the single implementation of the `IGMMModel` interface it takes),
+#' while this function takes any moment conditions you can write down.
+#'
+#' @section The moment condition function:
+#' `moment_conditions(parameters)` is called with one numeric vector, as long as `initial`, and must
+#' return a **list with two elements**:
+#'
+#' \describe{
+#'   \item{`g`}{the sample mean of the moment conditions at those parameters: a numeric vector of
+#'     length q, one entry per moment condition. GMM drives this towards zero.}
+#'   \item{`s`}{their covariance: a q by q numeric **matrix**. In two-step and iterative GMM the
+#'     optimal weighting matrix is its inverse.}
+#' }
+#'
+#' Both are required and both are checked by name, because returning the wrong thing here is the
+#' likeliest mistake on this surface. A two-parameter method-of-moments fit of a Normal, whose
+#' answer is the sample mean and the population variance:
+#'
+#' ```r
+#' moments <- function(p) {
+#'   a <- x - p[1]
+#'   b <- a * a - p[2]
+#'   list(g = c(mean(a), mean(b)),
+#'        s = matrix(c(mean(a * a), mean(a * b), mean(a * b), mean(b * b)), 2, 2))
+#' }
+#' ```
+#'
+#' `q` (the number of moment conditions) is measured by calling your function once at `initial`, so
+#' there is no argument to get wrong. When q equals the number of parameters the fit is
+#' just-identified and `$j_stat_pval` comes back `NA` -- see the return value below.
+#'
+#' @param moment_conditions the required function described above.
+#' @param initial numeric vector of starting values, one per parameter. Its length IS the parameter
+#'   count.
+#' @param lower,upper numeric vectors of parameter bounds, the same length as `initial`, with every
+#'   starting value inside them. Both are required: every optimizer this dispatches to takes a box,
+#'   and the numerical Jacobian's step selection is bounds-aware.
+#' @param sample_size the number of observations behind the moment conditions. Required, and only
+#'   you know it: your function hands over averages, not data. The sandwich covariance divides by
+#'   it, so the standard errors scale as `1 / sqrt(sample_size)`.
+#' @param jacobian an optional analytic Jacobian of the moment conditions, called as
+#'   `jacobian(parameters)` and returning a q by p numeric matrix -- one ROW per moment condition,
+#'   one COLUMN per parameter. `NULL`, the default, uses the ported bounds-aware finite-difference
+#'   Jacobian, which costs two extra `moment_conditions` calls per parameter per gradient.
+#' @param penalty an optional penalty added to the GMM objective, called as `penalty(parameters)`
+#'   and returning one number. Ridge-type regularization, and the only way to fit a model with more
+#'   parameters than moment conditions (which is otherwise refused as under-identified). Return `0`
+#'   for no penalty. Note the ported half-quadratic convention: with a penalty the objective is
+#'   `0.5 * g'Wg + penalty`, so a penalty should carry its own `1/2`.
+#' @param optimizer one of `"BFGS"` (default, matching `GeneralizedMethodOfMoments`'s own class
+#'   default), `"NelderMead"`, `"Brent"`, `"Powell"`, `"DifferentialEvolution"`,
+#'   `"MultilevelSingleLinkage"`.
+#' @param strategy GMM estimation strategy: `"Iterative"` (default), `"OneStep"`, or `"TwoStep"`.
+#'   `"OneStep"` is refused for an over-identified problem, matching the estimator.
+#' @param max_gmm_iterations maximum number of GMM iterations; `0` (default) keeps the estimator's
+#'   own default cap.
+#' @return An object of class `corehydro_fit` with `method == "GMM"` -- the same object [fit_gmm()]
+#'   returns, so `coef()`, `vcov()`, `print()` and `summary()` behave identically. Parameters are
+#'   named `p1`, `p2`, ... since your moment conditions name nothing. Method of moments computes no
+#'   likelihood surface, so `$log_likelihood`, `$aic` and `$bic` are `NA` and `confint()` errors, as
+#'   they do for [fit_gmm()]. `$j_stat` is Hansen's J and `$j_stat_pval` its p-value, which is `NA`
+#'   whenever the fit is just-identified (as many moment conditions as parameters): zero degrees of
+#'   freedom leaves no over-identifying restriction to test. `$j_stat` itself is then not
+#'   interpretable either and should not be read as a goodness-of-fit number: the residual
+#'   covariance it is scaled by is theoretically zero, so the value is whatever inverting a
+#'   numerically singular matrix gives (measured on one two-parameter problem across four
+#'   optimizers, all agreeing on the parameters to 1e-9: -1.3e-09, 8.6e+19, -7.7e-15, and 0.126).
+#'   Where it cannot be computed at all it comes back `NA` rather than failing the fit.
+#'   [fit_diagnostics()] and [quantile_variance()] are not available for this fit -- both need the
+#'   model a `fit_gmm()` fit carries.
+#' @section Reproducing a run in Python:
+#' There is no random number generator anywhere in this fit, so a repeated call returns the
+#' identical numbers. Across languages the guarantee is the usual one for this surface: the
+#' optimizer arithmetic all happens in the shared C++ core, but `g` and `s` are computed by your
+#' own R code, and R and Python do not guarantee identical rounding for the same formula.
+#' Arithmetic (`+ - * /`) is IEEE-deterministic and does reproduce; `log`, `exp` and friends come
+#' from each platform's math library. R's `sum()` and `mean()` accumulate in extended precision
+#' where Python's do not, so an explicit loop is the portable spelling.
+#' @seealso [fit_gmm()] for the Bulletin 17C flood-frequency fit, [optim_minimize()] for a plain
+#'   bounded optimization of your own objective, and [fit_mle()] for likelihood-based fitting.
+#' @examples
+#' x <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+#' moments <- function(p) {
+#'   a <- x - p[1]
+#'   b <- a * a - p[2]
+#'   list(
+#'     g = c(mean(a), mean(b)),
+#'     s = matrix(c(mean(a * a), mean(a * b), mean(a * b), mean(b * b)), 2, 2)
+#'   )
+#' }
+#' f <- fit_gmm_moments(moments,
+#'   initial = c(5, 0.5), lower = c(0, 0.001), upper = c(10, 10),
+#'   sample_size = length(x)
+#' )
+#' round(coef(f), 6) # the sample mean and the population variance
+#' f$j_stat_pval # NA: just-identified, so there is nothing to test
+#' @export
+fit_gmm_moments <- function(
+  moment_conditions,
+  initial,
+  lower = NULL,
+  upper = NULL,
+  sample_size,
+  jacobian = NULL,
+  penalty = NULL,
+  optimizer = "BFGS",
+  strategy = "Iterative",
+  max_gmm_iterations = 0L
+) {
+  if (!is.function(moment_conditions)) {
+    stop("`moment_conditions` must be a function taking (parameters) and returning a list with ",
+         "elements `g` (the moment vector) and `s` (the weighting matrix)", call. = FALSE)
+  }
+  if (!is.null(jacobian) && !is.function(jacobian)) {
+    stop("`jacobian` must be a function taking (parameters) and returning a numeric matrix",
+         call. = FALSE)
+  }
+  if (!is.null(penalty) && !is.function(penalty)) {
+    stop("`penalty` must be a function taking (parameters) and returning a single number",
+         call. = FALSE)
+  }
+  if (!is.numeric(initial) || length(initial) == 0L || !all(is.finite(initial))) {
+    stop("`initial` must be a non-empty numeric vector of finite values", call. = FALSE)
+  }
+  # Required despite the NULL default, exactly as optim_minimize()'s bounds are: the estimator has
+  # no unbounded form (see fit_gmm_moments()'s `lower`/`upper` documentation).
+  if (is.null(lower) || is.null(upper)) {
+    stop("`fit_gmm_moments()` needs `lower` and `upper` bounds: the GMM optimizer takes a box and ",
+         "the numerical Jacobian's step selection is bounds-aware", call. = FALSE)
+  }
+  if (!is.numeric(lower) || !is.numeric(upper) || !all(is.finite(lower)) || !all(is.finite(upper))) {
+    stop("`lower` and `upper` must be numeric vectors of finite values", call. = FALSE)
+  }
+  if (length(lower) != length(initial) || length(upper) != length(initial)) {
+    stop(sprintf(
+      "`initial`, `lower` and `upper` must be the same length; they are %d, %d and %d",
+      length(initial), length(lower), length(upper)
+    ), call. = FALSE)
+  }
+  if (missing(sample_size) || !is.numeric(sample_size) || length(sample_size) != 1L ||
+        !is.finite(sample_size) || sample_size < 1) {
+    stop("`sample_size` must be a single positive whole number: the number of observations behind ",
+         "your moment conditions, which the sandwich covariance divides by", call. = FALSE)
+  }
+  known_optimizers <- c(
+    "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
+  )
+  optimizer <- as.character(optimizer)
+  if (!optimizer %in% known_optimizers) {
+    stop(sprintf(
+      "unknown optimizer '%s'; expected one of %s", optimizer,
+      paste(known_optimizers, collapse = ", ")
+    ), call. = FALSE)
+  }
+  known_strategies <- c("OneStep", "TwoStep", "Iterative")
+  strategy <- as.character(strategy)
+  if (!strategy %in% known_strategies) {
+    stop(sprintf(
+      "unknown GMM estimation strategy '%s'; expected one of %s",
+      strategy, paste(known_strategies, collapse = ", ")
+    ), call. = FALSE)
+  }
+
+  opts <- list(
+    initial = spec_array(as.double(initial)),
+    lower = spec_array(as.double(lower)),
+    upper = spec_array(as.double(upper)),
+    sample_size = as.integer(sample_size),
+    optimizer = optimizer,
+    strategy = strategy
+  )
+  max_gmm_iterations <- as.integer(max_gmm_iterations)
+  if (max_gmm_iterations > 0L) opts$max_gmm_iterations <- max_gmm_iterations
+
+  res <- ch_callback_gmm_(to_spec_json(opts), moment_conditions, jacobian, penalty)
+  new_fit_gmm_moments(gmm_unflatten(res))
+}
+
+# Internal: slice the flat callback result back into the field set new_fit_gmm_moments() reads --
+# the same names ch_fit_run_() returns for the GMM target, so both feed the one shared
+# gmm_fit_fields() builder in R/fit.R. The layout is documented in
+# core/include/corehydro/numerics/support/callback/gmm.hpp, and corehydropy's own
+# _gmm_unflatten() reads it identically.
+gmm_unflatten <- function(res) {
+  values <- as.double(unlist(res$values))
+  nms <- as.character(unlist(res$names))
+  p <- as.integer(unlist(res$dims))[[1]]
+
+  by_name <- function(name) as.double(values[[match(name, nms)]])
+  block <- function(prefix, count) {
+    as.double(values[match(sprintf("%s[%d]", prefix, seq_len(count) - 1L), nms)])
+  }
+  # A p x p matrix read back by the label on every entry rather than by slicing a range: the
+  # bindings and the fixture runners all address this result by name, and a matrix is the one place
+  # an off-by-one slice would still look plausible.
+  square <- function(prefix) {
+    labels <- outer(seq_len(p) - 1L, seq_len(p) - 1L, function(i, j) sprintf("%s[%d,%d]", prefix, i, j))
+    matrix(values[match(as.vector(labels), nms)], nrow = p, ncol = p)
+  }
+
+  list(
+    method = "GMM",
+    parameters = block("parameter", p),
+    parameter_names = paste0("p", seq_len(p)),
+    standard_errors = block("standard_error", p),
+    covariance = square("covariance"),
+    correlation = square("correlation"),
+    j_stat = by_name("j_stat"),
+    j_stat_pval = by_name("j_stat_pval"),
+    degree_of_freedom = as.integer(by_name("degree_of_freedom")),
+    gmm_iterations = as.integer(by_name("gmm_iterations")),
+    converged_within_tolerance = by_name("converged_within_tolerance") == 1,
+    optimizer_fallback_count = as.integer(by_name("optimizer_fallback_count")),
+    number_of_moment_conditions = as.integer(by_name("number_of_moment_conditions")),
+    nobs = as.integer(by_name("sample_size")),
+    converged = identical(res$status, "Success"),
+    status = res$status
+  )
+}
+
 # Internal: the function check every bootstrap delegate shares, naming the argument AND its
 # signature -- a wrong argument order is the likeliest mistake on this surface and nothing
 # downstream can detect it. Kept in step with corehydropy's _check_bootstrap_fn.

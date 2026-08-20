@@ -264,9 +264,37 @@ new_fit_bayesian <- function(result, base_spec, dataset, construct_json, warmup,
   )
 }
 
-# Internal: build a corehydro_fit from a ch_fit_run_() result for the GMM target -- the
-# covariance stack (same shape as new_fit()'s, GMM's own sandwich covariance rather than a
-# Hessian) plus the GMM-specific bookkeeping (J-statistic, iteration/convergence counters).
+# Internal: everything a GMM fit carries beyond the common field set -- the covariance stack (same
+# shape as new_fit()'s, GMM's own sandwich covariance rather than a Hessian) plus the GMM-specific
+# bookkeeping (J-statistic, iteration/convergence counters). Shared by the two verbs that produce a
+# GMM fit: new_fit_gmm() below (fit_gmm(), a bulletin17c model through ch_fit_run_) and
+# new_fit_gmm_moments() (fit_gmm_moments(), user-written moment conditions through
+# ch_callback_gmm_). The two reach the SAME C++ estimator by its two constructors, so the fields
+# they report are the same fields and are assembled here once.
+#
+# `j_stat_pval` is NaN whenever the fit is just-identified (q == p): zero degrees of freedom leaves
+# no over-identifying restriction to test. It is reported as NA, R's spelling of "not available".
+gmm_fit_fields <- function(result) {
+  standard_errors <- if (length(result$standard_errors)) {
+    se <- result$standard_errors
+    names(se) <- result$parameter_names
+    se
+  } else {
+    NULL
+  }
+  list(
+    covariance = name_square(result$covariance, result$parameter_names),
+    standard_errors = standard_errors,
+    correlation = name_square(result$correlation, result$parameter_names),
+    j_stat = result$j_stat,
+    j_stat_pval = if (is.nan(result$j_stat_pval)) NA_real_ else result$j_stat_pval,
+    gmm_iterations = result$gmm_iterations,
+    converged_within_tolerance = result$converged_within_tolerance,
+    optimizer_fallback_count = result$optimizer_fallback_count
+  )
+}
+
+# Internal: build a corehydro_fit from a ch_fit_run_() result for the GMM target.
 new_fit_gmm <- function(result, base_spec, dataset, construct_json) {
   base <- new_fit_base(result, base_spec, dataset, construct_json)
   # GMM is method-of-moments: run_fit() leaves log_likelihood/aic/bic at their structural NaN
@@ -277,28 +305,40 @@ new_fit_gmm <- function(result, base_spec, dataset, construct_json) {
   base$aic <- NA_real_
   base$bic <- NA_real_
 
-  covariance <- name_square(result$covariance, result$parameter_names)
-  correlation <- name_square(result$correlation, result$parameter_names)
-  standard_errors <- if (length(result$standard_errors)) {
-    se <- result$standard_errors
-    names(se) <- result$parameter_names
-    se
-  } else {
-    NULL
-  }
+  structure(c(base, gmm_fit_fields(result)), class = "corehydro_fit")
+}
 
+# Internal: build a corehydro_fit from a ch_callback_gmm_() result -- the same GMM estimator fitted
+# through its delegate constructor instead of a model. Everything the model path takes from the
+# model is absent by construction and is NULL here: `$model`, `$spec`, `$dataset` and
+# `$construct_json`. That is what fit_diagnostics() and quantile_variance() test for before they
+# try to rerun a construct that does not exist (both need a distribution; moment conditions are not
+# one). Parameters are named p1..pn, matching mcmc_posterior(): a model you write down yourself
+# names nothing.
+new_fit_gmm_moments <- function(result) {
+  parameters <- result$parameters
+  names(parameters) <- result$parameter_names
   structure(
     c(
-      base,
       list(
-        covariance = covariance,
-        standard_errors = standard_errors,
-        correlation = correlation,
-        j_stat = result$j_stat,
-        j_stat_pval = if (is.nan(result$j_stat_pval)) NA_real_ else result$j_stat_pval,
-        gmm_iterations = result$gmm_iterations,
-        converged_within_tolerance = result$converged_within_tolerance,
-        optimizer_fallback_count = result$optimizer_fallback_count
+        method = "GMM",
+        parameters = parameters,
+        log_likelihood = NA_real_,
+        prior_log_likelihood = NA_real_,
+        aic = NA_real_,
+        bic = NA_real_,
+        nobs = result$nobs,
+        converged = result$converged,
+        status = result$status,
+        model = NULL,
+        spec = NULL,
+        dataset = NULL,
+        construct_json = NULL
+      ),
+      gmm_fit_fields(result),
+      list(
+        number_of_moment_conditions = result$number_of_moment_conditions,
+        degree_of_freedom = result$degree_of_freedom
       )
     ),
     class = "corehydro_fit"
@@ -694,6 +734,14 @@ fit_diagnostics <- function(fit) {
       fit$method
     ), call. = FALSE)
   }
+  # A fit_gmm_moments() fit is a GMM fit with no model behind it, so there is no construct to rerun
+  # through the C++ diagnostics entry point. Refused by name rather than left to fail three layers
+  # down on a NULL construct.
+  if (is.null(fit$construct_json)) {
+    stop("fit_diagnostics needs a fit built from a model; a fit_gmm_moments() fit has only your ",
+         "moment conditions, and the GMM diagnostics are computed from a model's per-observation ",
+         "moment contributions", call. = FALSE)
+  }
   ch_fit_diagnostics_(fit$method, fit$construct_json, fit$dataset)
 }
 
@@ -715,6 +763,11 @@ fit_diagnostics <- function(fit) {
 quantile_variance <- function(fit, aep) {
   if (!inherits(fit, "corehydro_fit") || !identical(fit$method, "GMM")) {
     stop("quantile_variance needs a fit_gmm() result", call. = FALSE)
+  }
+  # See fit_diagnostics() above: a fit_gmm_moments() fit has no distribution to take a quantile of.
+  if (is.null(fit$construct_json)) {
+    stop("quantile_variance needs a fit_gmm() fit of a bulletin17c model; a fit_gmm_moments() fit ",
+         "has no distribution to take a quantile of", call. = FALSE)
   }
   ch_fit_quantile_variance_(fit$construct_json, fit$dataset, as.double(aep))
 }

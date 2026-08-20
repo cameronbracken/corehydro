@@ -1849,6 +1849,53 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
                 if (static_cast<int>(i) != index) out.push_back(data[i]);
             return out;
         };
+    } else if (name == "Mom_NormalMeanVariance") {
+        // The gmm catalog (fixtures/callback/gmm.json), upstream's three delegate shapes from
+        // GeneralizedMethodOfMoments's delegate constructor. The model is the just-identified
+        // two-parameter method-of-moments fit of a Normal: theta = (mu, sigma2) and
+        //   g = [mean(x - mu), mean((x - mu)^2 - sigma2)],  S = the covariance of those two
+        // whose unique root -- and so the GMM optimum, since q = p makes g = 0 attainable -- is
+        // the sample mean and the population variance. Arithmetic and an explicit loop only, never
+        // sum()/mean()/Average(): R accumulates both in extended precision where the other three
+        // languages accumulate in double, and one differing bit moves a fitted parameter.
+        cbs.moment_conditions = [](const std::vector<double>& p) {
+            const double data[] = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+            const double n = 8.0;
+            double g0 = 0.0, g1 = 0.0, s00 = 0.0, s01 = 0.0, s11 = 0.0;
+            for (double x : data) {
+                double a = x - p[0];
+                double b = a * a - p[1];
+                g0 += a;
+                g1 += b;
+                s00 += a * a;
+                s01 += a * b;
+                s11 += b * b;
+            }
+            tbx::MomentConditionReturn out;
+            out.g = {g0 / n, g1 / n};
+            out.s = {s00 / n, s01 / n, s01 / n, s11 / n};  // row-major, symmetric
+            out.s_rows = 2;
+            out.s_cols = 2;
+            return out;
+        };
+    } else if (name == "Jac_NormalMeanVariance") {
+        // The analytic Jacobian of Mom_NormalMeanVariance, row-major 2 x 2 (one ROW per moment
+        // condition): dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.
+        cbs.vector_matrix = [](const std::vector<double>& p) {
+            const double data[] = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+            double acc = 0.0;
+            for (double x : data) acc += x - p[0];
+            return std::make_pair(std::vector<double>{-1.0, 0.0, -2.0 * acc / 8.0, -1.0},
+                                  std::vector<int>{2, 2});
+        };
+    } else if (name == "Pen_SigmaTowardsOne") {
+        // A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the ported
+        // half-quadratic convention expects. Moves the estimate off the closed form, which is what
+        // makes the penalty case an oracle rather than a repeat of the first one.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            double d = p[1] - 1.0;
+            return 0.5 * d * d;
+        };
     } else if (name == "Rng_Uniform") {
         // The rng catalog (fixtures/callback/rng_handle.json). Each of these takes the handle the
         // runner hands it -- the C++ analogue of the R closure calling rng_uniform() and the Python
@@ -1902,7 +1949,12 @@ static void run_callback_kind(const json& spec) {
         // The bootstrap group's other three delegates, resolved out of the same catalog (its
         // `callback` key names the resample, the one delegate handed the generator). `jackknife` is
         // absent for every method but BCa, which is what "no jackknife" means.
-        for (const char* key : {"fit", "statistic", "jackknife"})
+        // The bootstrap group's other three delegates and the gmm group's two optional ones,
+        // resolved out of the same catalog (each group's `callback` key names its own required
+        // delegate: the resample, or the moment conditions). An absent key means that delegate is
+        // not supplied, which is what "no jackknife", "the ported numerical Jacobian" and "no
+        // penalty" mean.
+        for (const char* key : {"fit", "statistic", "jackknife", "jacobian", "penalty"})
             if (construct.contains(key)) callback_fixture_set(construct[key].get<std::string>(), cbs);
         json options = construct.contains("options") ? construct["options"] : json::object();
         tbx::CallbackResult r =

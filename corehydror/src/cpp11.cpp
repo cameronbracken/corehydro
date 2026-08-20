@@ -76,6 +76,13 @@ extern "C" SEXP _corehydror_ch_callback_bootstrap_(SEXP options_json, SEXP resam
   END_CPP11
 }
 // callback.cpp
+list ch_callback_gmm_(std::string options_json, function moment_conditions, sexp jacobian, sexp penalty);
+extern "C" SEXP _corehydror_ch_callback_gmm_(SEXP options_json, SEXP moment_conditions, SEXP jacobian, SEXP penalty) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_callback_gmm_(cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(moment_conditions), cpp11::as_cpp<cpp11::decay_t<sexp>>(jacobian), cpp11::as_cpp<cpp11::decay_t<sexp>>(penalty)));
+  END_CPP11
+}
+// callback.cpp
 list ch_rng_probe_(std::string options_json, function f);
 extern "C" SEXP _corehydror_ch_rng_probe_(SEXP options_json, SEXP f) {
   BEGIN_CPP11
@@ -581,6 +588,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_bve_cdf_",                      (DL_FUNC) &_corehydror_ch_bve_cdf_,                       7},
     {"_corehydror_ch_bve_cdf_after_set_parameters_", (DL_FUNC) &_corehydror_ch_bve_cdf_after_set_parameters_, 11},
     {"_corehydror_ch_callback_bootstrap_",           (DL_FUNC) &_corehydror_ch_callback_bootstrap_,            5},
+    {"_corehydror_ch_callback_gmm_",                 (DL_FUNC) &_corehydror_ch_callback_gmm_,                  4},
     {"_corehydror_ch_callback_math_",                (DL_FUNC) &_corehydror_ch_callback_math_,                 3},
     {"_corehydror_ch_callback_mcmc_",                (DL_FUNC) &_corehydror_ch_callback_mcmc_,                 4},
     {"_corehydror_ch_cop_val_",                      (DL_FUNC) &_corehydror_ch_cop_val_,                       8},

@@ -981,3 +981,273 @@ test_that("a handle leaked out of a resample callback is dead afterwards", {
   )
   expect_error(rng_uniform(leaked, 1), "no longer valid")
 })
+
+# --- fit_gmm_moments ----------------------------------------------------------------------
+#
+# The model throughout is the just-identified two-parameter method-of-moments fit of a Normal:
+# theta = (mu, sigma2) and
+#
+#   g(theta) = [mean(x - mu), mean((x - mu)^2 - sigma2)]
+#
+# whose unique root -- and so the GMM optimum, since q = p makes g(theta-hat) = 0 attainable -- is
+# the sample mean and the POPULATION variance. So these tests check arithmetic anyone can do by
+# hand rather than a regression against whatever the optimizer returned. The C#-pinned oracle for
+# this same model lives in fixtures/callback/gmm.json. Every sum is an explicit `for` loop, never
+# sum() or mean(): both accumulate in extended precision in R where the shared core, Python and C#
+# accumulate in double, and one differing bit moves a fitted parameter.
+gmm_data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+
+gmm_moments <- function(p) {
+  n <- length(gmm_data)
+  g0 <- 0
+  g1 <- 0
+  s00 <- 0
+  s01 <- 0
+  s11 <- 0
+  for (x in gmm_data) {
+    a <- x - p[1]
+    b <- a * a - p[2]
+    g0 <- g0 + a
+    g1 <- g1 + b
+    s00 <- s00 + a * a
+    s01 <- s01 + a * b
+    s11 <- s11 + b * b
+  }
+  list(
+    g = c(g0 / n, g1 / n),
+    s = matrix(c(s00 / n, s01 / n, s01 / n, s11 / n), nrow = 2, ncol = 2)
+  )
+}
+
+gmm_jacobian <- function(p) {
+  acc <- 0
+  for (x in gmm_data) acc <- acc + (x - p[1])
+  matrix(c(-1, -2 * acc / length(gmm_data), 0, -1), nrow = 2, ncol = 2)
+}
+
+gmm_fit_it <- function(...) {
+  fit_gmm_moments(gmm_moments,
+    initial = c(5, 0.5), lower = c(0, 0.001), upper = c(10, 10),
+    sample_size = length(gmm_data), ...
+  )
+}
+
+gmm_closed_form <- function() {
+  n <- length(gmm_data)
+  acc <- 0
+  for (x in gmm_data) acc <- acc + x
+  mu <- acc / n
+  acc2 <- 0
+  for (x in gmm_data) acc2 <- acc2 + (x - mu) * (x - mu)
+  c(mu, acc2 / n)
+}
+
+test_that("fit_gmm_moments recovers the closed-form method-of-moments solution", {
+  f <- gmm_fit_it()
+  expect_s3_class(f, "corehydro_fit")
+  expect_identical(f$method, "GMM")
+  expect_identical(names(coef(f)), c("p1", "p2"))
+  expect_equal(unname(coef(f)), gmm_closed_form(), tolerance = 1e-9)
+  expect_identical(f$nobs, length(gmm_data))
+  expect_identical(f$number_of_moment_conditions, 2L)
+  expect_true(f$converged)
+  # The accessors behave exactly as they do for a fit_gmm() fit.
+  expect_identical(dim(vcov(f)), c(2L, 2L))
+  expect_identical(dimnames(vcov(f)), list(c("p1", "p2"), c("p1", "p2")))
+  expect_true(all(f$standard_errors > 0))
+  expect_equal(unname(f$standard_errors), unname(sqrt(diag(vcov(f)))), tolerance = 1e-12)
+  expect_identical(logLik(f)[[1]], NA_real_)
+  expect_true(is.na(AIC(f)))
+  expect_output(print(f), "j-statistic")
+  expect_error(confint(f), "no interval surface")
+})
+
+test_that("a just-identified fit reports NA for the J-statistic p-value", {
+  f <- gmm_fit_it()
+  # Zero degrees of freedom: q == p leaves no over-identifying restriction to test the
+  # specification with, so the ported post_process() writes NaN and this package reports NA. That
+  # is correct rather than a defect -- see docs/upstream-csharp-issues.md. J itself is ~0 by
+  # construction (g(theta-hat) is driven to zero) and is cancellation noise, so it is only checked
+  # against zero.
+  expect_identical(f$degree_of_freedom, 0L)
+  expect_true(is.na(f$j_stat_pval))
+})
+
+test_that("the J-statistic never fails a just-identified fit, whatever inverting a singular V gives", {
+  # J itself is NOT asserted, deliberately. On a just-identified fit the residual covariance it is
+  # scaled by is theoretically zero, so g' V^-1 g is whatever inverting a numerically singular
+  # matrix gives: measured across these four optimizers, all agreeing on the parameters to 1e-9,
+  # -1.3e-09, 8.6e+19, -7.7e-15 and 0.126 -- and under NelderMead it throws outright from R, where
+  # the core reports NA rather than failing an otherwise exact fit. THAT is what this pins.
+  for (optimizer in c("BFGS", "NelderMead", "Powell", "MultilevelSingleLinkage")) {
+    f <- gmm_fit_it(optimizer = optimizer)
+    expect_equal(coef(f)[["p1"]], gmm_closed_form()[[1]], tolerance = 1e-5)
+    expect_true(is.na(f$j_stat_pval))
+  }
+})
+
+test_that("two fit_gmm_moments runs are identical: there is no generator in this fit", {
+  a <- gmm_fit_it()
+  b <- gmm_fit_it()
+  expect_identical(coef(a), coef(b))
+  expect_identical(vcov(a), vcov(b))
+})
+
+test_that("the analytic jacobian and the penalty both reach the estimator", {
+  plain <- gmm_fit_it()
+  analytic <- gmm_fit_it(jacobian = gmm_jacobian)
+  expect_equal(unname(coef(analytic)), gmm_closed_form(), tolerance = 1e-9)
+
+  # A ridge penalty pulling sigma2 towards 1 moves the estimate off the closed form. An ignored
+  # penalty delegate would return the unpenalized answer, which is what this compares against.
+  penalized <- gmm_fit_it(penalty = function(p) 0.5 * (p[2] - 1) * (p[2] - 1))
+  expect_true(coef(penalized)[["p2"]] > coef(plain)[["p2"]])
+  expect_true(coef(penalized)[["p2"]] < 1)
+})
+
+test_that("every strategy fit_gmm_moments accepts finds the same optimum", {
+  # The optimizers are covered by the J-statistic test above, which fits with all four.
+  for (strategy in c("OneStep", "TwoStep", "Iterative")) {
+    expect_equal(coef(gmm_fit_it(strategy = strategy))[["p1"]], gmm_closed_form()[[1]],
+                 tolerance = 1e-8)
+  }
+})
+
+test_that("a moment condition function returning the wrong shape is refused naming g and s", {
+  expect_error(
+    fit_gmm_moments(function(p) c(1, 2), c(5, 0.5), c(0, 0.001), c(10, 10), 8),
+    "elements 'g' \\(the moment vector\\) and 's' \\(the weighting matrix\\)"
+  )
+  # A list, but not the right one: only `g`.
+  expect_error(
+    fit_gmm_moments(function(p) list(g = c(0, 0)), c(5, 0.5), c(0, 0.001), c(10, 10), 8),
+    "elements 'g' \\(the moment vector\\) and 's' \\(the weighting matrix\\)"
+  )
+  # The two the wrong way round: `s` holding the moment vector, `g` holding the matrix.
+  expect_error(
+    fit_gmm_moments(
+      function(p) {
+        out <- gmm_moments(p)
+        list(g = out$s, s = out$g)
+      },
+      c(5, 0.5), c(0, 0.001), c(10, 10), 8
+    ),
+    "'s' \\(the weighting matrix\\) must be a numeric matrix"
+  )
+  # A moment vector whose length changes between calls, the only way it can disagree with the q
+  # the up-front probe measured.
+  calls <- 0
+  expect_error(
+    fit_gmm_moments(
+      function(p) {
+        calls <<- calls + 1
+        out <- gmm_moments(p)
+        if (calls > 1) out$g <- c(out$g, 0)
+        out
+      },
+      c(5, 0.5), c(0, 0.001), c(10, 10), 8
+    ),
+    "'g' \\(the moment vector\\) must hold one value per moment condition"
+  )
+  # An `s` that is not square.
+  expect_error(
+    fit_gmm_moments(
+      function(p) list(g = gmm_moments(p)$g, s = matrix(0, nrow = 2, ncol = 3)),
+      c(5, 0.5), c(0, 0.001), c(10, 10), 8
+    ),
+    "'s' \\(the weighting matrix\\) must be a square matrix"
+  )
+  # A jacobian of the wrong shape: q x p, and the message says which way round.
+  expect_error(
+    gmm_fit_it(jacobian = function(p) matrix(0, nrow = 1, ncol = 3)),
+    "jacobian function must return a 2 x 2 matrix"
+  )
+})
+
+test_that("an error raised inside each of the three delegates reaches the caller", {
+  # One test per delegate: a guard wired for one and missing on another is exactly the shape of
+  # bug this invites. The moment conditions are tested twice, because throwing on the FIRST call
+  # is caught by the up-front probe (before the estimator exists) and throwing later is the case
+  # the guard has to carry -- by then the ported optimizer's catch-all would otherwise swallow it.
+  expect_error(
+    fit_gmm_moments(function(p) stop("boom"), c(5, 0.5), c(0, 0.001), c(10, 10), 8),
+    "boom"
+  )
+  calls <- 0
+  expect_error(
+    fit_gmm_moments(
+      function(p) {
+        calls <<- calls + 1
+        if (calls > 1) stop("boom later")
+        gmm_moments(p)
+      },
+      c(5, 0.5), c(0, 0.001), c(10, 10), 8
+    ),
+    "boom later"
+  )
+  expect_error(gmm_fit_it(jacobian = function(p) stop("jacobian boom")), "jacobian boom")
+  expect_error(
+    gmm_fit_it(penalty = function(p) stop("penalty boom")),
+    "penalty boom"
+  )
+})
+
+test_that("NA is refused in s and the jacobian, and allowed in g and the penalty", {
+  # The rule, drawn by what each value MEANS to the ported estimator and identical in Python:
+  # Q() ends with `is_finite(qv) ? qv : double.max`, so a non-finite `g` (or penalty) is the
+  # estimator's own way of learning a corner of the box is infeasible; nothing tests `s` or the
+  # jacobian, so an NA there would reach the fitted standard errors without a word.
+  expect_error(
+    fit_gmm_moments(
+      function(p) list(g = gmm_moments(p)$g, s = matrix(NA_real_, 2, 2)),
+      c(5, 0.5), c(0, 0.001), c(10, 10), 8
+    ),
+    "'s' \\(the weighting matrix\\) returned NA or NaN"
+  )
+  expect_error(
+    gmm_fit_it(jacobian = function(p) matrix(NA_real_, 2, 2)),
+    "jacobian function returned NA or NaN"
+  )
+  # `g` may go non-finite at a trial point and the fit still completes: NA only at parameters far
+  # from the optimum, which the optimizer then steps away from.
+  na_far_away <- fit_gmm_moments(
+    function(p) {
+      out <- gmm_moments(p)
+      if (p[2] > 5) out$g <- c(NA_real_, NA_real_)
+      out
+    },
+    c(5, 0.5), c(0, 0.001), c(10, 10), 8
+  )
+  expect_equal(unname(coef(na_far_away)), gmm_closed_form(), tolerance = 1e-9)
+  # And a penalty may too.
+  expect_s3_class(gmm_fit_it(penalty = function(p) if (p[2] > 5) NA_real_ else 0), "corehydro_fit")
+})
+
+test_that("fit_gmm_moments refuses arguments that are not what they claim", {
+  expect_error(fit_gmm_moments("nope", c(5, 0.5), c(0, 0.001), c(10, 10), 8),
+               "`moment_conditions` must be a function")
+  expect_error(
+    fit_gmm_moments(gmm_moments, c(5, 0.5), sample_size = 8),
+    "needs `lower` and `upper` bounds"
+  )
+  expect_error(
+    fit_gmm_moments(gmm_moments, c(5, 0.5), c(0), c(10, 10), 8),
+    "must be the same length; they are 2, 1 and 2"
+  )
+  expect_error(
+    fit_gmm_moments(gmm_moments, c(5, 0.5), c(0, 0.001), c(10, 10)),
+    "`sample_size` must be a single positive whole number"
+  )
+  expect_error(gmm_fit_it(optimizer = "Nope"), "unknown optimizer 'Nope'")
+  expect_error(gmm_fit_it(strategy = "Nope"), "unknown GMM estimation strategy 'Nope'")
+  expect_error(gmm_fit_it(jacobian = "nope"), "`jacobian` must be a function")
+  expect_error(gmm_fit_it(penalty = "nope"), "`penalty` must be a function")
+})
+
+test_that("the model-only verbs refuse a fit_gmm_moments() fit by name", {
+  f <- gmm_fit_it()
+  # Both need the model a fit_gmm() fit carries; this one has only the user's moment conditions.
+  expect_error(quantile_variance(f, 0.01), "no distribution to take a quantile of")
+  expect_error(fit_diagnostics(f), "needs a fit built from a model")
+  expect_null(f$model)
+})

@@ -1168,6 +1168,134 @@ static (double[] values, string[] names, int[] dims) RunCallbackBootstrap(
             new[] { results.StatisticResults.Length, results.ParameterResults.Length });
 }
 
+// The callback surface, Task 7: the gmm-group catalog for fixtures/callback/gmm.json. These are the
+// three C# delegates the REAL RMC.BestFit `GeneralizedMethodOfMoments` delegate constructor (C# 143)
+// takes -- upstream's own `MomentConditionFunction` / `JacobianFunction` / `PenaltyFunction` -- and
+// the counterpart of the native closures the C++/R/Python fixture runners write for the same names.
+//
+// The model is the just-identified two-parameter method-of-moments fit of a Normal: theta =
+// (mu, sigma2) and g = [mean(x - mu), mean((x - mu)^2 - sigma2)], whose unique root -- and so the
+// GMM optimum, since q = p makes g = 0 attainable -- is the sample mean and the population
+// variance. All three are built from `+ - * /` alone, with every sum written as an explicit loop
+// rather than through LINQ's Average(): R's sum()/mean() accumulate in extended precision where the
+// other three languages accumulate in double, and one differing bit moves a fitted parameter.
+// A method rather than a field: this file is a top-level-statements program, where a `static
+// readonly` field is not legal.
+static double[] CallbackGmmData() => new[] { 4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7 };
+
+static MomentConditionFunction? CallbackMomentConditionFunction(string name) => name switch
+{
+    "Mom_NormalMeanVariance" => parameters =>
+    {
+        double n = 8d;
+        double g0 = 0d, g1 = 0d, s00 = 0d, s01 = 0d, s11 = 0d;
+        foreach (double x in CallbackGmmData())
+        {
+            double a = x - parameters[0];
+            double b = a * a - parameters[1];
+            g0 += a; g1 += b; s00 += a * a; s01 += a * b; s11 += b * b;
+        }
+        var g = new Vector(new[] { g0 / n, g1 / n });
+        var s = new Matrix(new[,] { { s00 / n, s01 / n }, { s01 / n, s11 / n } });
+        return (g, s);
+    },
+    _ => null
+};
+
+static JacobianFunction? CallbackJacobianFunction(string name) => name switch
+{
+    // One ROW per moment condition: dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu),
+    // dg2/dsigma2 = -1.
+    "Jac_NormalMeanVariance" => parameters =>
+    {
+        double acc = 0d;
+        foreach (double x in CallbackGmmData()) acc += x - parameters[0];
+        return new[,] { { -1d, 0d }, { -2d * acc / 8d, -1d } };
+    },
+    _ => null
+};
+
+static PenaltyFunction? CallbackPenaltyFunction(string name) => name switch
+{
+    // A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the half-quadratic
+    // convention in Q() expects.
+    "Pen_SigmaTowardsOne" => parameters => 0.5d * (parameters[1] - 1d) * (parameters[1] - 1d),
+    _ => null
+};
+
+// Builds + configures + fits one callback-group gmm case, mirroring callback/gmm.hpp's run_gmm()
+// decision for decision: q is MEASURED by probing the moment condition function once at the initial
+// values (never declared), the optimizer/strategy names parse the same way fit_gmm()'s do, and an
+// absent key leaves the C# class's OWN default in force. PostProcess(sandwich: true,
+// computeJstat: true) matches both the C++ group and fit_gmm()'s model path.
+static (double[] values, string[] names, int[] dims) RunCallbackGmm(
+    JsonElement options,
+    MomentConditionFunction moments,
+    JacobianFunction? jacobian,
+    PenaltyFunction? penalty)
+{
+    bool Has(string key) => options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
+    double[] Vector1(string key)
+    {
+        if (!Has(key)) throw new Exception($"gmm/fit requires the option '{key}'");
+        return options.GetProperty(key).EnumerateArray().Select(ParseNum).ToArray();
+    }
+
+    double[] initial = Vector1("initial"), lower = Vector1("lower"), upper = Vector1("upper");
+    if (!Has("sample_size")) throw new Exception("gmm/fit requires the option 'sample_size'");
+    int sampleSize = (int)ParseNum(options.GetProperty("sample_size"));
+    int p = initial.Length;
+    int q = moments(initial).G.Length;   // the up-front probe, exactly as the C++ group does
+
+    var gmm = new GeneralizedMethodOfMoments(moments, p, q, sampleSize, initial, lower, upper,
+                                             null, jacobian, penalty, null);
+    gmm.OptimizerMethod = Has("optimizer")
+        ? ParseOptimizationMethod(options.GetProperty("optimizer").GetString()!)
+        : OptimizationMethod.BFGS;
+    if (Has("strategy"))
+        gmm.EstimationStrategy = ParseGmmStrategy(options.GetProperty("strategy").GetString()!);
+    if (Has("max_gmm_iterations"))
+        gmm.MaxGMMIterations = (int)ParseNum(options.GetProperty("max_gmm_iterations"));
+
+    if (!gmm.Estimate())
+        throw new Exception("GeneralizedMethodOfMoments.Estimate() failed with optimizer " +
+                            (Has("optimizer") ? options.GetProperty("optimizer").GetString() : "BFGS"));
+    // The J-statistic is allowed to fail, exactly as callback/gmm.hpp's drive site allows it:
+    // on a just-identified fit the moment residual covariance is theoretically zero, so inverting
+    // it throws as readily as it returns noise, and neither is worth failing an exact fit over.
+    // The C# members initialize to 0, not NaN, so the flag is what keeps an uncomputable
+    // J-statistic from being reported as a p-value of exactly zero.
+    bool jstatComputed = true;
+    try { gmm.PostProcess(useSandwich: true, computeJstat: true); }
+    catch (Exception) { jstatComputed = false; }
+
+    // The layout callback/gmm.hpp's result block documents.
+    var values = new List<double>();
+    var names = new List<string>();
+    void Push(string name, double value) { names.Add(name); values.Add(value); }
+
+    for (int j = 0; j < p; j++) Push($"parameter[{j}]", gmm.BestParameterSet.Values[j]);
+    var se = gmm.GetStandardErrors();
+    for (int j = 0; j < p; j++) Push($"standard_error[{j}]", se[j]);
+    var cov = gmm.GetCovarianceMatrix();
+    var corr = gmm.GetCorrelationMatrix();
+    for (int i = 0; i < p; i++)
+        for (int j = 0; j < p; j++) Push($"covariance[{i},{j}]", cov[i, j]);
+    for (int i = 0; i < p; i++)
+        for (int j = 0; j < p; j++) Push($"correlation[{i},{j}]", corr[i, j]);
+    Push("j_stat", jstatComputed ? gmm.JStat : double.NaN);
+    Push("j_stat_pval", jstatComputed ? gmm.JStatPval : double.NaN);
+    Push("degree_of_freedom", gmm.DegreeOfFreedom);
+    Push("gmm_iterations", gmm.GMMIterations);
+    Push("converged_within_tolerance", gmm.ConvergedWithinTolerance ? 1d : 0d);
+    Push("optimizer_fallback_count", gmm.OptimizerFallbackCount);
+    Push("sample_size", gmm.SampleSize);
+    Push("number_of_parameters", p);
+    Push("number_of_moment_conditions", q);
+
+    return (values.ToArray(), names.ToArray(), new[] { p, p });
+}
+
 // Builds the prior list a callback-group mcmc case names, from the same {"family", "parameters"}
 // spec grammar dist_spec.hpp builds from on the C++ side.
 static List<IUnivariateDistribution> CallbackMcmcPriors(JsonElement options)
@@ -5112,7 +5240,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             string caseName = c.GetProperty("name").GetString()!;
             var construct = c.GetProperty("construct");
             string group = construct.GetProperty("group").GetString()!;
-            if (group != "math" && group != "rng" && group != "mcmc" && group != "bootstrap")
+            if (group != "math" && group != "rng" && group != "mcmc" && group != "bootstrap" &&
+                group != "gmm")
                 throw new Exception($"unknown callback fixture group: {group}");
             string method = construct.GetProperty("method").GetString()!;
             string callbackName = construct.GetProperty("callback").GetString()!;
@@ -5188,6 +5317,31 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 }
                 (values, valueNames, dims) =
                     RunCallbackBootstrap(options, resampleFn, fitFn, statFn, jackFn);
+            }
+            else if (group == "gmm")
+            {
+                if (method != "fit") throw new Exception($"unknown gmm fixture method: {method}");
+                // `callback` names the MOMENT CONDITION function -- this group's required delegate,
+                // its counterpart of the mcmc group's log-likelihood -- and the two optional ones
+                // have keys of their own. An absent key means the C# class's own numerical Jacobian
+                // and no penalty.
+                var momentFn = CallbackMomentConditionFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a moment condition function");
+                JacobianFunction? jacobianFn = null;
+                if (construct.TryGetProperty("jacobian", out var jacEl))
+                {
+                    string jn = jacEl.GetString()!;
+                    jacobianFn = CallbackJacobianFunction(jn)
+                        ?? throw new Exception($"callback '{jn}' is not a jacobian function");
+                }
+                PenaltyFunction? penaltyFn = null;
+                if (construct.TryGetProperty("penalty", out var penEl))
+                {
+                    string pn2 = penEl.GetString()!;
+                    penaltyFn = CallbackPenaltyFunction(pn2)
+                        ?? throw new Exception($"callback '{pn2}' is not a penalty function");
+                }
+                (values, valueNames, dims) = RunCallbackGmm(options, momentFn, jacobianFn, penaltyFn);
             }
             else if (group == "rng")
             {

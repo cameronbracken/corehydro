@@ -953,3 +953,261 @@ def test_a_handle_leaked_out_of_a_resample_callback_is_dead_afterwards():
                         replicates=5, seed=12345)
     with pytest.raises(RuntimeError, match="no longer valid"):
         leaked[0].uniform(1)
+
+
+# --- fit_gmm_moments -------------------------------------------------------------------------
+#
+# The model throughout is the just-identified two-parameter method-of-moments fit of a Normal:
+# theta = (mu, sigma2) and
+#
+#   g(theta) = [mean(x - mu), mean((x - mu)^2 - sigma2)]
+#
+# whose unique root -- and so the GMM optimum, since q = p makes g(theta-hat) = 0 attainable -- is
+# the sample mean and the POPULATION variance. So these tests check arithmetic anyone can do by
+# hand rather than a regression against whatever the optimizer returned. The C#-pinned oracle for
+# this same model lives in fixtures/callback/gmm.json. Every sum is an explicit loop, never sum():
+# R's sum() and mean() accumulate in extended precision where the shared core, Python and C#
+# accumulate in double, and one differing bit moves a fitted parameter.
+_GMM_DATA = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+
+
+def _gmm_moments(p):
+    n = float(len(_GMM_DATA))
+    g0 = g1 = s00 = s01 = s11 = 0.0
+    for x in _GMM_DATA:
+        a = x - p[0]
+        b = a * a - p[1]
+        g0 += a
+        g1 += b
+        s00 += a * a
+        s01 += a * b
+        s11 += b * b
+    return ([g0 / n, g1 / n], [[s00 / n, s01 / n], [s01 / n, s11 / n]])
+
+
+def _gmm_jacobian(p):
+    acc = 0.0
+    for x in _GMM_DATA:
+        acc += x - p[0]
+    return [[-1.0, 0.0], [-2.0 * acc / len(_GMM_DATA), -1.0]]
+
+
+def _gmm_fit(**kwargs):
+    return ch.fit_gmm_moments(
+        _gmm_moments, initial=[5.0, 0.5], lower=[0.0, 0.001], upper=[10.0, 10.0],
+        sample_size=len(_GMM_DATA), **kwargs
+    )
+
+
+def _gmm_closed_form():
+    n = float(len(_GMM_DATA))
+    acc = 0.0
+    for x in _GMM_DATA:
+        acc += x
+    mu = acc / n
+    acc2 = 0.0
+    for x in _GMM_DATA:
+        acc2 += (x - mu) * (x - mu)
+    return (mu, acc2 / n)
+
+
+def test_fit_gmm_moments_recovers_the_closed_form_solution():
+    f = _gmm_fit()
+    mu, sigma2 = _gmm_closed_form()
+    assert f.method == "GMM"
+    assert f.parameter_names == ["p1", "p2"]
+    assert f.parameters["p1"] == pytest.approx(mu, rel=1e-9)
+    assert f.parameters["p2"] == pytest.approx(sigma2, rel=1e-9)
+    assert f.nobs == len(_GMM_DATA)
+    assert f.converged
+    # The accessors behave exactly as they do for a fit_gmm() fit.
+    assert f.covariance.shape == (2, 2)
+    assert all(se > 0 for se in f.standard_errors.values())
+    assert f.standard_errors["p1"] == pytest.approx(math.sqrt(f.covariance[0][0]), rel=1e-12)
+    assert f.log_likelihood is None and f.aic is None and f.bic is None
+    assert "j-statistic" in f.summary()
+    with pytest.raises(ValueError, match="no interval surface"):
+        f.confint()
+
+
+def test_a_just_identified_fit_reports_none_for_the_j_statistic_p_value():
+    # Zero degrees of freedom: q == p leaves no over-identifying restriction to test the
+    # specification with, so the ported post_process() writes NaN and this package reports None.
+    # That is correct rather than a defect -- see docs/upstream-csharp-issues.md.
+    assert _gmm_fit().j_stat_pval is None
+
+
+def test_the_j_statistic_never_fails_a_just_identified_fit():
+    # J itself is NOT asserted, deliberately. On a just-identified fit the residual covariance it
+    # is scaled by is theoretically zero, so g' V^-1 g is whatever inverting a numerically singular
+    # matrix gives: measured across these four optimizers, all agreeing on the parameters to 1e-9,
+    # -1.3e-09, 8.6e+19, -7.7e-15 and 0.126 -- and under NelderMead it throws outright from Python,
+    # where the core reports nan rather than failing an otherwise exact fit. THAT is what this pins.
+    mu, _ = _gmm_closed_form()
+    for optimizer in ("BFGS", "NelderMead", "Powell", "MultilevelSingleLinkage"):
+        f = _gmm_fit(optimizer=optimizer)
+        assert f.parameters["p1"] == pytest.approx(mu, rel=1e-5)
+        assert f.j_stat_pval is None
+
+
+def test_two_fit_gmm_moments_runs_are_identical():
+    # There is no generator anywhere in this fit.
+    a, b = _gmm_fit(), _gmm_fit()
+    assert a.parameters == b.parameters
+    assert (a.covariance == b.covariance).all()
+
+
+def test_the_analytic_jacobian_and_the_penalty_both_reach_the_estimator():
+    mu, sigma2 = _gmm_closed_form()
+    analytic = _gmm_fit(jacobian=_gmm_jacobian)
+    assert analytic.parameters["p1"] == pytest.approx(mu, rel=1e-9)
+    assert analytic.parameters["p2"] == pytest.approx(sigma2, rel=1e-9)
+    # A ridge penalty pulling sigma2 towards 1 moves the estimate off the closed form. An ignored
+    # penalty delegate would return the unpenalized answer, which is what this compares against.
+    penalized = _gmm_fit(penalty=lambda p: 0.5 * (p[1] - 1.0) * (p[1] - 1.0))
+    assert _gmm_fit().parameters["p2"] < penalized.parameters["p2"] < 1.0
+
+
+def test_every_strategy_fit_gmm_moments_accepts_finds_the_same_optimum():
+    # The optimizers are covered by the J-statistic test above, which fits with all four.
+    mu, _ = _gmm_closed_form()
+    for strategy in ("OneStep", "TwoStep", "Iterative"):
+        assert _gmm_fit(strategy=strategy).parameters["p1"] == pytest.approx(mu, rel=1e-8)
+
+
+def test_a_moment_condition_function_returning_the_wrong_shape_is_refused_naming_g_and_s():
+    # The exception TYPE says which layer refused: a check in bindings/callback.cpp (the shape of
+    # what the callback handed back) raises RuntimeError, one in callback/gmm.hpp (a length or a
+    # shape only the fit knows) raises ValueError, exactly as the bootstrap delegates' checks do.
+    shape = r"'g'.*moment vector.*'s'.*weighting matrix"
+    with pytest.raises(RuntimeError, match=shape):
+        ch.fit_gmm_moments(lambda p: 1.0, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # A sequence, but not of two things.
+    with pytest.raises(RuntimeError, match=shape):
+        ch.fit_gmm_moments(lambda p: [1.0, 2.0, 3.0], [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # A dict missing one of the two keys.
+    with pytest.raises(RuntimeError, match=shape):
+        ch.fit_gmm_moments(lambda p: {"g": [0.0, 0.0]}, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # The two the wrong way round: `s` holding the moment vector, `g` holding the matrix.
+    with pytest.raises(RuntimeError, match=r"'g' \(the moment vector\) must be a sequence"):
+        ch.fit_gmm_moments(lambda p: (_gmm_moments(p)[1], _gmm_moments(p)[0]),
+                           [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # A moment vector whose length changes between calls, the only way it can disagree with the q
+    # the up-front probe measured.
+    calls = []
+
+    def growing(p):
+        calls.append(1)
+        g, s = _gmm_moments(p)
+        return (g + [0.0] if len(calls) > 1 else g), s
+
+    with pytest.raises(ValueError,
+                       match=r"'g' \(the moment vector\) must hold one value per moment condition"):
+        ch.fit_gmm_moments(growing, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # An `s` that is not square.
+    with pytest.raises(ValueError, match=r"'s' \(the weighting matrix\) must be a square matrix"):
+        ch.fit_gmm_moments(lambda p: (_gmm_moments(p)[0], [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+                           [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # An `s` written flat rather than as a sequence of rows -- the mistake the tuple form invites.
+    with pytest.raises(RuntimeError, match="sequence of ROWS"):
+        ch.fit_gmm_moments(lambda p: (_gmm_moments(p)[0], [1.0, 0.0, 0.0, 1.0]),
+                           [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # A jacobian of the wrong shape: q x p, and the message says which way round.
+    with pytest.raises(ValueError, match="jacobian function must return a 2 x 2 matrix"):
+        _gmm_fit(jacobian=lambda p: [[0.0, 0.0, 0.0]])
+
+
+def test_an_error_raised_inside_each_of_the_three_gmm_delegates_reaches_the_caller():
+    # One test per delegate: a guard wired for one and missing on another is exactly the shape of
+    # bug this invites. The moment conditions are tested twice, because raising on the FIRST call
+    # is caught by the up-front probe (before the estimator exists) and raising later is the case
+    # the guard has to carry -- by then the ported optimizer's catch-all would otherwise swallow it.
+    def boom(p):
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        ch.fit_gmm_moments(boom, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+
+    calls = []
+
+    def boom_later(p):
+        calls.append(1)
+        if len(calls) > 1:
+            raise ValueError("boom later")
+        return _gmm_moments(p)
+
+    with pytest.raises(ValueError, match="boom later"):
+        ch.fit_gmm_moments(boom_later, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+
+    with pytest.raises(ValueError, match="jacobian boom"):
+        _gmm_fit(jacobian=boom_jacobian)
+    with pytest.raises(ValueError, match="penalty boom"):
+        _gmm_fit(penalty=boom_penalty)
+
+
+def boom_jacobian(p):
+    raise ValueError("jacobian boom")
+
+
+def boom_penalty(p):
+    raise ValueError("penalty boom")
+
+
+def test_nan_is_refused_in_s_and_the_jacobian_and_allowed_in_g_and_the_penalty():
+    # The rule, drawn by what each value MEANS to the ported estimator and identical in R: Q() ends
+    # with `is_finite(qv) ? qv : double.max`, so a non-finite `g` (or penalty) is the estimator's
+    # own way of learning a corner of the box is infeasible; nothing tests `s` or the jacobian, so
+    # a nan there would reach the fitted standard errors without a word.
+    nan = float("nan")
+    with pytest.raises(RuntimeError, match=r"'s' \(the weighting matrix\) returned nan"):
+        ch.fit_gmm_moments(lambda p: (_gmm_moments(p)[0], [[nan, nan], [nan, nan]]),
+                           [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    with pytest.raises(RuntimeError, match="jacobian function returned nan"):
+        _gmm_fit(jacobian=lambda p: [[nan, nan], [nan, nan]])
+
+    # `g` may go non-finite at a trial point and the fit still completes: nan only at parameters
+    # far from the optimum, which the optimizer then steps away from.
+    def nan_far_away(p):
+        g, s = _gmm_moments(p)
+        return ([nan, nan] if p[1] > 5.0 else g), s
+
+    mu, sigma2 = _gmm_closed_form()
+    f = ch.fit_gmm_moments(nan_far_away, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    assert f.parameters["p1"] == pytest.approx(mu, rel=1e-9)
+    assert f.parameters["p2"] == pytest.approx(sigma2, rel=1e-9)
+    # And a penalty may too.
+    assert _gmm_fit(penalty=lambda p: nan if p[1] > 5.0 else 0.0).converged
+
+
+def test_fit_gmm_moments_refuses_arguments_that_are_not_what_they_claim():
+    with pytest.raises(TypeError, match="`moment_conditions` must be a function"):
+        ch.fit_gmm_moments("nope", [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    with pytest.raises(ValueError, match="needs `lower` and `upper` bounds"):
+        ch.fit_gmm_moments(_gmm_moments, [5.0, 0.5], sample_size=8)
+    with pytest.raises(ValueError, match="must be the same length; they are 2, 1 and 2"):
+        ch.fit_gmm_moments(_gmm_moments, [5.0, 0.5], [0.0], [10.0, 10.0], 8)
+    with pytest.raises(ValueError, match="`sample_size` must be a single positive whole number"):
+        ch.fit_gmm_moments(_gmm_moments, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0])
+    with pytest.raises(ValueError, match="unknown optimizer 'Nope'"):
+        _gmm_fit(optimizer="Nope")
+    with pytest.raises(ValueError, match="unknown GMM estimation strategy 'Nope'"):
+        _gmm_fit(strategy="Nope")
+    with pytest.raises(TypeError, match="`jacobian` must be a function"):
+        _gmm_fit(jacobian="nope")
+    with pytest.raises(TypeError, match="`penalty` must be a function"):
+        _gmm_fit(penalty="nope")
+
+
+def test_the_model_only_verbs_refuse_a_fit_gmm_moments_fit_by_name():
+    f = _gmm_fit()
+    # All of these need the model a fit_gmm() fit carries; this one has only the user's moment
+    # conditions.
+    with pytest.raises(ValueError, match="no distribution to take a quantile of"):
+        ch.quantile_variance(f, 0.01)
+    with pytest.raises(ValueError, match="needs a fit built from a model"):
+        ch.fit_diagnostics(f)
+    with pytest.raises(ValueError, match="needs a fit built from a model"):
+        f.to_json()
+    with pytest.raises(ValueError, match="needs a fit built from a model"):
+        f.to_model()
+    assert f.model is None

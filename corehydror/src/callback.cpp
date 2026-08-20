@@ -25,9 +25,11 @@
 // Core headers are vendored under src/corehydro_core/include (a symlink into core/; regenerate real files with tools/materialize_core.py).
 #include <cpp11.hpp>
 
+#include <cstddef>
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "corehydro/numerics/support/callback_runner.hpp"
@@ -261,6 +263,111 @@ std::function<std::vector<double>(const std::vector<double>&)> as_numbers_fn(fun
     };
 }
 
+// --- the gmm delegates ------------------------------------------------------------------------
+//
+// The moment condition function returns TWO things at once -- upstream's `(Vector G, Matrix S)`
+// tuple -- so the return shape is the mistake this surface invites, and it is checked here by name
+// rather than left to produce a covariance matrix quietly built out of a moment vector. The R
+// spelling is a list with elements `g` and `s`; corehydropy accepts the tuple `(g, s)` or a dict
+// with the same two keys, and raises the same sentence.
+//
+// NA/NaN IS TREATED DIFFERENTLY BY THE PIECES BELOW, on purpose, drawn by what each value MEANS to
+// the ported estimator (the same rule the bootstrap delegates above follow, and corehydropy's glue
+// draws it identically):
+//
+//   - `g` and the penalty pass NA/NaN through. `Q()` ends with `is_finite(qv) ? qv : double.max`:
+//     a non-finite quadratic form is the ported estimator's own way of learning that a corner of
+//     the parameter box is infeasible, and refusing it here would turn a hard trial point into a
+//     hard error.
+//   - `s` and the jacobian refuse it by name. Nothing in the ported class tests either for
+//     finiteness, so an NA there flows silently into the weighting matrix or the sandwich
+//     covariance and comes back as a fitted number with no warning attached to it.
+const char* kMomentShape =
+    "the moment condition function must return a list with elements 'g' (the moment vector) and "
+    "'s' (the weighting matrix)";
+
+// The element of an R list with this name, or R_NilValue. Read off the names attribute rather than
+// through cpp11's `list::operator[](const char*)`, which raises its own message for a missing name
+// -- and the message for this mistake has to be the one above, naming BOTH elements.
+sexp list_element(sexp lst, const char* want) {
+    sexp names = Rf_getAttrib(lst, R_NamesSymbol);
+    if (TYPEOF(names) != STRSXP) return R_NilValue;
+    for (R_xlen_t i = 0; i < Rf_xlength(names); ++i) {
+        const char* name = CHAR(STRING_ELT(names, i));
+        if (name != nullptr && std::string(name) == want) return VECTOR_ELT(lst, i);
+    }
+    return R_NilValue;
+}
+
+// An R matrix flattened ROW-MAJOR, with its shape. R stores a matrix column-major, so this is a
+// transpose and not a copy: it matters for the jacobian (q x p, rarely symmetric) even though `s`
+// is symmetric and would survive either way. A length-1 numeric with no `dim` is accepted as the
+// 1 x 1 matrix a one-moment-condition model has -- corehydropy accepts a bare number for the same
+// case. Anything else is refused naming the element it came from.
+std::pair<std::vector<double>, std::vector<int>> row_major_matrix(sexp value, const std::string& what) {
+    doubles v = as_doubles(value);
+    sexp dim = Rf_getAttrib(value, R_DimSymbol);
+    int rows, cols;
+    if (TYPEOF(dim) == INTSXP && Rf_xlength(dim) == 2) {
+        rows = INTEGER(dim)[0];
+        cols = INTEGER(dim)[1];
+    } else if (v.size() == 1) {
+        rows = 1;
+        cols = 1;
+    } else {
+        throw std::runtime_error(what + " must be a numeric matrix; it has no dim attribute, so R "
+                                        "sees a plain vector of length " +
+                                 std::to_string(static_cast<long long>(v.size())));
+    }
+    std::vector<double> flat(static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols));
+    for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j) {
+            double x = v[static_cast<R_xlen_t>(j) * rows + i];  // column-major in, row-major out
+            if (ISNAN(x))
+                throw std::runtime_error(what +
+                                         " returned NA or NaN rather than a number; nothing in the "
+                                         "estimator checks it, so it would reach the fitted "
+                                         "standard errors without a word");
+            flat[static_cast<std::size_t>(i) * cols + j] = x;
+        }
+    return {flat, std::vector<int>{rows, cols}};
+}
+
+// f(parameters) -> list(g = <numeric vector>, s = <numeric matrix>). Upstream's
+// `(Vector G, Matrix S) MomentConditionFunction(double[] parameters)`.
+std::function<sup::MomentConditionReturn(const std::vector<double>&)> as_moment_conditions_fn(
+    function f) {
+    return [f](const std::vector<double>& p) mutable {
+        writable::doubles par(static_cast<R_xlen_t>(p.size()));
+        for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
+
+        sexp out = f(par);
+        if (TYPEOF(out) != VECSXP) throw std::runtime_error(kMomentShape);
+        sexp g_element = list_element(out, "g");
+        sexp s_element = list_element(out, "s");
+        if (Rf_isNull(g_element) || Rf_isNull(s_element)) throw std::runtime_error(kMomentShape);
+
+        sup::MomentConditionReturn result;
+        doubles g = as_doubles(g_element);
+        result.g.assign(g.begin(), g.end());  // NA passes: see the note above
+        auto s = row_major_matrix(s_element, "the moment condition function's 's' (the weighting matrix)");
+        result.s = s.first;
+        result.s_rows = s.second[0];
+        result.s_cols = s.second[1];
+        return result;
+    };
+}
+
+// f(parameters) -> a q x p numeric matrix. Upstream's `double[,] JacobianFunction(double[])`.
+std::function<std::pair<std::vector<double>, std::vector<int>>(const std::vector<double>&)>
+as_matrix_fn(function f, std::string what) {
+    return [f, what](const std::vector<double>& p) mutable {
+        writable::doubles par(static_cast<R_xlen_t>(p.size()));
+        for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
+        return row_major_matrix(f(par), what);
+    };
+}
+
 list pack(const sup::CallbackResult& r) {
     writable::doubles values(static_cast<R_xlen_t>(r.values.size()));
     for (std::size_t i = 0; i < r.values.size(); ++i)
@@ -331,6 +438,43 @@ list ch_callback_bootstrap_(std::string options_json, function resample, functio
     cbs.vector_vector = as_numbers_fn(statistic);
     if (!Rf_isNull(jackknife)) cbs.data_index = as_jackknife_fn(function(jackknife));
     return pack(sup::run_callback("bootstrap", "run", options_json, cbs));
+}
+
+// Runs the callback runner's "gmm" group against the delegates upstream's
+// `GeneralizedMethodOfMoments` takes in its delegate-based constructor (C# 143):
+// `moment_conditions(parameters)`, returning `list(g = <numeric vector>, s = <numeric matrix>)`,
+// plus the optional `jacobian(parameters)` (a q x p numeric matrix) and `penalty(parameters)` (one
+// number). Either optional argument may be NULL. The flat result is the layout documented in
+// numerics/support/callback/gmm.hpp; R/callback.R's fit_gmm_moments() reads it back by name into
+// the same corehydro_fit shape fit_gmm() returns.
+//
+// There is no generator on this surface and no RNG anywhere in the fit, so a repeated call returns
+// the identical numbers. INTERRUPTS behave exactly as this file's header describes for the
+// samplers, and for the same reason.
+[[cpp11::register]]
+list ch_callback_gmm_(std::string options_json, function moment_conditions, sexp jacobian,
+                      sexp penalty) {
+    sup::CallbackSet cbs;
+    cbs.moment_conditions = as_moment_conditions_fn(moment_conditions);
+    if (!Rf_isNull(jacobian))
+        cbs.vector_matrix = as_matrix_fn(function(jacobian), "the jacobian function");
+    // The penalty is one number from a parameter vector, the shape as_vector_scalar_fn already
+    // serves -- except that this one must let NA through (see the note above the gmm delegates),
+    // so it is its own small lambda rather than a reuse that would quietly refuse it.
+    if (!Rf_isNull(penalty)) {
+        function penalty_fn(penalty);
+        cbs.vector_scalar = [penalty_fn](const std::vector<double>& p) mutable -> double {
+            writable::doubles par(static_cast<R_xlen_t>(p.size()));
+            for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
+            doubles v = as_doubles(penalty_fn(par));
+            if (v.size() != 1)
+                throw std::runtime_error(
+                    "the penalty function must return a single number; got a value of length " +
+                    std::to_string(static_cast<long long>(v.size())));
+            return v[0];
+        };
+    }
+    return pack(sup::run_callback("gmm", "fit", options_json, cbs));
 }
 
 // Seeds a generator, hands `f` a handle on it together with the `parameters` vector from the

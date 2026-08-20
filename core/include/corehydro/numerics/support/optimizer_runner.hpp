@@ -103,16 +103,10 @@ inline GuardedObjective make_guarded_objective(const Objective& fn, bool maximiz
 
 namespace detail {
 
-inline std::string optim_status_name(opt::OptimizationStatus s) {
-    using S = opt::OptimizationStatus;
-    switch (s) {
-        case S::None: return "None";
-        case S::Success: return "Success";
-        case S::MaximumIterationsReached: return "MaximumIterationsReached";
-        case S::MaximumFunctionEvaluationsReached: return "MaximumFunctionEvaluationsReached";
-        default: return "Failure";
-    }
-}
+// A thin forwarder to the one definition, which lives beside the enum
+// (optimization/support/optimization_status.hpp). This file and fit_runner.hpp each carried an
+// identical copy of the switch until callback/gmm.hpp would have made a third.
+inline std::string optim_status_name(opt::OptimizationStatus s) { return opt::status_name(s); }
 
 inline std::vector<double> spec_vector(const JsonValue& spec, const char* key) {
     if (!spec.contains(key)) return {};

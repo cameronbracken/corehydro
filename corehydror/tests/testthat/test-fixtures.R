@@ -549,6 +549,48 @@ callback_fixture_function <- function(name) {
     # data[-(index + 1)] -- the naive data[-index] is data[-0], which R evaluates to numeric(0),
     # the empty vector, when index is 0, and drops the wrong observation at every later index.
     Jack_LeaveOneOut = function(data, index) data[-(index + 1)],
+    # The gmm catalog (fixtures/callback/gmm.json), upstream's three delegate shapes from
+    # GeneralizedMethodOfMoments's delegate constructor. The model is the just-identified
+    # two-parameter method-of-moments fit of a Normal: theta = (mu, sigma2) and
+    #   g = [mean(x - mu), mean((x - mu)^2 - sigma2)],  S = the covariance of those two
+    # whose unique root -- and so the GMM optimum, since q = p makes g = 0 attainable -- is the
+    # sample mean and the population variance. Arithmetic and an explicit `for` loop only, never
+    # sum() or mean(): both accumulate in extended precision in R where C++, Python and C#
+    # accumulate in double, and one differing bit moves a fitted parameter.
+    Mom_NormalMeanVariance = function(p) {
+      data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+      n <- 8
+      g0 <- 0
+      g1 <- 0
+      s00 <- 0
+      s01 <- 0
+      s11 <- 0
+      for (x in data) {
+        a <- x - p[1]
+        b <- a * a - p[2]
+        g0 <- g0 + a
+        g1 <- g1 + b
+        s00 <- s00 + a * a
+        s01 <- s01 + a * b
+        s11 <- s11 + b * b
+      }
+      list(
+        g = c(g0 / n, g1 / n),
+        # matrix() fills COLUMN-major; this one is symmetric, and the glue transposes anyway.
+        s = matrix(c(s00 / n, s01 / n, s01 / n, s11 / n), nrow = 2, ncol = 2)
+      )
+    },
+    # The analytic Jacobian of Mom_NormalMeanVariance, one ROW per moment condition:
+    # dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.
+    Jac_NormalMeanVariance = function(p) {
+      data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+      acc <- 0
+      for (x in data) acc <- acc + (x - p[1])
+      matrix(c(-1, -2 * acc / 8, 0, -1), nrow = 2, ncol = 2)
+    },
+    # A ridge penalty pulling sigma2 towards 1, carrying its own 1/2 as the ported half-quadratic
+    # convention expects.
+    Pen_SigmaTowardsOne = function(p) 0.5 * (p[2] - 1) * (p[2] - 1),
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1784,8 +1826,8 @@ test_that("oracle fixtures validate", {
       ns <- asNamespace("corehydror")
       for (case in spec$cases) {
         construct <- case$construct
-        # Only "math", "rng", "mcmc" and "bootstrap" have R glue so far; the gmm group arrives with
-        # its own entry point in a later task.
+        # Every group has its own R entry point: ch_callback_math_, ch_rng_probe_,
+        # ch_callback_mcmc_, ch_callback_gmm_ and ch_callback_bootstrap_.
         opts <- callback_options_json(ns, construct$options)
         fn <- callback_fixture_function(construct$callback)
         r <- if (identical(construct$group, "math")) {
@@ -1807,6 +1849,22 @@ test_that("oracle fixtures validate", {
             callback_fixture_function(construct$gradient)
           }
           ns$ch_callback_mcmc_(opts, fn, proposal, gradient)
+        } else if (identical(construct$group, "gmm")) {
+          # `callback` names the MOMENT CONDITION function -- this group's required delegate, its
+          # counterpart of the mcmc group's log-likelihood -- and the two optional ones have keys
+          # of their own. An absent key stays NULL, which is what "the ported numerical Jacobian"
+          # and "no penalty" mean.
+          jacobian <- if (is.null(construct$jacobian)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$jacobian)
+          }
+          penalty <- if (is.null(construct$penalty)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$penalty)
+          }
+          ns$ch_callback_gmm_(opts, fn, jacobian, penalty)
         } else if (identical(construct$group, "bootstrap")) {
           # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
           # counterpart of the mcmc group's log-likelihood -- and the other three have keys of

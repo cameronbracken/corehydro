@@ -18,6 +18,24 @@ namespace corehydro::numerics::support {
 
 using corehydro::models::spec::JsonValue;
 
+// What a GMM moment-condition callback returns: upstream's `(Vector G, Matrix S)` tuple
+// (GeneralizedMethodOfMoments.cs's MomentConditionFunction delegate), carried across the binding
+// boundary in the plainest shape each host language can build. `g` is the mean moment-condition
+// vector, length q; `s` is their q x q covariance, FLATTENED ROW-MAJOR with its own shape in
+// `s_rows`/`s_cols`.
+//
+// The shape travels with the value rather than being assumed from q for one reason: the wrong
+// shape is the mistake this callback invites, and reporting "your s is 2 x 3" is a different
+// quality of error from "your s has 6 entries". R hands back a COLUMN-major matrix and its glue
+// transposes; Python's nested sequence is already row-major. Neither language's converter may
+// guess -- see the note on each.
+struct MomentConditionReturn {
+    std::vector<double> g;
+    std::vector<double> s;
+    int s_rows = 0;
+    int s_cols = 0;
+};
+
 // Every callback a group may need. A caller fills only the members its group uses; the rest stay
 // empty and each group validates the ones it requires. One struct rather than a variant keeps the
 // four bindings' call sites uniform: build the set, name the group and method, call.
@@ -43,6 +61,8 @@ struct CallbackSet {
     // f(theta) -> matrix, row-major with dims. GMM jacobian, pointwise moment conditions.
     std::function<std::pair<std::vector<double>, std::vector<int>>(const std::vector<double>&)>
         vector_matrix;
+    // f(theta) -> (g, s). GMM moment conditions, upstream's MomentConditionFunction.
+    std::function<MomentConditionReturn(const std::vector<double>&)> moment_conditions;
 };
 
 // Flat result surface every binding and every fixture assertion reads. `dims` takes one of three

@@ -967,10 +967,350 @@ int main() {
         }
     }
 
-    // The group Task 7 fills in is reachable but explicitly unimplemented.
+    // --- gmm group ---------------------------------------------------------------------------
+    //
+    // Analytic/structural properties only (the repo convention for a ctest); the C#-pinned oracle
+    // values for this group live in fixtures/callback/gmm.json. The model throughout is the
+    // just-identified two-parameter method-of-moments fit of a Normal: theta = (mu, sigma2) and
+    //
+    //   g(theta) = [ mean(x - mu), mean((x - mu)^2 - sigma2) ]
+    //
+    // whose unique root -- and therefore the GMM optimum, since q = p makes g(theta-hat) = 0
+    // attainable -- is the sample mean and the population variance. That closed form is what makes
+    // this a real test rather than a regression against whatever the optimizer happened to return.
+    // Arithmetic and an explicit loop only, so all four runners agree bit for bit.
     {
+        const std::vector<double> data = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+        const double n = static_cast<double>(data.size());
+        double mean_hat = 0.0;
+        for (double x : data) mean_hat += x;
+        mean_hat /= n;
+        double variance_hat = 0.0;
+        for (double x : data) variance_hat += (x - mean_hat) * (x - mean_hat);
+        variance_hat /= n;
+
+        auto moments = [data, n](const std::vector<double>& p) {
+            sup::MomentConditionReturn out;
+            double g0 = 0.0, g1 = 0.0, s00 = 0.0, s01 = 0.0, s11 = 0.0;
+            for (double x : data) {
+                double a = x - p[0];
+                double b = a * a - p[1];
+                g0 += a;
+                g1 += b;
+                s00 += a * a;
+                s01 += a * b;
+                s11 += b * b;
+            }
+            out.g = {g0 / n, g1 / n};
+            out.s = {s00 / n, s01 / n, s01 / n, s11 / n};
+            out.s_rows = 2;
+            out.s_cols = 2;
+            return out;
+        };
+        // The analytic Jacobian D = dg/dtheta of the same moment conditions, row-major 2 x 2.
+        auto jacobian = [data, n](const std::vector<double>& p) {
+            double acc = 0.0;
+            for (double x : data) acc += x - p[0];
+            return std::make_pair(std::vector<double>{-1.0, 0.0, -2.0 * acc / n, -1.0},
+                                  std::vector<int>{2, 2});
+        };
+
         sup::CallbackSet cbs;
-        CHECK_THROWS_MSG(sup::run_callback("gmm", "estimate", "{}", cbs), "Task 7");
+        cbs.moment_conditions = moments;
+
+        const std::string options =
+            R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001], "upper": [10.0, 10.0],
+                "sample_size": 8})";
+
+        sup::CallbackResult r1 = sup::run_callback("gmm", "fit", options, cbs);
+        sup::CallbackResult r2 = sup::run_callback("gmm", "fit", options, cbs);
+        // Bit-for-bit reproducible: there is no RNG anywhere in this fit. Compared value by value
+        // rather than with ==, because `j_stat_pval` is a structural NaN and NaN != NaN.
+        CHECK_EQ(r1.values.size(), r2.values.size());
+        bool identical = r1.names == r2.names;
+        for (std::size_t i = 0; i < r1.values.size() && identical; ++i)
+            identical = std::isnan(r1.values[i]) ? std::isnan(r2.values[i])
+                                                 : r1.values[i] == r2.values[i];
+        CHECK_TRUE(identical);
+        CHECK_EQ(r1.status, std::string("Success"));
+
+        auto named = [](const sup::CallbackResult& r, const std::string& want) {
+            for (std::size_t i = 0; i < r.names.size(); ++i)
+                if (r.names[i] == want) return r.values.at(i);
+            throw std::runtime_error("no result named " + want);
+        };
+
+        // The closed form, which is the whole point of choosing this problem.
+        CHECK_NEAR(named(r1, "parameter[0]"), mean_hat, 1e-6);
+        CHECK_NEAR(named(r1, "parameter[1]"), variance_hat, 1e-6);
+        // A just-identified fit (q = p) has zero degrees of freedom, so Hansen's J cannot test the
+        // specification: the p-value is structurally NaN. That is CORRECT, not a defect -- see
+        // docs/upstream-csharp-issues.md and fixtures/estimation/gmm_bulletin17c_smoke.json, which
+        // pins the same NaN for the B17C fit.
+        //
+        // J ITSELF IS NOT ASSERTED, and deliberately not: on a just-identified fit the moment
+        // residual covariance V = S - D(D'S^-1 D)^-1 D' is THEORETICALLY ZERO, so g' V^-1 g is
+        // whatever inverting a numerically singular matrix happens to give. Measured on this one
+        // problem, over the four optimizers, all converging to the same parameters to 1e-9:
+        // -1.3e-09, 8.6e+19, -7.7e-15, 0.126 -- and it THROWS outright from R and Python under
+        // NelderMead, where run_gmm reports NaN instead of failing the fit. Any bound on it would
+        // be a fiction. What is asserted is what is meaningful: the fit succeeds, the p-value is
+        // NaN, and the degrees of freedom are zero.
+        CHECK_EQ(named(r1, "degree_of_freedom"), 0.0);
+        CHECK_TRUE(std::isnan(named(r1, "j_stat_pval")));
+        // Standard errors and a covariance matrix come back, shaped {p, p}.
+        CHECK_EQ(r1.dims.size(), std::size_t{2});
+        CHECK_EQ(r1.dims.at(0), 2);
+        CHECK_EQ(r1.dims.at(1), 2);
+        CHECK_TRUE(named(r1, "standard_error[0]") > 0.0);
+        CHECK_TRUE(named(r1, "standard_error[1]") > 0.0);
+        CHECK_NEAR(named(r1, "covariance[0,0]"),
+                   named(r1, "standard_error[0]") * named(r1, "standard_error[0]"), 1e-12);
+        CHECK_EQ(named(r1, "correlation[0,0]"), 1.0);
+        CHECK_EQ(named(r1, "sample_size"), 8.0);
+        CHECK_EQ(named(r1, "number_of_moment_conditions"), 2.0);
+
+        // The analytic Jacobian replaces the ported numerical one, and lands on the same optimum
+        // -- the closed form is the same whichever way the gradient was computed.
+        {
+            sup::CallbackSet t = cbs;
+            t.vector_matrix = jacobian;
+            sup::CallbackResult r = sup::run_callback("gmm", "fit", options, t);
+            CHECK_NEAR(named(r, "parameter[0]"), mean_hat, 1e-6);
+            CHECK_NEAR(named(r, "parameter[1]"), variance_hat, 1e-6);
+        }
+
+        // A penalty pulling sigma2 towards 1 moves the estimate away from the closed form and
+        // towards the target -- which is what proves the delegate is reached at all.
+        {
+            sup::CallbackSet t = cbs;
+            t.vector_scalar = [](const std::vector<double>& p) {
+                double d = p[1] - 1.0;
+                return 0.5 * d * d;
+            };
+            sup::CallbackResult r = sup::run_callback("gmm", "fit", options, t);
+            CHECK_TRUE(named(r, "parameter[1]") > variance_hat);
+            CHECK_TRUE(named(r, "parameter[1]") < 1.0);
+        }
+
+        // Every optimizer and every strategy the verb accepts runs and finds the same optimum.
+        for (const char* optimizer : {"BFGS", "NelderMead", "Powell", "MultilevelSingleLinkage"}) {
+            std::string opts =
+                R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001], "upper": [10.0, 10.0],
+                    "sample_size": 8, "optimizer": ")" +
+                std::string(optimizer) + R"("})";
+            sup::CallbackResult r = sup::run_callback("gmm", "fit", opts, cbs);
+            CHECK_NEAR(named(r, "parameter[0]"), mean_hat, 1e-4);
+            // Whatever the optimizer, and whatever inverting a singular V gives (see above), an
+            // uncomputable J-statistic must not fail the fit.
+            CHECK_TRUE(std::isnan(named(r, "j_stat_pval")));
+        }
+        for (const char* strategy : {"OneStep", "TwoStep", "Iterative"}) {
+            std::string opts =
+                R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001], "upper": [10.0, 10.0],
+                    "sample_size": 8, "strategy": ")" +
+                std::string(strategy) + R"("})";
+            sup::CallbackResult r = sup::run_callback("gmm", "fit", opts, cbs);
+            CHECK_NEAR(named(r, "parameter[0]"), mean_hat, 1e-6);
+        }
+
+        // A host exception inside EACH of the three delegates reaches the caller. One test per
+        // delegate: a guard wired for one and missing on another is exactly the shape of bug this
+        // invites, and a test that only makes the moment conditions throw cannot catch it.
+        {
+            // Throwing on the FIRST call is caught by the up-front probe, before the estimator
+            // exists, so it reaches the caller without the guard being involved at all. Both are
+            // worth pinning, and they are different paths.
+            sup::CallbackSet t = cbs;
+            t.moment_conditions =
+                [](const std::vector<double>&) -> sup::MomentConditionReturn { throw HostError(); };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+
+            // And throwing on a LATER call, which is the one the guard has to carry: by then the
+            // estimator is running, its optimizer swallows everything, and only the guard can get
+            // the message back out.
+            int calls = 0;
+            t.moment_conditions = [&calls, moments](const std::vector<double>& p)
+                -> sup::MomentConditionReturn {
+                if (++calls > 1) throw HostError();
+                return moments(p);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+        }
+        {
+            sup::CallbackSet t = cbs;
+            t.vector_matrix = [](const std::vector<double>&)
+                -> std::pair<std::vector<double>, std::vector<int>> { throw HostError(); };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+        }
+        {
+            sup::CallbackSet t = cbs;
+            t.vector_scalar = [](const std::vector<double>&) -> double { throw HostError(); };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+        }
+
+        // --- one abort state across all three delegates -------------------------------------
+        //
+        // THE property the shared state buys, and nothing else in this file proves it for this
+        // group: once ANY delegate throws, none of the others may be entered again, because the
+        // ported estimator does not know it is unwinding -- its optimizer catches everything and
+        // walks on -- and would otherwise re-enter the host with an unwind already pending. Each
+        // block makes ONE delegate throw and gives ANOTHER a body that reports being entered
+        // afterwards, so a guard given a private abort state fails here loudly, with the re-entry
+        // message rather than the host one.
+        {
+            // The moment conditions throw; the Jacobian reports re-entry (get_gradient calls
+            // get_g and then get_jacobian, in that order).
+            bool aborted = false;
+            sup::CallbackSet t = cbs;
+            t.moment_conditions = [&aborted](const std::vector<double>&)
+                -> sup::MomentConditionReturn {
+                aborted = true;
+                throw HostError();
+            };
+            t.vector_matrix = [&aborted, jacobian](const std::vector<double>& p) {
+                if (aborted)
+                    throw std::runtime_error("the jacobian function was re-entered after the abort");
+                return jacobian(p);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+        }
+        {
+            // The Jacobian throws; the moment conditions report re-entry.
+            bool aborted = false;
+            sup::CallbackSet t = cbs;
+            t.vector_matrix = [&aborted](const std::vector<double>&)
+                -> std::pair<std::vector<double>, std::vector<int>> {
+                aborted = true;
+                throw HostError();
+            };
+            t.moment_conditions = [&aborted, moments](const std::vector<double>& p) {
+                if (aborted)
+                    throw std::runtime_error(
+                        "the moment condition function was re-entered after the abort");
+                return moments(p);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+        }
+        {
+            // The penalty throws on its SECOND call (the first happens inside the same Q() the
+            // moment conditions were just evaluated for); the moment conditions report re-entry.
+            int penalty_calls = 0;
+            bool aborted = false;
+            sup::CallbackSet t = cbs;
+            t.vector_scalar = [&penalty_calls, &aborted](const std::vector<double>&) -> double {
+                if (++penalty_calls > 1) {
+                    aborted = true;
+                    throw HostError();
+                }
+                return 0.0;
+            };
+            t.moment_conditions = [&aborted, moments](const std::vector<double>& p) {
+                if (aborted)
+                    throw std::runtime_error(
+                        "the moment condition function was re-entered after the abort");
+                return moments(p);
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t), "host language error");
+        }
+
+        // Wrong-shaped returns are refused by name rather than left to corrupt a fit. Each check
+        // lives inside the guarded function, so it aborts the run exactly as a host-language
+        // error does, and each names the element it is talking about.
+        {
+            // The moment vector changes length between calls -- the only way it can disagree with
+            // the q the up-front probe measured.
+            int calls = 0;
+            sup::CallbackSet t = cbs;
+            t.moment_conditions = [&calls, moments](const std::vector<double>& p) {
+                sup::MomentConditionReturn out = moments(p);
+                if (++calls > 1) out.g.push_back(0.0);
+                return out;
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t),
+                             "'g' (the moment vector) must hold one value per moment condition");
+        }
+        {
+            sup::CallbackSet t = cbs;
+            t.moment_conditions = [moments](const std::vector<double>& p) {
+                sup::MomentConditionReturn out = moments(p);
+                out.s_rows = 1;
+                out.s_cols = 4;
+                return out;
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t),
+                             "'s' (the weighting matrix) must be a square matrix");
+        }
+        {
+            // An empty moment vector: caught by the up-front probe, before the estimator exists.
+            sup::CallbackSet t;
+            t.moment_conditions = [](const std::vector<double>&) {
+                return sup::MomentConditionReturn{};
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t),
+                             "must return at least one moment condition");
+        }
+        {
+            // A Jacobian of the wrong shape. q x p, not p x q -- and the message says which.
+            sup::CallbackSet t = cbs;
+            t.vector_matrix = [](const std::vector<double>&) {
+                return std::make_pair(std::vector<double>{1.0, 2.0, 3.0}, std::vector<int>{1, 3});
+            };
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", options, t),
+                             "jacobian function must return a 2 x 2 matrix");
+        }
+        {
+            // A declared moment-condition count that disagrees with what the callback returns.
+            CHECK_THROWS_MSG(
+                sup::run_callback("gmm", "fit",
+                                  R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001],
+                                      "upper": [10.0, 10.0], "sample_size": 8,
+                                      "number_of_moment_conditions": 3})",
+                                  cbs),
+                "returned 2");
+        }
+
+        // Dispatch and validation errors.
+        {
+            sup::CallbackSet empty;
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "nope", "{}", cbs), "unknown gmm method");
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", "{}", empty),
+                             "requires a moment condition function");
+            CHECK_THROWS_MSG(sup::run_callback("gmm", "fit", "{}", cbs),
+                             "requires the option 'initial'");
+            CHECK_THROWS_MSG(
+                sup::run_callback("gmm", "fit",
+                                  R"({"initial": [5.0, 0.5], "lower": [0.0], "upper": [10.0, 10.0],
+                                      "sample_size": 8})",
+                                  cbs),
+                "same length");
+            CHECK_THROWS_MSG(
+                sup::run_callback("gmm", "fit",
+                                  R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001],
+                                      "upper": [10.0, 10.0]})",
+                                  cbs),
+                "requires the option 'sample_size'");
+            CHECK_THROWS_MSG(
+                sup::run_callback("gmm", "fit",
+                                  R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001],
+                                      "upper": [10.0, 10.0], "sample_size": 0})",
+                                  cbs),
+                "sample_size");
+            CHECK_THROWS_MSG(
+                sup::run_callback("gmm", "fit",
+                                  R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001],
+                                      "upper": [10.0, 10.0], "sample_size": 8,
+                                      "optimizer": "Nope"})",
+                                  cbs),
+                "unknown optimizer");
+            CHECK_THROWS_MSG(
+                sup::run_callback("gmm", "fit",
+                                  R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001],
+                                      "upper": [10.0, 10.0], "sample_size": 8,
+                                      "strategy": "Nope"})",
+                                  cbs),
+                "unknown GMM estimation strategy");
+        }
     }
 
     return chtest::summary("callback_runner");
