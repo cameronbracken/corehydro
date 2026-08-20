@@ -571,6 +571,7 @@ def bootstrap_custom(
     seed: int = 12345,
     parameters: Sequence[float] | None = None,
     inner_replicates: int | None = None,
+    max_retries: int | None = None,
 ) -> dict:
     """Bootstrap your own statistic.
 
@@ -626,6 +627,11 @@ def bootstrap_custom(
     inner_replicates : int, optional
         Inner replicates for ``ci_method="BootstrapT"``, ignored by every other method. Left unset,
         the ported default (300) applies.
+    max_retries : int, optional
+        The maximum number of times a single failed replicate is retried before it is counted in
+        ``failed_replicates``. Left unset, the ported default (``MaxRetries``, 20) applies. Each
+        retry is another crossing into Python, so lowering it caps the worst case rather than
+        changing the typical one.
 
     Returns
     -------
@@ -641,10 +647,10 @@ def bootstrap_custom(
     **How many times your functions are called.** ``replicates`` calls of each of ``resample``,
     ``fit`` and ``statistic``, plus one extra ``statistic`` call to learn how many values it
     returns and one ``fit`` call when ``parameters`` is not supplied. A failed replicate is retried
-    up to 20 times, and ``"BCa"`` adds one ``jackknife`` + ``fit`` + ``statistic`` per observation.
-    ``"BootstrapT"`` is the expensive one: it multiplies the resample and fit counts by
-    ``inner_replicates``, so the ported defaults (10,000 x 300) would be three million crossings
-    back into Python. Start small.
+    up to ``max_retries`` times (20 by default), and ``"BCa"`` adds one ``jackknife`` + ``fit`` +
+    ``statistic`` per observation. ``"BootstrapT"`` is the expensive one: it multiplies the resample
+    and fit counts by ``inner_replicates``, so the ported defaults (10,000 x 300) would be three
+    million crossings back into Python. Start small.
 
     **Reproducing a run in R.** The draws come from the core's seeded Mersenne Twister, so an
     identical ``bootstrap_custom()`` call in R resamples the identical observations. The numbers
@@ -718,6 +724,10 @@ def bootstrap_custom(
         if int(inner_replicates) < 1:
             raise ValueError("`inner_replicates` must be a single positive whole number")
         options["inner_replicates"] = int(inner_replicates)
+    if max_retries is not None:
+        if int(max_retries) < 1:
+            raise ValueError("`max_retries` must be a single positive whole number")
+        options["max_retries"] = int(max_retries)
 
     res = _core.callback_bootstrap(
         json.dumps(options), resample, fit, statistic, jackknife

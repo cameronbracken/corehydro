@@ -506,8 +506,11 @@ mcmc_posterior <- function(
 #'     parameter vector: one or more, the same count every time.}
 #'   \item{`jackknife(data, index)`}{Returns `data` with observation `index` left out. `index`
 #'     counts from 0, matching the ported delegate, so the R spelling is `data[-(index + 1)]` --
-#'     `data[-index]` returns the sample untouched at `index = 0` and is refused by name. Only the
-#'     `"BCa"` method uses it; every other method ignores it.}
+#'     the naive `data[-index]` is wrong for every value of `index`, not just one: at `index = 0`
+#'     it is `data[-0]`, which R evaluates to `numeric(0)`, the EMPTY vector, and that is refused
+#'     by name; at every later index it is the right LENGTH but drops the wrong observation (one
+#'     off), which nothing can catch. Only the `"BCa"` method uses it; every other method ignores
+#'     it.}
 #' }
 #'
 #' @param data the original sample: a non-empty numeric vector.
@@ -526,6 +529,10 @@ mcmc_posterior <- function(
 #'   default, uses `fit(data)`, which is what the bootstrap ordinarily means by it.
 #' @param inner_replicates inner replicates for `ci_method = "BootstrapT"`, ignored by every other
 #'   method. `NULL` leaves the ported default (300) in force.
+#' @param max_retries the maximum number of times a single failed replicate is retried before it
+#'   is counted in `failed_replicates`. `NULL` leaves the ported default (`MaxRetries`, 20) in
+#'   force. Each retry is another crossing into R, so lowering it caps the worst case rather than
+#'   changing the typical one.
 #' @return A list with, per statistic, `estimate` (the statistic of `parameters`, not a bootstrap
 #'   average), `lower`, `upper`, `standard_error`, `mean` (the mean over valid replicates, so
 #'   `mean - estimate` is the bias estimate) and `valid_count`; the same first three for the fitted
@@ -534,10 +541,10 @@ mcmc_posterior <- function(
 #' @section How many times your functions are called:
 #' `replicates` calls of each of `resample`, `fit` and `statistic`, plus one extra `statistic` call
 #' to learn how many values it returns and one `fit` call when `parameters` is not supplied. A
-#' failed replicate is retried up to 20 times, and `"BCa"` adds one `jackknife` + `fit` +
-#' `statistic` per observation. `"BootstrapT"` is the expensive one: it multiplies the resample and
-#' fit counts by `inner_replicates`, so the ported defaults (10,000 x 300) would be three million
-#' crossings back into R. Start small.
+#' failed replicate is retried up to `max_retries` times (20 by default), and `"BCa"` adds one
+#' `jackknife` + `fit` + `statistic` per observation. `"BootstrapT"` is the expensive one: it
+#' multiplies the resample and fit counts by `inner_replicates`, so the ported defaults (10,000 x
+#' 300) would be three million crossings back into R. Start small.
 #' @section Reproducing a run in Python:
 #' The draws come from the core's seeded Mersenne Twister, so an identical `bootstrap_custom()`
 #' call in Python resamples the identical observations. The numbers your functions compute from
@@ -580,7 +587,8 @@ bootstrap_custom <- function(
   ci_method = c("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa"),
   seed = 12345,
   parameters = NULL,
-  inner_replicates = NULL
+  inner_replicates = NULL,
+  max_retries = NULL
 ) {
   if (!is.numeric(data) || length(data) == 0L || !all(is.finite(data))) {
     stop("`data` must be a non-empty numeric vector of finite values", call. = FALSE)
@@ -626,6 +634,12 @@ bootstrap_custom <- function(
       stop("`inner_replicates` must be a single positive whole number", call. = FALSE)
     }
     opts$inner_replicates <- as.integer(inner_replicates)
+  }
+  if (!is.null(max_retries)) {
+    if (!is.numeric(max_retries) || length(max_retries) != 1L || max_retries < 1) {
+      stop("`max_retries` must be a single positive whole number", call. = FALSE)
+    }
+    opts$max_retries <- as.integer(max_retries)
   }
 
   res <- ch_callback_bootstrap_(to_spec_json(opts), resample, fit, statistic, jackknife)

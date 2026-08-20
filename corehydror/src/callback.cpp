@@ -243,7 +243,9 @@ std::function<std::vector<double>(const std::vector<double>&, int)> as_jackknife
                 throw std::runtime_error(
                     "the jackknife function returned NA or NaN rather than a number; `index` "
                     "counts from 0, so the sample without it is data[-(index + 1)] -- note that "
-                    "data[-index] is data[0], the empty vector, when index is 0");
+                    "the naive data[-index] is data[-0], which R evaluates to numeric(0), the "
+                    "empty vector, when index is 0, and drops the wrong observation at every "
+                    "later index");
         return result;
     };
 }

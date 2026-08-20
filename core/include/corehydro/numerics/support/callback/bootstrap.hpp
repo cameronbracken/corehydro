@@ -37,7 +37,9 @@
 // workflow here: BootstrapT runs the studentized one, everything else the regular `Run()`. A user
 // who asks for BootstrapT with the ported 300 inner replicates and 10,000 outer ones is asking for
 // three million crossings back into R or Python, which is why both wrappers document the cost and
-// expose `inner_replicates`.
+// expose `inner_replicates`. `max_retries` (upstream's `MaxRetries`, also a public property, 20 by
+// default) multiplies host callback crossings the same way a failed replicate does, so both
+// wrappers expose it too, named identically to this key.
 //
 // BCa IS CHECKED UP FRONT, and that is the one place this group deliberately runs a check EARLIER
 // than the ported class does. C#'s `ValidateConfidenceIntervalRequest` refuses BCa without a

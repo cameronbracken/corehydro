@@ -850,6 +850,28 @@ def test_bootstrap_t_runs_the_studentized_workflow():
     assert res["lower"][0] < res["upper"][0]
 
 
+def test_max_retries_reaches_the_ported_class_and_bounds_the_retry_count():
+    with pytest.raises(ValueError, match="`max_retries` must be a single positive whole number"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            replicates=20, seed=12345, max_retries=0)
+    # A fit that always returns a non-finite parameter is a failed replicate by the ported
+    # class's own vocabulary (see the nan-symmetry test above), so it is retried up to
+    # `max_retries` times and then given up on -- proving the knob reaches C++ rather than being
+    # silently ignored, by counting exactly how many times `fit` is called.
+    fit_calls = []
+
+    def always_fails(data):
+        fit_calls.append(1)
+        return [float("nan")]
+
+    res = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, always_fails, _boot_statistic,
+        replicates=5, seed=12345, parameters=[5.0], max_retries=3,
+    )
+    assert res["failed_replicates"] == 5
+    assert len(fit_calls) == 5 * 3
+
+
 def test_a_statistic_of_more_than_one_value_is_labelled_per_statistic():
     res = ch.bootstrap_custom(
         _BOOT_DATA, _boot_resample, _boot_fit, lambda p: [p[0], p[0] * p[0]],

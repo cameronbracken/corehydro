@@ -831,6 +831,29 @@ test_that("every confidence interval method runs and brackets the estimate", {
   expect_true(res$lower[[1]] < res$upper[[1]])
 })
 
+test_that("max_retries reaches the ported class and bounds the retry count", {
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                     replicates = 20, seed = 12345, max_retries = 0),
+    "`max_retries` must be a single positive whole number"
+  )
+  # A fit that always returns a non-finite parameter is a failed replicate by the ported class's
+  # own vocabulary (see the NA/NaN symmetry test above), so it is retried up to `max_retries`
+  # times and then given up on -- proving the knob reaches C++ rather than being silently ignored,
+  # by counting exactly how many times `fit` is called.
+  fit_calls <- 0L
+  always_fails <- function(data) {
+    fit_calls <<- fit_calls + 1L
+    NA_real_
+  }
+  res <- bootstrap_custom(
+    boot_data, boot_resample, always_fails, boot_statistic,
+    replicates = 5, seed = 12345, parameters = 5, max_retries = 3
+  )
+  expect_identical(res$failed_replicates, 5L)
+  expect_identical(fit_calls, 5L * 3L)
+})
+
 test_that("a statistic of more than one value is labelled per statistic", {
   res <- bootstrap_custom(
     data = boot_data, resample = boot_resample, fit = boot_fit,
@@ -861,15 +884,38 @@ test_that("wrong-shaped returns are refused by name", {
                      replicates = 20, seed = 12345, ci_method = "BCa"),
     "must return fewer values than it was given"
   )
-  # The 0-based index trap, in the spelling R invites: `data[-index]` is `data[0]`, the EMPTY
-  # vector, when index is 0 -- and for every later index it silently drops the wrong observation.
-  # The empty half is caught by name; the off-by-one half is why both packages document the base.
+  # The 0-based index trap, in the spelling R invites: `data[-index]` is `data[-0]`, which R
+  # evaluates to `numeric(0)`, the EMPTY vector, when index is 0 -- and for every later index it
+  # silently drops the wrong observation instead. The empty half is caught by name; the off-by-one
+  # half is why both packages document the base (see the test below, which pins the R semantics
+  # directly).
   expect_error(
     bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
                      jackknife = function(data, index) data[-index],
                      replicates = 20, seed = 12345, ci_method = "BCa"),
     "jackknife function must return at least one value"
   )
+})
+
+test_that("the naive `data[-index]` jackknife trap is exactly what the docs say it is", {
+  # This pins the R language semantics behind the docs' warning under `?bootstrap_custom`, so a
+  # future edit to that prose has something executable to disagree with.
+  data <- c(10, 20, 30, 40)
+
+  # At index = 0, the naive spelling is `data[-0]`, which R evaluates to the EMPTY vector -- NOT
+  # the sample left untouched. This is the half the guarded jackknife catches by name.
+  expect_identical(data[-0], numeric(0))
+
+  # At every later index, `data[-index]` is the right LENGTH (so nothing can catch it), but it
+  # drops the WRONG observation: `index` is 0-based, so leaving out the value at 0-based index 1
+  # (the second element, 20) is `data[-(1 + 1)]`, while the naive `data[-1]` drops the first
+  # element (10) instead.
+  naive <- data[-1]
+  correct <- data[-(1 + 1)]
+  expect_length(naive, length(data) - 1L)
+  expect_identical(naive, c(20, 30, 40))
+  expect_identical(correct, c(10, 30, 40))
+  expect_false(identical(naive, correct))
 })
 
 test_that("a resample or jackknife returning NA is refused, and a fit or statistic returning NA is not", {

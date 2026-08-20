@@ -546,7 +546,8 @@ callback_fixture_function <- function(name) {
     Stat_Identity = function(parameters) parameters,
     Stat_MeanAndSquare = function(parameters) c(parameters[1], parameters[1] * parameters[1]),
     # `index` counts from 0, as the ported delegate does, so the sample without it is
-    # data[-(index + 1)] -- data[-index] is data[0], the empty vector, when index is 0.
+    # data[-(index + 1)] -- the naive data[-index] is data[-0], which R evaluates to numeric(0),
+    # the empty vector, when index is 0, and drops the wrong observation at every later index.
     Jack_LeaveOneOut = function(data, index) data[-(index + 1)],
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a

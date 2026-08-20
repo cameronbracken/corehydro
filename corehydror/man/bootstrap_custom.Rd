@@ -15,7 +15,8 @@ bootstrap_custom(
   ci_method = c("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa"),
   seed = 12345,
   parameters = NULL,
-  inner_replicates = NULL
+  inner_replicates = NULL,
+  max_retries = NULL
 )
 }
 \arguments{
@@ -43,6 +44,11 @@ default, uses \code{fit(data)}, which is what the bootstrap ordinarily means by 
 
 \item{inner_replicates}{inner replicates for \code{ci_method = "BootstrapT"}, ignored by every other
 method. \code{NULL} leaves the ported default (300) in force.}
+
+\item{max_retries}{the maximum number of times a single failed replicate is retried before it
+is counted in \code{failed_replicates}. \code{NULL} leaves the ported default (\code{MaxRetries}, 20) in
+force. Each retry is another crossing into R, so lowering it caps the worst case rather than
+changing the typical one.}
 }
 \value{
 A list with, per statistic, \code{estimate} (the statistic of \code{parameters}, not a bootstrap
@@ -75,8 +81,11 @@ the same count every time.}
 parameter vector: one or more, the same count every time.}
 \item{\code{jackknife(data, index)}}{Returns \code{data} with observation \code{index} left out. \code{index}
 counts from 0, matching the ported delegate, so the R spelling is \code{data[-(index + 1)]} --
-\code{data[-index]} returns the sample untouched at \code{index = 0} and is refused by name. Only the
-\code{"BCa"} method uses it; every other method ignores it.}
+the naive \code{data[-index]} is wrong for every value of \code{index}, not just one: at \code{index = 0}
+it is \code{data[-0]}, which R evaluates to \code{numeric(0)}, the EMPTY vector, and that is refused
+by name; at every later index it is the right LENGTH but drops the wrong observation (one
+off), which nothing can catch. Only the \code{"BCa"} method uses it; every other method ignores
+it.}
 }
 }
 
@@ -84,10 +93,10 @@ counts from 0, matching the ported delegate, so the R spelling is \code{data[-(i
 
 \code{replicates} calls of each of \code{resample}, \code{fit} and \code{statistic}, plus one extra \code{statistic} call
 to learn how many values it returns and one \code{fit} call when \code{parameters} is not supplied. A
-failed replicate is retried up to 20 times, and \code{"BCa"} adds one \code{jackknife} + \code{fit} +
-\code{statistic} per observation. \code{"BootstrapT"} is the expensive one: it multiplies the resample and
-fit counts by \code{inner_replicates}, so the ported defaults (10,000 x 300) would be three million
-crossings back into R. Start small.
+failed replicate is retried up to \code{max_retries} times (20 by default), and \code{"BCa"} adds one
+\code{jackknife} + \code{fit} + \code{statistic} per observation. \code{"BootstrapT"} is the expensive one: it
+multiplies the resample and fit counts by \code{inner_replicates}, so the ported defaults (10,000 x
+300) would be three million crossings back into R. Start small.
 }
 
 \section{Reproducing a run in Python}{
