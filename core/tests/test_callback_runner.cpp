@@ -1114,6 +1114,80 @@ int main() {
             CHECK_NEAR(named(r, "parameter[0]"), mean_hat, 1e-6);
         }
 
+        // The OVER-IDENTIFIED companion, q = 3 > p = 2: the same Normal model and the same eight
+        // observations with mean((x - mu)^3) added as a third moment condition, which is zero for
+        // a Normal and so leaves the model itself unchanged. Everything above is just-identified,
+        // and three things are reachable ONLY from here -- a non-zero degrees of freedom, the
+        // chi-squared p-value branch of post_process(), and the estimator's refusal of OneStep.
+        // The C#-pinned oracle for this same fit is fixtures/callback/gmm.json's
+        // over_identified_three_moments.
+        {
+            auto moments3 = [data, n](const std::vector<double>& p) {
+                sup::MomentConditionReturn out;
+                double g0 = 0.0, g1 = 0.0, g2 = 0.0;
+                double s00 = 0.0, s01 = 0.0, s02 = 0.0, s11 = 0.0, s12 = 0.0, s22 = 0.0;
+                for (double x : data) {
+                    double a = x - p[0];
+                    double b = a * a - p[1];
+                    double c = a * a * a;
+                    g0 += a;
+                    g1 += b;
+                    g2 += c;
+                    s00 += a * a;
+                    s01 += a * b;
+                    s02 += a * c;
+                    s11 += b * b;
+                    s12 += b * c;
+                    s22 += c * c;
+                }
+                out.g = {g0 / n, g1 / n, g2 / n};
+                out.s = {s00 / n, s01 / n, s02 / n, s01 / n, s11 / n,
+                         s12 / n, s02 / n, s12 / n, s22 / n};
+                out.s_rows = 3;
+                out.s_cols = 3;
+                return out;
+            };
+            sup::CallbackSet t;
+            t.moment_conditions = moments3;
+            sup::CallbackResult r = sup::run_callback("gmm", "fit", options, t);
+
+            CHECK_EQ(r.status, std::string("Success"));
+            CHECK_EQ(named(r, "number_of_moment_conditions"), 3.0);
+            CHECK_EQ(named(r, "number_of_parameters"), 2.0);
+            CHECK_EQ(named(r, "degree_of_freedom"), 1.0);
+            // The covariance stays p x p: it does not grow with q.
+            CHECK_EQ(r.dims.at(0), 2);
+            CHECK_EQ(r.dims.at(1), 2);
+            // With three conditions and two parameters, g cannot be driven to zero, so the
+            // weighting matrix decides the trade-off and the estimate leaves the closed form.
+            CHECK_TRUE(std::abs(named(r, "parameter[0]") - mean_hat) > 1e-3);
+            CHECK_TRUE(named(r, "standard_error[0]") > 0.0);
+            CHECK_TRUE(named(r, "standard_error[1]") > 0.0);
+            // THE property this case exists for: a non-zero degrees of freedom takes
+            // post_process() down its chi-squared branch instead of writing the structural NaN, so
+            // the p-value is a real probability. J ITSELF IS STILL NOT ASSERTED, and this is worth
+            // being explicit about, because over-identifying is often assumed to fix it and does
+            // not: V = S - D(D'S^-1 D)^-1 D' has rank exactly q - p for ANY q and p, so it is
+            // singular here too -- the rank only moves from 0 to 1 -- and inverting it amplifies
+            // the optimizer's convergence tolerance rather than anything about the data. Measured
+            // on THIS fit, the real C# library returns J = 214.59 with a p-value of 0 while this
+            // core returns J = -129.46 with a p-value of 1, from parameters that agree to 2e-11.
+            // So what is pinned is that the branch was TAKEN, not what it produced.
+            CHECK_TRUE(!std::isnan(named(r, "j_stat_pval")));
+            CHECK_TRUE(named(r, "j_stat_pval") >= 0.0 && named(r, "j_stat_pval") <= 1.0);
+
+            // And OneStep is refused for an over-identified problem, by the ported estimator's own
+            // validation, with its own message -- the one strategy/identification combination the
+            // just-identified cases above can never reach.
+            CHECK_THROWS_MSG(
+                sup::run_callback("gmm", "fit",
+                                  R"({"initial": [5.0, 0.5], "lower": [0.0, 0.001],
+                                      "upper": [10.0, 10.0], "sample_size": 8,
+                                      "strategy": "OneStep"})",
+                                  t),
+                "over-identified, so you cannot use the one-step estimation method");
+        }
+
         // A host exception inside EACH of the three delegates reaches the caller. One test per
         // delegate: a guard wired for one and missing on another is exactly the shape of bug this
         // invites, and a test that only makes the moment conditions throw cannot catch it.

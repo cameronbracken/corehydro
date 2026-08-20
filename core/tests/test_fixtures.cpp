@@ -1878,6 +1878,40 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
             out.s_cols = 2;
             return out;
         };
+    } else if (name == "Mom_NormalThreeMoments") {
+        // The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the
+        // identical eight observations, with a third moment condition added -- mean((x - mu)^3),
+        // zero for a Normal -- so q = 3 > p = 2 and the degrees of freedom become 1. This is the
+        // only case in the file that reaches the chi-squared p-value branch of the J-statistic;
+        // see the fixture's own note on why J ITSELF still cannot be pinned even here.
+        cbs.moment_conditions = [](const std::vector<double>& p) {
+            const double data[] = {4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7};
+            const double n = 8.0;
+            double g0 = 0.0, g1 = 0.0, g2 = 0.0;
+            double s00 = 0.0, s01 = 0.0, s02 = 0.0, s11 = 0.0, s12 = 0.0, s22 = 0.0;
+            for (double x : data) {
+                double a = x - p[0];
+                double b = a * a - p[1];
+                double c = a * a * a;
+                g0 += a;
+                g1 += b;
+                g2 += c;
+                s00 += a * a;
+                s01 += a * b;
+                s02 += a * c;
+                s11 += b * b;
+                s12 += b * c;
+                s22 += c * c;
+            }
+            tbx::MomentConditionReturn out;
+            out.g = {g0 / n, g1 / n, g2 / n};
+            out.s = {s00 / n, s01 / n, s02 / n,  // row-major, symmetric
+                     s01 / n, s11 / n, s12 / n,
+                     s02 / n, s12 / n, s22 / n};
+            out.s_rows = 3;
+            out.s_cols = 3;
+            return out;
+        };
     } else if (name == "Jac_NormalMeanVariance") {
         // The analytic Jacobian of Mom_NormalMeanVariance, row-major 2 x 2 (one ROW per moment
         // condition): dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.

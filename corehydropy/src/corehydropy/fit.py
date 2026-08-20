@@ -218,9 +218,16 @@ class Fit:
         Bayesian only: the effective number of parameters behind :attr:`waic` and :attr:`looic`.
     j_stat, j_stat_pval : float or None
         GMM only. Bulletin 17C is always just-identified, so ``j_stat_pval`` is structurally
-        ``None`` -- there is no over-identified case to report a p-value for.
+        ``None`` -- there is no over-identified case to report a p-value for. At zero degrees of
+        freedom ``j_stat`` is not interpretable either and :meth:`summary` does not print it.
     gmm_iterations, converged_within_tolerance, optimizer_fallback_count
         GMM only, the estimator's own bookkeeping.
+    degree_of_freedom, number_of_moment_conditions : int or None
+        :func:`~corehydropy.fit_gmm_moments` only, matching corehydror's ``$degree_of_freedom``
+        and ``$number_of_moment_conditions``: the number of moment conditions q your function
+        returned, and the over-identifying degrees of freedom ``max(0, q - p)`` that decide
+        whether :attr:`j_stat_pval` exists at all. The :func:`~corehydropy.fit_gmm` model path
+        does not report them (Bulletin 17C is always just-identified) and leaves both ``None``.
 
     Notes
     -----
@@ -250,6 +257,7 @@ class Fit:
         loo_pd=None,
         j_stat=None, j_stat_pval=None, gmm_iterations=None,
         converged_within_tolerance=None, optimizer_fallback_count=None,
+        degree_of_freedom=None, number_of_moment_conditions=None,
     ) -> None:
         self.method = method
         self.parameters = parameters
@@ -291,6 +299,8 @@ class Fit:
         self.gmm_iterations = gmm_iterations
         self.converged_within_tolerance = converged_within_tolerance
         self.optimizer_fallback_count = optimizer_fallback_count
+        self.degree_of_freedom = degree_of_freedom
+        self.number_of_moment_conditions = number_of_moment_conditions
         # Internal bookkeeping (not part of the documented public surface, hence the leading
         # underscore -- Python's convention for "implementation detail", where R's plain list
         # has no equivalent access-control mechanism): the UNFITTED construct/spec/dataset this
@@ -308,10 +318,28 @@ class Fit:
         # correctly counts six.
         bits = [f"{len(self.parameter_names)} parameters"]
         if self.method == "GMM":
-            bits.append(f"j-stat={self.j_stat:g}")
+            if self._j_stat_is_interpretable():
+                bits.append(f"j-stat={self.j_stat:g}")
         else:
             bits.append(f"log-likelihood={self.log_likelihood:g}")
         return f"<Fit {self.method} ({self.status}): {', '.join(bits)}>"
+
+    def _j_stat_is_interpretable(self) -> bool:
+        """Internal: whether this GMM fit's J-statistic is worth printing.
+
+        Only at NON-ZERO over-identifying degrees of freedom. At zero -- which every
+        :func:`fit_gmm` fit is, Bulletin 17C being structurally just-identified, and which a
+        `fit_gmm_moments` fit is whenever q == p -- the residual covariance J is scaled by is
+        theoretically zero, so the number is whatever inverting a numerically singular matrix
+        happened to give (see ``fixtures/callback/gmm.json`` for the measured spread). ``.j_stat``
+        itself is untouched and still on the fit for anyone who wants it. Kept in step with
+        corehydror's ``gmm_degree_of_freedom()``: the model path does not carry
+        ``degree_of_freedom``, and a ``None`` p-value says the same thing, since the ported
+        ``post_process()`` writes NaN there exactly when the degrees of freedom are zero.
+        """
+        if self.degree_of_freedom is not None:
+            return self.degree_of_freedom > 0
+        return self.j_stat_pval is not None
 
     def summary(self) -> str:
         """A multi-line text summary, mirroring R's ``print.corehydro_fit``/``summary.corehydro_fit``.
@@ -334,11 +362,17 @@ class Fit:
         if self.dic is not None:
             lines.append(f"dic: {self.dic:g}")
         if self.method == "GMM":
-            pval = "NA" if self.j_stat_pval is None else f"{self.j_stat_pval:g}"
-            lines.append(
-                f"j-statistic: {self.j_stat:g}   p-value: {pval}   "
-                f"gmm iterations: {self.gmm_iterations}"
-            )
+            if self._j_stat_is_interpretable():
+                pval = "NA" if self.j_stat_pval is None else f"{self.j_stat_pval:g}"
+                lines.append(
+                    f"j-statistic: {self.j_stat:g}   p-value: {pval}   "
+                    f"gmm iterations: {self.gmm_iterations}"
+                )
+            else:
+                lines.append(
+                    "j-statistic: not interpretable at 0 degrees of freedom   "
+                    f"gmm iterations: {self.gmm_iterations}"
+                )
         if self.method in ("MaximumLikelihood", "MaximumAPosteriori"):
             lines.append(f"converged: {self.converged}   function evaluations: {self.function_evaluations}")
         else:
@@ -678,6 +712,11 @@ def _new_fit_gmm_moments(result: dict) -> Fit:
         dataset=None,
         construct_json=None,
         **_gmm_fit_fields(result, names),
+        # Both are real GMM output and both come back from `callback_gmm`; corehydror's
+        # new_fit_gmm_moments() puts the same two on its list, and the two languages agree only
+        # if they are carried through here rather than computed and dropped.
+        degree_of_freedom=result["degree_of_freedom"],
+        number_of_moment_conditions=result["number_of_moment_conditions"],
     )
 
 

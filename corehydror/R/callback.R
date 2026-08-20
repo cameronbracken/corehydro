@@ -670,11 +670,16 @@ bootstrap_custom <- function(
 #' answer is the sample mean and the population variance:
 #'
 #' ```r
+#' avg <- function(v) {  # not mean(): see "Reproducing a run in Python" below
+#'   total <- 0
+#'   for (value in v) total <- total + value
+#'   total / length(v)
+#' }
 #' moments <- function(p) {
 #'   a <- x - p[1]
 #'   b <- a * a - p[2]
-#'   list(g = c(mean(a), mean(b)),
-#'        s = matrix(c(mean(a * a), mean(a * b), mean(a * b), mean(b * b)), 2, 2))
+#'   list(g = c(avg(a), avg(b)),
+#'        s = matrix(c(avg(a * a), avg(a * b), avg(a * b), avg(b * b)), 2, 2))
 #' }
 #' ```
 #'
@@ -713,12 +718,16 @@ bootstrap_custom <- function(
 #'   likelihood surface, so `$log_likelihood`, `$aic` and `$bic` are `NA` and `confint()` errors, as
 #'   they do for [fit_gmm()]. `$j_stat` is Hansen's J and `$j_stat_pval` its p-value, which is `NA`
 #'   whenever the fit is just-identified (as many moment conditions as parameters): zero degrees of
-#'   freedom leaves no over-identifying restriction to test. `$j_stat` itself is then not
-#'   interpretable either and should not be read as a goodness-of-fit number: the residual
-#'   covariance it is scaled by is theoretically zero, so the value is whatever inverting a
-#'   numerically singular matrix gives (measured on one two-parameter problem across four
-#'   optimizers, all agreeing on the parameters to 1e-9: -1.3e-09, 8.6e+19, -7.7e-15, and 0.126).
-#'   Where it cannot be computed at all it comes back `NA` rather than failing the fit.
+#'   freedom leaves no over-identifying restriction to test, and `print()` says so rather than
+#'   showing a figure. `$j_stat` itself is not a goodness-of-fit number you can read there either.
+#'   The residual covariance it is scaled by is singular -- it has rank q - p, so it is exactly
+#'   zero when the fit is just-identified -- and inverting it amplifies the optimizer's convergence
+#'   tolerance rather than any property of your data. The result varies by many orders of magnitude
+#'   and in sign between optimizers, and between this package and the C# library it ports, on fits
+#'   whose parameters agree to ten significant figures. Sometimes it cannot be computed at all, and
+#'   then it comes back `NA` rather than failing the fit. Over-identifying the model restores the
+#'   p-value but not `$j_stat`, since the rank deficiency only shrinks from q to q - p.
+#'   `$degree_of_freedom` and `$number_of_moment_conditions` carry q - p and q.
 #'   [fit_diagnostics()] and [quantile_variance()] are not available for this fit -- both need the
 #'   model a `fit_gmm()` fit carries.
 #' @section Reproducing a run in Python:
@@ -733,12 +742,19 @@ bootstrap_custom <- function(
 #'   bounded optimization of your own objective, and [fit_mle()] for likelihood-based fitting.
 #' @examples
 #' x <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+#' # An explicit loop rather than mean(), so the same formula returns the same bits in Python:
+#' # R's mean() and sum() accumulate in extended precision and Python's do not.
+#' avg <- function(v) {
+#'   total <- 0
+#'   for (value in v) total <- total + value
+#'   total / length(v)
+#' }
 #' moments <- function(p) {
 #'   a <- x - p[1]
 #'   b <- a * a - p[2]
 #'   list(
-#'     g = c(mean(a), mean(b)),
-#'     s = matrix(c(mean(a * a), mean(a * b), mean(a * b), mean(b * b)), 2, 2)
+#'     g = c(avg(a), avg(b)),
+#'     s = matrix(c(avg(a * a), avg(a * b), avg(a * b), avg(b * b)), 2, 2)
 #'   )
 #' }
 #' f <- fit_gmm_moments(moments,

@@ -645,13 +645,17 @@ def fit_gmm_moments(
         are ``None`` and ``.confint()`` raises, as they do for :func:`~corehydropy.fit_gmm`.
         ``.j_stat`` is Hansen's J and ``.j_stat_pval`` its p-value, which is ``None`` whenever the
         fit is just-identified (as many moment conditions as parameters): zero degrees of freedom
-        leaves no over-identifying restriction to test. ``.j_stat`` itself is then not
-        interpretable either and should not be read as a goodness-of-fit number: the residual
-        covariance it is scaled by is theoretically zero, so the value is whatever inverting a
-        numerically singular matrix gives (measured on one two-parameter problem across four
-        optimizers, all agreeing on the parameters to 1e-9: -1.3e-09, 8.6e+19, -7.7e-15, and
-        0.126). Where it cannot be computed at all it comes back ``nan`` rather than failing the
-        fit.
+        leaves no over-identifying restriction to test, and ``.summary()`` says so rather than
+        showing a figure. ``.j_stat`` itself is not a goodness-of-fit number you can read there
+        either. The residual covariance it is scaled by is singular -- it has rank q - p, so it is
+        exactly zero when the fit is just-identified -- and inverting it amplifies the optimizer's
+        convergence tolerance rather than any property of your data. The result varies by many
+        orders of magnitude and in sign between optimizers, and between this package and the C#
+        library it ports, on fits whose parameters agree to ten significant figures. Sometimes it
+        cannot be computed at all, and then it comes back ``nan`` rather than failing the fit.
+        Over-identifying the model restores the p-value but not ``.j_stat``, since the rank
+        deficiency only shrinks from q to q - p.
+        ``.degree_of_freedom`` and ``.number_of_moment_conditions`` carry q - p and q.
         :func:`~corehydropy.fit_diagnostics` and :func:`~corehydropy.quantile_variance` are not
         available for this fit -- both need the model a `fit_gmm` fit carries.
 

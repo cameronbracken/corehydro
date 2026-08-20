@@ -1050,6 +1050,99 @@ def test_the_j_statistic_never_fails_a_just_identified_fit():
         assert f.j_stat_pval is None
 
 
+def _gmm_moments3(p):
+    # The OVER-IDENTIFIED companion of _gmm_moments: the same Normal model and the same eight
+    # observations with mean((x - mu)^3) added as a third condition, zero for a Normal and so
+    # leaving the model itself unchanged. q = 3 > p = 2. Three things are reachable only from here
+    # -- a non-zero degrees of freedom, the chi-squared p-value branch, and the refusal of OneStep.
+    n = float(len(_GMM_DATA))
+    g0 = g1 = g2 = 0.0
+    s00 = s01 = s02 = s11 = s12 = s22 = 0.0
+    for x in _GMM_DATA:
+        a = x - p[0]
+        b = a * a - p[1]
+        c = a * a * a
+        g0 += a
+        g1 += b
+        g2 += c
+        s00 += a * a
+        s01 += a * b
+        s02 += a * c
+        s11 += b * b
+        s12 += b * c
+        s22 += c * c
+    return (
+        [g0 / n, g1 / n, g2 / n],
+        [[s00 / n, s01 / n, s02 / n], [s01 / n, s11 / n, s12 / n], [s02 / n, s12 / n, s22 / n]],
+    )
+
+
+def _gmm_fit3(**kwargs):
+    return ch.fit_gmm_moments(
+        _gmm_moments3, initial=[5.0, 0.5], lower=[0.0, 0.001], upper=[10.0, 10.0],
+        sample_size=len(_GMM_DATA), **kwargs
+    )
+
+
+def test_an_over_identified_fit_reports_a_real_p_value_from_the_chi_squared_branch():
+    f = _gmm_fit3()
+    assert f.number_of_moment_conditions == 3
+    assert f.degree_of_freedom == 1
+    # THE property this case exists for. Everywhere else on this surface q == p, the degrees of
+    # freedom are zero and the ported post_process() writes a structural NaN; here it takes its
+    # chi-squared branch instead and the p-value is a real probability.
+    assert f.j_stat_pval is not None
+    assert 0.0 <= f.j_stat_pval <= 1.0
+    # J ITSELF is still not asserted, and over-identifying is often assumed to fix that and does
+    # not: V has rank exactly q - p for any q and p, so it is singular here too -- the rank only
+    # moves from 0 to 1 -- and inverting it amplifies the optimizer's convergence tolerance. On
+    # this fit the real C# library returns 214.59 where the shared core returns -129.46, from
+    # parameters that agree to 2e-11. So the branch being TAKEN is what is pinned, not what it
+    # produced. The C#-pinned oracle for everything that does reproduce is fixtures/callback/gmm.json.
+    mu, _ = _gmm_closed_form()
+    assert f.parameters["p1"] != mu
+    assert all(se > 0 for se in f.standard_errors.values())
+    assert f.covariance.shape == (2, 2)  # p x p, not q x q
+
+
+def test_one_step_is_refused_for_an_over_identified_problem():
+    # The ported estimator's own validation, and the one strategy/identification combination no
+    # just-identified fit on this surface can reach.
+    with pytest.raises(
+        (RuntimeError, ValueError),
+        match="over-identified, so you cannot use the one-step estimation method",
+    ):
+        _gmm_fit3(strategy="OneStep")
+    for strategy in ("TwoStep", "Iterative"):
+        assert _gmm_fit3(strategy=strategy).degree_of_freedom == 1
+
+
+def test_the_j_statistic_is_summarized_only_where_it_means_something():
+    # At zero degrees of freedom the number is whatever inverting a singular matrix gave, so
+    # summary() names the reason instead of showing it. The attribute itself stays on the fit, and
+    # corehydror's print.corehydro_fit does exactly the same.
+    just = _gmm_fit()
+    assert "j-statistic: not interpretable at 0 degrees of freedom" in just.summary()
+    assert just.j_stat is not None
+    assert "j-stat=" not in repr(just)
+
+    over = _gmm_fit3()
+    assert f"j-statistic: {over.j_stat:g}" in over.summary()
+    assert "p-value" in over.summary()
+    assert "j-stat=" in repr(over)
+
+
+def test_a_gmm_moments_fit_carries_the_same_gmm_bookkeeping_r_does():
+    # corehydror's fit_gmm_moments() puts $degree_of_freedom and $number_of_moment_conditions on
+    # its fit; both are real GMM output, and the two languages have to agree on the field set.
+    f = _gmm_fit()
+    assert f.degree_of_freedom == 0
+    assert f.number_of_moment_conditions == 2
+    # Both are also the only route to the degrees of freedom, since j_stat_pval collapses the
+    # "zero degrees of freedom" and "J could not be computed" cases into the same None.
+    assert _gmm_fit3().degree_of_freedom == 1
+
+
 def test_two_fit_gmm_moments_runs_are_identical():
     # There is no generator anywhere in this fit.
     a, b = _gmm_fit(), _gmm_fit()
@@ -1085,6 +1178,18 @@ def test_a_moment_condition_function_returning_the_wrong_shape_is_refused_naming
     # A sequence, but not of two things.
     with pytest.raises(RuntimeError, match=shape):
         ch.fit_gmm_moments(lambda p: [1.0, 2.0, 3.0], [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    # A FLAT PAIR of numbers -- the likeliest mistake when q is 2, since `[g0, g1]` looks like just
+    # the moment vector, and the one wrong shape that passes the length-2 check above. It must be
+    # refused by the message naming BOTH elements: without the explicit sequence check in
+    # bindings/callback.cpp it is reported as "'g' ... must be a sequence of numbers; got 0.0",
+    # which points at the wrong thing entirely. R refuses the identical mistake with the shape
+    # message (test-callback.R's counterpart of this test), so this is also what keeps the two
+    # languages saying the same sentence about the same error.
+    with pytest.raises(RuntimeError, match=shape):
+        ch.fit_gmm_moments(lambda p: [0.0, 0.0], [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
+    with pytest.raises(RuntimeError, match=shape):
+        ch.fit_gmm_moments(lambda p: list(_gmm_moments(p)[0]),
+                           [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
     # A dict missing one of the two keys.
     with pytest.raises(RuntimeError, match=shape):
         ch.fit_gmm_moments(lambda p: {"g": [0.0, 0.0]}, [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)

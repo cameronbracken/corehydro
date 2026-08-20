@@ -1,9 +1,10 @@
 {
   "kind": "callback",
   "source": "RMC-BestFit/src/RMC.BestFit/Estimation/GeneralizedMethodOfMoments.cs (the delegate constructor, C# 143, and the three delegates it takes) @ c2e6192",
-  "reference": "RMC.BestFit @ c2e6192. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"gmm\", method \"fit\", against the delegates named by `construct.callback` (the moment conditions), `construct.jacobian` and `construct.penalty` -- each a function the four runners write themselves as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case crosses the real host-language boundary. This is upstream's OWN API: GeneralizedMethodOfMoments has TWO constructors, one taking an IGMMModel (C# 106) and one taking these delegates directly (C# 143), and `IGMMModel` has exactly one implementation -- Bulletin17CDistribution -- so until this group existed the packages could fit an LP3 flood-frequency model by GMM and nothing else. EVERY expected value here is EMITTER-READ: no upstream test fits this model, so the oracle is the real RMC.BestFit GeneralizedMethodOfMoments driven by tools/oracle_emitter with the equivalent C# delegates, never a value computed by this repo's own C++. Every catalog callback is built from + - * / alone, with each summation written as an explicit loop rather than any language's sum(), mean() or Average(): R's sum() and mean() accumulate in extended precision where C++, Python and C# accumulate in double, and one differing bit moves a fitted parameter. THE MODEL is the just-identified two-parameter method-of-moments fit of a Normal -- theta = (mu, sigma2), g = [mean(x - mu), mean((x - mu)^2 - sigma2)] -- chosen because its GMM optimum has a CLOSED FORM: q = p makes g(theta-hat) = 0 attainable, and the unique root is the sample mean (4.95) and the population variance (0.165) of the eight observations. So the parameter assertions are checkable arithmetic, not a regression against whatever the optimizer happened to return. j_stat is NOT asserted anywhere in this file, deliberately: on a just-identified fit the moment residual covariance V = S - D(D'S^-1 D)^-1 D' is THEORETICALLY ZERO, so g' V^-1 g is whatever inverting a numerically singular matrix happens to give. Measured on this exact problem across the four optimizers -- all converging to the same parameters to 1e-9 -- it is -1.3e-09, 8.6e+19, -7.7e-15 and 0.126, and under NelderMead it THROWS outright from R and Python (where callback/gmm.hpp reports NaN rather than failing an otherwise exact fit) while returning a number from the C++ fixture runner, whose compiled callback contracts `a * a - theta` into an FMA. fixtures/estimation/gmm_bulletin17c_smoke.json's |J| < 1e-3 check holds only because its far messier real-data V carries real noise; on this deliberately clean synthetic problem any bound would be a fiction. j_stat_pval is NaN because the degrees of freedom q - p = 0: a just-identified fit has no over-identifying restriction left over to test its own specification with. That is correct, not a defect (see docs/upstream-csharp-issues.md). Tolerances follow fixtures/README.md's policy: optimizer-dependent parameters rel 1e-8, finite-difference-sensitive standard_error/covariance/correlation rel 1e-7. The result layout (parameter[j] / standard_error[j] / covariance[i,j] / correlation[i,j] / the J-statistic and bookkeeping scalars, dims = {p, p}) is documented in core/include/corehydro/numerics/support/callback/gmm.hpp; the `named` assertions below read it by label rather than by an index that shifts with the parameter count.",
+  "reference": "RMC.BestFit @ c2e6192. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"gmm\", method \"fit\", against the delegates named by `construct.callback` (the moment conditions), `construct.jacobian` and `construct.penalty` -- each a function the four runners write themselves as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case crosses the real host-language boundary. This is upstream's OWN API: GeneralizedMethodOfMoments has TWO constructors, one taking an IGMMModel (C# 106) and one taking these delegates directly (C# 143), and `IGMMModel` has exactly one implementation -- Bulletin17CDistribution -- so until this group existed the packages could fit an LP3 flood-frequency model by GMM and nothing else. EVERY expected value here is EMITTER-READ: no upstream test fits this model, so the oracle is the real RMC.BestFit GeneralizedMethodOfMoments driven by tools/oracle_emitter with the equivalent C# delegates, never a value computed by this repo's own C++. Every catalog callback is built from + - * / alone, with each summation written as an explicit loop rather than any language's sum(), mean() or Average(): R's sum() and mean() accumulate in extended precision where C++, Python and C# accumulate in double, and one differing bit moves a fitted parameter. THE MODEL is the just-identified two-parameter method-of-moments fit of a Normal -- theta = (mu, sigma2), g = [mean(x - mu), mean((x - mu)^2 - sigma2)] -- chosen because its GMM optimum has a CLOSED FORM: q = p makes g(theta-hat) = 0 attainable, and the unique root is the sample mean (4.95) and the population variance (0.165) of the eight observations. So the parameter assertions are checkable arithmetic, not a regression against whatever the optimizer happened to return. j_stat is NOT asserted anywhere in this file, deliberately: on a just-identified fit the moment residual covariance V = S - D(D'S^-1 D)^-1 D' is THEORETICALLY ZERO, so g' V^-1 g is whatever inverting a numerically singular matrix happens to give. Measured on this exact problem across the four optimizers -- all converging to the same parameters to 1e-9 -- it is -1.3e-09, 8.6e+19, -7.7e-15 and 0.126, and under NelderMead it THROWS outright from R and Python (where callback/gmm.hpp reports NaN rather than failing an otherwise exact fit) while returning a number from the C++ fixture runner, whose compiled callback contracts `a * a - theta` into an FMA. fixtures/estimation/gmm_bulletin17c_smoke.json's |J| < 1e-3 check holds only because its far messier real-data V carries real noise; on this deliberately clean synthetic problem any bound would be a fiction. j_stat_pval is NaN because the degrees of freedom q - p = 0: a just-identified fit has no over-identifying restriction left over to test its own specification with. That is correct, not a defect (see docs/upstream-csharp-issues.md). THE OVER-IDENTIFIED CASE (over_identified_three_moments, q = 3 > p = 2 via Mom_NormalThreeMoments) exists because it is the only reachable route to a NON-ZERO degrees of freedom on this surface -- Bulletin 17C is structurally just-identified -- and so the only case whose p-value comes from the chi-squared branch of PostProcess() rather than the structural NaN. It does NOT rescue j_stat, and the measurement is worth recording rather than hiding: the ported estimator computes J as g' V^-1 g, and V = S - D(D'S^-1 D)^-1 D' has rank exactly q - p for ANY q and p, so V is singular by construction whether the fit is just-identified or not; over-identifying only moves the rank from 0 to 1. What the inverse of that singular matrix amplifies is the optimizer's first-order-condition residual, which is a tolerance (1e-8), not a rounding error, so the result differs by far more than any tolerance worth writing: measured on THIS case, the real C# library returns J = 214.59276580810547 with a p-value of 0 while the shared C++ core returns J = -129.458513140678 with a p-value of 1, from parameters that agree to 2e-11; across the four optimizers the core alone spans -129.46, 1.2e+08, 1268.6 and 3.8e+06. So j_stat and j_stat_pval are unasserted in this case too -- with NO oracle_skip and NO loosened tolerance, because there is no honest value to loosen TOWARDS. What IS pinned here is everything the case was added to reach: degree_of_freedom = 1, the q = 3 probe agreeing with the declared number_of_moment_conditions, and the parameters/standard errors/covariance of a genuine over-identified sandwich (a 3 x 2 Jacobian against a 3 x 3 weighting matrix), none of which any other case in the file exercises. Tolerances follow fixtures/README.md's policy: optimizer-dependent parameters rel 1e-8, finite-difference-sensitive standard_error/covariance/correlation rel 1e-7. The result layout (parameter[j] / standard_error[j] / covariance[i,j] / correlation[i,j] / the J-statistic and bookkeeping scalars, dims = {p, p}) is documented in core/include/corehydro/numerics/support/callback/gmm.hpp; the `named` assertions below read it by label rather than by an index that shifts with the parameter count.",
   "callbacks": {
     "Mom_NormalMeanVariance": "moment_conditions(parameters) -> (g, s) with g = [mean(x - mu), mean((x - mu)^2 - sigma2)] and s = the 2 x 2 covariance of those two contributions, over x = [4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7]; every sum an explicit loop  [corehydro addition, upstream's `(Vector G, Matrix S) MomentConditionFunction(double[])` shape: the textbook just-identified method-of-moments fit of a Normal, whose root is the sample mean and the population variance]",
+    "Mom_NormalThreeMoments": "moment_conditions(parameters) -> (g, s) with g = [mean(x - mu), mean((x - mu)^2 - sigma2), mean((x - mu)^3)] and s = the 3 x 3 covariance of those three contributions, over the same eight observations; every sum an explicit loop  [corehydro addition, the same `MomentConditionFunction` shape: the OVER-IDENTIFIED companion of Mom_NormalMeanVariance. The third central moment is zero for a Normal, so adding it as a moment condition leaves the model unchanged and makes q = 3 > p = 2, DegreeOfFreedom = 1. This is the only case in the file that reaches the chi-squared p-value branch of PostProcess(), and the only one for which OneStep is refused by the estimator]",
     "Jac_NormalMeanVariance": "jacobian(parameters) -> the analytic 2 x 2 dg/dtheta of Mom_NormalMeanVariance, one ROW per moment condition: [[-1, 0], [-2 mean(x - mu), -1]]  [corehydro addition, upstream's `double[,] JacobianFunction(double[])` shape: replaces the ported bounds-aware finite-difference Jacobian, so this case pins the analytic path rather than the numerical one]",
     "Pen_SigmaTowardsOne": "penalty(parameters) -> 0.5 * (sigma2 - 1)^2  [corehydro addition, upstream's `double PenaltyFunction(double[])` shape: a ridge penalty carrying its own 1/2, as the half-quadratic convention in Q() expects. It pulls sigma2 away from the closed-form 0.165 and towards 1, which is what makes this case an oracle for the delegate being reached at all rather than a repeat of the first]"
   },
@@ -277,6 +278,124 @@
           "mode": "abs",
           "tol": 0,
           "source": "EMITTER-READ: ConvergedWithinTolerance, false for OneStep -- the T13-fixed flag is set only on the iterative loop's tolerance-convergence branch"
+        }
+      ]
+    },
+    {
+      "name": "over_identified_three_moments",
+      "construct": {
+        "group": "gmm",
+        "method": "fit",
+        "callback": "Mom_NormalThreeMoments",
+        "options": {
+          "initial": [5.0, 0.5],
+          "lower": [0.0, 0.001],
+          "upper": [10.0, 10.0],
+          "sample_size": 8,
+          "number_of_moment_conditions": 3
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "parameter[0]",
+          "expected": 4.747796502809368,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: BestParameterSet.Values[0], mu. There is no closed form once q > p: with three moment conditions and two parameters g cannot be driven to zero, so the iterative optimal weighting matrix decides the trade-off and mu moves off the sample mean of 4.95"
+        },
+        {
+          "method": "named",
+          "name": "parameter[1]",
+          "expected": 0.22739008887281148,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "EMITTER-READ: BestParameterSet.Values[1], sigma2, likewise off the just-identified 0.165"
+        },
+        {
+          "method": "named",
+          "name": "standard_error[0]",
+          "expected": 0.09117243708489156,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetStandardErrors()[0] -- built from a 3 x 2 Jacobian and a 3 x 3 weighting matrix, so it also pins that the sandwich shapes are right when q != p"
+        },
+        {
+          "method": "named",
+          "name": "standard_error[1]",
+          "expected": 0.05782286410223247,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetStandardErrors()[1]"
+        },
+        {
+          "method": "named",
+          "name": "covariance[0,0]",
+          "expected": 0.00831241328399851,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetCovarianceMatrix()[0, 0]. The DIAGONAL, not the off-diagonal the just-identified case pins: with three moment conditions the two parameters come out almost uncorrelated (r = -0.0075), so covariance[0, 1] here is a cancellation residual that reproduces C#-vs-C++ only to 8e-8 -- inside this file's rel 1e-7 policy but with no headroom, and pinning it would be pinning noise. The row-major/column-major mix-up it guards against is already pinned by the just-identified case, on a matrix whose off-diagonal is a real number"
+        },
+        {
+          "method": "named",
+          "name": "covariance[1,1]",
+          "expected": 0.003343483612985244,
+          "mode": "rel",
+          "tol": 1e-07,
+          "source": "EMITTER-READ: GetCovarianceMatrix()[1, 1], the other diagonal entry"
+        },
+        {
+          "method": "named",
+          "name": "degree_of_freedom",
+          "expected": 1,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: DegreeOfFreedom = max(0, q - p) = 3 - 2. THE assertion this case exists for: it is the only one in the file with a non-zero degrees of freedom, so it is the only one whose J-statistic p-value comes from the chi-squared branch of PostProcess() rather than the structural NaN"
+        },
+        {
+          "method": "named",
+          "name": "number_of_moment_conditions",
+          "expected": 3,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: q, measured by the same up-front probe all four runners take. The construct also DECLARES number_of_moment_conditions: 3, so this case doubles as the oracle for the optional cross-check agreeing with the probe"
+        },
+        {
+          "method": "named",
+          "name": "gmm_iterations",
+          "expected": 21,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: GMMIterations under the default Iterative strategy -- far more than the just-identified case's 2, because the weighting matrix keeps moving when g cannot be driven to zero"
+        },
+        {
+          "method": "named",
+          "name": "converged_within_tolerance",
+          "expected": 1,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: ConvergedWithinTolerance -- the iterative loop did reach its tolerance branch, so the 21 iterations above are a converged run and not the cap"
+        },
+        {
+          "method": "named",
+          "name": "sample_size",
+          "expected": 8,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: SampleSize"
+        },
+        {
+          "method": "status",
+          "expected": "Success",
+          "source": "EMITTER-READ: the final OptimizationStatus of the BFGS run"
+        },
+        {
+          "method": "dim",
+          "args": [0],
+          "expected": 2,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: the covariance is p x p, still 2 x 2 -- it does not grow with q"
         }
       ]
     }

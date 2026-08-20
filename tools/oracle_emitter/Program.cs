@@ -1199,6 +1199,30 @@ static MomentConditionFunction? CallbackMomentConditionFunction(string name) => 
         var s = new Matrix(new[,] { { s00 / n, s01 / n }, { s01 / n, s11 / n } });
         return (g, s);
     },
+    // The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the identical
+    // eight observations, with a third moment condition added -- mean((x - mu)^3), zero for a
+    // Normal -- so q = 3 > p = 2 and DegreeOfFreedom becomes 1. The only case in the file that
+    // reaches the chi-squared p-value branch of PostProcess().
+    "Mom_NormalThreeMoments" => parameters =>
+    {
+        double n = 8d;
+        double g0 = 0d, g1 = 0d, g2 = 0d;
+        double s00 = 0d, s01 = 0d, s02 = 0d, s11 = 0d, s12 = 0d, s22 = 0d;
+        foreach (double x in CallbackGmmData())
+        {
+            double a = x - parameters[0];
+            double b = a * a - parameters[1];
+            double c = a * a * a;
+            g0 += a; g1 += b; g2 += c;
+            s00 += a * a; s01 += a * b; s02 += a * c;
+            s11 += b * b; s12 += b * c; s22 += c * c;
+        }
+        var g = new Vector(new[] { g0 / n, g1 / n, g2 / n });
+        var s = new Matrix(new[,] { { s00 / n, s01 / n, s02 / n },
+                                    { s01 / n, s11 / n, s12 / n },
+                                    { s02 / n, s12 / n, s22 / n } });
+        return (g, s);
+    },
     _ => null
 };
 

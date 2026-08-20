@@ -59,12 +59,16 @@ named \code{p1}, \code{p2}, ... since your moment conditions name nothing. Metho
 likelihood surface, so \verb{$log_likelihood}, \verb{$aic} and \verb{$bic} are \code{NA} and \code{confint()} errors, as
 they do for \code{\link[=fit_gmm]{fit_gmm()}}. \verb{$j_stat} is Hansen's J and \verb{$j_stat_pval} its p-value, which is \code{NA}
 whenever the fit is just-identified (as many moment conditions as parameters): zero degrees of
-freedom leaves no over-identifying restriction to test. \verb{$j_stat} itself is then not
-interpretable either and should not be read as a goodness-of-fit number: the residual
-covariance it is scaled by is theoretically zero, so the value is whatever inverting a
-numerically singular matrix gives (measured on one two-parameter problem across four
-optimizers, all agreeing on the parameters to 1e-9: -1.3e-09, 8.6e+19, -7.7e-15, and 0.126).
-Where it cannot be computed at all it comes back \code{NA} rather than failing the fit.
+freedom leaves no over-identifying restriction to test, and \code{print()} says so rather than
+showing a figure. \verb{$j_stat} itself is not a goodness-of-fit number you can read there either.
+The residual covariance it is scaled by is singular -- it has rank q - p, so it is exactly
+zero when the fit is just-identified -- and inverting it amplifies the optimizer's convergence
+tolerance rather than any property of your data. The result varies by many orders of magnitude
+and in sign between optimizers, and between this package and the C# library it ports, on fits
+whose parameters agree to ten significant figures. Sometimes it cannot be computed at all, and
+then it comes back \code{NA} rather than failing the fit. Over-identifying the model restores the
+p-value but not \verb{$j_stat}, since the rank deficiency only shrinks from q to q - p.
+\verb{$degree_of_freedom} and \verb{$number_of_moment_conditions} carry q - p and q.
 \code{\link[=fit_diagnostics]{fit_diagnostics()}} and \code{\link[=quantile_variance]{quantile_variance()}} are not available for this fit -- both need the
 model a \code{fit_gmm()} fit carries.
 }
@@ -91,11 +95,16 @@ Both are required and both are checked by name, because returning the wrong thin
 likeliest mistake on this surface. A two-parameter method-of-moments fit of a Normal, whose
 answer is the sample mean and the population variance:
 
-\if{html}{\out{<div class="sourceCode r">}}\preformatted{moments <- function(p) \{
+\if{html}{\out{<div class="sourceCode r">}}\preformatted{avg <- function(v) \{  # not mean(): see "Reproducing a run in Python" below
+  total <- 0
+  for (value in v) total <- total + value
+  total / length(v)
+\}
+moments <- function(p) \{
   a <- x - p[1]
   b <- a * a - p[2]
-  list(g = c(mean(a), mean(b)),
-       s = matrix(c(mean(a * a), mean(a * b), mean(a * b), mean(b * b)), 2, 2))
+  list(g = c(avg(a), avg(b)),
+       s = matrix(c(avg(a * a), avg(a * b), avg(a * b), avg(b * b)), 2, 2))
 \}
 }\if{html}{\out{</div>}}
 
@@ -117,12 +126,19 @@ where Python's do not, so an explicit loop is the portable spelling.
 
 \examples{
 x <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+# An explicit loop rather than mean(), so the same formula returns the same bits in Python:
+# R's mean() and sum() accumulate in extended precision and Python's do not.
+avg <- function(v) {
+  total <- 0
+  for (value in v) total <- total + value
+  total / length(v)
+}
 moments <- function(p) {
   a <- x - p[1]
   b <- a * a - p[2]
   list(
-    g = c(mean(a), mean(b)),
-    s = matrix(c(mean(a * a), mean(a * b), mean(a * b), mean(b * b)), 2, 2)
+    g = c(avg(a), avg(b)),
+    s = matrix(c(avg(a * a), avg(a * b), avg(a * b), avg(b * b)), 2, 2)
   )
 }
 f <- fit_gmm_moments(moments,

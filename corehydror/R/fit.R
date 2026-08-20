@@ -772,6 +772,18 @@ quantile_variance <- function(fit, aep) {
   ch_fit_quantile_variance_(fit$construct_json, fit$dataset, as.double(aep))
 }
 
+# Internal: the over-identifying degrees of freedom q - p of a GMM fit, or NA when they cannot be
+# told. fit_gmm_moments() reports the field directly. The fit_gmm() model path does not carry it and
+# does not need to: its only IGMMModel implementation, Bulletin 17C, is always just-identified, and
+# a NaN p-value says the same thing, since the ported post_process() writes NaN there exactly when
+# the degrees of freedom are zero.
+gmm_degree_of_freedom <- function(x) {
+  if (!is.null(x$degree_of_freedom)) {
+    return(as.integer(x$degree_of_freedom))
+  }
+  if (isTRUE(is.na(x$j_stat_pval))) 0L else NA_integer_
+}
+
 #' @export
 print.corehydro_fit <- function(x, ...) {
   cat(sprintf("<corehydro_fit> %s (%s)\n", x$method, x$status))
@@ -788,10 +800,25 @@ print.corehydro_fit <- function(x, ...) {
   }
   if (!is.null(x$dic)) cat(sprintf("  dic: %g\n", x$dic))
   if (!is.null(x$j_stat_pval)) {
-    cat(sprintf(
-      "  j-statistic: %g   p-value: %s   gmm iterations: %d\n",
-      x$j_stat, format(x$j_stat_pval), x$gmm_iterations
-    ))
+    # The J-statistic is only interpretable at NON-ZERO degrees of freedom. At zero -- which every
+    # fit_gmm() fit is, Bulletin 17C being structurally just-identified, and which a
+    # fit_gmm_moments() fit is whenever q == p -- the residual covariance J is scaled by is
+    # theoretically zero, so the number is whatever inverting a numerically singular matrix
+    # happened to give (see fixtures/callback/gmm.json for the measured spread). Printing it there
+    # would put a meaningless figure in front of a reader with no way to know it is meaningless.
+    # `$j_stat` itself is untouched and still on the fit for anyone who wants it.
+    dof <- gmm_degree_of_freedom(x)
+    if (is.na(dof) || dof > 0L) {
+      cat(sprintf(
+        "  j-statistic: %g   p-value: %s   gmm iterations: %d\n",
+        x$j_stat, format(x$j_stat_pval), x$gmm_iterations
+      ))
+    } else {
+      cat(sprintf(
+        "  j-statistic: not interpretable at 0 degrees of freedom   gmm iterations: %d\n",
+        x$gmm_iterations
+      ))
+    }
   }
   if (x$method %in% c("MaximumLikelihood", "MaximumAPosteriori")) {
     cat(sprintf(

@@ -349,6 +349,16 @@ std::function<sup::MomentConditionReturn(const std::vector<double>&)> as_moment_
             if (py::len(pair) != 2) throw std::runtime_error(kMomentShape);
             g_object = pair[0];
             s_object = pair[1];
+            // `g` must itself be a sequence. Without this, `return [g0, g1]` -- the likeliest
+            // mistake when q == 2, since a flat pair of numbers looks like just the moment vector
+            // -- passes the length check above and is then reported as "'g' ... must be a sequence
+            // of numbers; got 0.0", which points at the wrong thing entirely. R refuses the
+            // identical mistake with the shape message, so this is also what keeps the two
+            // languages saying the same sentence about the same error. `s` is deliberately NOT
+            // checked the same way: row_major_matrix() below accepts a bare number as the 1 x 1
+            // matrix a one-moment-condition model has, exactly as corehydror accepts a length-1
+            // numeric with no `dim`, and requiring a sequence here would retract that.
+            if (!PySequence_Check(g_object.ptr())) throw std::runtime_error(kMomentShape);
         }
 
         sup::MomentConditionReturn result;

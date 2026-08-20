@@ -1811,6 +1811,12 @@ def _callback_fixture_function(name):
     # differing bit moves a fitted parameter.
     if name == "Mom_NormalMeanVariance":
         return _gmm_moment_conditions
+    # The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the identical
+    # eight observations, with a third moment condition added -- mean((x - mu)^3), zero for a
+    # Normal -- so q = 3 > p = 2 and the degrees of freedom become 1. The only case in the file
+    # that reaches the chi-squared p-value branch of the J-statistic.
+    if name == "Mom_NormalThreeMoments":
+        return _gmm_moment_conditions_three
     if name == "Jac_NormalMeanVariance":
         return _gmm_jacobian
     if name == "Pen_SigmaTowardsOne":
@@ -1936,6 +1942,30 @@ def _gmm_moment_conditions(p):
         s01 += a * b
         s11 += b * b
     return ([g0 / n, g1 / n], [[s00 / n, s01 / n], [s01 / n, s11 / n]])
+
+
+def _gmm_moment_conditions_three(p):
+    data = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+    n = 8.0
+    g0 = g1 = g2 = 0.0
+    s00 = s01 = s02 = s11 = s12 = s22 = 0.0
+    for x in data:
+        a = x - p[0]
+        b = a * a - p[1]
+        c = a * a * a
+        g0 += a
+        g1 += b
+        g2 += c
+        s00 += a * a
+        s01 += a * b
+        s02 += a * c
+        s11 += b * b
+        s12 += b * c
+        s22 += c * c
+    return (
+        [g0 / n, g1 / n, g2 / n],
+        [[s00 / n, s01 / n, s02 / n], [s01 / n, s11 / n, s12 / n], [s02 / n, s12 / n, s22 / n]],
+    )
 
 
 def _gmm_jacobian(p):

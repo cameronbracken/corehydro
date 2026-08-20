@@ -580,6 +580,45 @@ callback_fixture_function <- function(name) {
         s = matrix(c(s00 / n, s01 / n, s01 / n, s11 / n), nrow = 2, ncol = 2)
       )
     },
+    # The OVER-IDENTIFIED member of the same catalog: the identical Normal model and the identical
+    # eight observations, with a third moment condition added -- mean((x - mu)^3), zero for a
+    # Normal -- so q = 3 > p = 2 and the degrees of freedom become 1. The only case in the file
+    # that reaches the chi-squared p-value branch of the J-statistic.
+    Mom_NormalThreeMoments = function(p) {
+      data <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+      n <- 8
+      g0 <- 0
+      g1 <- 0
+      g2 <- 0
+      s00 <- 0
+      s01 <- 0
+      s02 <- 0
+      s11 <- 0
+      s12 <- 0
+      s22 <- 0
+      for (x in data) {
+        a <- x - p[1]
+        b <- a * a - p[2]
+        cc <- a * a * a
+        g0 <- g0 + a
+        g1 <- g1 + b
+        g2 <- g2 + cc
+        s00 <- s00 + a * a
+        s01 <- s01 + a * b
+        s02 <- s02 + a * cc
+        s11 <- s11 + b * b
+        s12 <- s12 + b * cc
+        s22 <- s22 + cc * cc
+      }
+      list(
+        g = c(g0 / n, g1 / n, g2 / n),
+        # matrix() fills COLUMN-major; this one is symmetric, and the glue transposes anyway.
+        s = matrix(
+          c(s00 / n, s01 / n, s02 / n, s01 / n, s11 / n, s12 / n, s02 / n, s12 / n, s22 / n),
+          nrow = 3, ncol = 3
+        )
+      )
+    },
     # The analytic Jacobian of Mom_NormalMeanVariance, one ROW per moment condition:
     # dg1/dmu = -1, dg1/dsigma2 = 0, dg2/dmu = -2 mean(x - mu), dg2/dsigma2 = -1.
     Jac_NormalMeanVariance = function(p) {

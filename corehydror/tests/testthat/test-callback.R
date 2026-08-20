@@ -1086,6 +1086,93 @@ test_that("the J-statistic never fails a just-identified fit, whatever inverting
   }
 })
 
+# The OVER-IDENTIFIED companion of gmm_moments: the same Normal model and the same eight
+# observations with mean((x - mu)^3) added as a third condition, zero for a Normal and so leaving
+# the model itself unchanged. q = 3 > p = 2. Three things are reachable only from here -- a
+# non-zero degrees of freedom, the chi-squared p-value branch, and the refusal of OneStep.
+gmm_moments3 <- function(p) {
+  n <- length(gmm_data)
+  g0 <- 0
+  g1 <- 0
+  g2 <- 0
+  s00 <- 0
+  s01 <- 0
+  s02 <- 0
+  s11 <- 0
+  s12 <- 0
+  s22 <- 0
+  for (x in gmm_data) {
+    a <- x - p[1]
+    b <- a * a - p[2]
+    cc <- a * a * a
+    g0 <- g0 + a
+    g1 <- g1 + b
+    g2 <- g2 + cc
+    s00 <- s00 + a * a
+    s01 <- s01 + a * b
+    s02 <- s02 + a * cc
+    s11 <- s11 + b * b
+    s12 <- s12 + b * cc
+    s22 <- s22 + cc * cc
+  }
+  list(
+    g = c(g0 / n, g1 / n, g2 / n),
+    s = matrix(
+      c(s00 / n, s01 / n, s02 / n, s01 / n, s11 / n, s12 / n, s02 / n, s12 / n, s22 / n),
+      nrow = 3, ncol = 3
+    )
+  )
+}
+
+test_that("an over-identified fit reports a real p-value from the chi-squared branch", {
+  f <- fit_gmm_moments(gmm_moments3, c(5, 0.5), c(0, 0.001), c(10, 10), length(gmm_data))
+  expect_identical(f$number_of_moment_conditions, 3L)
+  expect_identical(f$degree_of_freedom, 1L)
+  # THE property this case exists for. Everywhere else on this surface q == p, the degrees of
+  # freedom are zero and the ported post_process() writes a structural NaN; here it takes its
+  # chi-squared branch instead and the p-value is a real probability.
+  expect_false(is.na(f$j_stat_pval))
+  expect_gte(f$j_stat_pval, 0)
+  expect_lte(f$j_stat_pval, 1)
+  # J ITSELF is still not asserted, and over-identifying is often assumed to fix that and does
+  # not: V has rank exactly q - p for any q and p, so it is singular here too -- the rank only
+  # moves from 0 to 1 -- and inverting it amplifies the optimizer's convergence tolerance. On this
+  # fit the real C# library returns 214.59 where the shared core returns -129.46, from parameters
+  # that agree to 2e-11. So the branch being TAKEN is what is pinned, not what it produced.
+  # The C#-pinned oracle for everything that does reproduce is fixtures/callback/gmm.json.
+  expect_true(coef(f)[["p1"]] != gmm_closed_form()[[1]])
+  expect_true(all(f$standard_errors > 0))
+  expect_identical(dim(vcov(f)), c(2L, 2L)) # p x p, not q x q
+})
+
+test_that("OneStep is refused for an over-identified problem", {
+  # The ported estimator's own validation, and the one strategy/identification combination no
+  # just-identified fit on this surface can reach.
+  expect_error(
+    fit_gmm_moments(gmm_moments3, c(5, 0.5), c(0, 0.001), c(10, 10), length(gmm_data),
+                    strategy = "OneStep"),
+    "over-identified, so you cannot use the one-step estimation method"
+  )
+  # TwoStep and Iterative are accepted for the same problem.
+  for (strategy in c("TwoStep", "Iterative")) {
+    f <- fit_gmm_moments(gmm_moments3, c(5, 0.5), c(0, 0.001), c(10, 10), length(gmm_data),
+                         strategy = strategy)
+    expect_identical(f$degree_of_freedom, 1L)
+  }
+})
+
+test_that("print() shows the J-statistic only where it means something", {
+  # At zero degrees of freedom the number is whatever inverting a singular matrix gave, so
+  # print() names the reason instead of showing it. The field itself stays on the fit.
+  just <- gmm_fit_it()
+  expect_output(print(just), "j-statistic: not interpretable at 0 degrees of freedom")
+  expect_false(is.null(just$j_stat))
+
+  over <- fit_gmm_moments(gmm_moments3, c(5, 0.5), c(0, 0.001), c(10, 10), length(gmm_data))
+  expect_output(print(over), sprintf("j-statistic: %g", over$j_stat))
+  expect_output(print(over), "p-value")
+})
+
 test_that("two fit_gmm_moments runs are identical: there is no generator in this fit", {
   a <- gmm_fit_it()
   b <- gmm_fit_it()
@@ -1114,8 +1201,23 @@ test_that("every strategy fit_gmm_moments accepts finds the same optimum", {
 })
 
 test_that("a moment condition function returning the wrong shape is refused naming g and s", {
+  # A FLAT PAIR of numbers -- the likeliest mistake when q is 2, since `c(g0, g1)` looks like just
+  # the moment vector. It must be refused by the message naming BOTH elements, not by some later
+  # message about one of them; the Python binding needs an explicit check to say the same sentence
+  # here, and test_callback.py's counterpart of this test is what pins it.
   expect_error(
     fit_gmm_moments(function(p) c(1, 2), c(5, 0.5), c(0, 0.001), c(10, 10), 8),
+    "elements 'g' \\(the moment vector\\) and 's' \\(the weighting matrix\\)"
+  )
+  # The same mistake with the real numbers in it, which is what a user actually writes.
+  expect_error(
+    fit_gmm_moments(
+      function(p) {
+        out <- gmm_moments(p)
+        c(out$g[1], out$g[2])
+      },
+      c(5, 0.5), c(0, 0.001), c(10, 10), 8
+    ),
     "elements 'g' \\(the moment vector\\) and 's' \\(the weighting matrix\\)"
   )
   # A list, but not the right one: only `g`.
