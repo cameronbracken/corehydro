@@ -46,7 +46,31 @@ it pointed at no longer exists, and reading it would crash the session rather th
 misbehave.
 }
 
+\examples{
+# The Gibbs proposal is the surface that hands you a handle. This model's full conditional
+# really is uniform: with x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+# Uniform(max(x) - 1, min(x) + 1), so one uniform draw IS the Gibbs step.
+x <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+ll <- function(p) if (all(abs(x - p[1]) <= 1)) 0 else -Inf
+proposal <- function(parameters, rng) {
+  lo <- max(x) - 1
+  hi <- min(x) + 1
+  lo + rng_uniform(rng, 1) * (hi - lo)
+}
+fit <- mcmc_posterior(ll, distribution("Uniform", c(0, 10)),
+                      sampler = "Gibbs", proposal = proposal,
+                      iterations = 200, seed = 12345, initialize = "Randomize")
+fit$posterior_mean
+
+# rng_integers() draws whole numbers on [min, max) off the same stream -- a resampling
+# proposal, say, picking one of the observations by index.
+pick_one <- function(parameters, rng) x[rng_integers(rng, 1, 1, length(x) + 1)]
+mcmc_posterior(ll, distribution("Uniform", c(0, 10)),
+               sampler = "Gibbs", proposal = pick_one,
+               iterations = 200, seed = 12345, initialize = "Randomize")$posterior_mean
+}
 \seealso{
-\code{\link[stats:runif]{stats::runif()}} for ordinary R random numbers, which is what to use anywhere OUTSIDE
-a corehydro callback.
+\code{\link[=mcmc_posterior]{mcmc_posterior()}}, whose \code{proposal} argument is the verb that hands you a handle, and
+\code{\link[stats:runif]{stats::runif()}} for ordinary R random numbers, which is what to use anywhere OUTSIDE a
+corehydro callback.
 }

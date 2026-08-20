@@ -469,6 +469,33 @@ callback_fixture_function <- function(name) {
       }
       -0.5 * acc
     },
+    # The Gibbs case's model, whose full conditional really IS uniform: with
+    # x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+    # Uniform(max(x) - 1, min(x) + 1), so Prop_UniformConditional below is an exact Gibbs step
+    # rather than a random walk wearing Gibbs's name. Comparisons and arithmetic only.
+    Mcmc_UniformWidthKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      for (x in data) {
+        if (x - p[1] > 1 || p[1] - x > 1) return(-Inf)
+      }
+      0
+    },
+    # The proposal catalog: (parameters, rng) -> parameters, upstream's Gibbs.Proposal shape.
+    # Draws through the HANDLE, exactly as a user's own proposal would.
+    Prop_UniformConditional = function(parameters, rng) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      lo <- max(data) - 1
+      hi <- min(data) + 1
+      lo + rng_uniform(rng, 1) * (hi - lo)
+    },
+    # The gradient catalog: (parameters) -> vector, upstream's HMC.Gradient shape. The analytic
+    # derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu), summed in an explicit loop.
+    Grad_GaussianKernel = function(p) {
+      data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+      acc <- 0
+      for (x in data) acc <- acc + (x - p[1])
+      acc
+    },
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1713,7 +1740,20 @@ test_that("oracle fixtures validate", {
         } else if (identical(construct$group, "rng")) {
           ns$ch_rng_probe_(opts, fn)
         } else if (identical(construct$group, "mcmc")) {
-          ns$ch_callback_mcmc_(opts, fn)
+          # The two other delegates the mcmc group's samplers take, each resolved out of the same
+          # catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys stay NULL, which is
+          # what "no proposal" and "the ported default gradient" mean.
+          proposal <- if (is.null(construct$proposal)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$proposal)
+          }
+          gradient <- if (is.null(construct$gradient)) {
+            NULL
+          } else {
+            callback_fixture_function(construct$gradient)
+          }
+          ns$ch_callback_mcmc_(opts, fn, proposal, gradient)
         } else {
           stop(sprintf("unknown callback fixture group: %s", construct$group))
         }

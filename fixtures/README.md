@@ -1819,9 +1819,19 @@ a summary block (`map_fitness`, `acceptance_rate[c]`, then `map[j]`/`posterior_m
 `dims = {n_summary, n_chains, n_draws, n_parameters}`. That is why the `"named"` assertion method
 exists: the summary indices shift with the chain and parameter counts, so `"posterior_mean[0]"`
 says what it pins where `12` does not. `fixtures/callback/mcmc.json` is the one file of this group
-and every value in it is `EMITTER-READ`; both its catalog log-densities are built from `+ - * /`
+and every value in it is `EMITTER-READ`; all its catalog log-densities are built from `+ - * /`
 alone and sum in an explicit loop, because a Markov chain turns one differing bit into a different
 chain outright (R's `sum()` accumulates in extended precision, so it is specifically avoided).
+
+A `"mcmc"` case may also name the two OTHER delegates upstream's samplers take, each a catalog
+entry of its own resolved the same way `callback` is: `construct.proposal` (upstream's
+`Gibbs.Proposal(double[] parameters, Random prng)`, REQUIRED by the Gibbs sampler and accepted by
+nothing else -- the callback is handed a borrowed handle on THIS chain's generator, exactly as the
+`"rng"` group's probe is) and `construct.gradient` (upstream's `HMC.Gradient(IList<double>
+parameters)`, OPTIONAL for HMC and NUTS and accepted by nothing else -- an absent key leaves the
+ported bound-aware finite-difference default in force, which `hmc_gaussian_kernel_default_gradient`
+pins beside `hmc_gaussian_kernel_analytic_gradient`). Both catalogs live in the same fixture's
+`callbacks` block as the log-densities, under the `Prop_`/`Grad_` prefixes.
 
 ### `toolbox_cross_language`
 

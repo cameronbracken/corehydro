@@ -32,8 +32,8 @@ ch_callback_math_ <- function(method, options_json, f) {
   .Call(`_corehydror_ch_callback_math_`, method, options_json, f)
 }
 
-ch_callback_mcmc_ <- function(options_json, f) {
-  .Call(`_corehydror_ch_callback_mcmc_`, options_json, f)
+ch_callback_mcmc_ <- function(options_json, f, proposal, gradient) {
+  .Call(`_corehydror_ch_callback_mcmc_`, options_json, f, proposal, gradient)
 }
 
 ch_rng_probe_ <- function(options_json, f) {

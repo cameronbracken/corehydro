@@ -31,7 +31,9 @@ __all__ = [
     "Rng",
 ]
 
-_SAMPLERS = ("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS")
+_SAMPLERS = ("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs")
+# The samplers that take an analytic gradient. Kept beside _SAMPLERS so the two lists cannot drift.
+_GRADIENT_SAMPLERS = ("HMC", "NUTS")
 
 # The handle a callback is given on the core's seeded generator, defined in bindings/callback.cpp
 # (see its RngHandle). Re-exported here so a user can type-annotate a proposal or resample
@@ -335,6 +337,8 @@ def mcmc_posterior(
     log_likelihood: Callable,
     priors,
     sampler: str = "RWMH",
+    proposal: Callable | None = None,
+    gradient: Callable | None = None,
     iterations: int | None = None,
     warmup: int | None = None,
     chains: int | None = None,
@@ -364,8 +368,22 @@ def mcmc_posterior(
         Takes a list of floats, returns one float.
     priors : Distribution or sequence of Distribution
         One prior per parameter, in the order ``log_likelihood`` reads them.
-    sampler : {"RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS"}
-        The MCMC sampler. ``"Gibbs"`` needs a proposal function and is not available yet.
+    sampler : {"RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs"}
+        The MCMC sampler. ``"Gibbs"`` requires ``proposal``.
+    proposal : callable, optional
+        The conditional proposal function ``"Gibbs"`` samples with, and the only sampler that
+        takes one. It is called as ``proposal(parameters, rng)`` and must return a sequence as
+        long as ``priors``: the next state of the chain, which Gibbs accepts unconditionally.
+        Ordinarily that is a draw from the full conditional of the model. ``rng`` is a
+        :class:`corehydropy.Rng` handle on the generator this chain is running on -- draw from it
+        with ``rng.uniform()`` and ``rng.integers()``, not with :mod:`random` or
+        :mod:`numpy.random`, or the seeded run stops being reproducible.
+    gradient : callable, optional
+        An analytic gradient of ``log_likelihood`` for ``"HMC"`` and ``"NUTS"``, the only samplers
+        that take one. It is called as ``gradient(parameters)`` and must return a sequence as long
+        as ``priors``. Left unset, both samplers use the ported bound-aware finite-difference
+        gradient, which costs two extra ``log_likelihood`` calls per parameter per leapfrog step;
+        an analytic gradient is usually a large saving and is always more accurate.
     iterations : int, optional
         Iterations per chain (sampler default if omitted). ``"SNIS"`` needs at least 10000: its
         ported validation requires ``iterations`` to be at least the output length, and the
@@ -428,6 +446,11 @@ def mcmc_posterior(
     ``initialize="MAP"``, the C# default, runs the DifferentialEvolution optimizer over your
     function before the first chain iteration; ``initialize="Randomize"`` skips the optimizer.
 
+    ``"Gibbs"`` is the sampler whose defaults surprise: the ported constructor sets one chain, no
+    thinning, and 100,000 iterations on top of a 10,000-draw output block, so an ``iterations`` you
+    do not set is 110,000 iterations of BOTH your log-likelihood and your proposal. Set
+    ``iterations``.
+
     **Interrupting a long run.** Ctrl-C returns control with a ``KeyboardInterrupt``, but not
     instantly. The ported samplers have no cancellation hook, so the chain runs to the end of
     its loop -- rejecting every remaining point without calling your function again -- before
@@ -463,6 +486,31 @@ def mcmc_posterior(
         raise ValueError(f"unknown sampler '{sampler}'; use one of {_SAMPLERS}")
     if initialize not in ("MAP", "Randomize"):
         raise ValueError('`initialize` must be "MAP" or "Randomize"')
+    # Each optional delegate belongs to specific samplers, and a mismatch is refused rather than
+    # ignored: a user who writes a gradient and leaves `sampler` at its default would otherwise get
+    # a plausible run that never called it. Worded to match corehydror's mcmc_posterior().
+    if sampler == "Gibbs" and proposal is None:
+        raise ValueError(
+            "the Gibbs sampler requires a `proposal` function; it has no default conditional draw"
+        )
+    if proposal is not None:
+        if not callable(proposal):
+            raise TypeError(
+                "`proposal` must be a function taking (parameters, rng) and returning a "
+                "parameter vector"
+            )
+        if sampler != "Gibbs":
+            raise ValueError(
+                f"`proposal` is only used by the Gibbs sampler; '{sampler}' does not take one"
+            )
+    if gradient is not None:
+        if not callable(gradient):
+            raise TypeError("`gradient` must be a function taking a parameter vector and returning one")
+        if sampler not in _GRADIENT_SAMPLERS:
+            raise ValueError(
+                f"`gradient` is only used by the HMC and NUTS samplers; '{sampler}' does not "
+                "take one"
+            )
 
     options: dict = {
         "sampler": sampler,
@@ -494,7 +542,9 @@ def mcmc_posterior(
         # Identity is what mcmc_sample() sets for the same reason.
         options["proposal_sigma"] = "identity"
 
-    return _mcmc_unflatten(_core.callback_mcmc(json.dumps(options), log_likelihood))
+    return _mcmc_unflatten(
+        _core.callback_mcmc(json.dumps(options), log_likelihood, proposal, gradient)
+    )
 
 
 def _prior_specs(priors) -> list:

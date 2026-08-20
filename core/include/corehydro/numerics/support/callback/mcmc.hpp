@@ -46,18 +46,44 @@
 // and a caller slices by name rather than by arithmetic. The draw block is row-major
 // [chain][draw][parameter].
 //
-// GUARD DISCIPLINE. The log-likelihood guard is built on a SHARED abort state even though this
-// group has one callback today, because the Gibbs proposal and the HMC/NUTS gradient join it in
-// the next task and a group with two live callbacks must abort as one (see callback_guard.hpp's
-// "USE A SHARED STATE" note). The drive site is wrapped and the trailing rethrow is kept, and
-// both halves earn their place here: the -infinity sentinel is a value the samplers treat as an
-// unconditionally rejected point, so an aborted run does NOT throw of its own accord -- it walks
-// the whole chain rejecting everything and returns a finished-looking result, which only the
-// TRAILING rethrow catches. The wrap catches the other half: DifferentialEvolution on the MAP
-// path, handed nothing but -infinity, can throw from its own internals (a singular Hessian
-// inverse) before the latch is ever consulted.
+// THE OTHER TWO DELEGATES. Upstream's samplers take two more caller-written functions beside the
+// log-likelihood, and both are reachable here:
+//
+//   - `proposal`, C# `Gibbs.Proposal(double[] parameters, Random prng)`, REQUIRED by Gibbs and
+//     accepted by nothing else. It is handed the current parameter vector and THIS CHAIN'S
+//     generator (as a borrowed handle -- see rng_handle.hpp) and returns the next parameter
+//     vector, which Gibbs accepts unconditionally. That is why Gibbs was the one ported sampler
+//     neither package could reach until this callback existed: a conditional proposal is
+//     model-specific, so there is nothing sensible to default it to.
+//   - `gradient`, C# `HMC.Gradient(IList<double> parameters)`, OPTIONAL for HMC and NUTS and
+//     accepted by nothing else. Left unsupplied, the ported constructors install their own
+//     bound-aware finite-difference gradient of SafeLogLikelihood, and that default stays in
+//     force -- the empty `std::function` reaches the constructor unchanged rather than being
+//     replaced here by a hand-rolled equivalent.
+//
+// A proposal handed to a non-Gibbs sampler, or a gradient handed to anything but HMC/NUTS, is an
+// error rather than a silent no-op: a user who writes a gradient and picks RWMH by mistake would
+// otherwise get a plausible-looking run that never called their function.
+//
+// GUARD DISCIPLINE. All three guards share ONE abort state, and that is load-bearing rather than
+// tidy. With private states, an R error raised inside the log-likelihood latches only that guard,
+// and Gibbs -- which does not know it is unwinding -- calls the proposal on the next iteration,
+// re-entering R with an unwind already pending. Sharing makes the first throw short-circuit every
+// callback in the group (see callback_guard.hpp's "USE A SHARED STATE" note). Each guard keeps its
+// OWN sentinel, because the right "worst value" differs: -infinity for the log-likelihood (an
+// unconditionally rejected point), an empty vector for the proposal (which the Gibbs arm turns
+// back into the current state, i.e. a rejected proposal), and a zero vector for the gradient (a
+// flat surface, which the leapfrog integrator handles without complaint).
+//
+// The drive site is wrapped AND the trailing rethrow is kept, and both halves earn their place
+// here: the sentinels are all values the samplers treat as legal, so an aborted run does NOT throw
+// of its own accord -- it walks the whole chain rejecting everything and returns a
+// finished-looking result, which only the TRAILING rethrow catches. The wrap catches the other
+// half: DifferentialEvolution on the MAP path, handed nothing but -infinity, can throw from its
+// own internals (a singular Hessian inverse) before the latch is ever consulted.
 #pragma once
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -66,6 +92,8 @@
 #include <vector>
 
 #include "corehydro/numerics/distributions/support/dist_spec.hpp"
+#include "corehydro/numerics/math/linalg/vector.hpp"
+#include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/sampling/mcmc/support/mcmc_run.hpp"
 #include "corehydro/numerics/support/callback/common.hpp"
 #include "corehydro/numerics/support/callback_guard.hpp"
@@ -171,6 +199,12 @@ inline CallbackResult mcmc_flatten(const chmcmc::MCMCRunOutput& o) {
     return r;
 }
 
+// The one sentence naming the samplers each optional delegate belongs to, so the two checks below
+// and the R/Python wrappers cannot drift apart in wording.
+inline bool sampler_takes_gradient(const std::string& sampler_type) {
+    return sampler_type == "HMC" || sampler_type == "NUTS";
+}
+
 inline CallbackResult run_mcmc(const std::string& method, const JsonValue& o,
                                const CallbackSet& cbs) {
     if (method != "sample") throw std::invalid_argument("unknown mcmc method: " + method);
@@ -178,20 +212,86 @@ inline CallbackResult run_mcmc(const std::string& method, const JsonValue& o,
         throw std::invalid_argument("mcmc/sample requires a log-likelihood function");
 
     chmcmc::PriorList priors = mcmc_priors(o);
+    const std::size_t n_parameters = priors.size();
     std::string sampler_type = o.value_or("sampler", "RWMH");
 
-    // Shared abort state from the start: Task 5's proposal and gradient guards join THIS state,
-    // and a group with more than one live callback has to abort as one. See the file header.
+    if (cbs.vector_rng && sampler_type != "Gibbs")
+        throw std::invalid_argument("a proposal function is only used by the Gibbs sampler; '" +
+                                    sampler_type + "' does not take one");
+    if (cbs.vector_vector && !sampler_takes_gradient(sampler_type))
+        throw std::invalid_argument(
+            "a gradient function is only used by the HMC and NUTS samplers; '" + sampler_type +
+            "' does not take one");
+
+    // ONE abort state for all three guards -- see the file header on why sharing it is what stops
+    // a latched log-likelihood from letting the sampler re-enter the host through the proposal.
     CallbackAbortStatePtr abort = make_abort_state();
     GuardedCall<double, const std::vector<double>&> log_likelihood(
         cbs.vector_scalar, -std::numeric_limits<double>::infinity(), abort);
 
+    // The length check lives INSIDE the guarded function rather than around it, so a proposal or
+    // gradient of the wrong length aborts the run exactly as a host-language error does: latched
+    // on the first occurrence, every later callback short-circuited, and the message rethrown from
+    // the protected frame instead of surfacing as whatever the sampler does with a short vector.
+    std::function<std::vector<double>(const std::vector<double>&, sampling::MersenneTwister&)>
+        proposal_fn;
+    if (cbs.vector_rng) {
+        proposal_fn = [fn = cbs.vector_rng, n_parameters](
+                          const std::vector<double>& p,
+                          sampling::MersenneTwister& prng) -> std::vector<double> {
+            std::vector<double> xp = fn(p, prng);
+            if (xp.size() != n_parameters)
+                throw std::invalid_argument(
+                    "the proposal function must return one value per parameter; it was given " +
+                    std::to_string(n_parameters) + " and returned " + std::to_string(xp.size()));
+            return xp;
+        };
+    }
+    GuardedCall<std::vector<double>, const std::vector<double>&, sampling::MersenneTwister&>
+        proposal(proposal_fn, std::vector<double>{}, abort);
+
+    std::function<std::vector<double>(const std::vector<double>&)> gradient_fn;
+    if (cbs.vector_vector) {
+        gradient_fn = [fn = cbs.vector_vector,
+                       n_parameters](const std::vector<double>& p) -> std::vector<double> {
+            std::vector<double> g = fn(p);
+            if (g.size() != n_parameters)
+                throw std::invalid_argument(
+                    "the gradient function must return one value per parameter; it was given " +
+                    std::to_string(n_parameters) + " and returned " + std::to_string(g.size()));
+            return g;
+        };
+    }
+    GuardedCall<std::vector<double>, const std::vector<double>&> gradient(
+        gradient_fn, std::vector<double>(n_parameters, 0.0), abort);
+
+    chmcmc::MCMCRunCallbacks callbacks;
+    if (cbs.vector_rng) {
+        callbacks.proposal = [&proposal](const std::vector<double>& p,
+                                          sampling::MersenneTwister& prng) {
+            std::vector<double> xp = proposal(p, prng);
+            // The guard's sentinel. Gibbs accepts every proposal unconditionally, so there is no
+            // reject branch to hand an empty vector to; returning the CURRENT state is the same
+            // thing said in the only vocabulary this sampler has, and it keeps the recorded chain
+            // the right width for the run that is about to be thrown away anyway.
+            return xp.empty() ? p : xp;
+        };
+    }
+    if (cbs.vector_vector) {
+        callbacks.gradient = [&gradient](const std::vector<double>& p) {
+            return math::linalg::Vector(gradient(p));
+        };
+    }
+    // No gradient supplied leaves `callbacks.gradient` empty, which is exactly what the ported
+    // HMC/NUTS constructors read as "use the bound-aware finite-difference default".
+
     std::unique_ptr<chmcmc::MCMCSampler> sampler = chmcmc::build_sampler(
         sampler_type, std::move(priors),
         [&log_likelihood](const std::vector<double>& p) { return log_likelihood(p); },
-        mcmc_settings(o));
+        mcmc_settings(o), callbacks);
 
-    // See the file header on why BOTH halves are load-bearing here.
+    // See the file header on why BOTH halves are load-bearing here. Any guard in the group
+    // rethrows the group's first exception, so the log-likelihood's is the one asked.
     try {
         sampler->sample();
     } catch (...) {

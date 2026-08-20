@@ -227,8 +227,31 @@ hessian <- function(f, x) {
 #' ("this random number generator handle is no longer valid"), which is deliberate: the generator
 #' it pointed at no longer exists, and reading it would crash the session rather than merely
 #' misbehave.
-#' @seealso [stats::runif()] for ordinary R random numbers, which is what to use anywhere OUTSIDE
-#'   a corehydro callback.
+#' @seealso [mcmc_posterior()], whose `proposal` argument is the verb that hands you a handle, and
+#'   [stats::runif()] for ordinary R random numbers, which is what to use anywhere OUTSIDE a
+#'   corehydro callback.
+#' @examples
+#' # The Gibbs proposal is the surface that hands you a handle. This model's full conditional
+#' # really is uniform: with x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+#' # Uniform(max(x) - 1, min(x) + 1), so one uniform draw IS the Gibbs step.
+#' x <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+#' ll <- function(p) if (all(abs(x - p[1]) <= 1)) 0 else -Inf
+#' proposal <- function(parameters, rng) {
+#'   lo <- max(x) - 1
+#'   hi <- min(x) + 1
+#'   lo + rng_uniform(rng, 1) * (hi - lo)
+#' }
+#' fit <- mcmc_posterior(ll, distribution("Uniform", c(0, 10)),
+#'                       sampler = "Gibbs", proposal = proposal,
+#'                       iterations = 200, seed = 12345, initialize = "Randomize")
+#' fit$posterior_mean
+#'
+#' # rng_integers() draws whole numbers on [min, max) off the same stream -- a resampling
+#' # proposal, say, picking one of the observations by index.
+#' pick_one <- function(parameters, rng) x[rng_integers(rng, 1, 1, length(x) + 1)]
+#' mcmc_posterior(ll, distribution("Uniform", c(0, 10)),
+#'                sampler = "Gibbs", proposal = pick_one,
+#'                iterations = 200, seed = 12345, initialize = "Randomize")$posterior_mean
 #' @name rng_uniform
 NULL
 
@@ -286,7 +309,18 @@ rng_is_whole <- function(x) {
 #' @param priors a list of [distribution()] objects, one per parameter, in the order
 #'   `log_likelihood` reads them. A single distribution is accepted for a one-parameter model.
 #' @param sampler one of `"RWMH"` (the default), `"ARWMH"`, `"DEMCz"`, `"DEMCzs"`, `"HMC"`,
-#'   `"NUTS"`, or `"SNIS"`. `"Gibbs"` needs a proposal function and is not available yet.
+#'   `"NUTS"`, `"SNIS"`, or `"Gibbs"`. `"Gibbs"` requires `proposal`.
+#' @param proposal the conditional proposal function `"Gibbs"` samples with, and the only sampler
+#'   that takes one. It is called as `proposal(parameters, rng)` and must return a numeric vector
+#'   as long as `priors`: the next state of the chain, which Gibbs accepts unconditionally.
+#'   Ordinarily that is a draw from the full conditional of the model. `rng` is a handle on the
+#'   generator this chain is running on -- draw from it with [rng_uniform()] and [rng_integers()],
+#'   not with [stats::runif()], or the seeded run stops being reproducible.
+#' @param gradient an analytic gradient of `log_likelihood` for `"HMC"` and `"NUTS"`, the only
+#'   samplers that take one. It is called as `gradient(parameters)` and must return a numeric
+#'   vector as long as `priors`. Left `NULL`, both samplers use the ported bound-aware
+#'   finite-difference gradient, which costs two extra `log_likelihood` calls per parameter per
+#'   leapfrog step; an analytic gradient is usually a large saving and is always more accurate.
 #' @param iterations iterations per chain (sampler default if `NULL`). `"SNIS"` needs at least
 #'   10000: its ported validation requires `iterations` to be at least the output length, and the
 #'   output length keeps its default of 10000 here.
@@ -336,6 +370,10 @@ rng_is_whole <- function(x) {
 #' `thinning = 1` turned the same run into 0.26 seconds. And `initialize = "MAP"`, the C# default,
 #' runs the DifferentialEvolution optimizer over your function before the first chain iteration;
 #' `initialize = "Randomize"` skips the optimizer.
+#'
+#' `"Gibbs"` is the sampler whose defaults surprise: the ported constructor sets one chain, no
+#' thinning, and 100,000 iterations on top of a 10,000-draw output block, so an `iterations` you do
+#' not set is 110,000 iterations of BOTH your log-likelihood and your proposal. Set `iterations`.
 #' @section Interrupting a long run:
 #' Ctrl-C returns control with an interrupt condition, but not instantly. The ported samplers have
 #' no cancellation hook, so the chain runs to the end of its loop -- rejecting every remaining
@@ -361,7 +399,9 @@ rng_is_whole <- function(x) {
 mcmc_posterior <- function(
   log_likelihood,
   priors,
-  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS"),
+  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs"),
+  proposal = NULL,
+  gradient = NULL,
   iterations = NULL,
   warmup = NULL,
   chains = NULL,
@@ -379,6 +419,34 @@ mcmc_posterior <- function(
   sampler <- match.arg(sampler)
   initialize <- match.arg(initialize)
   priors <- mcmc_prior_list(priors)
+  # Each optional delegate belongs to specific samplers, and a mismatch is refused rather than
+  # ignored: a user who writes a gradient and leaves `sampler` at its default would otherwise get
+  # a plausible run that never called it. Worded to match corehydropy's mcmc_posterior().
+  if (identical(sampler, "Gibbs") && is.null(proposal)) {
+    stop("the Gibbs sampler requires a `proposal` function; it has no default conditional draw",
+         call. = FALSE)
+  }
+  if (!is.null(proposal)) {
+    if (!is.function(proposal)) {
+      stop("`proposal` must be a function taking (parameters, rng) and returning a parameter vector",
+           call. = FALSE)
+    }
+    if (!identical(sampler, "Gibbs")) {
+      stop(sprintf("`proposal` is only used by the Gibbs sampler; '%s' does not take one", sampler),
+           call. = FALSE)
+    }
+  }
+  if (!is.null(gradient)) {
+    if (!is.function(gradient)) {
+      stop("`gradient` must be a function taking a parameter vector and returning one",
+           call. = FALSE)
+    }
+    if (!sampler %in% c("HMC", "NUTS")) {
+      stop(sprintf("`gradient` is only used by the HMC and NUTS samplers; '%s' does not take one",
+                   sampler),
+           call. = FALSE)
+    }
+  }
 
   opts <- list(
     sampler = sampler,
@@ -411,7 +479,7 @@ mcmc_posterior <- function(
     opts$proposal_sigma <- "identity"
   }
 
-  mcmc_unflatten(ch_callback_mcmc_(to_spec_json(opts), log_likelihood))
+  mcmc_unflatten(ch_callback_mcmc_(to_spec_json(opts), log_likelihood, proposal, gradient))
 }
 
 # Internal: accept either a list of distribution() objects or a single one, and refuse anything

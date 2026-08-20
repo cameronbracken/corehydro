@@ -7,7 +7,9 @@
 mcmc_posterior(
   log_likelihood,
   priors,
-  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS"),
+  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs"),
+  proposal = NULL,
+  gradient = NULL,
   iterations = NULL,
   warmup = NULL,
   chains = NULL,
@@ -24,7 +26,20 @@ number.}
 \code{log_likelihood} reads them. A single distribution is accepted for a one-parameter model.}
 
 \item{sampler}{one of \code{"RWMH"} (the default), \code{"ARWMH"}, \code{"DEMCz"}, \code{"DEMCzs"}, \code{"HMC"},
-\code{"NUTS"}, or \code{"SNIS"}. \code{"Gibbs"} needs a proposal function and is not available yet.}
+\code{"NUTS"}, \code{"SNIS"}, or \code{"Gibbs"}. \code{"Gibbs"} requires \code{proposal}.}
+
+\item{proposal}{the conditional proposal function \code{"Gibbs"} samples with, and the only sampler
+that takes one. It is called as \code{proposal(parameters, rng)} and must return a numeric vector
+as long as \code{priors}: the next state of the chain, which Gibbs accepts unconditionally.
+Ordinarily that is a draw from the full conditional of the model. \code{rng} is a handle on the
+generator this chain is running on -- draw from it with \code{\link[=rng_uniform]{rng_uniform()}} and \code{\link[=rng_integers]{rng_integers()}},
+not with \code{\link[stats:runif]{stats::runif()}}, or the seeded run stops being reproducible.}
+
+\item{gradient}{an analytic gradient of \code{log_likelihood} for \code{"HMC"} and \code{"NUTS"}, the only
+samplers that take one. It is called as \code{gradient(parameters)} and must return a numeric
+vector as long as \code{priors}. Left \code{NULL}, both samplers use the ported bound-aware
+finite-difference gradient, which costs two extra \code{log_likelihood} calls per parameter per
+leapfrog step; an analytic gradient is usually a large saving and is always more accurate.}
 
 \item{iterations}{iterations per chain (sampler default if \code{NULL}). \code{"SNIS"} needs at least
 10000: its ported validation requires \code{iterations} to be at least the output length, and the
@@ -102,6 +117,10 @@ Two settings dominate the count and neither is obvious. \code{thinning} multipli
 \code{thinning = 1} turned the same run into 0.26 seconds. And \code{initialize = "MAP"}, the C# default,
 runs the DifferentialEvolution optimizer over your function before the first chain iteration;
 \code{initialize = "Randomize"} skips the optimizer.
+
+\code{"Gibbs"} is the sampler whose defaults surprise: the ported constructor sets one chain, no
+thinning, and 100,000 iterations on top of a 10,000-draw output block, so an \code{iterations} you do
+not set is 110,000 iterations of BOTH your log-likelihood and your proposal. Set \code{iterations}.
 }
 
 \section{Interrupting a long run}{
@@ -116,7 +135,12 @@ point without calling your function again -- before the interrupt surfaces. Meas
 \donttest{
 set.seed(1)
 x <- rnorm(50, mean = 5)
-ll <- function(p) -0.5 * sum((x - p[1])^2)
+# A plain loop and `+ - * /` alone, the portable spelling described above.
+ll <- function(p) {
+  acc <- 0
+  for (xi in x) acc <- acc + (xi - p[1]) * (xi - p[1])
+  -0.5 * acc
+}
 fit <- mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))),
                       iterations = 500, seed = 12345)
 fit$posterior_mean

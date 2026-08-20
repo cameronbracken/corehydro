@@ -445,11 +445,30 @@ def test_a_two_parameter_model_reads_its_priors_in_order():
     assert fit["map"][1] == pytest.approx(2.0, abs=0.2)
 
 
-# The SAME seven-sampler vector mcmc_posterior()'s own `sampler` argument accepts (Gibbs
-# excluded -- it is refused before it ever reaches a sampler, see
-# test_mcmc_posterior_refuses_a_prior_list_that_is_not_one's "unknown sampler" case for the
-# neighboring check). A guard wired for one sampler's arm and silently missing on another is
-# exactly the shape of bug a previous phase shipped, and a single-sampler test cannot catch it.
+# A model whose full conditional really is uniform, so the proposal below is an EXACT Gibbs step
+# (draw from the conditional, accept unconditionally) rather than a random walk in Gibbs clothing:
+# with x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+# Uniform(max(x) - 1, min(x) + 1). For this data that is Uniform(4.2, 5.8), mean exactly 5 and sd
+# 1.6 / sqrt(12) = 0.4619. Arithmetic only, matching the fixture catalog.
+_UNIFORM_WIDTH_DATA = (4.9, 5.1, 5.0, 5.2, 4.8)
+
+
+def _uniform_width_kernel(p):
+    for x in _UNIFORM_WIDTH_DATA:
+        if x - p[0] > 1.0 or p[0] - x > 1.0:
+            return float("-inf")
+    return 0.0
+
+
+def _uniform_conditional(parameters, rng):
+    lo = max(_UNIFORM_WIDTH_DATA) - 1.0
+    hi = min(_UNIFORM_WIDTH_DATA) + 1.0
+    return [lo + rng.uniform(1)[0] * (hi - lo)]
+
+
+# ALL EIGHT samplers mcmc_posterior()'s own `sampler` argument accepts. A guard wired for one
+# sampler's arm and silently missing on another is exactly the shape of bug a previous phase
+# shipped, and a single-sampler test cannot catch it.
 _ALL_SAMPLERS = [
     ("RWMH", 2, 100, 50),
     ("ARWMH", 2, 100, 50),
@@ -461,6 +480,9 @@ _ALL_SAMPLERS = [
     # iterations >= output_length, which mcmc_posterior() does not expose (fixed at the ported
     # default, 10000) -- so this is the smallest legal call, not an arbitrary round number.
     ("SNIS", 1, 10000, None),
+    # Gibbs runs one chain by construction and needs a working proposal before the log-likelihood
+    # is ever reached, so it is the arm where two callbacks are live at once.
+    ("Gibbs", None, 100, 50),
 ]
 
 
@@ -482,6 +504,8 @@ def test_an_error_raised_inside_the_log_likelihood_reaches_the_caller(
     )
     if warmup is not None:
         kwargs["warmup"] = warmup
+    if sampler == "Gibbs":
+        kwargs["proposal"] = _uniform_conditional
     with pytest.raises(ValueError, match="my own error"):
         ch.mcmc_posterior(boom, _ONE_PRIOR, **kwargs)
 
@@ -496,6 +520,9 @@ def test_mcmc_posterior_refuses_a_prior_list_that_is_not_one():
     with pytest.raises(TypeError, match="`log_likelihood` must be a function"):
         ch.mcmc_posterior("not a function", _ONE_PRIOR)
     with pytest.raises(ValueError, match="unknown sampler"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="Nope")
+    # Gibbs is a legal sampler now, but not without the one thing it cannot default.
+    with pytest.raises(ValueError, match="requires a `proposal` function"):
         ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="Gibbs")
     # A None seed used to reach int(None) and fail deep inside the JSON builder with a message
     # that never names the argument; it is now refused by name before that point.
@@ -530,3 +557,151 @@ def test_snis_is_refused_the_settings_its_own_ported_validation_refuses():
         initialize="Randomize",
     )
     assert fit["posterior_mean"][0] == pytest.approx(5.0, abs=0.5)
+
+
+# --- the Gibbs proposal and the HMC/NUTS gradient ---------------------------------------------
+
+
+def test_gibbs_runs_with_a_user_written_proposal():
+    fit = ch.mcmc_posterior(
+        _uniform_width_kernel, [ch.Distribution("Uniform", [0.0, 10.0])],
+        sampler="Gibbs", proposal=_uniform_conditional,
+        iterations=500, warmup=100, thinning=1, seed=12345, initialize="Randomize",
+    )
+    assert fit["posterior_mean"][0] == pytest.approx(5.0, abs=0.5)
+    # The conditional's own moments, which say the draws came from the proposal and not from some
+    # fallback: Uniform(4.2, 5.8) has sd 0.4619, and no state can fall outside its support.
+    assert fit["posterior_sd"][0] == pytest.approx(0.4619, abs=0.05)
+    assert ((fit["chains"][0] >= 4.2) & (fit["chains"][0] <= 5.8)).all()
+    # The ported constructor forces one chain; Gelman-Rubin needs two, so rhat is NaN here.
+    assert len(fit["chains"]) == 1
+    assert math.isnan(fit["rhat"][0])
+
+
+def test_two_seeded_gibbs_runs_are_identical_and_the_proposal_draws_off_the_core_stream():
+    def run(seed):
+        return ch.mcmc_posterior(
+            _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]),
+            sampler="Gibbs", proposal=_uniform_conditional,
+            iterations=300, warmup=100, thinning=1, seed=seed, initialize="Randomize",
+        )["chains"][0]
+
+    assert (run(12345) == run(12345)).all()
+    # A different seed is a different chain, which is what says the proposal is drawing off the
+    # generator the run seeded rather than off Python's own.
+    assert not (run(12345) == run(999)).all()
+
+
+def test_a_proposal_returning_the_wrong_number_of_values_is_refused_by_name():
+    with pytest.raises(ValueError, match="must return one value per parameter"):
+        ch.mcmc_posterior(
+            _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]),
+            sampler="Gibbs", proposal=lambda parameters, rng: list(rng.uniform(2)),
+            iterations=100, warmup=50, thinning=1, seed=12345, initialize="Randomize",
+        )
+
+
+@pytest.mark.parametrize("initialize", ["Randomize", "MAP"])
+def test_an_error_raised_inside_the_proposal_reaches_the_caller(initialize):
+    # The proposal's OWN guard, which no log-likelihood test can prove: it runs beside the
+    # log-likelihood on a SHARED abort state, so the first throw -- whichever callback it comes
+    # from -- short-circuits both and is the message that surfaces.
+    def boom(parameters, rng):
+        raise ValueError("my own proposal error")
+
+    with pytest.raises(ValueError, match="my own proposal error"):
+        ch.mcmc_posterior(
+            _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]),
+            sampler="Gibbs", proposal=boom,
+            iterations=100, warmup=50, thinning=1, seed=12345, initialize=initialize,
+        )
+
+
+def test_a_handle_leaked_out_of_a_proposal_is_dead_afterwards():
+    leaked = {}
+
+    def leaky(parameters, rng):
+        leaked["rng"] = rng
+        return _uniform_conditional(parameters, rng)
+
+    ch.mcmc_posterior(
+        _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]),
+        sampler="Gibbs", proposal=leaky,
+        iterations=100, warmup=50, thinning=1, seed=12345, initialize="Randomize",
+    )
+    with pytest.raises(RuntimeError, match="no longer valid"):
+        leaked["rng"].uniform(1)
+
+
+@pytest.mark.parametrize("sampler", ["HMC", "NUTS"])
+def test_hmc_and_nuts_accept_an_analytic_gradient_and_still_default_without_one(sampler):
+    # The smooth Gaussian kernel again, with its analytic gradient d/dmu = sum(x - mu).
+    calls = {"n": 0}
+
+    def grad(p):
+        calls["n"] += 1
+        acc = 0.0
+        for x in (4.9, 5.1, 5.0, 5.2, 4.8):
+            acc += x - p[0]
+        return [acc]
+
+    kwargs = dict(
+        sampler=sampler, iterations=200, warmup=50, chains=2, thinning=1, seed=12345,
+        initialize="Randomize",
+    )
+    with_gradient = ch.mcmc_posterior(
+        _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), gradient=grad, **kwargs
+    )
+    assert calls["n"] > 0  # the user's gradient really was the one used
+    assert with_gradient["posterior_mean"][0] == pytest.approx(5.0, abs=0.3)
+    # No gradient leaves the ported bound-aware finite-difference default in force.
+    without = ch.mcmc_posterior(
+        _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), **kwargs
+    )
+    assert without["posterior_mean"][0] == pytest.approx(5.0, abs=0.3)
+    # A DELIBERATELY WRONG gradient is what proves the supplied function drives the leapfrog
+    # rather than being quietly ignored. Comparing the analytic run with the default one would
+    # not: the central difference of a quadratic log-density is exact up to rounding, so those two
+    # agree to about 4e-16 (fixtures/callback/mcmc.json's two HMC cases say the same thing with
+    # real numbers). Half the true gradient rather than zero: a zero gradient leaves the momentum
+    # unturned, so NUTS never detects a U-turn and builds its full 2**10 tree every iteration --
+    # correct behaviour, but a million callbacks for one assertion.
+    wrong = ch.mcmc_posterior(
+        _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]),
+        gradient=lambda p: [0.5 * grad(p)[0]], **kwargs
+    )
+    assert not (wrong["chains"][0] == without["chains"][0]).all()
+
+
+@pytest.mark.parametrize("sampler", ["HMC", "NUTS"])
+@pytest.mark.parametrize("initialize", ["Randomize", "MAP"])
+def test_a_gradient_that_raises_reaches_the_caller(sampler, initialize):
+    def boom(p):
+        raise ValueError("my own gradient error")
+
+    with pytest.raises(ValueError, match="my own gradient error"):
+        ch.mcmc_posterior(
+            _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler=sampler,
+            gradient=boom, iterations=100, warmup=50, chains=2, thinning=1, seed=12345,
+            initialize=initialize,
+        )
+
+
+def test_a_gradient_returning_the_wrong_number_of_values_is_refused_by_name():
+    with pytest.raises(ValueError, match="must return one value per parameter"):
+        ch.mcmc_posterior(
+            _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler="HMC",
+            gradient=lambda p: [1.0, 2.0], iterations=100, warmup=50, chains=2, thinning=1,
+            seed=12345, initialize="Randomize",
+        )
+
+
+def test_each_delegate_is_refused_by_the_samplers_that_have_no_use_for_it():
+    with pytest.raises(ValueError, match="only used by the Gibbs sampler"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, proposal=_uniform_conditional)
+    with pytest.raises(ValueError, match="only used by the HMC and NUTS samplers"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, gradient=lambda p: [1.0])
+    with pytest.raises(TypeError, match="`proposal` must be a function"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="Gibbs", proposal="nope")
+    with pytest.raises(TypeError, match="`gradient` must be a function"):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="HMC", gradient="nope")

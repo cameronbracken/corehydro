@@ -4,7 +4,10 @@
   "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"mcmc\", method \"sample\", against the log-likelihood named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. This is upstream's OWN constructor, MCMCSampler(List<IUnivariateDistribution> priorDistributions, LogLikelihood logLikelihoodFunction): the model registry under sampling/mcmc/ that the `mcmc_sampler` kind drives is corehydro fixture scaffolding, while these cases pass their own priors and their own delegate, exactly as a C# caller would. EVERY expected value here is EMITTER-READ: no upstream test samples these models, so the oracle is the real Numerics sampler driven by tools/oracle_emitter with the equivalent C# delegate, never a value computed by this repo's own C++. Both catalog log-densities are built from + - * / alone, with the summation written as an explicit loop rather than any language's sum(): a Markov chain amplifies one differing bit into a different chain outright (one flipped accept-or-reject changes every state after it), so a transcendental call -- or R's extended-precision sum() -- would make these oracles a coincidence of one platform's math library rather than a reproducible fact. The result layout (a named summary block, then the draws row-major by [chain][draw][parameter], with dims = {n_summary, n_chains, n_draws, n_parameters}) is documented in core/include/corehydro/numerics/support/callback/mcmc.hpp; the `named` assertions below read the summary block by label rather than by an index that shifts with the chain and parameter counts.",
   "callbacks": {
     "Mcmc_GaussianKernel": "f(mu) = -0.5 * sum((x - mu)^2) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition: a unit-variance Gaussian kernel with no normalizing term, one parameter]",
-    "Mcmc_LinearKernel": "f(a, b) = -0.5 * sum((y - a - b*t)^2) over t = {1..8}, y = {2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1}  [corehydro addition: the same kernel over the residuals of a straight line, two parameters]"
+    "Mcmc_LinearKernel": "f(a, b) = -0.5 * sum((y - a - b*t)^2) over t = {1..8}, y = {2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1}  [corehydro addition: the same kernel over the residuals of a straight line, two parameters]",
+    "Mcmc_UniformWidthKernel": "f(mu) = 0 when every |x - mu| <= 1 over x = {4.9, 5.1, 5.0, 5.2, 4.8}, else -infinity  [corehydro addition: the log-likelihood of x_i ~ Uniform(mu - 1, mu + 1) with the normalizing term dropped, one parameter. Chosen for the Gibbs case because THIS model's full conditional is itself uniform, so its proposal is an exact conditional draw written with arithmetic and comparisons alone -- a Gaussian conditional would need Box-Muller or an inverse normal CDF, i.e. transcendentals, and those do not reproduce bit for bit across four languages]",
+    "Prop_UniformConditional": "proposal(parameters, prng) = lo + prng.NextDouble() * (hi - lo), lo = max(x) - 1 = 4.2, hi = min(x) + 1 = 5.8  [corehydro addition, upstream's Gibbs.Proposal(double[], Random) shape: the EXACT full conditional of Mcmc_UniformWidthKernel under a flat prior, so every recorded state is an independent Uniform(4.2, 5.8) draw -- mean exactly 5, sd 1.6/sqrt(12) = 0.4619. One NextDouble per call, off the generator the sampler hands in]",
+    "Grad_GaussianKernel": "gradient(mu) = sum(x - mu) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition, upstream's HMC.Gradient(IList<double>) shape: the analytic derivative of Mcmc_GaussianKernel, one parameter]"
   },
   "cases": [
     {
@@ -110,6 +113,98 @@
         { "method": "named", "name": "rhat[1]", "expected": 1.0108072063912357, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
         { "method": "dim", "args": [0], "expected": 20, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_summary = 1 + 3 chains + 8 * 2 parameters" },
         { "method": "dim", "args": [3], "expected": 2, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_parameters" }
+      ]
+    },
+    {
+      "name": "gibbs_uniform_conditional",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_UniformWidthKernel",
+        "proposal": "Prop_UniformConditional",
+        "options": {
+          "sampler": "Gibbs",
+          "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+          "iterations": 300, "warmup": 100, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.984069999799132, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.Mean off the driven C# Gibbs. The theoretical value is exactly 5 (the conditional is Uniform(4.2, 5.8)); the pinned value is the finite sample's, not the theory's" },
+        { "method": "named", "name": "posterior_sd[0]", "expected": 0.4863744430314994, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.StandardDeviation. The conditional's own sd is 1.6/sqrt(12) = 0.4619" },
+        { "method": "named", "name": "posterior_median[0]", "expected": 4.943827163241803, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.Median" },
+        { "method": "named", "name": "map[0]", "expected": 5.7310633707791565, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]. Every feasible state scores 0 under this kernel, so the MAP is simply the first state the output phase recorded -- which makes it a sharp test of WHERE in the stream the run was at that moment" },
+        { "method": "named", "name": "acceptance_rate[0]", "expected": 0.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ: AcceptanceRates[0]. Exactly zero, and correctly so: Gibbs.ChainIteration is a two-line dispatch with no accept/reject step, so it never touches SampleCount and C#'s own AcceptanceRates getter returns 0 for a zero sample count" },
+        { "method": "value", "args": [10], "expected": 4.369926358014346, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][0].Values[0], the first entry of the draw block that follows the 10-value summary block. This is the first proposal the user's own conditional draw ever produced" },
+        { "method": "value", "args": [160], "expected": 4.430059107020497, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][150].Values[0], a mid-chain state. Gibbs accepts unconditionally, so every state IS a proposal: this pins that the proposal consumed exactly one NextDouble per iteration and stayed in step with the C# stream for 150 of them" },
+        { "method": "value", "args": [309], "expected": 4.246628397703171, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][299].Values[0], the last state of the chain -- the far end of the draw block" },
+        { "method": "dim", "args": [0], "expected": 10, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_summary = 1 + 1 chain + 8 * 1 parameter" },
+        { "method": "dim", "args": [1], "expected": 1, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_chains. The Gibbs constructor forces one chain, and this case leaves that default alone" },
+        { "method": "dim", "args": [2], "expected": 300, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_draws, one per iteration" },
+        { "method": "dim", "args": [3], "expected": 1, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_parameters" }
+      ]
+    },
+    {
+      "name": "hmc_gaussian_kernel_analytic_gradient",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_GaussianKernel",
+        "gradient": "Grad_GaussianKernel",
+        "options": {
+          "sampler": "HMC",
+          "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+          "iterations": 200, "warmup": 50, "chains": 2, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.999418060989311, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.Mean off the driven C# HMC constructed with a caller-supplied gradientFunction" },
+        { "method": "named", "name": "posterior_sd[0]", "expected": 0.4338909459907582, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.StandardDeviation" },
+        { "method": "named", "name": "map[0]", "expected": 4.996195064981948, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]" },
+        { "method": "named", "name": "acceptance_rate[0]", "expected": 1.0, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]. HMC's leapfrog integration calls the gradient once per step, so an accept count matching exactly means every one of those calls returned the same value in C# and in the port" },
+        { "method": "value", "args": [11], "expected": 4.752632248421761, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][0].Values[0]" },
+        { "method": "value", "args": [111], "expected": 5.075020267269581, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][100].Values[0], a mid-chain state" }
+      ]
+    },
+    {
+      "name": "hmc_gaussian_kernel_default_gradient",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_GaussianKernel",
+        "options": {
+          "sampler": "HMC",
+          "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+          "iterations": 200, "warmup": 50, "chains": 2, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.999418060989313, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the SAME run as hmc_gaussian_kernel_analytic_gradient with the `gradient` key removed, so what it pins is the OPTIONALITY of that delegate: an absent gradient must select the ported bound-aware finite-difference gradient of SafeLogLikelihood, which is what C# does with `gradientFunction: null`. Read the two cases together and note how CLOSE they land -- 4.999418060989313 against ...311, agreeing to about 4e-16 relative. That is not a coincidence and it is not the delegate being ignored: the central difference of a QUADRATIC log-density is exact up to rounding, so the ported default and the analytic formula genuinely compute the same number here. It follows that this pair cannot, on its own, tell a supplied gradient from an ignored one; that is asserted in each package's own tests instead (a deliberately wrong gradient produces a visibly different chain), and what these two cases pin is that BOTH paths reproduce the C# run" },
+        { "method": "named", "name": "posterior_sd[0]", "expected": 0.4338909459907582, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.StandardDeviation" },
+        { "method": "named", "name": "acceptance_rate[0]", "expected": 1.0, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]" },
+        { "method": "value", "args": [111], "expected": 5.07502026726938, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][100].Values[0], a mid-chain state" }
+      ]
+    },
+    {
+      "name": "nuts_gaussian_kernel_analytic_gradient",
+      "construct": {
+        "group": "mcmc",
+        "method": "sample",
+        "callback": "Mcmc_GaussianKernel",
+        "gradient": "Grad_GaussianKernel",
+        "options": {
+          "sampler": "NUTS",
+          "priors": [{ "family": "Uniform", "parameters": [0.0, 10.0] }],
+          "iterations": 200, "warmup": 50, "chains": 2, "thinning": 1, "seed": 12345,
+          "output_length": 100, "initialize": "Randomize"
+        }
+      },
+      "assertions": [
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.998909978154603, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the second sampler that takes a gradient, so the delegate's dispatch is pinned for both arms and not just HMC's" },
+        { "method": "named", "name": "map[0]", "expected": 5.000409011728744, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]" },
+        { "method": "value", "args": [111], "expected": 5.467371912706708, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][100].Values[0], a mid-chain state" }
       ]
     }
   ]

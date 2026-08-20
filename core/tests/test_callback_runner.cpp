@@ -9,6 +9,7 @@
 #include "check.hpp"
 #include "corehydro/numerics/support/callback_guard.hpp"
 #include "corehydro/numerics/support/callback_runner.hpp"
+#include "corehydro/numerics/support/rng_handle.hpp"
 
 namespace sup = corehydro::numerics::support;
 
@@ -339,6 +340,219 @@ int main() {
                               cbs),
             "requires a proposal function");
     }
+
+    // --- the Gibbs proposal ----------------------------------------------------------------
+    //
+    // A model whose full conditional really is uniform, so the proposal is an EXACT Gibbs step
+    // (draw from the conditional, accept unconditionally) written with arithmetic alone: x_i ~
+    // Uniform(mu - 1, mu + 1), whose conditional for mu under a flat prior is Uniform(max(x) - 1,
+    // min(x) + 1). For {4.9, 5.1, 5.0, 5.2, 4.8} that is Uniform(4.2, 5.8), mean exactly 5. The
+    // C#-pinned oracle for this same model lives in fixtures/callback/mcmc.json.
+    {
+        const std::vector<double> data = {4.9, 5.1, 5.0, 5.2, 4.8};
+        sup::CallbackSet cbs;
+        cbs.vector_scalar = [&data](const std::vector<double>& p) {
+            for (double x : data)
+                if (x - p[0] > 1.0 || p[0] - x > 1.0)
+                    return -std::numeric_limits<double>::infinity();
+            return 0.0;
+        };
+        cbs.vector_rng = [&data](const std::vector<double>&,
+                                 corehydro::numerics::sampling::MersenneTwister& prng) {
+            sup::RngScope scope(prng);
+            double lo = data[0] - 1.0, hi = data[0] + 1.0;
+            for (double x : data) {
+                if (x - 1.0 > lo) lo = x - 1.0;
+                if (x + 1.0 < hi) hi = x + 1.0;
+            }
+            return std::vector<double>{lo + scope.handle()->uniform(1).at(0) * (hi - lo)};
+        };
+        const std::string options = R"({
+            "sampler": "Gibbs", "iterations": 500, "warmup": 100, "chains": 1, "thinning": 1,
+            "seed": 12345, "output_length": 100, "initialize": "Randomize",
+            "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+        sup::CallbackResult r1 = sup::run_callback("mcmc", "sample", options, cbs);
+        sup::CallbackResult r2 = sup::run_callback("mcmc", "sample", options, cbs);
+        // A seeded Gibbs run is deterministic. Compared value by value rather than with CHECK_EQ
+        // on the whole vector, because Gibbs runs ONE chain by construction and Gelman-Rubin needs
+        // at least two, so rhat is NaN here -- a legitimate NaN, but one that compares unequal to
+        // itself and would make a whole-vector equality check fail on an identical run.
+        CHECK_EQ(r1.values.size(), r2.values.size());
+        bool identical = true;
+        for (std::size_t i = 0; i < r1.values.size(); ++i) {
+            const double a = r1.values[i], b = r2.values[i];
+            if (!(a == b || (std::isnan(a) && std::isnan(b)))) identical = false;
+        }
+        CHECK_TRUE(identical);
+        CHECK_EQ(r1.dims.at(1), 1);  // the ctor forces one chain
+        CHECK_EQ(r1.dims.at(2), 500);
+        std::size_t mean_at = 0, sd_at = 0;
+        for (std::size_t i = 0; i < r1.names.size(); ++i) {
+            if (r1.names[i] == "posterior_mean[0]") mean_at = i;
+            if (r1.names[i] == "posterior_sd[0]") sd_at = i;
+        }
+        // Every draw is an independent Uniform(4.2, 5.8): mean 5, sd 1.6 / sqrt(12) = 0.4619.
+        CHECK_NEAR(r1.values.at(mean_at), 5.0, 0.15);
+        CHECK_NEAR(r1.values.at(sd_at), 0.4619, 0.05);
+        // Every state the chain recorded lies inside the conditional's support, which is the
+        // property that says the proposal -- not some default -- produced them.
+        for (std::size_t i = static_cast<std::size_t>(r1.dims.at(0)); i < r1.values.size(); ++i)
+            CHECK_TRUE(r1.values[i] >= 4.2 && r1.values[i] <= 5.8);
+
+        // A proposal returning the wrong number of values is refused by name rather than left to
+        // whatever the sampler does with a short vector.
+        sup::CallbackSet wrong = cbs;
+        wrong.vector_rng = [](const std::vector<double>&,
+                              corehydro::numerics::sampling::MersenneTwister&) {
+            return std::vector<double>{1.0, 2.0};
+        };
+        CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", options, wrong),
+                         "must return one value per parameter");
+
+        // And it belongs to Gibbs alone.
+        CHECK_THROWS_MSG(
+            sup::run_callback("mcmc", "sample",
+                              R"({"sampler": "RWMH", "iterations": 100, "warmup": 50,
+                                  "output_length": 100, "thinning": 1, "seed": 12345,
+                                  "proposal_sigma": "identity",
+                                  "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})",
+                              cbs),
+            "only used by the Gibbs sampler");
+    }
+
+    // --- the HMC/NUTS gradient -------------------------------------------------------------
+    {
+        // The Gaussian kernel again, now with its analytic gradient d/dmu = sum(x - mu).
+        const std::vector<double> data = {4.9, 5.1, 5.0, 5.2, 4.8};
+        sup::CallbackSet cbs;
+        cbs.vector_scalar = [&data](const std::vector<double>& p) {
+            double acc = 0.0;
+            for (double x : data) acc += (x - p[0]) * (x - p[0]);
+            return -0.5 * acc;
+        };
+        int gradient_calls = 0;
+        cbs.vector_vector = [&data, &gradient_calls](const std::vector<double>& p) {
+            ++gradient_calls;
+            double acc = 0.0;
+            for (double x : data) acc += x - p[0];
+            return std::vector<double>{acc};
+        };
+        for (const char* sampler : {"HMC", "NUTS"}) {
+            gradient_calls = 0;
+            std::string options = std::string(R"({"sampler": ")") + sampler +
+                                  R"(", "iterations": 200, "warmup": 50, "chains": 2,
+                                     "thinning": 1, "seed": 12345, "output_length": 100,
+                                     "initialize": "Randomize",
+                                     "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+            sup::CallbackResult r = sup::run_callback("mcmc", "sample", options, cbs);
+            CHECK_TRUE(gradient_calls > 0);  // the user's gradient really was the one used
+            std::size_t mean_at = 0;
+            for (std::size_t i = 0; i < r.names.size(); ++i)
+                if (r.names[i] == "posterior_mean[0]") mean_at = i;
+            CHECK_NEAR(r.values.at(mean_at), 5.0, 0.3);
+
+            // Supplying NO gradient still runs, on the ported bound-aware finite-difference
+            // default the constructors install.
+            sup::CallbackSet no_gradient;
+            no_gradient.vector_scalar = cbs.vector_scalar;
+            sup::CallbackResult d = sup::run_callback("mcmc", "sample", options, no_gradient);
+            CHECK_NEAR(d.values.at(mean_at), 5.0, 0.3);
+            // A DELIBERATELY WRONG gradient is what proves the supplied function drives the
+            // leapfrog rather than being quietly ignored. Comparing the analytic run with the
+            // default one would not: the central difference of a quadratic log-density is exact
+            // up to rounding, so those two agree to about 4e-16 (the fixture's two HMC cases say
+            // the same thing with real numbers). Half the true gradient rather than zero: a zero
+            // gradient leaves the momentum unturned, so NUTS never detects a U-turn and builds its
+            // full 2^10 tree every iteration -- correct behaviour, but a million callbacks for one
+            // assertion.
+            sup::CallbackSet wrong_gradient;
+            wrong_gradient.vector_scalar = cbs.vector_scalar;
+            wrong_gradient.vector_vector = [&data](const std::vector<double>& p) {
+                double acc = 0.0;
+                for (double x : data) acc += x - p[0];
+                return std::vector<double>{0.5 * acc};
+            };
+            sup::CallbackResult w = sup::run_callback("mcmc", "sample", options, wrong_gradient);
+            CHECK_TRUE(w.values != d.values);
+        }
+        // A gradient of the wrong length, and a gradient handed to a sampler that has no use for
+        // one, are both refused by name.
+        sup::CallbackSet wrong = cbs;
+        wrong.vector_vector = [](const std::vector<double>&) {
+            return std::vector<double>{1.0, 2.0};
+        };
+        CHECK_THROWS_MSG(
+            sup::run_callback("mcmc", "sample",
+                              R"({"sampler": "HMC", "iterations": 100, "warmup": 50, "chains": 2,
+                                  "thinning": 1, "seed": 12345, "output_length": 100,
+                                  "initialize": "Randomize",
+                                  "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})",
+                              wrong),
+            "must return one value per parameter");
+        CHECK_THROWS_MSG(
+            sup::run_callback("mcmc", "sample",
+                              R"({"sampler": "DEMCz", "iterations": 100, "warmup": 50,
+                                  "chains": 3, "thinning": 1, "seed": 12345,
+                                  "output_length": 100, "initialize": "Randomize",
+                                  "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})",
+                              cbs),
+            "only used by the HMC and NUTS samplers");
+    }
+
+    // --- one abort state across the whole group ---------------------------------------------
+    //
+    // THE property the shared state buys, and nothing else in this file proves it: when the
+    // PROPOSAL throws, the log-likelihood guard must short-circuit too, so the sampler cannot
+    // re-enter the host through it while an unwind is already pending. With private abort states
+    // this test fails loudly rather than subtly -- the log-likelihood below reports being called
+    // after the proposal has already thrown, and its message, not the proposal's, is what
+    // surfaces. The same check is made from the gradient's side.
+    {
+        bool proposal_aborted = false;
+        sup::CallbackSet cbs;
+        cbs.vector_scalar = [&proposal_aborted](const std::vector<double>&) -> double {
+            if (proposal_aborted)
+                throw std::runtime_error("the log-likelihood was re-entered after the abort");
+            return -1.0;
+        };
+        cbs.vector_rng = [&proposal_aborted](const std::vector<double>&,
+                                             corehydro::numerics::sampling::MersenneTwister&)
+            -> std::vector<double> {
+            proposal_aborted = true;
+            throw HostError();
+        };
+        CHECK_THROWS_MSG(
+            sup::run_callback("mcmc", "sample",
+                              R"({"sampler": "Gibbs", "iterations": 100, "warmup": 50,
+                                  "output_length": 100, "thinning": 1, "seed": 12345,
+                                  "initialize": "Randomize",
+                                  "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})",
+                              cbs),
+            "host language error");
+
+        bool gradient_aborted = false;
+        sup::CallbackSet grad;
+        grad.vector_scalar = [&gradient_aborted](const std::vector<double>&) -> double {
+            if (gradient_aborted)
+                throw std::runtime_error("the log-likelihood was re-entered after the abort");
+            return -1.0;
+        };
+        grad.vector_vector =
+            [&gradient_aborted](const std::vector<double>&) -> std::vector<double> {
+            gradient_aborted = true;
+            throw HostError();
+        };
+        for (const char* sampler : {"HMC", "NUTS"}) {
+            gradient_aborted = false;
+            std::string options = std::string(R"({"sampler": ")") + sampler +
+                                  R"(", "iterations": 100, "warmup": 50, "chains": 2,
+                                     "thinning": 1, "seed": 12345, "output_length": 100,
+                                     "initialize": "Randomize",
+                                     "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+            CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", options, grad),
+                             "host language error");
+        }
+    }
     {
         // A host exception inside the log-likelihood reaches the caller on BOTH initialization
         // paths, and they fail differently, which is why the guard is used in pairs. Under
@@ -374,6 +588,23 @@ int main() {
                 CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", options, cbs),
                                  "host language error");
             }
+        }
+        // The eighth sampler, which needs a proposal before it will run at all. Its proposal here
+        // is a working one, so what throws is the log-likelihood -- the same check the seven above
+        // make, extended to the arm that has two live callbacks.
+        sup::CallbackSet gibbs = cbs;
+        gibbs.vector_rng = [](const std::vector<double>& p,
+                              corehydro::numerics::sampling::MersenneTwister& prng) {
+            sup::RngScope scope(prng);
+            return std::vector<double>{p[0] + scope.handle()->uniform(1).at(0) - 0.5};
+        };
+        for (const char* init : {"Randomize", "MAP"}) {
+            std::string options = std::string(R"({"sampler": "Gibbs", "iterations": 100,
+                                     "warmup": 50, "thinning": 1, "seed": 12345,
+                                     "output_length": 100, "initialize": ")") + init + R"(",
+                                     "priors": [{"family": "Uniform", "parameters": [0.0, 10.0]}]})";
+            CHECK_THROWS_MSG(sup::run_callback("mcmc", "sample", options, gibbs),
+                             "host language error");
         }
     }
     {

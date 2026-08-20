@@ -79,6 +79,27 @@ std::function<double(const std::vector<double>&)> as_vector_scalar_fn(function f
     };
 }
 
+// f(theta) -> vector, the shape the HMC/NUTS gradient callback takes. The length is checked in
+// the core (against the prior count, which is the only place that knows it); here the only job is
+// refusing something that is not a numeric vector at all, and refusing NA/NaN for the same reason
+// as_vector_scalar_fn does -- reading past the end of a vector is the commonest mistake on this
+// surface and R answers it with NA rather than an error.
+std::function<std::vector<double>(const std::vector<double>&)> as_vector_vector_fn(function f) {
+    return [f](const std::vector<double>& p) mutable -> std::vector<double> {
+        writable::doubles par(static_cast<R_xlen_t>(p.size()));
+        for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
+        sexp out = f(par);
+        doubles v = as_doubles(out);
+        std::vector<double> result(v.begin(), v.end());
+        for (double value : result)
+            if (ISNAN(value))
+                throw std::runtime_error(
+                    "the function returned NA or NaN rather than a number; in R, reading past the "
+                    "end of a vector gives NA, so check the length of the vector it was passed");
+        return result;
+    };
+}
+
 // --- the RNG handle -----------------------------------------------------------------------
 //
 // The generator a callback draws from is owned by the C++ frame driving it, so what R gets is an
@@ -184,12 +205,22 @@ list ch_callback_math_(std::string method, std::string options_json, function f)
 // numerics/support/callback/mcmc.hpp; R/callback.R's mcmc_posterior() slices it back into the
 // list mcmc_sample() returns.
 //
+// `proposal` and `gradient` are the two other delegates upstream's samplers take, and either may
+// be NULL: `proposal` is Gibbs's conditional draw, called with (parameters, rng) where `rng` is a
+// handle on THIS chain's generator, and `gradient` is HMC/NUTS's optional analytic gradient,
+// called with the parameter vector. A NULL gradient leaves the ported finite-difference default
+// in force; which sampler may take which is enforced in the core, once, for all four runners.
+//
 // INTERRUPTS. Ctrl-C during a long chain returns control with an interrupt condition, and not
 // instantly -- both halves of that are measured and explained in this file's header note.
 [[cpp11::register]]
-list ch_callback_mcmc_(std::string options_json, function f) {
+list ch_callback_mcmc_(std::string options_json, function f, sexp proposal, sexp gradient) {
     sup::CallbackSet cbs;
     cbs.vector_scalar = as_vector_scalar_fn(f);
+    // The proposal takes the SAME (parameters, generator) shape the rng group's probe takes, so it
+    // is wrapped by the same as_rng_fn -- there is one place a handle is handed to R, not two.
+    if (!Rf_isNull(proposal)) cbs.vector_rng = as_rng_fn(function(proposal));
+    if (!Rf_isNull(gradient)) cbs.vector_vector = as_vector_vector_fn(function(gradient));
     return pack(sup::run_callback("mcmc", "sample", options_json, cbs));
 }
 

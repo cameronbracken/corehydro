@@ -1765,6 +1765,18 @@ def _callback_fixture_function(name):
         return _mcmc_gaussian_kernel
     if name == "Mcmc_LinearKernel":
         return _mcmc_linear_kernel
+    # The Gibbs case's model, whose full conditional really IS uniform: with
+    # x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+    # Uniform(max(x) - 1, min(x) + 1), so Prop_UniformConditional is an exact Gibbs step rather
+    # than a random walk wearing Gibbs's name. Comparisons and arithmetic only.
+    if name == "Mcmc_UniformWidthKernel":
+        return _mcmc_uniform_width_kernel
+    # (parameters, rng) -> parameters, upstream's Gibbs.Proposal shape, drawing through the HANDLE.
+    if name == "Prop_UniformConditional":
+        return _mcmc_uniform_conditional
+    # (parameters) -> vector, upstream's HMC.Gradient shape: d/dmu of Mcmc_GaussianKernel.
+    if name == "Grad_GaussianKernel":
+        return _mcmc_gaussian_gradient
     # The rng catalog (fixtures/callback/rng_handle.json): two arguments, (parameters, rng), the
     # Gibbs proposal's own signature. Each draws through the HANDLE it is given -- exactly what a
     # user's proposal function would do -- rather than reaching for a generator of its own, which
@@ -1804,6 +1816,29 @@ def _mcmc_linear_kernel(p):
     return -0.5 * acc
 
 
+def _mcmc_uniform_width_kernel(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    for x in data:
+        if x - p[0] > 1.0 or p[0] - x > 1.0:
+            return float("-inf")
+    return 0.0
+
+
+def _mcmc_uniform_conditional(parameters, rng):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    lo = max(data) - 1.0
+    hi = min(data) + 1.0
+    return [lo + rng.uniform(1)[0] * (hi - lo)]
+
+
+def _mcmc_gaussian_gradient(p):
+    data = (4.9, 5.1, 5.0, 5.2, 4.8)
+    acc = 0.0
+    for x in data:
+        acc += x - p[0]
+    return [acc]
+
+
 def _rng_warmup_1000(parameters, rng):
     rng.uniform(1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
     return rng.uniform(10)
@@ -1820,7 +1855,16 @@ def _run_callback_case(case):
     elif construct["group"] == "rng":
         r = _core.rng_probe(options_json, fn)
     elif construct["group"] == "mcmc":
-        r = _core.callback_mcmc(options_json, fn)
+        # The two other delegates the mcmc group's samplers take, each resolved out of the same
+        # catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys stay None, which is what
+        # "no proposal" and "the ported default gradient" mean.
+        proposal = (
+            _callback_fixture_function(construct["proposal"]) if "proposal" in construct else None
+        )
+        gradient = (
+            _callback_fixture_function(construct["gradient"]) if "gradient" in construct else None
+        )
+        r = _core.callback_mcmc(options_json, fn, proposal, gradient)
     else:
         raise KeyError(f"unknown callback fixture group: {construct['group']}")
     for a in case["assertions"]:

@@ -119,6 +119,21 @@ std::function<double(double)> as_scalar_fn(py::function f) {
     };
 }
 
+// f(theta) -> vector, the shape the HMC/NUTS gradient callback takes. The length is checked in the
+// core (against the prior count, which is the only place that knows it); here the only job is
+// refusing something that is not a sequence of numbers at all.
+std::function<std::vector<double>(const std::vector<double>&)> as_vector_vector_fn(py::function f) {
+    return [f](const std::vector<double>& p) -> std::vector<double> {
+        py::object out = f(p);
+        try {
+            return out.cast<std::vector<double>>();
+        } catch (const py::cast_error&) {
+            throw std::runtime_error("the function must return a sequence of numbers; got " +
+                                     std::string(py::str(out)));
+        }
+    };
+}
+
 std::function<double(const std::vector<double>&)> as_vector_scalar_fn(py::function f) {
     return [f](const std::vector<double>& p) -> double {
         py::object out = f(p);
@@ -185,14 +200,29 @@ void register_callback(py::module_& m) {
     // 200,000-iteration single chain at the default thinning: 0.3 seconds from the signal to the
     // KeyboardInterrupt reaching the caller. corehydror's src/callback.cpp header carries the R
     // half of the same measurement.
+    //
+    // `proposal` and `gradient` are the two other delegates upstream's samplers take, and either
+    // may be None: `proposal` is Gibbs's conditional draw, called with (parameters, rng) where
+    // `rng` is a handle on THIS chain's generator, and `gradient` is HMC/NUTS's optional analytic
+    // gradient, called with the parameter list. A None gradient leaves the ported
+    // finite-difference default in force; which sampler may take which is enforced in the core,
+    // once, for all four runners.
     m.def(
         "callback_mcmc",
-        [](const std::string& options_json, py::function f) {
+        [](const std::string& options_json, py::function f, py::object proposal,
+           py::object gradient) {
             sup::CallbackSet cbs;
             cbs.vector_scalar = as_vector_scalar_fn(f);
+            // The proposal takes the SAME (parameters, generator) shape the rng group's probe
+            // takes, so it is wrapped by the same as_rng_fn -- there is one place a handle is
+            // handed to Python, not two.
+            if (!proposal.is_none()) cbs.vector_rng = as_rng_fn(proposal.cast<py::function>());
+            if (!gradient.is_none())
+                cbs.vector_vector = as_vector_vector_fn(gradient.cast<py::function>());
             return pack(sup::run_callback("mcmc", "sample", options_json, cbs));
         },
-        py::arg("options_json"), py::arg("f"));
+        py::arg("options_json"), py::arg("f"), py::arg("proposal") = py::none(),
+        py::arg("gradient") = py::none());
 
     // The handle a callback is given on the core's seeded generator. No constructor is exposed:
     // it is handed out by the runner and is only usable for the duration of the one call it was
@@ -209,6 +239,31 @@ The handle borrows the generator for the duration of the one call it was given t
 object to keep. Storing it and drawing from it after your callback has returned raises
 `RuntimeError`, which is deliberate: the generator it pointed at no longer exists, and reading it
 would crash the interpreter rather than merely misbehave.
+
+Examples
+--------
+The Gibbs proposal of :func:`corehydropy.mcmc_posterior` is the verb that hands you one. This
+model's full conditional really is uniform: with x_i ~ Uniform(mu - 1, mu + 1) and a flat prior,
+mu given the data is Uniform(max(x) - 1, min(x) + 1), so one uniform draw IS the Gibbs step.
+
+>>> import corehydropy as ch
+>>> x = [4.9, 5.1, 5.0, 5.2, 4.8]
+>>> def ll(p):
+...     return 0.0 if all(abs(xi - p[0]) <= 1.0 for xi in x) else float("-inf")
+>>> def proposal(parameters, rng):
+...     lo, hi = max(x) - 1.0, min(x) + 1.0
+...     return [lo + rng.uniform(1)[0] * (hi - lo)]
+>>> fit = ch.mcmc_posterior(ll, ch.Distribution("Uniform", [0.0, 10.0]),
+...                         sampler="Gibbs", proposal=proposal,
+...                         iterations=200, seed=12345, initialize="Randomize")
+>>> round(float(fit["posterior_mean"][0]), 1)
+5.0
+
+`rng.integers(n, min, max)` draws whole numbers on [min, max) off the same stream -- a resampling
+proposal, say, picking one of the observations by index.
+
+>>> def pick_one(parameters, rng):
+...     return [x[rng.integers(1, 0, len(x))[0]]]
 )doc")
         .def(
             "uniform",

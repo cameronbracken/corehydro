@@ -358,6 +358,26 @@ mcmc_gaussian_kernel <- function(p) {
   -0.5 * acc
 }
 
+# A model whose full conditional really is uniform, so the proposal below is an EXACT Gibbs step
+# (draw from the conditional, accept unconditionally) rather than a random walk in Gibbs clothing:
+# with x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+# Uniform(max(x) - 1, min(x) + 1). For this data that is Uniform(4.2, 5.8), mean exactly 5 and sd
+# 1.6 / sqrt(12) = 0.4619. Arithmetic only, matching the fixture catalog.
+mcmc_uniform_width_data <- c(4.9, 5.1, 5.0, 5.2, 4.8)
+
+mcmc_uniform_width_kernel <- function(p) {
+  for (x in mcmc_uniform_width_data) {
+    if (x - p[1] > 1 || p[1] - x > 1) return(-Inf)
+  }
+  0
+}
+
+mcmc_uniform_conditional <- function(parameters, rng) {
+  lo <- max(mcmc_uniform_width_data) - 1
+  hi <- min(mcmc_uniform_width_data) + 1
+  lo + rng_uniform(rng, 1) * (hi - lo)
+}
+
 test_that("mcmc_posterior recovers the mean of a user-written Gaussian posterior", {
   fit <- mcmc_posterior(
     mcmc_gaussian_kernel, list(distribution("Uniform", c(0, 10))),
@@ -415,10 +435,9 @@ test_that("an error raised inside the log-likelihood reaches the caller, for eve
   # completion), while "MAP" hands DifferentialEvolution nothing but -infinity and can throw from
   # its own internals first. Only the guard makes the user's own message win in both.
   #
-  # This loops the SAME seven-sampler vector `mcmc_posterior()`'s own `sampler` argument accepts
-  # (Gibbs excluded -- it is refused before it ever reaches a sampler, see the "not one" test
-  # below): a guard wired for one sampler's arm and silently missing on another is exactly the
-  # shape of bug a previous phase shipped, and a single-sampler test cannot catch it.
+  # This loops ALL EIGHT samplers `mcmc_posterior()`'s own `sampler` argument accepts: a guard
+  # wired for one sampler's arm and silently missing on another is exactly the shape of bug a
+  # previous phase shipped, and a single-sampler test cannot catch it.
   samplers <- list(
     list(sampler = "RWMH", chains = 2L, iterations = 100L, warmup = 50L),
     list(sampler = "ARWMH", chains = 2L, iterations = 100L, warmup = 50L),
@@ -429,15 +448,19 @@ test_that("an error raised inside the log-likelihood reaches the caller, for eve
     # SNIS is not a Markov chain: its own ported validation rejects any warm-up and requires
     # iterations >= output_length, which mcmc_posterior() does not expose (fixed at the ported
     # default, 10000) -- so this is the smallest legal call, not an arbitrary round number.
-    list(sampler = "SNIS", chains = 1L, iterations = 10000L, warmup = NULL)
+    list(sampler = "SNIS", chains = 1L, iterations = 10000L, warmup = NULL),
+    # Gibbs runs one chain by construction and needs a working proposal before the log-likelihood
+    # is ever reached, so it is the arm where two callbacks are live at once.
+    list(sampler = "Gibbs", chains = NULL, iterations = 100L, warmup = 50L,
+         proposal = mcmc_uniform_conditional)
   )
   for (s in samplers) {
     for (init in c("Randomize", "MAP")) {
       expect_error(
         mcmc_posterior(
           function(p) stop("my own error"), list(distribution("Uniform", c(0, 10))),
-          sampler = s$sampler, iterations = s$iterations, warmup = s$warmup,
-          chains = s$chains, thinning = 1, seed = 12345, initialize = init
+          sampler = s$sampler, proposal = s$proposal, iterations = s$iterations,
+          warmup = s$warmup, chains = s$chains, thinning = 1, seed = 12345, initialize = init
         ),
         "my own error"
       )
@@ -454,8 +477,13 @@ test_that("mcmc_posterior refuses a prior list that is not one", {
   expect_error(mcmc_posterior("not a function", list(distribution("Uniform", c(0, 10)))),
                "`log_likelihood` must be a function")
   expect_error(
-    mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "Gibbs"),
+    mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "Nope"),
     "'arg' should be one of"
+  )
+  # Gibbs is a legal sampler now, but not without the one thing it cannot default.
+  expect_error(
+    mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "Gibbs"),
+    "requires a `proposal` function"
   )
   # A NULL seed used to reach as.integer(NULL) and fail deep inside the JSON builder with an
   # unhelpful message; it is now refused by name before that point.
@@ -495,4 +523,157 @@ test_that("SNIS is refused the settings its own ported validation refuses", {
   fit <- mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "SNIS",
                         iterations = 10000, seed = 12345, initialize = "Randomize")
   expect_equal(fit$posterior_mean[[1]], 5.0, tolerance = 0.5)
+})
+
+# --- the Gibbs proposal and the HMC/NUTS gradient --------------------------------------------
+
+test_that("Gibbs runs with a user-written proposal", {
+  fit <- mcmc_posterior(
+    mcmc_uniform_width_kernel, priors = list(distribution("Uniform", c(0, 10))),
+    sampler = "Gibbs", proposal = mcmc_uniform_conditional,
+    iterations = 500, warmup = 100, thinning = 1, seed = 12345, initialize = "Randomize"
+  )
+  expect_equal(fit$posterior_mean[[1]], 5.0, tolerance = 0.5)
+  # The conditional's own moments, which say the draws came from the proposal and not from some
+  # fallback: Uniform(4.2, 5.8) has sd 0.4619, and no state can fall outside its support.
+  expect_equal(fit$posterior_sd[[1]], 0.4619, tolerance = 0.05)
+  expect_true(all(fit$chains[[1]] >= 4.2 & fit$chains[[1]] <= 5.8))
+  # The ported constructor forces one chain; Gelman-Rubin needs two, so rhat is NaN here.
+  expect_length(fit$chains, 1L)
+  expect_true(is.nan(fit$rhat[[1]]))
+})
+
+test_that("two seeded Gibbs runs are identical, and the proposal draws off the core stream", {
+  run <- function(seed) {
+    mcmc_posterior(
+      mcmc_uniform_width_kernel, distribution("Uniform", c(0, 10)),
+      sampler = "Gibbs", proposal = mcmc_uniform_conditional,
+      iterations = 300, warmup = 100, thinning = 1, seed = seed, initialize = "Randomize"
+    )$chains[[1]]
+  }
+  expect_identical(run(12345), run(12345))
+  # A different seed is a different chain, which is what says the proposal is drawing off the
+  # generator the run seeded rather than off R's own.
+  expect_false(identical(run(12345), run(999)))
+})
+
+test_that("a proposal returning the wrong number of values is refused by name", {
+  expect_error(
+    mcmc_posterior(
+      mcmc_uniform_width_kernel, distribution("Uniform", c(0, 10)),
+      sampler = "Gibbs", proposal = function(parameters, rng) rng_uniform(rng, 2),
+      iterations = 100, warmup = 50, thinning = 1, seed = 12345, initialize = "Randomize"
+    ),
+    "must return one value per parameter"
+  )
+})
+
+test_that("an error raised inside the proposal reaches the caller, on both init paths", {
+  # The proposal's OWN guard, which no log-likelihood test can prove: it runs beside the
+  # log-likelihood on a SHARED abort state, so the first throw -- whichever callback it comes
+  # from -- short-circuits both and is the message that surfaces.
+  for (init in c("Randomize", "MAP")) {
+    expect_error(
+      mcmc_posterior(
+        mcmc_uniform_width_kernel, distribution("Uniform", c(0, 10)),
+        sampler = "Gibbs", proposal = function(parameters, rng) stop("my own proposal error"),
+        iterations = 100, warmup = 50, thinning = 1, seed = 12345, initialize = init
+      ),
+      "my own proposal error"
+    )
+  }
+  # And a handle leaked out of a proposal is dead afterwards, exactly as one leaked out of
+  # rng_probe() is.
+  leaked <- NULL
+  mcmc_posterior(
+    mcmc_uniform_width_kernel, distribution("Uniform", c(0, 10)),
+    sampler = "Gibbs",
+    proposal = function(parameters, rng) {
+      leaked <<- rng
+      mcmc_uniform_conditional(parameters, rng)
+    },
+    iterations = 100, warmup = 50, thinning = 1, seed = 12345, initialize = "Randomize"
+  )
+  expect_error(rng_uniform(leaked, 1), "no longer valid")
+})
+
+test_that("HMC and NUTS accept an analytic gradient and still default without one", {
+  # The smooth Gaussian kernel again, with its analytic gradient d/dmu = sum(x - mu).
+  grad_calls <- 0L
+  grad <- function(p) {
+    grad_calls <<- grad_calls + 1L
+    acc <- 0
+    for (x in c(4.9, 5.1, 5.0, 5.2, 4.8)) acc <- acc + (x - p[1])
+    acc
+  }
+  for (sampler in c("HMC", "NUTS")) {
+    grad_calls <- 0L
+    args <- list(
+      mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)),
+      sampler = sampler, iterations = 200, warmup = 50, chains = 2, thinning = 1,
+      seed = 12345, initialize = "Randomize"
+    )
+    with_gradient <- do.call(mcmc_posterior, c(args, list(gradient = grad)))
+    expect_gt(grad_calls, 0L)  # the user's gradient really was the one used
+    expect_equal(with_gradient$posterior_mean[[1]], 5.0, tolerance = 0.3)
+    # No gradient leaves the ported bound-aware finite-difference default in force.
+    without <- do.call(mcmc_posterior, args)
+    expect_equal(without$posterior_mean[[1]], 5.0, tolerance = 0.3)
+    # A DELIBERATELY WRONG gradient is what proves the supplied function drives the leapfrog
+    # rather than being quietly ignored. Comparing the analytic run with the default one would
+    # not: the central difference of a quadratic log-density is exact up to rounding, so those
+    # two agree to about 4e-16 (fixtures/callback/mcmc.json's two HMC cases say the same thing
+    # with real numbers). Half the true gradient rather than zero: a zero gradient leaves the
+    # momentum unturned, so NUTS never detects a U-turn and builds its full 2^10 tree every
+    # iteration -- correct behaviour, but a million callbacks for one assertion.
+    wrong <- do.call(mcmc_posterior, c(args, list(gradient = function(p) 0.5 * grad(p))))
+    expect_false(identical(wrong$chains, without$chains))
+  }
+})
+
+test_that("a gradient returning the wrong number of values, or raising, is refused by name", {
+  expect_error(
+    mcmc_posterior(
+      mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)), sampler = "HMC",
+      gradient = function(p) c(1, 2), iterations = 100, warmup = 50, chains = 2,
+      thinning = 1, seed = 12345, initialize = "Randomize"
+    ),
+    "must return one value per parameter"
+  )
+  # The gradient's own guard, on both init paths and both samplers that take one.
+  for (sampler in c("HMC", "NUTS")) {
+    for (init in c("Randomize", "MAP")) {
+      expect_error(
+        mcmc_posterior(
+          mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)), sampler = sampler,
+          gradient = function(p) stop("my own gradient error"), iterations = 100, warmup = 50,
+          chains = 2, thinning = 1, seed = 12345, initialize = init
+        ),
+        "my own gradient error"
+      )
+    }
+  }
+})
+
+test_that("each delegate is refused by the samplers that have no use for it", {
+  expect_error(
+    mcmc_posterior(mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)),
+                   proposal = mcmc_uniform_conditional),
+    "only used by the Gibbs sampler"
+  )
+  expect_error(
+    mcmc_posterior(mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)),
+                   gradient = function(p) 1),
+    "only used by the HMC and NUTS samplers"
+  )
+  expect_error(
+    mcmc_posterior(mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)),
+                   sampler = "Gibbs", proposal = "not a function"),
+    "`proposal` must be a function"
+  )
+  expect_error(
+    mcmc_posterior(mcmc_gaussian_kernel, distribution("Uniform", c(0, 10)),
+                   sampler = "HMC", gradient = "not a function"),
+    "`gradient` must be a function"
+  )
 })

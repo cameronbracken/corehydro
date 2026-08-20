@@ -1742,6 +1742,41 @@ static void callback_fixture_set(const std::string& name, tbx::CallbackSet& cbs)
             }
             return -0.5 * acc;
         };
+    } else if (name == "Mcmc_UniformWidthKernel") {
+        // The Gibbs case's model, whose full conditional really IS uniform: with
+        // x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+        // Uniform(max(x) - 1, min(x) + 1), so `Prop_UniformConditional` below is an exact Gibbs
+        // step rather than a random walk wearing Gibbs's name. The normalizing term is dropped,
+        // as the two kernels above drop theirs; comparisons and arithmetic only.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            for (double x : data)
+                if (x - p[0] > 1.0 || p[0] - x > 1.0)
+                    return -std::numeric_limits<double>::infinity();
+            return 0.0;
+        };
+    } else if (name == "Prop_UniformConditional") {
+        // The proposal catalog: (parameters, rng) -> parameters, upstream's Gibbs.Proposal shape.
+        // Draws through the HANDLE, exactly as the R closure and the Python lambda do.
+        cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            tbx::RngScope scope(prng);
+            double lo = data[0] - 1.0, hi = data[0] + 1.0;
+            for (double x : data) {
+                if (x - 1.0 > lo) lo = x - 1.0;
+                if (x + 1.0 < hi) hi = x + 1.0;
+            }
+            return std::vector<double>{lo + scope.handle()->uniform(1).at(0) * (hi - lo)};
+        };
+    } else if (name == "Grad_GaussianKernel") {
+        // The gradient catalog: (parameters) -> vector, upstream's HMC.Gradient shape. The
+        // analytic derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu).
+        cbs.vector_vector = [](const std::vector<double>& p) {
+            const double data[] = {4.9, 5.1, 5.0, 5.2, 4.8};
+            double acc = 0.0;
+            for (double x : data) acc += x - p[0];
+            return std::vector<double>{acc};
+        };
     } else if (name == "Rng_Uniform") {
         // The rng catalog (fixtures/callback/rng_handle.json). Each of these takes the handle the
         // runner hands it -- the C++ analogue of the R closure calling rng_uniform() and the Python
@@ -1785,6 +1820,13 @@ static void run_callback_kind(const json& spec) {
         const json& construct = c["construct"];
         tbx::CallbackSet cbs;
         callback_fixture_set(construct["callback"].get<std::string>(), cbs);
+        // The two other delegates the mcmc group's samplers take, each resolved out of the same
+        // catalog: a Gibbs proposal and an HMC/NUTS gradient. Absent keys leave the set's members
+        // empty, which is what "no proposal" and "the ported default gradient" mean.
+        if (construct.contains("proposal"))
+            callback_fixture_set(construct["proposal"].get<std::string>(), cbs);
+        if (construct.contains("gradient"))
+            callback_fixture_set(construct["gradient"].get<std::string>(), cbs);
         json options = construct.contains("options") ? construct["options"] : json::object();
         tbx::CallbackResult r =
             tbx::run_callback(construct["group"].get<std::string>(),

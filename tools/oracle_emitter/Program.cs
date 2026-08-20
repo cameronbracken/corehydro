@@ -945,6 +945,54 @@ static Func<double[], double>? CallbackMcmcFunction(string name) => name switch
         }
         return -0.5 * acc;
     },
+    // The Gibbs case's model, whose full conditional really IS uniform: with
+    // x_i ~ Uniform(mu - 1, mu + 1) and a flat prior, mu given the data is
+    // Uniform(max(x) - 1, min(x) + 1), so CallbackProposalFunction below is an EXACT Gibbs step
+    // rather than a random walk wearing Gibbs's name. The normalizing term is dropped, as the two
+    // kernels above drop theirs; comparisons and arithmetic only.
+    "Mcmc_UniformWidthKernel" => p =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        foreach (double x in data)
+            if (x - p[0] > 1d || p[0] - x > 1d) return double.NegativeInfinity;
+        return 0d;
+    },
+    _ => null
+};
+
+// The callback surface, Task 5: the two OTHER delegates upstream's samplers take, driven against
+// the REAL C# Gibbs and HMC/NUTS. `Gibbs.Proposal(double[] parameters, Random prng)` is required
+// by Gibbs and accepted by nothing else; `HMC.Gradient(IList<double> parameters)` is optional for
+// HMC/NUTS and, left null, leaves the C# class's own bound-aware finite-difference gradient in
+// force -- which is exactly what a case with no `gradient` key pins.
+static Gibbs.Proposal? CallbackProposalFunction(string name) => name switch
+{
+    // One uniform draw from the full conditional Uniform(max(x) - 1, min(x) + 1). The draw comes
+    // off the generator the sampler hands in, which is the whole point of the delegate's signature.
+    "Prop_UniformConditional" => (parameters, prng) =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double lo = data[0] - 1d, hi = data[0] + 1d;
+        foreach (double x in data)
+        {
+            if (x - 1d > lo) lo = x - 1d;
+            if (x + 1d < hi) hi = x + 1d;
+        }
+        return new[] { lo + prng.NextDouble() * (hi - lo) };
+    },
+    _ => null
+};
+static HMC.Gradient? CallbackGradientFunction(string name) => name switch
+{
+    // The analytic derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu), summed in an explicit
+    // loop for the same reason the kernels are.
+    "Grad_GaussianKernel" => parameters =>
+    {
+        double[] data = { 4.9, 5.1, 5.0, 5.2, 4.8 };
+        double acc = 0d;
+        foreach (double x in data) acc += x - parameters[0];
+        return new Vector(new[] { acc });
+    },
     _ => null
 };
 
@@ -969,7 +1017,9 @@ static List<IUnivariateDistribution> CallbackMcmcPriors(JsonElement options)
 // Builds + configures + samples one sampler from a callback-group mcmc case's options, mirroring
 // mcmc_run.hpp's build_sampler() arm for arm (the five short user-facing keys plus the sampler's
 // own setting names; an absent key leaves the C# class's OWN default in force).
-static MCMCSampler BuildAndSampleCallbackMcmc(JsonElement options, LogLikelihood logLikelihood)
+static MCMCSampler BuildAndSampleCallbackMcmc(JsonElement options, LogLikelihood logLikelihood,
+                                              Gibbs.Proposal? proposal = null,
+                                              HMC.Gradient? gradient = null)
 {
     var priors = CallbackMcmcPriors(options);
     int d = priors.Count;
@@ -996,11 +1046,16 @@ static MCMCSampler BuildAndSampleCallbackMcmc(JsonElement options, LogLikelihood
                 "identity" => Matrix.Identity(d),
                 var s => throw new Exception($"unknown proposal_sigma sentinel: {s}")
             }),
+        // `gradientFunction: null!` is the C# default, i.e. the class's own bound-aware
+        // finite-difference gradient -- which is exactly what a case with no `gradient` key must
+        // exercise, so it is passed through rather than replaced by a hand-rolled equivalent.
         "HMC" => new HMC(priors, logLikelihood, stepSize: Num("step_size", 0.1),
-                          steps: (int)Num("steps", 50)),
+                          steps: (int)Num("steps", 50), gradientFunction: gradient!),
         "NUTS" => new NUTS(priors, logLikelihood, stepSize: Num("step_size", 0.1),
-                            maxTreeDepth: (int)Num("max_tree_depth", 10)),
+                            maxTreeDepth: (int)Num("max_tree_depth", 10), gradientFunction: gradient),
         "ARWMH" => new ARWMH(priors, logLikelihood),
+        "Gibbs" => new Gibbs(priors, logLikelihood,
+            proposal ?? throw new Exception("the Gibbs sampler requires a proposal function")),
         "SNIS" => new SNIS(priors, logLikelihood),
         "DEMCz" => new DEMCz(priors, logLikelihood),
         "DEMCzs" => new DEMCzs(priors, logLikelihood),
@@ -4917,7 +4972,25 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 if (method != "sample") throw new Exception($"unknown mcmc fixture method: {method}");
                 var f = CallbackMcmcFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not an mcmc log-likelihood");
-                var sampler = BuildAndSampleCallbackMcmc(options, new LogLikelihood(f));
+                // The two other delegates, each resolved out of the same catalog. An absent key
+                // means no proposal (illegal for Gibbs, unused by everything else) and the C#
+                // class's own default gradient.
+                Gibbs.Proposal? proposalFn = null;
+                if (construct.TryGetProperty("proposal", out var propEl))
+                {
+                    string pn = propEl.GetString()!;
+                    proposalFn = CallbackProposalFunction(pn)
+                        ?? throw new Exception($"callback '{pn}' is not a proposal function");
+                }
+                HMC.Gradient? gradientFn = null;
+                if (construct.TryGetProperty("gradient", out var gradEl))
+                {
+                    string gn = gradEl.GetString()!;
+                    gradientFn = CallbackGradientFunction(gn)
+                        ?? throw new Exception($"callback '{gn}' is not a gradient function");
+                }
+                var sampler = BuildAndSampleCallbackMcmc(options, new LogLikelihood(f), proposalFn,
+                                                          gradientFn);
                 (values, valueNames, dims) = FlattenCallbackMcmc(sampler);
             }
             else if (group == "rng")
