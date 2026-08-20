@@ -725,6 +725,35 @@ def test_a_gradient_returning_nan_is_refused(sampler):
         )
 
 
+def test_a_one_parameter_proposal_or_gradient_may_return_a_bare_number():
+    # The same rule the bootstrap delegates follow: R has no scalar type, so a one-parameter
+    # proposal or gradient there is written as a bare numeric, and Python accepts the same spelling
+    # rather than making the two packages' examples differ over a pair of brackets.
+    kwargs = dict(iterations=300, warmup=100, thinning=1, seed=12345, initialize="Randomize")
+    bare = ch.mcmc_posterior(
+        _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler="Gibbs",
+        proposal=lambda parameters, rng: _uniform_conditional(parameters, rng)[0], **kwargs,
+    )["chains"][0]
+    wrapped = ch.mcmc_posterior(
+        _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler="Gibbs",
+        proposal=_uniform_conditional, **kwargs,
+    )["chains"][0]
+    assert (bare == wrapped).all()
+
+    # The Gaussian kernel's analytic gradient, d/dmu = sum(x - mu), returned bare.
+    def grad_bare(p):
+        acc = 0.0
+        for x in (4.9, 5.1, 5.0, 5.2, 4.8):
+            acc += x - p[0]
+        return acc
+
+    for sampler in ("HMC", "NUTS"):
+        assert ch.mcmc_posterior(
+            _gaussian_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler=sampler,
+            gradient=grad_bare, chains=2, **kwargs,
+        )["posterior_mean"][0] == pytest.approx(5.0, abs=0.5)
+
+
 def test_each_delegate_is_refused_by_the_samplers_that_have_no_use_for_it():
     with pytest.raises(ValueError, match="only used by the Gibbs sampler"):
         ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, proposal=_uniform_conditional)
@@ -781,6 +810,39 @@ def test_bootstrap_custom_brackets_the_sample_mean():
     assert res["estimate"][0] == pytest.approx(_boot_sample_mean(), rel=1e-15)
     assert res["failed_replicates"] == 0
     assert res["valid_count"][0] == 500
+
+
+def test_a_length_one_return_may_be_written_as_a_bare_number_as_it_is_in_r():
+    # R has no scalar type: `acc / length(data)` there IS a numeric of length one, and corehydror's
+    # own documented bootstrap_custom example fits the mean exactly that way. Python used to require
+    # `[acc / len(data)]`, so the two packages' examples could not be transliterations of each
+    # other -- the cross-language asymmetry this project least tolerates. A bare number is now the
+    # one-element sequence it stands for, here and in every other callback that returns numbers.
+    def fit_bare(data):
+        acc = 0.0
+        for x in data:
+            acc += x
+        return acc / len(data)
+
+    def statistic_bare(parameters):
+        return parameters[0]
+
+    def resample_bare(data, parameters, rng):
+        return [data[k] for k in rng.integers(len(data), 0, len(data))]
+
+    kwargs = dict(replicates=200, seed=12345)
+    bare = ch.bootstrap_custom(_BOOT_DATA, resample_bare, fit_bare, statistic_bare, **kwargs)
+    wrapped = ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic, **kwargs)
+    assert bare["estimate"][0] == wrapped["estimate"][0]
+    assert bare["lower"][0] == wrapped["lower"][0]
+    assert bare["upper"][0] == wrapped["upper"][0]
+
+    # The same for a jackknife of a one-observation sample, which is the only data delegate that
+    # can legitimately return one number.
+    assert ch.bootstrap_custom(
+        [1.0, 2.0], resample_bare, fit_bare, statistic_bare,
+        jackknife=lambda data, index: data[1 - index], replicates=50, seed=1, ci_method="BCa",
+    )["estimate"][0] == pytest.approx(1.5, rel=1e-15)
 
 
 def test_two_seeded_bootstrap_runs_are_identical_and_the_resample_draws_off_the_core_stream():
@@ -1321,6 +1383,37 @@ def test_an_error_raised_inside_each_of_the_three_gmm_delegates_reaches_the_call
         _gmm_fit(jacobian=boom_jacobian)
     with pytest.raises(ValueError, match="penalty boom"):
         _gmm_fit(penalty=boom_penalty)
+
+
+def test_a_one_moment_condition_model_may_write_g_and_s_bare():
+    # q == 1: `g` is one number and `s` is a 1 x 1 matrix. R writes both as bare numerics (a
+    # length-1 numeric with no `dim` has always been read as the 1 x 1 matrix), so Python accepts
+    # them the same way. The dict form names both elements and is never ambiguous.
+    x = (4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+
+    def one_moment(p):
+        g = s = 0.0
+        for xi in x:
+            a = xi - p[0]
+            g += a
+            s += a * a
+        return {"g": g / 8.0, "s": s / 8.0}
+
+    fit = ch.fit_gmm_moments(one_moment, [5.0], [0.0], [10.0], 8)
+    assert fit.number_of_moment_conditions == 1
+    assert fit.parameters["p1"] == pytest.approx(4.95, rel=1e-8)
+
+    # The tuple form works too, as long as it is not ambiguous: `([g], s)` names the moment vector
+    # by writing it as a sequence.
+    assert ch.fit_gmm_moments(
+        lambda p: ([one_moment(p)["g"]], one_moment(p)["s"]), [5.0], [0.0], [10.0], 8
+    ).parameters["p1"] == pytest.approx(4.95, rel=1e-8)
+
+    # And the one shape that IS ambiguous is refused rather than guessed at: `(number, number)`
+    # could be a q == 1 model or the flat `[g0, g1]` a q == 2 model writes by mistake, and reading
+    # it as the first would fit a different model in silence.
+    with pytest.raises(RuntimeError, match="cannot be told apart from a flat moment vector"):
+        ch.fit_gmm_moments(lambda p: (0.0, 1.0), [5.0, 0.5], [0.0, 0.001], [10.0, 10.0], 8)
 
 
 def test_an_error_raised_in_the_post_processing_re_entry_reports_the_users_message():

@@ -84,6 +84,31 @@ int as_whole_number(const py::object& v, const char* message) {
     return out;
 }
 
+// A callback's return read as a sequence of numbers, ACCEPTING A BARE NUMBER as the length-one
+// sequence it stands for. R has no scalar type -- `acc / length(data)` there IS a numeric of
+// length one -- so without this fallback every length-one return has to be written `[x]` in Python
+// and `x` in R, and the two packages' own documented examples cannot be transliterations of each
+// other. (corehydror's `bootstrap_custom` example fits the mean with `acc / length(data)`; the
+// Python docstring had to spell the same line `[acc / len(data)]` to work at all.) The precedent is
+// row_major_matrix() below, which has always accepted a bare number as the 1 x 1 matrix a
+// one-moment-condition model has.
+//
+// A numpy 0-d array and a numpy scalar both reach the `double` cast, so they are accepted too. A
+// string is not: pybind refuses `str -> double`, and the message names what came back.
+std::vector<double> as_number_sequence(const py::object& out, const std::string& message) {
+    try {
+        return out.cast<std::vector<double>>();
+    } catch (const py::cast_error&) {
+    }
+    // Deliberately NOT `py::isinstance<py::float_>`: an int, a numpy float64 and a 0-d array all
+    // have to work, and each of them casts to double while none of them is a Python float.
+    try {
+        return std::vector<double>{out.cast<double>()};
+    } catch (const py::cast_error&) {
+    }
+    throw std::runtime_error(message + "; got " + std::string(py::str(out)));
+}
+
 // Worded exactly as corehydror's R checks are, so a caller cannot tell which language refused.
 const char* kBadCount = "`n` must be a single positive whole number";
 const char* kBadBounds = "`min` and `max` must each be a single finite whole number";
@@ -103,13 +128,8 @@ std::function<std::vector<double>(const std::vector<double>&, samp::MersenneTwis
     return [f](const std::vector<double>& p, samp::MersenneTwister& prng) {
         sup::RngScope scope(prng);
         py::object out = f(p, RngHandle(scope.handle()));
-        std::vector<double> result;
-        try {
-            result = out.cast<std::vector<double>>();
-        } catch (const py::cast_error&) {
-            throw std::runtime_error("the function must return a sequence of numbers; got " +
-                                     std::string(py::str(out)));
-        }
+        std::vector<double> result =
+            as_number_sequence(out, "the function must return a sequence of numbers");
         for (double value : result)
             if (std::isnan(value))
                 throw std::runtime_error("the function returned nan rather than a number");
@@ -144,13 +164,8 @@ std::function<double(double)> as_scalar_fn(py::function f) {
 std::function<std::vector<double>(const std::vector<double>&)> as_vector_vector_fn(py::function f) {
     return [f](const std::vector<double>& p) -> std::vector<double> {
         py::object out = f(p);
-        std::vector<double> result;
-        try {
-            result = out.cast<std::vector<double>>();
-        } catch (const py::cast_error&) {
-            throw std::runtime_error("the function must return a sequence of numbers; got " +
-                                     std::string(py::str(out)));
-        }
+        std::vector<double> result =
+            as_number_sequence(out, "the function must return a sequence of numbers");
         for (double value : result)
             if (std::isnan(value))
                 throw std::runtime_error("the function returned nan rather than a number");
@@ -198,16 +213,11 @@ std::function<double(const std::vector<double>&)> as_vector_scalar_fn(py::functi
 // so the handle is invalidated the moment the callback returns, by a normal return or by an
 // unwind. It is copied rather than shared because upstream's resample delegate is a THREE-argument
 // shape, `Func<TData, ParameterSet, Random, TData>`, and as_rng_fn's is (parameters, generator).
+// A bare number is accepted as the one-element sequence it stands for -- see as_number_sequence()
+// above on why, and on corehydror's own documented `fit` returning `acc / length(data)`.
 std::vector<double> as_number_list(const py::object& out, const char* what) {
-    std::vector<double> result;
-    try {
-        result = out.cast<std::vector<double>>();
-    } catch (const py::cast_error&) {
-        throw std::runtime_error("the " + std::string(what) +
-                                 " function must return a sequence of numbers; got " +
-                                 std::string(py::str(out)));
-    }
-    return result;
+    return as_number_sequence(out, "the " + std::string(what) +
+                                       " function must return a sequence of numbers");
 }
 
 // f(data, parameters, rng) -> data. Upstream's `Func<TData, ParameterSet, Random, TData>`.
@@ -349,27 +359,30 @@ std::function<sup::MomentConditionReturn(const std::vector<double>&)> as_moment_
             if (py::len(pair) != 2) throw std::runtime_error(kMomentShape);
             g_object = pair[0];
             s_object = pair[1];
-            // `g` must itself be a sequence. Without this, `return [g0, g1]` -- the likeliest
-            // mistake when q == 2, since a flat pair of numbers looks like just the moment vector
-            // -- passes the length check above and is then reported as "'g' ... must be a sequence
-            // of numbers; got 0.0", which points at the wrong thing entirely. R refuses the
-            // identical mistake with the shape message, so this is also what keeps the two
-            // languages saying the same sentence about the same error. `s` is deliberately NOT
-            // checked the same way: row_major_matrix() below accepts a bare number as the 1 x 1
-            // matrix a one-moment-condition model has, exactly as corehydror accepts a length-1
-            // numeric with no `dim`, and requiring a sequence here would retract that.
-            if (!PySequence_Check(g_object.ptr())) throw std::runtime_error(kMomentShape);
+            // THE ONE AMBIGUOUS RETURN on this surface, refused rather than guessed at. Both `g`
+            // and `s` may be written as bare numbers -- `g` because R's `c(x)` is a bare number
+            // there too, `s` because row_major_matrix() reads one as the 1 x 1 matrix a
+            // one-moment-condition model has -- so `(number, number)` could be a q == 1 model, or
+            // it could be `return [g0, g1]`, the likeliest mistake when q == 2, where a flat pair
+            // of numbers looks like just the moment vector. Nothing downstream can tell them
+            // apart, and reading the mistake as a q == 1 model would fit a different model in
+            // silence. The dict form names both elements and is never ambiguous; so is
+            // `([g0], s)`. R cannot reach this at all: its moment function returns a NAMED list,
+            // and a bare `c(g0, g1)` is refused by the same sentence.
+            if (!PySequence_Check(g_object.ptr()) && !PySequence_Check(s_object.ptr()))
+                throw std::runtime_error(
+                    std::string(kMomentShape) +
+                    ". Both came back as bare numbers, which cannot be told apart from a flat "
+                    "moment vector like [g0, g1]: write 'g' as a one-element sequence, or return "
+                    "the dict, which names them");
         }
 
         sup::MomentConditionReturn result;
-        try {
-            result.g = g_object.cast<std::vector<double>>();  // nan passes: see the note above
-        } catch (const py::cast_error&) {
-            throw std::runtime_error(
-                "the moment condition function's 'g' (the moment vector) must be a sequence of "
-                "numbers; got " +
-                std::string(py::str(g_object)));
-        }
+        // nan passes: see the note above. A bare number is the one-element moment vector a
+        // one-moment-condition model has, exactly as corehydror accepts a length-1 numeric.
+        result.g = as_number_sequence(
+            g_object,
+            "the moment condition function's 'g' (the moment vector) must be a sequence of numbers");
         auto s = row_major_matrix(
             s_object, "the moment condition function's 's' (the weighting matrix)");
         result.s = s.first;

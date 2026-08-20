@@ -375,7 +375,8 @@ def mcmc_posterior(
     proposal : callable, optional
         The conditional proposal function ``"Gibbs"`` samples with, and the only sampler that
         takes one. It is called as ``proposal(parameters, rng)`` and must return a sequence as
-        long as ``priors``: the next state of the chain, which Gibbs accepts unconditionally.
+        long as ``priors`` (a bare number when there is one parameter): the next state of the
+        chain, which Gibbs accepts unconditionally.
         Ordinarily that is a draw from the full conditional of the model. ``rng`` is a
         :class:`corehydropy.Rng` handle on the generator this chain is running on -- draw from it
         with ``rng.uniform()`` and ``rng.integers()``, not with :mod:`random` or
@@ -383,7 +384,8 @@ def mcmc_posterior(
     gradient : callable, optional
         An analytic gradient of ``log_likelihood`` for ``"HMC"`` and ``"NUTS"``, the only samplers
         that take one. It is called as ``gradient(parameters)`` and must return a sequence as long
-        as ``priors``. Left unset, both samplers use the ported bound-aware finite-difference
+        as ``priors`` (a bare number when there is one parameter). Left unset, both samplers use
+        the ported bound-aware finite-difference
         gradient, which costs two extra ``log_likelihood`` calls per parameter per leapfrog step;
         an analytic gradient is usually a large saving and is always more accurate.
     iterations : int, optional
@@ -578,7 +580,10 @@ def fit_gmm_moments(
     must return **two things**: the tuple ``(g, s)``, or a dict with keys ``"g"`` and ``"s"``.
 
     - ``g`` is the sample mean of the moment conditions at those parameters: a sequence of q
-      numbers, one per moment condition. GMM drives this towards zero.
+      numbers, one per moment condition. GMM drives this towards zero. With one moment condition
+      it may be written as the bare number, which is R's spelling for it -- except when ``s`` is
+      also written bare, where ``(number, number)`` cannot be told apart from a flat ``[g0, g1]``
+      and is refused by name.
     - ``s`` is their covariance: a q by q **matrix**, written as a sequence of ROWS (a list of
       lists, or a 2-D numpy array). In two-step and iterative GMM the optimal weighting matrix is
       its inverse.
@@ -841,10 +846,11 @@ def bootstrap_custom(
         stops agreeing with R. The returned sample need not be the same length as ``data``.
     ``fit(data)``
         Returns the parameters fitted to ``data``: one number per parameter, the same count every
-        time.
+        time. A one-parameter model may return the bare number rather than ``[x]``, which is the
+        spelling R uses for it.
     ``statistic(parameters)``
         Returns the numbers to put intervals on, computed from a fitted parameter vector: one or
-        more, the same count every time.
+        more, the same count every time. A single statistic may likewise be returned bare.
     ``jackknife(data, index)``
         Returns ``data`` with observation ``index`` left out. ``index`` counts from 0, matching the
         ported delegate, so the Python spelling is ``data[:index] + data[index + 1:]``. Only the
@@ -925,7 +931,7 @@ def bootstrap_custom(
     ...     acc = 0.0
     ...     for xi in data:
     ...         acc += xi
-    ...     return [acc / len(data)]
+    ...     return acc / len(data)
     >>> res = ch.bootstrap_custom(x, resample, fit, lambda p: p, replicates=500, seed=12345)
     >>> bool(res["lower"][0] < res["estimate"][0] < res["upper"][0])
     True

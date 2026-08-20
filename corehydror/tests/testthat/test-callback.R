@@ -1370,6 +1370,25 @@ test_that("an error raised inside each of the three delegates reaches the caller
   )
 })
 
+test_that("a one-moment-condition model may write g and s as bare numbers", {
+  # R has no scalar type, so `g` here IS a length-1 numeric and `s` a length-1 numeric with no
+  # `dim`. Both have always been accepted; the counterpart in test_callback.py now accepts the same
+  # spelling in Python, which it did not before, and this test is the R half of that pair.
+  one_moment <- function(p) {
+    g <- 0
+    s <- 0
+    for (x in gmm_data) {
+      a <- x - p[1]
+      g <- g + a
+      s <- s + a * a
+    }
+    list(g = g / 8, s = s / 8)
+  }
+  fit <- fit_gmm_moments(one_moment, 5, 0, 10, 8)
+  expect_identical(fit$number_of_moment_conditions, 1L)
+  expect_equal(coef(fit)[["p1"]], 4.95, tolerance = 1e-8)
+})
+
 test_that("an error raised in the post-processing re-entry still reports the user's message", {
   # post_process() recomputes S, the Jacobian and g at the fitted parameters AFTER the fit itself
   # has finished, so it is a THIRD place the moment function is entered -- and its own throw is
