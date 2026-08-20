@@ -546,6 +546,31 @@ def test_a_log_likelihood_indexing_past_its_priors_fails_by_name():
         )
 
 
+def test_output_length_is_exposed_and_reproduces_the_cross_language_fixture():
+    # The fixture fixtures/callback/callback_cross_language.json runs this construct with
+    # output_length 100 and asserts its posterior mean and median at ZERO tolerance. Until the
+    # option was exposed, those two numbers could not be reproduced through the public verb at all:
+    # the ported sampler summarizes the OUTPUT BLOCK, not the recorded chain, and the block's
+    # default length is 10,000. The same call in R returns the same doubles.
+    fit = ch.mcmc_posterior(
+        _uniform_width_kernel, ch.Distribution("Uniform", [0.0, 10.0]), sampler="Gibbs",
+        proposal=_uniform_conditional, iterations=300, warmup=100, thinning=1,
+        output_length=100, seed=12345, initialize="Randomize",
+    )
+    assert fit["posterior_mean"][0] == 4.984069999799132
+    assert fit["posterior_median"][0] == 4.943827163241803
+    # The recorded chain is untouched by it: same length, same states, same MAP.
+    assert fit["chains"][0].shape == (300, 1)
+    assert fit["map"][0] == 5.7310633707791565
+
+    # The ported floor is refused by name in both verbs rather than by the ported sentence.
+    floor = "at least 100"
+    with pytest.raises(ValueError, match=floor):
+        ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, output_length=99)
+    with pytest.raises(ValueError, match=floor):
+        ch.mcmc_sample([4.9, 5.1, 5.0], "Normal", output_length=99)
+
+
 def test_snis_is_refused_the_settings_its_own_ported_validation_refuses():
     with pytest.raises(ValueError, match="supports `chains=1` only"):
         ch.mcmc_posterior(_gaussian_kernel, _ONE_PRIOR, sampler="SNIS", chains=4)

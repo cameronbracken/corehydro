@@ -25,6 +25,10 @@
 #'   default if `NULL`).
 #' @param chains number of chains (sampler default if `NULL`).
 #' @param thinning thinning interval (sampler default if `NULL`).
+#' @param output_length total number of retained draws across all chains
+#'   (sampler default, 10,000, if `NULL`). The ported sampler collects
+#'   `ceiling(output_length / chains)` draws per chain after the iteration
+#'   loop. The ported floor is 100 and it is refused below that.
 #' @param seed PRNG seed; `12345` is the C# default.
 #' @param initialize chain initialization: `"MAP"` (from the posterior-mode
 #'   estimate, the C# default) or `"Randomize"` (draws from the priors).
@@ -45,16 +49,20 @@
 mcmc_sample <- function(
   data,
   distribution = "Normal",
-  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS"),
+  sampler = "RWMH",
   iterations = NULL,
   warmup = NULL,
   chains = NULL,
   thinning = NULL,
+  output_length = NULL,
   seed = 12345,
-  initialize = c("MAP", "Randomize")
+  initialize = "MAP"
 ) {
-  sampler <- match.arg(sampler)
-  initialize <- match.arg(initialize)
+  # The same check_choice() mcmc_posterior() uses, over the same list without "Gibbs" (which needs
+  # a model-specific conditional proposal this verb has no way to take). See R/fit.R on why not
+  # match.arg.
+  sampler <- check_choice(sampler, setdiff(mcmc_sampler_names, "Gibbs"), "sampler")
+  initialize <- check_choice(initialize, c("MAP", "Randomize"), "chain initialization")
   settings <- list(prng_seed = as.integer(seed), initialize = initialize)
   if (!is.null(iterations)) {
     settings$iterations <- as.integer(iterations)
@@ -65,6 +73,16 @@ mcmc_sample <- function(
   if (!is.null(warmup)) settings$warmup_iterations <- as.integer(warmup)
   if (!is.null(chains)) settings$number_of_chains <- as.integer(chains)
   if (!is.null(thinning)) settings$thinning_interval <- as.integer(thinning)
+  if (!is.null(output_length)) {
+    # Validated here and worded identically in mcmc_posterior() and corehydropy, so the floor is
+    # refused by name rather than by the ported "The output length must be at least 100."
+    if (!is.numeric(output_length) || length(output_length) != 1L ||
+          !is.finite(output_length) || output_length < 100) {
+      stop("`output_length` must be a single whole number of at least 100, which is the ported ",
+           "sampler's own floor", call. = FALSE)
+    }
+    settings$output_length <- as.integer(output_length)
+  }
   if (identical(sampler, "RWMH")) {
     # The RWMH constructor takes a proposal covariance; MAP initialization
     # overwrites it before first use (the C# test convention).

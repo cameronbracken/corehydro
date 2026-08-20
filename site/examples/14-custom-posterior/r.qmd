@@ -231,7 +231,7 @@ drawing from it later raises an error rather than reading freed memory.
 gibbs <- mcmc_posterior(uniform_width, distribution("Uniform", c(0, 10)),
                         sampler = "Gibbs", proposal = full_conditional,
                         iterations = 300, warmup = 100, thinning = 1,
-                        seed = 12345, initialize = "Randomize")
+                        output_length = 100, seed = 12345, initialize = "Randomize")
 
 chain <- gibbs$chains[[1]]
 cat(sprintf("draws: %d, parameters: %d, chains: %d\n",
@@ -278,14 +278,12 @@ runners reproduce it bit for bit, because both callbacks are built from arithmet
 comparisons alone. It is checked at 1e-15 relative tolerance here only to match the convention
 the other example pages use.
 
-Two of the fixture's numbers are deliberately absent below, and the reason is worth stating.
-The fixture sets the sampler's `output_length` to 100, an option `mcmc_posterior()` does not
-expose, and the posterior mean and median are computed over that output block rather than over
-the recorded chain. Left at the ported Gibbs default of 10,000 the same run reports 5.003896
-rather than the fixture's 4.984070. The chain itself is untouched by this, which is why every
-state, the MAP, the fitness and the acceptance rate below are the fixture's own values. The mean
-and median are asserted at what this call returns, and R and Python return the same double for
-both.
+`output_length` is worth a word, since the call above sets it. The ported sampler computes its
+posterior summaries over an OUTPUT BLOCK collected after the iteration loop, not over the
+recorded chain, so the mean and the median depend on it while the chain does not. The fixture
+uses 100; left at the ported Gibbs default of 10,000 the same run reports a posterior mean of
+5.003896 rather than 4.984070. Every number below is therefore the fixture's own, and R and
+Python return the same double for each.
 
 The regression numbers are a within-R regression check on this page, not a cross-language claim,
 for the reason given in the cross-language section above.
@@ -303,10 +301,9 @@ stopifnot(
   near(chain[151, 1], 4.430059107020497),
   near(chain[300, 1], 4.246628397703171),
 
-  # Gibbs summary statistics, over the default 10,000-draw output block (see above). R and
-  # Python return the same double for each.
-  near(gibbs$posterior_mean[1], 5.0038958189989167),
-  near(gibbs$posterior_median[1], 5.0066633708775043),
+  # Gibbs summary statistics, over the fixture's own 100-draw output block (see above).
+  near(gibbs$posterior_mean[1], 4.984069999799132),
+  near(gibbs$posterior_median[1], 4.943827163241803),
 
   # The regression posterior, within R only.
   near(fit$posterior_mean[1], -7.4538132847773335),

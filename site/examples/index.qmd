@@ -10,6 +10,12 @@ a Jupyter notebook you can download and run) and an R version (`corehydror`, a
 Quarto document). The pair uses the same seeds and prints the same numbers: both
 packages run the same compiled core with a bit-exact Mersenne Twister.
 
+Two pages carry a condition on that, and say so where it applies. On the callback
+surface (examples 13, 14 and 15) the ported routine's input is a function you write,
+so the draws come from the core generator but your own R or Python arithmetic decides
+the values. A seeded run there reproduces across the two languages if and only if your
+function returns bit-identical values.
+
 Every example ends with a reproduction check comparing this port's results
 against the outputs embedded in the upstream notebooks, run by the original C#
 library. Where a result is seeded and deterministic the match is exact; where an

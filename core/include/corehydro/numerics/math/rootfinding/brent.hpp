@@ -15,9 +15,18 @@ inline double sign(double a, double b) {
     return b >= 0 ? (a >= 0 ? a : -a) : (a >= 0 ? -a : a);
 }
 
+// The ported defaults, named rather than left as bare literals in the signature. A caller that
+// must pass `tolerance` positionally in order to reach `max_iterations` would otherwise have to
+// write `1E-8` itself -- a second copy of a value that belongs here, in the ported routine, so
+// that a change to the C# default lands in exactly one place. support/callback/math.hpp's
+// root_find arm is that caller, and the promise not to restate these is a documented one on both
+// packages' `root_find()` help pages.
+inline constexpr double kDefaultTolerance = 1E-8;
+inline constexpr int kDefaultMaxIterations = 1000;
+
 inline double solve(const std::function<double(double)>& f, double lower_bound,
-                    double upper_bound, double tolerance = 1E-8, int max_iterations = 1000,
-                    bool report_failure = true) {
+                    double upper_bound, double tolerance = kDefaultTolerance,
+                    int max_iterations = kDefaultMaxIterations, bool report_failure = true) {
     if (upper_bound < lower_bound)
         throw std::out_of_range("upper bound cannot be less than the lower bound");
 

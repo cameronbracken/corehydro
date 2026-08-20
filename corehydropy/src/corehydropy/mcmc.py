@@ -26,6 +26,7 @@ def mcmc_sample(
     warmup: int | None = None,
     chains: int | None = None,
     thinning: int | None = None,
+    output_length: int | None = None,
     seed: int = 12345,
     initialize: str = "MAP",
 ):
@@ -58,6 +59,11 @@ def mcmc_sample(
         Number of chains (sampler default if omitted).
     thinning : int, optional
         Thinning interval (sampler default if omitted).
+    output_length : int, optional
+        Total number of retained draws across all chains (sampler default, 10,000, if
+        omitted). The ported sampler collects ``ceil(output_length / chains)`` draws per
+        chain after the iteration loop. The ported floor is 100 and it is refused below
+        that.
     seed : int
         PRNG seed; 12345 is the C# default.
     initialize : {"MAP", "Randomize"}
@@ -89,6 +95,15 @@ def mcmc_sample(
         settings["number_of_chains"] = int(chains)
     if thinning is not None:
         settings["thinning_interval"] = int(thinning)
+    if output_length is not None:
+        # Validated here and worded identically in mcmc_posterior() and corehydror, so the floor
+        # is refused by name rather than by the ported "The output length must be at least 100."
+        if int(output_length) < 100:
+            raise ValueError(
+                "`output_length` must be a single whole number of at least 100, which is the "
+                "ported sampler's own floor"
+            )
+        settings["output_length"] = int(output_length)
     if sampler == "RWMH":
         # The RWMH constructor takes a proposal covariance; MAP initialization
         # overwrites it before first use (the C# test convention).

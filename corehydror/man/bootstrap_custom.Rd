@@ -12,7 +12,7 @@ bootstrap_custom(
   jackknife = NULL,
   replicates = 1000,
   alpha = 0.1,
-  ci_method = c("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa"),
+  ci_method = "Percentile",
   seed = 12345,
   parameters = NULL,
   inner_replicates = NULL,

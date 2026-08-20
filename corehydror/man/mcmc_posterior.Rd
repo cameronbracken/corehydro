@@ -7,15 +7,16 @@
 mcmc_posterior(
   log_likelihood,
   priors,
-  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs"),
+  sampler = "RWMH",
   proposal = NULL,
   gradient = NULL,
   iterations = NULL,
   warmup = NULL,
   chains = NULL,
   thinning = NULL,
+  output_length = NULL,
   seed = 12345,
-  initialize = c("MAP", "Randomize")
+  initialize = "MAP"
 )
 }
 \arguments{
@@ -42,8 +43,8 @@ finite-difference gradient, which costs two extra \code{log_likelihood} calls pe
 leapfrog step; an analytic gradient is usually a large saving and is always more accurate.}
 
 \item{iterations}{iterations per chain (sampler default if \code{NULL}). \code{"SNIS"} needs at least
-10000: its ported validation requires \code{iterations} to be at least the output length, and the
-output length keeps its default of 10000 here.}
+10000 unless \code{output_length} is lowered too: its ported validation requires \code{iterations} to
+be at least the output length, whose default is 10000.}
 
 \item{warmup}{warm-up iterations discarded from each chain (sampler default if \code{NULL}). When
 \code{iterations} is given and \code{warmup} is not, half of \code{iterations} is used, matching
@@ -54,6 +55,11 @@ so none is derived for it.}
 at least three; \code{"SNIS"} draws independently and runs one.}
 
 \item{thinning}{thinning interval (sampler default if \code{NULL}).}
+
+\item{output_length}{total number of retained draws across all chains (sampler default, 10,000,
+if \code{NULL}). The ported sampler collects \code{ceiling(output_length / chains)} draws per chain
+after the iteration loop, so this is the second setting -- with \code{thinning} -- that multiplies
+how many times your function is called. The ported floor is 100 and it is refused below that.}
 
 \item{seed}{PRNG seed; \code{12345} is the C# default.}
 
@@ -106,15 +112,17 @@ the count is \code{(iterations + output_length / chains) * thinning * chains}, a
 defaults are 4 chains, a thinning interval of 20 and an output length of 10,000. So
 \code{iterations = 10000} is a million crossings, not ten thousand.
 
-That is affordable. Measured here, \code{iterations = 10000} over a 50-point Gaussian log-density
-took 4.5 seconds, against 4.9 seconds for the \code{\link[=mcmc_sample]{mcmc_sample()}} call in the same units -- the
-callback path is not the slower one, because \code{mcmc_sample()}'s built-in log-likelihood rebuilds
-a distribution object on every evaluation while a small R closure does not. The crossing itself
-costs about 4 microseconds: the same closure called a million times directly from R takes 0.3
-seconds, so roughly 4 of the 4.5 seconds is the boundary and not your code.
+That is affordable. All the figures here come from one machine, one session and one problem --
+a 50-point Gaussian log-density at \code{iterations = 10000}, so exactly the million evaluations
+above -- and \code{corehydropy}'s help page reports the same experiment, so the two can be read
+side by side. The run took 5.0 seconds, against 1.3 seconds for the \code{\link[=mcmc_sample]{mcmc_sample()}} call on
+the same data: the callback path is about four times the built-in one, and most of that is not
+the boundary. The same closure called a million times directly from R takes 2.7 seconds, so
+your own code is over half the total. The crossing itself is about 1.5 microseconds, measured
+by replacing the log-density with \code{function(p) 0}, which brings the run to 1.7 seconds.
 
 Two settings dominate the count and neither is obvious. \code{thinning} multiplies it, so
-\code{thinning = 1} turned the same run into 0.26 seconds. And \code{initialize = "MAP"}, the C# default,
+\code{thinning = 1} turned the same run into 0.23 seconds. And \code{initialize = "MAP"}, the C# default,
 runs the DifferentialEvolution optimizer over your function before the first chain iteration;
 \code{initialize = "Randomize"} skips the optimizer.
 
@@ -127,8 +135,10 @@ not set is 110,000 iterations of BOTH your log-likelihood and your proposal. Set
 
 Ctrl-C returns control with an interrupt condition, but not instantly. The ported samplers have
 no cancellation hook, so the chain runs to the end of its loop -- rejecting every remaining
-point without calling your function again -- before the interrupt surfaces. Measured on a
-100,000-iteration chain: 4.2 seconds from Ctrl-C to the prompt.
+point without calling your function again -- before the interrupt surfaces. The wait is
+therefore set by how much of the run is left, not by the interrupt: measured on a
+100,000-iteration chain interrupted one second in, 3.2 seconds from Ctrl-C to the prompt.
+\code{corehydropy} behaves the same way and reports the same measurement at 200,000 iterations.
 }
 
 \examples{

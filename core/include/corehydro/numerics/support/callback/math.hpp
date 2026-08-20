@@ -71,8 +71,16 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
         GuardedCall<double, double> g(cbs.scalar, std::numeric_limits<double>::quiet_NaN());
         double lower = require_double(o, "lower", "math/root_find");
         double upper = require_double(o, "upper", "math/root_find");
-        double tolerance = o.value_or("tolerance", 1e-8);
-        int max_iterations = o.value_or("max_iterations", 1000);
+        // An ABSENT key leaves the PORTED default in force, and this file does not carry a copy
+        // of that default -- the same rule the quadrature arm below follows with o.contains(),
+        // and the one both packages' root_find() help pages state ("the value is not restated
+        // here, so a change to it lands in one place"). The two constants live in brent.hpp,
+        // beside the signature they default, because `max_iterations` cannot be passed
+        // positionally without also naming `tolerance`.
+        double tolerance = o.contains("tolerance") ? o.at("tolerance").as_double()
+                                                   : rootfinding::kDefaultTolerance;
+        int max_iterations = o.contains("max_iterations") ? o.at("max_iterations").as_int()
+                                                          : rootfinding::kDefaultMaxIterations;
         double root = 0.0;
         try {
             root = rootfinding::solve([&g](double x) { return g(x); }, lower, upper, tolerance,
@@ -91,10 +99,14 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
         if (!cbs.scalar) throw std::invalid_argument("math/derivative requires a scalar function");
         GuardedCall<double, double> g(cbs.scalar, std::numeric_limits<double>::quiet_NaN());
         double point = require_double(o, "point", "math/derivative");
-        double step_size = o.value_or("step_size", -1.0);
         double d = 0.0;
+        // `step_size` is the last parameter, so an absent key simply drops it and the ported
+        // adaptive default applies -- no copy of it here either. See the root_find arm above.
+        auto fx = [&g](double x) { return g(x); };
         try {
-            d = differentiation::derivative([&g](double x) { return g(x); }, point, step_size);
+            d = o.contains("step_size")
+                    ? differentiation::derivative(fx, point, o.at("step_size").as_double())
+                    : differentiation::derivative(fx, point);
         } catch (...) {
             g.rethrow_if_aborted();
             throw;

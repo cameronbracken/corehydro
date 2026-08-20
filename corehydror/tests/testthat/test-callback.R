@@ -478,7 +478,14 @@ test_that("mcmc_posterior refuses a prior list that is not one", {
                "`log_likelihood` must be a function")
   expect_error(
     mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "Nope"),
-    "'arg' should be one of"
+    "unknown sampler 'Nope'; expected one of"
+  )
+  # check_choice(), not match.arg(): a PREFIX is refused too, because Python refuses it and an
+  # argument that is legal in one package and an error in the other is the defect this project
+  # least tolerates.
+  expect_error(
+    mcmc_posterior(ll, list(distribution("Uniform", c(0, 10))), sampler = "Gib"),
+    "unknown sampler 'Gib'; expected one of"
   )
   # Gibbs is a legal sampler now, but not without the one thing it cannot default.
   expect_error(
@@ -509,6 +516,33 @@ test_that("a log-likelihood indexing past its priors fails by name", {
     ),
     "returned NA or NaN rather than a number"
   )
+})
+
+test_that("output_length is exposed and reproduces the cross-language fixture", {
+  # The fixture fixtures/callback/callback_cross_language.json runs this construct with
+  # output_length 100 and asserts its posterior mean and median at ZERO tolerance. Until the
+  # option was exposed, those two numbers could not be reproduced through the public verb at all:
+  # the ported sampler summarizes the OUTPUT BLOCK, not the recorded chain, and the block's
+  # default length is 10,000. The same call in Python returns the same doubles.
+  fit <- mcmc_posterior(
+    mcmc_uniform_width_kernel, list(distribution("Uniform", c(0, 10))),
+    sampler = "Gibbs", proposal = mcmc_uniform_conditional,
+    iterations = 300, warmup = 100, thinning = 1, output_length = 100,
+    seed = 12345, initialize = "Randomize"
+  )
+  expect_identical(fit$posterior_mean[[1]], 4.984069999799132)
+  expect_identical(fit$posterior_median[[1]], 4.943827163241803)
+  # The recorded chain is untouched by it: same length, same states, same MAP.
+  expect_identical(dim(fit$chains[[1]]), c(300L, 1L))
+  expect_identical(fit$map[[1]], 5.7310633707791565)
+
+  # The ported floor is refused by name in both verbs rather than by the ported sentence.
+  expect_error(
+    mcmc_posterior(mcmc_gaussian_kernel, list(distribution("Uniform", c(0, 10))),
+                   output_length = 99),
+    "at least 100"
+  )
+  expect_error(mcmc_sample(c(4.9, 5.1, 5.0), "Normal", output_length = 99), "at least 100")
 })
 
 test_that("SNIS is refused the settings its own ported validation refuses", {
@@ -963,7 +997,11 @@ test_that("bootstrap_custom refuses arguments that are not what they claim", {
                "`alpha` must be a single number between 0 and 1")
   expect_error(bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
                                 ci_method = "Nope"),
-               "'arg' should be one of")
+               "unknown ci_method 'Nope'; expected one of")
+  # A prefix is refused for the same reason mcmc_posterior() refuses one.
+  expect_error(bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                                ci_method = "Perc"),
+               "unknown ci_method 'Perc'; expected one of")
 })
 
 test_that("a handle leaked out of a resample callback is dead afterwards", {

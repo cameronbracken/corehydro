@@ -20,8 +20,15 @@ for the details of what is currently implemented in the core library and in the 
 ## R and Python packages
 
 R (`corehydror`) and Python (`corehydropy`) packages are also available with bindings to call the 
-functions in the core library. Both packages call the same code and are expected to produce 
-identical results with the same random seed.
+functions in the core library. Both packages call the same code, so a seeded run produces identical 
+results in each.
+
+The one condition on that is the callback surface, where the ported routine's input is a function 
+you write rather than data. The draws still come from the core generator, but your own R or Python 
+arithmetic decides the values, and the two languages do not guarantee identical rounding for the 
+same formula. A seeded run there reproduces across the two languages if and only if your function 
+returns bit-identical values, which arithmetic (`+ - * /`) does and a call into a platform math 
+library is not guaranteed to.
 
 ## Documentation
 

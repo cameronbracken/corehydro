@@ -9,6 +9,15 @@
 # runner rethrows it after the ported routine returns, so an internal C++ error provoked by the
 # guard's own sentinel can never replace it.
 
+# The eight ported samplers mcmc_posterior() reaches, the two that take an analytic gradient, and
+# the five confidence-interval methods bootstrap_custom() offers. Declared once rather than in each
+# signature: mcmc_sample() takes the same list without "Gibbs", and a second copy is how the two
+# verbs come to disagree about what they accept. corehydropy carries the same three as _SAMPLERS,
+# _GRADIENT_SAMPLERS and _CI_METHODS in callback.py. Internal, so no NAMESPACE entry.
+mcmc_sampler_names <- c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs")
+mcmc_gradient_sampler_names <- c("HMC", "NUTS")
+bootstrap_ci_method_names <- c("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa")
+
 # Internal: validate the function argument the same way for every verb.
 callback_check_fn <- function(f) {
   if (!is.function(f)) {
@@ -322,8 +331,8 @@ rng_is_whole <- function(x) {
 #'   finite-difference gradient, which costs two extra `log_likelihood` calls per parameter per
 #'   leapfrog step; an analytic gradient is usually a large saving and is always more accurate.
 #' @param iterations iterations per chain (sampler default if `NULL`). `"SNIS"` needs at least
-#'   10000: its ported validation requires `iterations` to be at least the output length, and the
-#'   output length keeps its default of 10000 here.
+#'   10000 unless `output_length` is lowered too: its ported validation requires `iterations` to
+#'   be at least the output length, whose default is 10000.
 #' @param warmup warm-up iterations discarded from each chain (sampler default if `NULL`). When
 #'   `iterations` is given and `warmup` is not, half of `iterations` is used, matching
 #'   [mcmc_sample()]. `"SNIS"` is the exception: its ported validation rejects any warm-up at all,
@@ -331,6 +340,10 @@ rng_is_whole <- function(x) {
 #' @param chains number of chains (sampler default if `NULL`). `"DEMCz"` and `"DEMCzs"` require
 #'   at least three; `"SNIS"` draws independently and runs one.
 #' @param thinning thinning interval (sampler default if `NULL`).
+#' @param output_length total number of retained draws across all chains (sampler default, 10,000,
+#'   if `NULL`). The ported sampler collects `ceiling(output_length / chains)` draws per chain
+#'   after the iteration loop, so this is the second setting -- with `thinning` -- that multiplies
+#'   how many times your function is called. The ported floor is 100 and it is refused below that.
 #' @param seed PRNG seed; `12345` is the C# default.
 #' @param initialize chain initialization: `"MAP"` (from the posterior-mode estimate, the C#
 #'   default) or `"Randomize"` (draws from the priors).
@@ -359,15 +372,17 @@ rng_is_whole <- function(x) {
 #' defaults are 4 chains, a thinning interval of 20 and an output length of 10,000. So
 #' `iterations = 10000` is a million crossings, not ten thousand.
 #'
-#' That is affordable. Measured here, `iterations = 10000` over a 50-point Gaussian log-density
-#' took 4.5 seconds, against 4.9 seconds for the [mcmc_sample()] call in the same units -- the
-#' callback path is not the slower one, because `mcmc_sample()`'s built-in log-likelihood rebuilds
-#' a distribution object on every evaluation while a small R closure does not. The crossing itself
-#' costs about 4 microseconds: the same closure called a million times directly from R takes 0.3
-#' seconds, so roughly 4 of the 4.5 seconds is the boundary and not your code.
+#' That is affordable. All the figures here come from one machine, one session and one problem --
+#' a 50-point Gaussian log-density at `iterations = 10000`, so exactly the million evaluations
+#' above -- and `corehydropy`'s help page reports the same experiment, so the two can be read
+#' side by side. The run took 5.0 seconds, against 1.3 seconds for the [mcmc_sample()] call on
+#' the same data: the callback path is about four times the built-in one, and most of that is not
+#' the boundary. The same closure called a million times directly from R takes 2.7 seconds, so
+#' your own code is over half the total. The crossing itself is about 1.5 microseconds, measured
+#' by replacing the log-density with `function(p) 0`, which brings the run to 1.7 seconds.
 #'
 #' Two settings dominate the count and neither is obvious. `thinning` multiplies it, so
-#' `thinning = 1` turned the same run into 0.26 seconds. And `initialize = "MAP"`, the C# default,
+#' `thinning = 1` turned the same run into 0.23 seconds. And `initialize = "MAP"`, the C# default,
 #' runs the DifferentialEvolution optimizer over your function before the first chain iteration;
 #' `initialize = "Randomize"` skips the optimizer.
 #'
@@ -377,8 +392,10 @@ rng_is_whole <- function(x) {
 #' @section Interrupting a long run:
 #' Ctrl-C returns control with an interrupt condition, but not instantly. The ported samplers have
 #' no cancellation hook, so the chain runs to the end of its loop -- rejecting every remaining
-#' point without calling your function again -- before the interrupt surfaces. Measured on a
-#' 100,000-iteration chain: 4.2 seconds from Ctrl-C to the prompt.
+#' point without calling your function again -- before the interrupt surfaces. The wait is
+#' therefore set by how much of the run is left, not by the interrupt: measured on a
+#' 100,000-iteration chain interrupted one second in, 3.2 seconds from Ctrl-C to the prompt.
+#' `corehydropy` behaves the same way and reports the same measurement at 200,000 iterations.
 #' @seealso [mcmc_sample()] for a built-in family under constraint-based priors, which is faster
 #'   and bit-identical across languages.
 #' @examples
@@ -399,15 +416,16 @@ rng_is_whole <- function(x) {
 mcmc_posterior <- function(
   log_likelihood,
   priors,
-  sampler = c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs"),
+  sampler = "RWMH",
   proposal = NULL,
   gradient = NULL,
   iterations = NULL,
   warmup = NULL,
   chains = NULL,
   thinning = NULL,
+  output_length = NULL,
   seed = 12345,
-  initialize = c("MAP", "Randomize")
+  initialize = "MAP"
 ) {
   if (!is.function(log_likelihood)) {
     stop("`log_likelihood` must be a function taking a parameter vector and returning a single number",
@@ -416,8 +434,12 @@ mcmc_posterior <- function(
   if (is.null(seed)) {
     stop("`seed` must not be NULL", call. = FALSE)
   }
-  sampler <- match.arg(sampler)
-  initialize <- match.arg(initialize)
+  # check_choice() rather than match.arg(), here and in every enumerated argument on this
+  # surface: match.arg accepts an unambiguous PREFIX, so `sampler = "Gib"` would run in R and be
+  # an error in Python, and it names the offending value `'arg'` instead of `sampler`. The lists
+  # and the helper live in R/fit.R. corehydropy raises the same two sentences.
+  sampler <- check_choice(sampler, mcmc_sampler_names, "sampler")
+  initialize <- check_choice(initialize, c("MAP", "Randomize"), "chain initialization")
   priors <- mcmc_prior_list(priors)
   # Each optional delegate belongs to specific samplers, and a mismatch is refused rather than
   # ignored: a user who writes a gradient and leaves `sampler` at its default would otherwise get
@@ -441,7 +463,7 @@ mcmc_posterior <- function(
       stop("`gradient` must be a function taking a parameter vector and returning one",
            call. = FALSE)
     }
-    if (!sampler %in% c("HMC", "NUTS")) {
+    if (!sampler %in% mcmc_gradient_sampler_names) {
       stop(sprintf("`gradient` is only used by the HMC and NUTS samplers; '%s' does not take one",
                    sampler),
            call. = FALSE)
@@ -472,6 +494,14 @@ mcmc_posterior <- function(
     opts$chains <- as.integer(chains)
   }
   if (!is.null(thinning)) opts$thinning <- as.integer(thinning)
+  if (!is.null(output_length)) {
+    if (!is.numeric(output_length) || length(output_length) != 1L ||
+          !is.finite(output_length) || output_length < 100) {
+      stop("`output_length` must be a single whole number of at least 100, which is the ported ",
+           "sampler's own floor", call. = FALSE)
+    }
+    opts$output_length <- as.integer(output_length)
+  }
   if (identical(sampler, "RWMH")) {
     # The RWMH constructor takes a proposal covariance, and the ported default is all zeros,
     # which is only usable when MAP initialization overwrites it before the first iteration.
@@ -584,7 +614,7 @@ bootstrap_custom <- function(
   jackknife = NULL,
   replicates = 1000,
   alpha = 0.1,
-  ci_method = c("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa"),
+  ci_method = "Percentile",
   seed = 12345,
   parameters = NULL,
   inner_replicates = NULL,
@@ -597,7 +627,7 @@ bootstrap_custom <- function(
   bootstrap_check_fn(fit, "fit", "(data)")
   bootstrap_check_fn(statistic, "statistic", "(parameters)")
   if (!is.null(jackknife)) bootstrap_check_fn(jackknife, "jackknife", "(data, index)")
-  ci_method <- match.arg(ci_method)
+  ci_method <- check_choice(ci_method, bootstrap_ci_method_names, "ci_method")
   # Refused HERE rather than after the run: the ported class checks it inside
   # GetConfidenceIntervals, by which point every replicate has already called back into R. The
   # core repeats this check for all four runners; the wording is the same in both packages.
@@ -811,24 +841,10 @@ fit_gmm_moments <- function(
     stop("`sample_size` must be a single positive whole number: the number of observations behind ",
          "your moment conditions, which the sandwich covariance divides by", call. = FALSE)
   }
-  known_optimizers <- c(
-    "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
-  )
-  optimizer <- as.character(optimizer)
-  if (!optimizer %in% known_optimizers) {
-    stop(sprintf(
-      "unknown optimizer '%s'; expected one of %s", optimizer,
-      paste(known_optimizers, collapse = ", ")
-    ), call. = FALSE)
-  }
-  known_strategies <- c("OneStep", "TwoStep", "Iterative")
-  strategy <- as.character(strategy)
-  if (!strategy %in% known_strategies) {
-    stop(sprintf(
-      "unknown GMM estimation strategy '%s'; expected one of %s",
-      strategy, paste(known_strategies, collapse = ", ")
-    ), call. = FALSE)
-  }
+  # The two name lists live in R/fit.R, declared once for every verb that takes one, so that
+  # fit_gmm() and fit_gmm_moments() cannot come to accept different names.
+  optimizer <- check_choice(optimizer, known_optimizers, "optimizer")
+  strategy <- check_choice(strategy, known_gmm_strategies, "GMM estimation strategy")
 
   opts <- list(
     initial = spec_array(as.double(initial)),

@@ -345,6 +345,7 @@ def mcmc_posterior(
     warmup: int | None = None,
     chains: int | None = None,
     thinning: int | None = None,
+    output_length: int | None = None,
     seed: int = 12345,
     initialize: str = "MAP",
 ) -> dict:
@@ -390,8 +391,8 @@ def mcmc_posterior(
         an analytic gradient is usually a large saving and is always more accurate.
     iterations : int, optional
         Iterations per chain (sampler default if omitted). ``"SNIS"`` needs at least 10000: its
-        ported validation requires ``iterations`` to be at least the output length, and the
-        output length keeps its default of 10000 here.
+        ported validation requires ``iterations`` to be at least the output length, whose
+        default is 10000, so lowering ``output_length`` lowers the floor with it.
     warmup : int, optional
         Warm-up iterations discarded from each chain (sampler default if omitted). When
         ``iterations`` is given and ``warmup`` is not, half of ``iterations`` is used, matching
@@ -402,6 +403,11 @@ def mcmc_posterior(
         least three; ``"SNIS"`` draws independently and runs one.
     thinning : int, optional
         Thinning interval (sampler default if omitted).
+    output_length : int, optional
+        Total number of retained draws across all chains (sampler default, 10,000, if omitted).
+        The ported sampler collects ``ceil(output_length / chains)`` draws per chain after the
+        iteration loop, so this is the second setting -- with ``thinning`` -- that multiplies how
+        many times your function is called. The ported floor is 100 and it is refused below that.
     seed : int
         PRNG seed; 12345 is the C# default.
     initialize : {"MAP", "Randomize"}
@@ -439,16 +445,20 @@ def mcmc_posterior(
     chains, a thinning interval of 20 and an output length of 10,000. So ``iterations=10000`` is
     a million crossings, not ten thousand.
 
-    That is affordable. Measured here, ``iterations=10000`` over a 50-point Gaussian
-    log-density took 1.3 seconds, against 0.7 seconds for the
-    :func:`corehydropy.mcmc_sample` call in the same units, so about twice as slow. The
-    crossing itself costs about 0.3 microseconds: the same function called a million times
-    directly from Python takes 1.0 second, so most of the 1.3 seconds is your own code, not the
-    boundary.
+    That is affordable. All the figures here come from one machine, one session and one problem
+    -- a 50-point Gaussian log-density at ``iterations=10000``, so exactly the million
+    evaluations above -- and ``corehydror``'s help page reports the same experiment, so the two
+    can be read side by side. The run took 7.1 seconds, against 1.4 seconds for the
+    :func:`corehydropy.mcmc_sample` call on the same data: the callback path is about five times
+    the built-in one, and almost none of that is the boundary. The same function called a
+    million times directly from Python takes 6.4 seconds, so your own code is nearly the whole
+    total. The crossing itself is about 0.5 microseconds, measured by replacing the log-density
+    with ``lambda p: 0.0``, which brings the run to 0.6 seconds.
 
-    Two settings dominate the count and neither is obvious. ``thinning`` multiplies it, and
-    ``initialize="MAP"``, the C# default, runs the DifferentialEvolution optimizer over your
-    function before the first chain iteration; ``initialize="Randomize"`` skips the optimizer.
+    Two settings dominate the count and neither is obvious. ``thinning`` multiplies it, so
+    ``thinning=1`` turned the same run into 0.33 seconds. And ``initialize="MAP"``, the C#
+    default, runs the DifferentialEvolution optimizer over your function before the first chain
+    iteration; ``initialize="Randomize"`` skips the optimizer.
 
     ``"Gibbs"`` is the sampler whose defaults surprise: the ported constructor sets one chain, no
     thinning, and 100,000 iterations on top of a 10,000-draw output block, so an ``iterations`` you
@@ -458,8 +468,10 @@ def mcmc_posterior(
     **Interrupting a long run.** Ctrl-C returns control with a ``KeyboardInterrupt``, but not
     instantly. The ported samplers have no cancellation hook, so the chain runs to the end of
     its loop -- rejecting every remaining point without calling your function again -- before
-    the interrupt surfaces. Measured on a 200,000-iteration chain: 0.3 seconds from the signal
-    to the exception reaching the caller.
+    the interrupt surfaces. The wait is therefore set by how much of the run is left, not by the
+    interrupt: measured on a 200,000-iteration chain interrupted one second in, 6.4 seconds from
+    the signal to the exception reaching the caller. ``corehydror`` behaves the same way and
+    reports the same measurement at 100,000 iterations.
 
     See Also
     --------
@@ -540,6 +552,13 @@ def mcmc_posterior(
         options["chains"] = int(chains)
     if thinning is not None:
         options["thinning"] = int(thinning)
+    if output_length is not None:
+        if int(output_length) < 100:
+            raise ValueError(
+                "`output_length` must be a single whole number of at least 100, which is the "
+                "ported sampler's own floor"
+            )
+        options["output_length"] = int(output_length)
     if sampler == "RWMH":
         # The RWMH constructor takes a proposal covariance, and the ported default is all zeros,
         # which is only usable when MAP initialization overwrites it before the first iteration.

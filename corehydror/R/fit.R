@@ -4,6 +4,32 @@
 # printed, saved, and passed between R sessions unchanged. Bayesian and GMM fits (fit_bayesian(),
 # fit_gmm()) land in a later task on top of the same `ch_fit_run_()` entry point.
 
+# The optimizer and GMM-strategy names every verb that takes one accepts, declared ONCE. There
+# were four copies of these two vectors before -- two in this file and two in R/callback.R -- and
+# `fit_gmm()` and `fit_gmm_moments()` accepting different names is exactly the drift they invite.
+# corehydropy carries the same two tuples as `_KNOWN_OPTIMIZERS` / `_KNOWN_GMM_STRATEGIES` in
+# fit.py, and its callback.py imports them from there rather than repeating them; this is the R
+# half of that arrangement. Internal, so no NAMESPACE entry.
+known_optimizers <- c(
+  "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
+)
+known_gmm_strategies <- c("OneStep", "TwoStep", "Iterative")
+
+# Internal: refuse an unrecognized name for an enumerated argument, with the sentence corehydropy
+# raises for the same mistake. Used in place of match.arg() throughout the fit and callback
+# surfaces: match.arg accepts an unambiguous PREFIX, so `optimizer = "BF"` would be legal in R and
+# an error in Python, and it reports the offending value as `'arg'` rather than by name.
+check_choice <- function(value, choices, what) {
+  value <- as.character(value)
+  if (length(value) != 1L || is.na(value) || !value %in% choices) {
+    stop(sprintf(
+      "unknown %s '%s'; expected one of %s", what,
+      paste(value, collapse = ", "), paste(choices, collapse = ", ")
+    ), call. = FALSE)
+  }
+  value
+}
+
 # Internal: assemble the construct the C++ fit runner parses, from the dual first argument every
 # fit verb takes (a corehydro_model, or a numeric vector plus a distribution name). Reuses
 # analysis_input() (R/analysis.R) so the vector path and the model path build the identical model
@@ -352,15 +378,7 @@ new_fit_gmm_moments <- function(result) {
 # level without a public `alpha` argument nobody else needs.
 fit_optimized <- function(target, model, distribution, optimizer, hessian, profile, profile_bins,
                           alpha = 0.1) {
-  known_optimizers <- c(
-    "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
-  )
-  optimizer <- as.character(optimizer)
-  if (!optimizer %in% known_optimizers) {
-    stop(sprintf(
-      "unknown optimizer '%s'; expected one of %s", optimizer, paste(known_optimizers, collapse = ", ")
-    ), call. = FALSE)
-  }
+  optimizer <- check_choice(optimizer, known_optimizers, "optimizer")
   profile <- isTRUE(profile)
   # `profile_bins` reaches profile_likelihood(bins) unguarded in the core, where a non-positive
   # count is a silently empty profile rather than an error, so it is validated here.
@@ -664,23 +682,8 @@ fit_bayesian <- function(model, distribution = NULL, sampler = "DEMCz", chains =
 #' f$parameters
 #' quantile_variance(f, 0.01)
 fit_gmm <- function(model, optimizer = "BFGS", strategy = "Iterative", max_gmm_iterations = 0L) {
-  known_optimizers <- c(
-    "NelderMead", "Brent", "BFGS", "Powell", "DifferentialEvolution", "MultilevelSingleLinkage"
-  )
-  optimizer <- as.character(optimizer)
-  if (!optimizer %in% known_optimizers) {
-    stop(sprintf(
-      "unknown optimizer '%s'; expected one of %s", optimizer, paste(known_optimizers, collapse = ", ")
-    ), call. = FALSE)
-  }
-  known_strategies <- c("OneStep", "TwoStep", "Iterative")
-  strategy <- as.character(strategy)
-  if (!strategy %in% known_strategies) {
-    stop(sprintf(
-      "unknown GMM estimation strategy '%s'; expected one of %s",
-      strategy, paste(known_strategies, collapse = ", ")
-    ), call. = FALSE)
-  }
+  optimizer <- check_choice(optimizer, known_optimizers, "optimizer")
+  strategy <- check_choice(strategy, known_gmm_strategies, "GMM estimation strategy")
   if (!inherits(model, "corehydro_model") || !identical(model$spec$type, "bulletin17c")) {
     stop("fit_gmm fits a bulletin17c model only; build one with model_bulletin17c()", call. = FALSE)
   }
