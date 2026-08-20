@@ -187,6 +187,22 @@ inline double percentile(const std::vector<double>& data, double k, bool data_is
     if (n == 0) throw std::invalid_argument("Sequence contains no elements.");
     if (k < 0.0 || k > 1.0) throw std::out_of_range("k must be in [0,1].");
 
+    // A NaN `k` slips through the range check above -- every comparison against NaN is false --
+    // and would reach `static_cast<int>(std::floor(h))` below. Converting a NaN double to `int`
+    // is UNDEFINED BEHAVIOUR in C++, and the platforms disagree about it in the worst possible
+    // way: AArch64's `fcvtzs` saturates to 0, so the expression falls out as NaN and nothing
+    // appears wrong, while x86-64's `cvttsd2si` yields INT_MIN, which then indexes `sorted`
+    // roughly 17 GB below its base and segfaults. Not hypothetical -- Bootstrap's BCa
+    // acceleration constant is `0 / 0` whenever every jackknife sample fails, and that NaN
+    // arrives here through `Normal::standard_cdf` as `k`.
+    //
+    // The C# this is ported from has exactly the same hole in its range check, but .NET's
+    // float-to-int conversion is DEFINED to saturate NaN to 0 (.NET Core 3.0 onward), so C#
+    // evaluates `sortedData[0] + NaN * (sortedData[0] - sortedData[0])` and hands the caller a
+    // NaN. Returning NaN here reproduces the C# result exactly while removing the UB; it is a
+    // fidelity fix, not a behaviour change (macOS already produced NaN by accident of ISA).
+    if (std::isnan(k)) return std::numeric_limits<double>::quiet_NaN();
+
     std::vector<double> sorted_copy;
     const std::vector<double>* sorted = &data;
     if (!data_is_sorted) {

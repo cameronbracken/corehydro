@@ -1976,6 +1976,37 @@ ask for no upstream action at all (the CompetingRisks / MVN.CDF overload chain, 
 proposal covariance, NoncentralT's numerically integrated moments, and the just-identified B17C
 J-statistic) are unchanged and still correct as written.
 
+## ROBUSTNESS — `Statistics.Percentile`'s `k` range check cannot see a NaN, and the C++ port's float-to-int conversion is undefined where C#'s is not
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs`, `Percentile(IList<double>, double k, bool)`
+  (~line 544); ported at `core/include/corehydro/numerics/data/statistics.hpp`.
+- **What:** the guard is `if (k < 0.0 || k > 1.0) throw ...`. Every comparison against NaN is
+  false, so a NaN `k` passes it and reaches `int lower = (int)Math.Floor(h)` with `h = NaN`.
+- **Why it is harmless in C# and not in C++:** .NET Core 3.0 onward DEFINES the float-to-integer
+  conversion to saturate, so `(int)double.NaN` is 0 and C# returns
+  `sortedData[0] + NaN * (sortedData[0] - sortedData[0])`, i.e. NaN — an odd answer for an
+  out-of-range request, but a safe one. C++ leaves that conversion UNDEFINED. AArch64's `fcvtzs`
+  saturates the same way C# does, so the port returned NaN and looked correct; x86-64's
+  `cvttsd2si` yields `INT_MIN`, and indexing the sample with it is a wild read.
+- **Evidence:** an x86_64 build of the pre-fix body prints `h=nan lower=-2147483648
+  upper=-2147483648` and dies with SIGSEGV; the same source built for arm64 prints
+  `lower=0 upper=0` and returns `nan`. UBSan on macOS reports
+  `statistics.hpp:204:34: runtime error: nan is outside the range of representable values of
+  type 'int'` regardless of ISA.
+- **Reachable, not hypothetical:** `Bootstrap<TData>.ComputeAccelerationConstants` divides
+  `i3 / (i2^1.5 * 6)`, which is `0 / 0` whenever every jackknife sample fails. That NaN becomes
+  the acceleration constant, passes through `Normal.StandardCDF` unchanged, and arrives at
+  `Percentile` as `k`. It is what a BCa run does after a jackknife delegate throws, and it
+  segfaulted the R session, the Python interpreter and the C++ ctest binary on every gcc
+  platform. Fixed in the port; see the comment at the call site.
+- **Port handling:** the port now returns NaN explicitly for a NaN `k`. This REPRODUCES the C#
+  result exactly (it is what .NET's defined saturation computes) while removing the undefined
+  behaviour, so it is a fidelity fix rather than a behaviour change.
+- **Suggested C# fix:** reject a non-finite `k` in the range check —
+  `if (double.IsNaN(k) || k < 0.0 || k > 1.0) throw new ArgumentOutOfRangeException(...)`. The
+  deeper fix belongs in `ComputeAccelerationConstants`, which should report that it had no usable
+  jackknife samples rather than hand a NaN acceleration constant downstream.
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a
