@@ -174,10 +174,15 @@ int main() {
         CHECK_EQ(r.names.at(2), std::string("standard_error"));
         CHECK_EQ(r.status, std::string("Success"));
         CHECK_TRUE(r.values.at(1) > 0.0);  // function evaluations were counted
-        // G10K21 is exact for a quadratic, so the Gauss and Kronrod estimates agree, nothing is
-        // subdivided and the ported StandardError is zero. The subdividing case below is where it
-        // is not.
-        CHECK_EQ(r.values.at(2), 0.0);
+        // G10K21 is exact for a quadratic, so nothing is subdivided and the ported StandardError
+        // is nothing but the rounding floor of the two rules' weighted sums. NOT bit-exact zero:
+        // whether the Gauss and Kronrod sums round to the same double turns on whether the
+        // compiler contracts `weight * fsum + acc` into an FMA. It does on arm64 (the error is
+        // then exactly 0); it does not on a baseline x86-64 build with no FMA instruction, where
+        // the error is 1.7763568394002505e-15. The portably exact-zero case is x^3 on [0, 1],
+        // pinned as an oracle in fixtures/callback/math.json's quadrature_x_cubed. The
+        // subdividing case below is where the error is real rather than rounding.
+        CHECK_TRUE(r.values.at(2) < 1e-14);
     }
     {
         // The one case here that reaches the SUBDIVIDING branch: a Lorentzian peak of half-width

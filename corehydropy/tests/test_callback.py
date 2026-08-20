@@ -59,8 +59,15 @@ def test_quadrature_integrates_a_python_function():
 
 
 def test_quadrature_reports_the_rules_own_standard_error():
-    # x**2 needs no subdivision (G10K21 is exact for it), so the accumulated error is exactly zero.
-    assert ch.quadrature(lambda x: x**2, 0, 3).standard_error == 0.0
+    # x**2 needs no subdivision (G10K21 is exact for it), so the accumulated error is nothing but
+    # the rounding floor of the two rules' weighted sums. NOT bit-exact zero, and asserting that
+    # was a portability bug: whether the Gauss and Kronrod sums round to the same double depends
+    # on whether the compiler contracts `weight * fsum + acc` into an FMA. It does on arm64 (the
+    # error is then exactly 0); it does not on a baseline x86-64 build with no FMA instruction,
+    # where the error is 1.7763568394002505e-15 and `== 0.0` fails. The exact-zero case that IS
+    # portable -- x**3 on [0, 1], where both sums round identically either way -- is pinned as an
+    # oracle in fixtures/callback/math.json's quadrature_x_cubed, so it is covered there.
+    assert ch.quadrature(lambda x: x**2, 0, 3).standard_error < 1e-14
     # A Lorentzian peak of half-width 0.01 does subdivide, so the error estimate is real. The
     # C#-pinned values for this exact run are fixtures/callback/math.json's
     # quadrature_peak_subdivides; here only the qualitative properties, to keep the oracle in the

@@ -34,9 +34,15 @@ test_that("quadrature integrates a user-written R function", {
 })
 
 test_that("quadrature reports the rule's own standard error", {
-  # x^2 needs no subdivision (G10K21 is exact for it), so the accumulated error is exactly zero.
+  # x^2 needs no subdivision (G10K21 is exact for it), so the accumulated error is nothing but the
+  # rounding floor of the two rules' weighted sums -- NOT bit-exact zero. Whether the Gauss and
+  # Kronrod sums round to the same double depends on whether the compiler contracts
+  # `weight * fsum + acc` into an FMA: it does on arm64 (error exactly 0), it does not on a
+  # baseline x86-64 build (error 1.7763568394002505e-15). expect_equal()'s default tolerance
+  # covers both, which is why this passed on every platform while the Python twin's `== 0.0` did
+  # not. The portably exact-zero case is x^3 on [0, 1], pinned in fixtures/callback/math.json.
   q <- quadrature(function(x) x^2, lower = 0, upper = 3)
-  expect_equal(attr(q, "standard_error"), 0)
+  expect_lt(attr(q, "standard_error"), 1e-14)
   # A Lorentzian peak of half-width 0.01 does subdivide, so the error estimate is real. The
   # C#-pinned values for this exact run are fixtures/callback/math.json's
   # quadrature_peak_subdivides; here only the qualitative properties, to keep the oracle in the
