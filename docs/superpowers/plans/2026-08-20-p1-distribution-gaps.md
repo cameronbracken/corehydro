@@ -404,11 +404,11 @@ git -C upstream/Numerics show 'HEAD:Test_Numerics/Sampling/Test_PivotalBootstrap
 - [ ] **Step 2: Write the failing test suite first**
 
 Create `core/tests/test_pivotal_bootstrap.cpp` porting the Test_PivotalBootstrap.cs test methods
-1:1 (all 19: the Transform_* link/covariance/policy/filter tests, the RunPivotalBootstrap_*
+1:1 (all 18 as of the current pin: the Transform_* link/covariance/policy/filter tests, the RunPivotalBootstrap_*
 behavior and throw tests, `Run_RegularBootstrap_IgnoresPivotalOnlyProperties`,
 `GetConfidenceIntervals_BCaAfterPivotalRun_Throws`,
 `GetRawPivotalConfidenceIntervals_BeforePivotalRun_Throws`,
-`RunPivotalBootstrap_WithSameSeed_IsReproducible`, and the two statistical-coverage tests at the
+`RunPivotalBootstrap_WithSameSeed_IsReproducible`, and the statistical-coverage test at the
 file's end). Copy the harness style from an existing suite (open
 `core/tests/test_bootstrap_analysis.cpp` for the assertion macros/registration pattern).
 Structural and behavioral assertions (counts, throws, reproducibility, policy effects) transcribe
