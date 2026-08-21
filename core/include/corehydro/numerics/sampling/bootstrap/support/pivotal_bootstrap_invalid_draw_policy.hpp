@@ -1,9 +1,8 @@
 // ported from: Numerics/Sampling/Bootstrap/Support/PivotalBootstrapInvalidDrawPolicy.cs @ 2a0357a
 //
 // Specifies how invalid pivotal bootstrap draws are handled after the two-covariance
-// transform. Used by the covariance-aware pivotal bootstrap workflow -- see
-// bootstrap_fit.hpp's file header for the P3.10/P3.11 task split; this support type is ported
-// ahead of the pivotal run methods themselves.
+// transform. Used by the covariance-aware pivotal bootstrap workflow, which is now ported in
+// full -- see `bootstrap.hpp`'s file header for the documentation of record.
 #pragma once
 
 namespace corehydro::numerics::sampling {

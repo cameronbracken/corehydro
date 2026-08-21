@@ -3,9 +3,8 @@
 // Provides accepted raw bootstrap fits to a pivotal bootstrap link factory. Link factories
 // can use this context to select fixed links, such as `LogLink` for positive scale
 // parameters, or to fit data-adaptive links, such as `YeoJohnsonLink`, from the accepted raw
-// bootstrap ensemble. Used by the covariance-aware pivotal bootstrap workflow -- see
-// bootstrap_fit.hpp's file header for the P3.10/P3.11 task split; this support type is ported
-// ahead of the pivotal run methods themselves.
+// bootstrap ensemble. Used by the covariance-aware pivotal bootstrap workflow, which is now
+// ported in full -- see `bootstrap.hpp`'s file header for the documentation of record.
 //
 // Null-reference guards omitted: C#'s ctor throws `ArgumentNullException` when `parentFit` or
 // `rawBootstrapFits` is null; a C++ `const BootstrapFit&`/`const std::vector<BootstrapFit>&`

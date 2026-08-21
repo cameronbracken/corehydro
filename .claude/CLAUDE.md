@@ -337,7 +337,10 @@ no new per-distribution glue. Don't hardcode oracle values in test files. The do
 - **Portability (learned from CI):** never use `M_PI` (absent under strict `-std=c++17` on Linux
   and on MSVC) — use `corehydro::numerics::kPi`. Don't name a namespace alias `gamma` (clashes with
   glibc's libm `gamma()`) or `stat` (clashes with the MSVC/POSIX CRT `stat` symbol). Pass
-  `-Wall/-Wextra` only to non-MSVC compilers in CMake.
+  `-Wall/-Wextra` only to non-MSVC compilers in CMake. MSVC raises C3493 on the implicit use of a
+  `const` function-local inside a lambda with no default capture (clang/gcc treat it as a constant
+  expression); capturing it explicitly then trips clang's -Wunused-lambda-capture. Put the constant
+  at file scope as `constexpr`.
 - **Self-contained core:** no external C++ deps (port Numerics' own linear algebra / RNG). Keeps
   the CRAN dependency surface empty and preserves oracle fidelity. Don't add Eigen to the core.
 - **CRAN:** `corehydror` uses `License: file LICENSE` (R can't standardize the `0BSD` token).
@@ -757,9 +760,12 @@ ranks the **15** candidates the C# `FittingAnalysis` ranks rather than 14 (Gener
 the candidate list fifth, so the fixture, the emitter's `DistributionList` filter, both packages'
 count literals, and the re-indexed assertions all moved in one commit). The distribution is the
 first to declare the new **`IStandardError`** mixin
-(`numerics/distributions/base/i_standard_error.hpp`), whose four methods reach both languages
-through the shared `dist_runner` generic dispatch rather than the bespoke GEV-only path that
-carried them before. The **covariance-aware pivotal bootstrap**, severed at Phase 3 as that phase's
+(`numerics/distributions/base/i_standard_error.hpp`), whose dispatched methods reach both languages
+through the shared `dist_runner` generic dispatch, a generic path added beside -- not replacing --
+the bespoke GEV slice, which still carries GEV's own standard errors; of the trio only
+`quantile_gradient` is oracle-pinnable for this family (C# throws `NotImplementedException` for the
+other two), and `quantile_jacobian` is ctest-covered by an analytic identity rather than
+runner-dispatched. The **covariance-aware pivotal bootstrap**, severed at Phase 3 as that phase's
 severable final task, is ported in full: three support headers under
 `numerics/sampling/bootstrap/support/` (`pivotal_bootstrap_context.hpp`,
 `pivotal_bootstrap_diagnostics.hpp`, `pivotal_bootstrap_invalid_draw_policy.hpp`), the omitted

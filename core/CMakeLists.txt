@@ -106,6 +106,7 @@ set(BF_TESTS
   test_rng_handle
   test_parameter_constraint_sizes
   test_linear_moments_overflow
+  test_generalized_normal_jacobian
 )
 
 # Sobol test takes the direction-number file as its sole argument.

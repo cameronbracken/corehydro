@@ -57,15 +57,6 @@ the full account.
   registry, the copula marginal pre-fit, the mixture, competing-risks and point-process component
   seeds, and Bulletin 17C.
 
-## Changes to results
-
-* `l_moments()`, and every fit that estimates from sample L-moments, now forms its weight products
-  in floating point. Those products overflowed a 32-bit integer at 1293 points, so the L-kurtosis
-  of any sample of **1293 or more points** was wrong: on an evenly spaced series whose true
-  L-kurtosis is 0, the old code returned -0.185 at 1293 points and -1.45 at 1300. Shorter samples
-  are bit-identical to before. This is a deliberate divergence from upstream, which still wraps, so
-  corehydror and RMC-BestFit disagree on the L-kurtosis of any sample of 1293 or more points.
-
 # corehydror 0.7.0
 
 The callback layer. Five upstream classes are delegate-driven by design, and until now the package

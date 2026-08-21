@@ -1,9 +1,8 @@
 // ported from: Numerics/Sampling/Bootstrap/Support/PivotalBootstrapDiagnostics.cs @ 2a0357a
 //
 // Stores diagnostic counts from the most recent pivotal bootstrap run. Used by the
-// covariance-aware pivotal bootstrap workflow -- see bootstrap_fit.hpp's file header for the
-// P3.10/P3.11 task split; this support type is ported ahead of the pivotal run methods
-// themselves.
+// covariance-aware pivotal bootstrap workflow, which is now ported in full -- see
+// `bootstrap.hpp`'s file header for the documentation of record.
 //
 // Documented deviation: the two C# `TimeSpan` timing fields (`ResamplingTime`,
 // `TransformationTime`) are dropped -- wall-clock duration is not oracle-comparable across
