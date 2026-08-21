@@ -96,6 +96,7 @@ set(BF_TESTS
   test_composite_analysis
   test_coincident_frequency_analysis
   test_bootstrap_analysis
+  test_pivotal_bootstrap
   test_copula_clone
   test_multivariate_normal_api
   test_brent_search
