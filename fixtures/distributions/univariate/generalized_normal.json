@@ -1,0 +1,110 @@
+{
+  "target": "GeneralizedNormal",
+  "kind": "univariate_distribution",
+  "source": "Numerics/Test_Numerics/Distributions/Univariate/Test_GeneralizedNormal.cs",
+  "reference": "Hosking & Wallis, Regional Frequency Analysis (1997), appendix A.8; C# literals verified against the R lmom package",
+  "comment": "Every value below is a literal lifted from the C# test file named in `source`. The C# test's Test_ParametersToString case has no C++ counterpart (ParametersToString / GetParameterPropertyNames / MinimumOfParameters / MaximumOfParameters are WPF-facing and unported across this whole distribution layer), and its Test_Moments and Test_GNO_PartialDerivatives cases assert only self-consistency (Mean/StandardDeviation/Skewness/Kurtosis against CentralMoments(1E-8); QuantileGradient against the same NumericalDerivative.Gradient call it makes internally) rather than any literal, so neither is carried here. Product moments, seeded draws and the IStandardError surface are curated through the dotnet oracle gate in the follow-on task.",
+  "datasets": {
+    "air_quality_wind": [7.4, 8, 12.6, 11.5, 14.3, 14.9, 8.6, 13.8, 20.1, 8.6, 6.9, 9.7, 9.2, 10.9, 13.2, 11.5, 12, 18.4, 11.5, 9.7, 9.7, 16.6, 9.7, 12, 16.6, 14.9, 8, 12, 14.9, 5.7, 7.4, 8.6, 9.7, 16.1, 9.2, 8.6, 14.3, 9.7, 6.9, 13.8, 11.5, 10.9, 9.2, 8, 13.8, 11.5, 14.9, 20.7, 9.2, 11.5, 10.3, 6.3, 1.7, 4.6, 6.3, 8, 8, 10.3, 11.5, 14.9, 8, 4.1, 9.2, 9.2, 10.9, 4.6, 10.9, 5.1, 6.3, 5.7, 7.4, 8.6, 14.3, 14.9, 14.9, 14.3, 6.9, 10.3, 6.3, 5.1, 11.5, 6.9, 9.7, 11.5, 8.6, 8, 8.6, 12, 7.4, 7.4, 7.4, 9.2, 6.9, 13.8, 7.4, 6.9, 7.4, 4.6, 4, 10.3, 8, 8.6, 11.5, 11.5, 11.5, 9.7, 11.5, 10.3, 6.3, 7.4, 10.9, 10.3, 15.5, 14.3, 12.6, 9.7, 3.4, 8, 5.7, 9.7, 2.3, 6.3, 6.3, 6.9, 5.1, 2.8, 4.6, 7.4, 15.5, 10.9, 10.3, 10.9, 9.7, 14.9, 15.5, 6.3, 10.9, 11.5, 6.9, 13.8, 10.3, 10.3, 8, 12.6, 9.2, 10.3, 10.3, 16.6, 6.9, 13.2, 14.3, 8, 11.5]
+  },
+  "cases": [
+    {
+      "name": "lmom_fit_air_quality_wind",
+      "comment": "Test_GNO_LMOM: method-of-L-moments fit to R's air-quality wind series, then the forward L-moment map off the fitted parameters. Tolerances are the C# test's own 0.0001 absolute.",
+      "construct": { "fit": { "dataset": "air_quality_wind", "method": "lmom" } },
+      "assertions": [
+        { "method": "param",         "args": [0], "expected": 9.7285364,  "mode": "abs", "tol": 0.0001 },
+        { "method": "param",         "args": [1], "expected": 3.4885029,  "mode": "abs", "tol": 0.0001 },
+        { "method": "param",         "args": [2], "expected": -0.1307169, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [0], "expected": 9.95751634, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [1], "expected": 1.98224114, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [2], "expected": 0.06380804, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [3], "expected": 0.1258014,  "mode": "abs", "tol": 0.0001 }
+      ]
+    },
+    {
+      "name": "dist_lmom_fit_air_quality_wind",
+      "comment": "Test_GNO_Dist: PDF/CDF at 14.9 off the same L-moment fit, plus the CDF->InverseCDF round trip. C# asserts InverseCDF(gno.CDF(14.9)) == 14.9; here the quantile is evaluated at the CDF LITERAL (0.912294, good to 5e-7), so the same 0.0001 absolute tolerance the C# test uses covers the literal's own rounding (dx ~ dp/pdf ~ 1.3e-5).",
+      "construct": { "fit": { "dataset": "air_quality_wind", "method": "lmom" } },
+      "assertions": [
+        { "method": "pdf",      "args": [14.9],     "expected": 0.03825155, "mode": "abs", "tol": 0.0001 },
+        { "method": "cdf",      "args": [14.9],     "expected": 0.912294,   "mode": "abs", "tol": 0.0001 },
+        { "method": "quantile", "args": [0.912294], "expected": 14.9,       "mode": "abs", "tol": 0.0001 }
+      ]
+    },
+    {
+      "name": "cdf_xi97_alpha35_kappa_neg01",
+      "comment": "Test_GNO_CDF: GeneralizedNormal(9.7, 3.5, -0.1) verified against the R lmom package, at the C# test's own 1E-7 tolerance.",
+      "construct": { "params": [9.7, 3.5, -0.1] },
+      "assertions": [
+        { "method": "cdf", "args": [5.0],  "expected": 0.07465069, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [10.0], "expected": 0.53400804, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [12.0], "expected": 0.73775928, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [15.0], "expected": 0.92073519, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [18.0], "expected": 0.98333335, "mode": "abs", "tol": 1e-07 }
+      ]
+    },
+    {
+      "name": "inverse_cdf_round_trip_xi97_alpha35_kappa_neg01",
+      "comment": "Second half of Test_GNO_CDF: InverseCDF(CDF(x)) == x. C# feeds back the freshly computed CDF; here the quantile is evaluated at the 8-decimal CDF literals above, whose 5e-9 rounding maps to at most ~1e-6 in x through the local density, so 1e-05 absolute is the tightest honest tolerance for the literal (the C# 1E-7 applies to the un-rounded round trip, not to this one).",
+      "construct": { "params": [9.7, 3.5, -0.1] },
+      "assertions": [
+        { "method": "quantile", "args": [0.07465069], "expected": 5.0,  "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.53400804], "expected": 10.0, "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.73775928], "expected": 12.0, "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.92073519], "expected": 15.0, "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.98333335], "expected": 18.0, "mode": "abs", "tol": 1e-05 }
+      ]
+    },
+    {
+      "name": "construction_default",
+      "comment": "Test_Construction: the default constructor is SetParameters(100, 10, 0), which is exactly what this construct performs.",
+      "construct": { "params": [100.0, 10.0, 0.0] },
+      "assertions": [
+        { "method": "param",            "args": [0], "expected": 100.0, "mode": "equal" },
+        { "method": "param",            "args": [1], "expected": 10.0,  "mode": "equal" },
+        { "method": "param",            "args": [2], "expected": 0.0,   "mode": "equal" },
+        { "method": "parameters_valid", "args": [],  "expected": true,  "mode": "bool" },
+        { "method": "minimum",          "args": [],  "expected": "-inf", "mode": "equal" },
+        { "method": "maximum",          "args": [],  "expected": "inf",  "mode": "equal" }
+      ]
+    },
+    {
+      "name": "construction_negative_location",
+      "comment": "Test_Construction: GeneralizedNormal(-100, 1, 1). kappa=1 > NearZero, so the support is bounded above at xi + alpha/kappa = -99 and unbounded below.",
+      "construct": { "params": [-100.0, 1.0, 1.0] },
+      "assertions": [
+        { "method": "param",            "args": [0], "expected": -100.0, "mode": "equal" },
+        { "method": "param",            "args": [1], "expected": 1.0,    "mode": "equal" },
+        { "method": "param",            "args": [2], "expected": 1.0,    "mode": "equal" },
+        { "method": "parameters_valid", "args": [],  "expected": true,   "mode": "bool" },
+        { "method": "minimum",          "args": [],  "expected": "-inf", "mode": "equal" },
+        { "method": "maximum",          "args": [],  "expected": -99.0,  "mode": "equal" }
+      ]
+    },
+    {
+      "name": "invalid_infinity",
+      "comment": "Test_InvalidParameters: all three parameters positive infinity.",
+      "construct": { "params": ["inf", "inf", "inf"] },
+      "assertions": [
+        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
+      ]
+    },
+    {
+      "name": "invalid_nan",
+      "comment": "Test_InvalidParameters: all three parameters NaN.",
+      "construct": { "params": ["nan", "nan", "nan"] },
+      "assertions": [
+        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
+      ]
+    },
+    {
+      "name": "invalid_zero_scale",
+      "comment": "Test_InvalidParameters: GeneralizedNormal(100, 0, 1) -- the scale must be strictly positive.",
+      "construct": { "params": [100.0, 0.0, 1.0] },
+      "assertions": [
+        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
+      ]
+    }
+  ]
+}

@@ -65,6 +65,7 @@
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
+#include "corehydro/numerics/distributions/base/i_standard_error.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_factory.hpp"
 #include "corehydro/numerics/distributions/copulas/base/bivariate_copula_estimation.hpp"
 #include "corehydro/numerics/distributions/copulas/base/copula_factory.hpp"
@@ -1326,6 +1327,24 @@ static double dispatch_generic(dist::UnivariateDistributionBase& d, const std::s
         const auto* lm = dynamic_cast<const dist::ILinearMomentEstimation*>(&d);
         if (lm == nullptr) throw std::runtime_error("distribution has no L-moments");
         return lm->linear_moments_from_parameters(d.get_parameters())[a[0].get<int>()];
+    }
+    // The IStandardError surface, reached by the same capability cast `linear_moment` uses.
+    // Args mirror the GEV slice's flattened convention above (dispatch_gev), so one fixture
+    // vocabulary covers both the bespoke GEV path and every factory-built family:
+    // parameter_covariance [sample_size, row, col], quantile_variance [probability,
+    // sample_size], quantile_gradient [probability, index]. The estimation method is fixed at
+    // MaximumLikelihood, matching dist_runner.hpp's arms.
+    if (m == "parameter_covariance" || m == "quantile_variance" || m == "quantile_gradient") {
+        const auto* se = dynamic_cast<const dist::IStandardError*>(&d);
+        if (se == nullptr)
+            throw std::runtime_error("distribution does not implement IStandardError: " + m);
+        const auto mle = dist::ParameterEstimationMethod::MaximumLikelihood;
+        if (m == "parameter_covariance")
+            return se->parameter_covariance(a[0].get<int>(), mle)[a[1].get<int>()]
+                                                                 [a[2].get<int>()];
+        if (m == "quantile_variance")
+            return se->quantile_variance(a[0].get<double>(), a[1].get<int>(), mle);
+        return se->quantile_gradient(a[0].get<double>())[a[1].get<int>()];
     }
     // Static GammaDistribution utility, not tied to `d`'s own parameters -- args:
     // [skewness, probability]. Only meaningful for target "GammaDistribution", but the
