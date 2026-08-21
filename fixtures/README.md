@@ -55,8 +55,9 @@ generic dispatcher supports `random_value [sample_size, seed, index]`: element `
 (a fresh seeded Mersenne Twister per call), so it locks the seeded C# draw stream
 bit-for-bit across all four runners; see the `seeded_random_draws` cases in `normal.json`,
 `log_normal.json`, `ln_normal.json`, `gumbel.json`, `gamma_distribution.json`,
-`weibull.json`, and `generalized_normal.json`. It also supports `partial_kp [skewness, probability]` -- a direct call to
-the static `GammaDistribution.PartialKp` utility, independent of the case's own
+`weibull.json`, and `generalized_normal.json`. It also supports `partial_kp [skewness,
+probability]` -- a direct call to the static `GammaDistribution.PartialKp` utility, independent
+of the case's own
 `construct` (which just needs to build *some* valid distribution instance for the dispatch
 plumbing; only `gamma_distribution.json` uses it, to pin the v2.1.4 near-zero-skew
 derivative-limit fix).
@@ -77,8 +78,12 @@ rows are the corpus's 11 documented oracle skips: they were validated in Phase 0
 gate does not re-run them. `generalized_normal.json` is the one family dispatched for real, and
 only through `quantile_gradient` -- upstream `GeneralizedNormal.cs` throws
 `NotImplementedException` for the other two and the port mirrors the throw, so there is nothing
-to pin. `quantile_se [probability, sample_size]` is GEV-only (the square root of
-`quantile_variance`).
+to pin. `quantile_se [probability, sample_size]` is a GEV-only method (the square root of
+`quantile_variance`) that is deliberately emitter-only and NOT dispatched by the R/Python fixture
+runners; it exists as an oracle surface for the toolchain itself but has no package export. A
+future `IStandardError` family adding a `quantile_se` row must first wire the dispatcher arms in
+`corehydror/tests/testthat/test-fixtures.R` and `corehydropy/tests/test_fixtures.py` before the
+value can be pinned.
 
 #### Composite `univariate_distribution` targets
 
