@@ -3802,12 +3802,10 @@ static AnalysisData BuildAndRunAnalysis(string target, JsonElement construct,
         var df = new BestFitModels.DataFrame { ExactSeries = new ExactSeries(data) };
         df.CalculatePlottingPositions();
         var analysis = new BestFitAnalyses.FittingAnalysis(df);
-        // The C++ port omits GeneralizedNormal (its distribution factory has no case for it), so
-        // it fits 14 candidates in the C# order minus that one -- index 11 == Normal. Remove it
-        // here so the emitter drives the SAME 14-candidate set the fixture (and the C++/R/Python
-        // harnesses) assert; each candidate is fit independently, so removing it does not perturb
-        // any remaining fit. See the A10 report's "14-vs-15 candidate-count reality".
-        analysis.DistributionList.RemoveAll(d => d is GeneralizedNormal);
+        // The full C# DistributionList (15 candidates, GeneralizedNormal at index 4) is driven as
+        // shipped. GeneralizedNormal used to be removed here because the C++ distribution factory
+        // had no case for it; now that it is ported and factory-constructible, both sides fit the
+        // SAME 15-candidate set and the fixture asserts C# indices directly.
         analysis.RunAsync().GetAwaiter().GetResult();
         var fitted = analysis.FittedDistributions;
         r.CandidateCount = fitted.Count;

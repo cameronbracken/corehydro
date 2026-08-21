@@ -167,7 +167,7 @@ list ch_analysis_univariate_run_(std::string model_json, doubles dataset, std::s
     });
 }
 
-// FittingAnalysis (A6): fit the 14 ported candidate distributions by MLE over an exact-only frame
+// FittingAnalysis (A6): fit the 15 candidate distributions by MLE over an exact-only frame
 // built from `dataset`, and return the per-candidate GoF table {distribution, aic, bic, rmse,
 // converged}. Ranking is left to the R caller.
 [[cpp11::register]]

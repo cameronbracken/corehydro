@@ -45,10 +45,10 @@ def test_univariate_analysis_returns_frequency_curve():
     assert all(hi >= m - 1e-6 for hi, m in zip(res["upper_ci"], res["mode_curve"]))
 
 
-def test_fit_distributions_ranks_14_candidates():
+def test_fit_distributions_ranks_15_candidates():
     res = corehydropy.fit_distributions(SMOKE_PEAKS)
-    assert len(res["distribution"]) == 14
-    assert len(res["aic"]) == 14
+    assert len(res["distribution"]) == 15
+    assert len(res["aic"]) == 15
     assert any(res["converged"])
     for i, ok in enumerate(res["converged"]):
         if ok:

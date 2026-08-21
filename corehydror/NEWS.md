@@ -11,7 +11,7 @@ for the full account.
   constraints where it has three parameters, so the candidate's starting value, bounds and prior
   were read one element past the end of a vector, from whatever the allocator had left there. On
   the dataset used by the test fixtures the candidate came back with an AIC of `NaN` where it
-  should converge at 423.31, the lowest of all 14 candidates. **Results from `fit_distributions()`
+  should converge at 423.31, the lowest of any candidate. **Results from `fit_distributions()`
   involving GeneralizedPareto may change; refit if you kept earlier output.** The same read reached
   the GeneralizedPareto seed used by `model_*()` defaults and trend models, `mcmc_sample()`'s model
   registry, the copula marginal pre-fit, the mixture, competing-risks and point-process component

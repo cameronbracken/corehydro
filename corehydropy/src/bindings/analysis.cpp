@@ -285,7 +285,7 @@ void register_analysis(py::module_& m) {
         py::arg("output_length"), py::arg("credible_level"), py::arg("seed"),
         py::arg("exceedance_probabilities"), py::arg("thinning_interval") = -1);
 
-    // FittingAnalysis (A6): fit the 14 ported candidates by MLE, return the per-candidate GoF table.
+    // FittingAnalysis (A6): fit the 15 candidates by MLE, return the per-candidate GoF table.
     m.def(
         "analysis_fit_distributions",
         [](const std::vector<double>& dataset) {

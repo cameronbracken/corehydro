@@ -1582,7 +1582,7 @@ analyses from the same spec.
         // UnivariateAnalysis: parameter [i], mode_curve [i], mean_curve [i], lower_ci [i],
         //   upper_ci [i] (indexed by the exceedance grid), and scalars aic / bic / dic / rmse.
         { "method": "parameter", "args": [0], "expected": 16775.69498994981, "mode": "rel", "tol": 1e-9 },
-        // FittingAnalysis: candidate_count (exact 14), candidate_aic / candidate_bic /
+        // FittingAnalysis: candidate_count (exact 15), candidate_aic / candidate_bic /
         //   candidate_rmse / candidate_converged [candidate_index].
         // Bulletin17CAnalysis: exceedance_probability [i], point_estimate [i] (log10 space),
         //   lower_ci [i], upper_ci [i] (discharge space), beta1 [i], nu [i],
@@ -1630,7 +1630,7 @@ patched `Bulletin17CAnalysis.cs` clears the CS0104 `YeoJohnsonLink` ambiguity; s
 against the real C# analyses. Deterministic point values (GMM point estimate + parameters, mode
 curve = InverseCDF, candidate aic/bic) use `rel 1e-9`; GoF/quadrature-derived quantities (candidate
 rmse, Cohn CI bounds, the credible band) use `rel 1e-8`; DIC keeps `rel 1e-6` (parallel-reduction
-noise). `candidate_count == 14`, `confidence_level`, and the exceedance-probability round-trip stay
+noise). `candidate_count == 15`, `confidence_level`, and the exceedance-probability round-trip stay
 exact structural invariants (`abs 1e-12..1e-15`, `equal`). The UnivariateAnalysis case PINS
 `thinning_interval = 1`: the sampler-default thin=20 exposes a real C#-vs-C++ divergence in the
 thinned population-sampler stream (documented in `docs/upstream-csharp-issues.md` as a tracked
