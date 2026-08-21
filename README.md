@@ -142,7 +142,7 @@ carries the multivariate distributions and seven bivariate copulas.
 | Function | Purpose |
 |----------|---------|
 | `univariate_analysis` | Bayesian MCMC frequency curve for one distribution |
-| `fit_distributions` | fit and rank 14 candidate distributions by AIC / BIC / RMSE |
+| `fit_distributions` | fit and rank 15 candidate distributions by AIC / BIC / RMSE |
 | `bulletin17c_analysis` | LP3 flood-frequency with Cohn delta-method intervals |
 | `mixture_analysis` | finite mixture of 1-3 component distributions |
 | `competing_risk_analysis` | maximum of several independent parents |

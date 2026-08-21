@@ -104,7 +104,7 @@ cat("Model fit summary (lower AIC is better):\n")
 print(fit_df, row.names = FALSE, digits = 8)
 ```
 
-The packages also ship this ranking as a one-liner: `fit_distributions` fits all 14
+The packages also ship this ranking as a one-liner: `fit_distributions` fits all 15
 supported candidates by maximum likelihood and returns AIC, BIC, and RMSE for each.
 (It refits GEV by MLE, so its AIC differs slightly from the L-moment fit above.)
 
@@ -262,7 +262,7 @@ for (d in models) {
 }
 stopifnot(sapply(design[names(models)], \(q) all(diff(q) > 0)))
 
-# Ranking: Weibull wins by AIC, both among the three fits here and among the 14
+# Ranking: Weibull wins by AIC, both among the three fits here and among the 15
 # MLE candidates in fit_distributions.
 stopifnot(
   fit_df$Model[1] == "Weibull",
