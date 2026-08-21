@@ -131,7 +131,7 @@ b17c$upper_ci
 
 ## Features
 
-**Probability Distributions.** 42 univariate families with density, CDF, quantile, moments, and fitting
+**Probability Distributions.** 43 univariate families with density, CDF, quantile, moments, and fitting
 (maximum likelihood, L-moments, product moments). Names accepted by the analysis functions include
 `Normal`, `LogNormal`, `Gumbel`, `Weibull`, `GeneralizedExtremeValue`, `GeneralizedPareto`,
 `GeneralizedLogistic`, `LogPearsonTypeIII`, `PearsonTypeIII`, `KappaFour`, and more. The core library also

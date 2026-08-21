@@ -5,11 +5,11 @@ toc: true
 
 What is currently implemented, by source library for both the shared C++ core library 
 (the faithful port itself) and the R/Python packages (`corehydror` /
-`corehydropy`). As of v0.7.0 every ported area has a public wrapper in both packages, so
+`corehydropy`). As of v0.8.0 every ported area has a public wrapper in both packages, so
 no row is marked "Internal" any more; where only part of an area is exposed, the Notes
 column says which part. Every "Ported" row is validated by test suites which have also been ported and compared to the original C# libraries.
 
-Status as of v0.7.0.
+Status as of v0.8.0.
 
 ## Numerics
 
@@ -19,12 +19,12 @@ general-purpose math, machine learning, and data-container layers are out of sco
 
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
-| `Distributions` (univariate, 42 families) | Ported | Public | `Distribution` / `distribution()` + density, CDF, quantile, moments, L-moments, fitting (MLE / L-moments / MOM), seeded sampling |
+| `Distributions` (univariate, 43 families) | Ported | Public | `Distribution` / `distribution()` + density, CDF, quantile, moments, L-moments, fitting (MLE / L-moments / MOM), seeded sampling |
 | `Distributions` (multivariate) | Ported | Public | Dirichlet, Multinomial, BivariateEmpirical, MultivariateNormal (Genz MVNDST), MultivariateStudentT, through the `mvdist_*` verbs since v0.5.0 |
 | `Distributions.Copulas` (7 bivariate + estimation) | Ported | Public | `copula()` / `copula_fit()` and the density, CDF, tail-dependence and joint-exceedance verbs since v0.5.0; also drives `bivariate_analysis` and `coincident_frequency_analysis` |
 | `Sampling.MCMC` (8 samplers + R-hat / ESS) | Ported | Public | `mcmc_sample()` fits a built-in family; `mcmc_posterior()` takes a log-likelihood you write and reaches all eight samplers, Gibbs included, through the proposal callback it accepts; all drive the Bayesian analyses |
 | `Sampling` (Latin hypercube, Sobol, Stratify) | Ported | Public | `latin_hypercube()`, `sobol_sequence()`, `stratify()` |
-| `Sampling.Bootstrap` | Ported (non-pivotal) | Public | `bootstrap_analysis()` for a fitted distribution, `bootstrap_custom()` for a statistic you write, reaching all four upstream delegates (resample, fit, statistic, jackknife) and all five interval methods; the covariance-aware pivotal workflow is a documented omission |
+| `Sampling.Bootstrap` | Ported | Public | `bootstrap_analysis()` for a fitted distribution, `bootstrap_custom()` for a statistic you write, reaching all four upstream delegates (resample, fit, statistic, jackknife) and all five interval methods; `bootstrap_custom(run_type = "pivotal")` adds the covariance-aware pivotal workflow since v0.8.0 |
 | `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation, autocorrelation, goodness of fit, histogram binning, and joint probability all public; t / Mann-Whitney / KS tests, single Grubbs-Beck, and Jenks breaks not ported |
 | `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z) |
 | `Data.Regression` | Ported | Public | `linear_regression()` -- ordinary least squares, returning a `corehydro_lm` / `LinearRegressionResult` with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict` |

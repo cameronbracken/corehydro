@@ -49,6 +49,10 @@ def test_fit_distributions_ranks_15_candidates():
     res = corehydropy.fit_distributions(SMOKE_PEAKS)
     assert len(res["distribution"]) == 15
     assert len(res["aic"]) == 15
+    # Candidates come back in the C# DistributionList order, so index 4 is the GeneralizedNormal
+    # the 15-candidate set restored. A wrong type_name switch arm reports "Unknown" here while
+    # every count and metric still passes.
+    assert res["distribution"][4] == "GeneralizedNormal"
     assert any(res["converged"])
     for i, ok in enumerate(res["converged"]):
         if ok:

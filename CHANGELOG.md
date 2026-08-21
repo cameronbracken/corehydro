@@ -7,26 +7,64 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
+## [0.8.0] - 2026-08-21
 
-- **`fit_distributions()` could rank GeneralizedPareto as failed, or rank it differently between
-  platforms and between runs.** `GeneralizedPareto::get_parameter_constraints` returned two values
-  for a three-parameter distribution, so every caller that reads all three read one element past
-  the end of the vector. Inside `fit_distributions()` that out-of-bounds value became the
-  GeneralizedPareto candidate's starting parameter, its bounds, and its prior. On the fitting
-  dataset used by the test fixtures the candidate came back failed, with an AIC of `NaN`, where the
-  C# library converges it at an AIC of 423.31, the lowest of all 14 candidates. What was read is
-  whatever the allocator happened to leave in that memory, so the outcome was not stable across
-  platforms, compilers, or runs. **Results from `fit_distributions()` involving GeneralizedPareto
-  may change.** Refit if you kept earlier output. The candidate is now pinned against the real C#
-  library in `fixtures/analyses/fit_distributions_smoke.json`, which asserted only the Normal
-  candidate before and so did not catch this. The same read reached the GeneralizedPareto seed in
-  eight other places: a model's default parameters and its trend model, the MCMC model registry,
-  the copula marginal pre-fit, the mixture, competing-risks and point-process component seeds, and
-  Bulletin 17C. This was a port defect, not upstream behaviour; in C# the index is in range.
+Two gaps the ten-phase port left open, closed. `GeneralizedNormal` was the one univariate family
+that had a name in the Numerics type enum and nothing behind it, so the library now carries **43**
+univariate distributions rather than 42, and `fit_distributions()` fits and ranks the **15**
+candidates the C# `FittingAnalysis` ranks rather than 14. The covariance-aware pivotal bootstrap,
+severed at Phase 3 as that phase's final task, is ported in full and reachable from both packages
+as `bootstrap_custom(run_type = "pivotal")`.
+
+The pivotal workflow is what you want when a plain bootstrap interval is too narrow because each
+replicate's own estimation uncertainty is thrown away. A regular run keeps one point estimate per
+replicate; a pivotal run keeps the estimate **and** its covariance, standardizes each replicate
+against the parent fit in link space, and reinflates through the parent covariance, so the
+replicate ensemble carries the within-replicate uncertainty the point estimates dropped. The raw
+(non-pivotal) ensemble is returned beside the pivotal one, so the two intervals can be compared in
+the same run.
+
+### Added
+
+- **`GeneralizedNormal`**, the 43rd univariate distribution, ported from
+  `Numerics/Distributions/Univariate/GeneralizedNormal.cs`. It is the three-parameter log-normal,
+  parameterized by location, scale and shape, with the shape's sign setting which tail is bounded.
+  Reachable by name through every existing verb -- R `distribution("GeneralizedNormal", c(100, 10,
+  0))`, Python `Distribution("GeneralizedNormal", [100, 10, 0])` -- with moments, L-moments, MLE
+  and seeded sampling. With it, **every family in the univariate type enum now constructs** except
+  the three C# itself marks unsupported by the factory (CompetingRisks, Mixture, UserDefined).
+- **The covariance-aware pivotal bootstrap**, through nine new arguments on `bootstrap_custom()`
+  that carry the same names and defaults in R and Python: `run_type` (`"regular"` or `"pivotal"`),
+  `fit_with_covariance` (the fitting function a pivotal run uses instead of `fit`, returning the
+  parameters and their covariance), `original_covariance`, `pivotal_links`,
+  `pivotal_invalid_draw_policy`, `regularize_pivotal_covariances`, `pivotal_z_limit`,
+  `add_pivotal_jitter` and `pivotal_jitter_scale`. `pivotal_links` takes one **link function name**
+  per parameter (`"Identity"`, `"Log"`, `"Logit"`, `"Probit"`, `"ComplementaryLogLog"`,
+  `"YeoJohnson"`, `"FisherZ"`, or a null for the identity), not a callback: standardization happens
+  in link space, so `"Log"` on a scale parameter keeps every reinflated draw positive. A pivotal
+  result adds `pivotal_diagnostics` (the six replicate counts, named after the upstream fields) and
+  the raw block `raw_estimate` / `raw_lower` / `raw_upper` / `raw_standard_error` / `raw_mean` /
+  `raw_valid_count` / `raw_parameter_estimate` / `raw_parameter_lower` / `raw_parameter_upper`;
+  every result now carries `run_type`. A pivotal run is percentile-only and refuses the arguments
+  it cannot use (`fit`, `jackknife`, `inner_replicates`), as a regular run refuses the pivotal ones.
+- **The `IStandardError` capability mixin** in the core
+  (`numerics/distributions/base/i_standard_error.hpp`), with generic dispatch for
+  `parameter_covariance`, `quantile_variance`, `quantile_gradient` and `quantile_jacobian` through
+  the shared `dist_runner`. A family that declares the mixin is now reached by the same one-runner
+  path every other distribution verb uses, instead of the bespoke GEV-only path that carried these
+  four methods before.
+- Two worked example pairs, each ending in an executable reproduction check: **16, the
+  15-candidate fitting surface** (ranking an annual-peak record by AIC, BIC and RMSE, and what
+  it means that the three criteria pick three different winners) and **17, the pivotal bootstrap**
+  (a pivotal interval against its own raw block, a link on a bounded parameter, and the three
+  invalid-draw policies side by side).
 
 ### Changed
 
+- **`fit_distributions()` returns 15 rows, not 14.** GeneralizedNormal enters the candidate list at
+  the position C# gives it, fifth, between GeneralizedLogistic and GeneralizedPareto, so **any code
+  indexing the result positionally past the fourth row shifts by one.** Ranking by
+  `which.min(aic)` / `min()` is unaffected except that a new candidate can now win.
 - **L-moments form their integer products in floating point, so long samples return correct
   values.** `l_moments()`, and every distribution fit that estimates from sample L-moments,
   computed the probability-weighted-moment weights `(i - 2) * (i - 1)` and
@@ -40,6 +78,70 @@ the `corehydropy` Python package) are documented here. The format follows
   library and RMC-BestFit still wrap, so **corehydro and RMC-BestFit disagree on the L-kurtosis of
   any sample of 1293 or more points.** C# defines signed overflow as wrapping, while C++ leaves it
   undefined, so keeping the C# expression was not an option either.
+
+### Fixed
+
+- **`fit_distributions()` reported the new candidate's name as `"Unknown"` in both languages.**
+  The distribution-name lookup in the R and Python analysis glue is a local switch with an
+  `"Unknown"` default, and it had fourteen arms. Adding the distribution and adding the fifteenth
+  candidate each left it alone, and the fixture pins that candidate's AIC, BIC and converged flag
+  but not its name, so every count and every metric passed while the row printed `Unknown`. Found
+  by writing the worked example, which is the only place the column is read by eye. Both packages'
+  tests now assert the name of the fifth candidate, not just how many there are.
+- **The oracle gate silently skipped the standard-error methods for every family that implements
+  them.** The emitter returned "no value" for `parameter_covariance`, `quantile_variance`,
+  `quantile_gradient` and `quantile_se` unconditionally, which was right for GEV's eleven
+  documented skips but meant any other implementer would have been skipped rather than reproduced.
+  It now skips GEV by name and dispatches the rest for real, through the same capability cast the
+  other three runners use.
+- **Python and R disagreed on which pivotal option values they would refuse.** Python passed
+  `pivotal_jitter_scale` through `float()` unchecked, so a `NaN` there silently emptied the
+  retained ensemble under the default drop policy, and it accepted an infinite `pivotal_z_limit`
+  that R refuses. Both now raise on a non-finite scale and on a non-positive or infinite limit,
+  with the same wording, so the two languages refuse exactly the same inputs.
+- **A Python `fit_with_covariance` returning a bare list of numbers was read as a one-parameter
+  fit** with a 1x1 covariance instead of being refused, the same mistake the moment-condition
+  callback already guards against. It now raises.
+- **`fit_distributions()` could rank GeneralizedPareto as failed, or rank it differently between
+  platforms and between runs.** `GeneralizedPareto::get_parameter_constraints` returned two values
+  for a three-parameter distribution, so every caller that reads all three read one element past
+  the end of the vector. Inside `fit_distributions()` that out-of-bounds value became the
+  GeneralizedPareto candidate's starting parameter, its bounds, and its prior. On the fitting
+  dataset used by the test fixtures the candidate came back failed, with an AIC of `NaN`, where the
+  C# library converges it at an AIC of 423.31, the lowest of any candidate. What was read is
+  whatever the allocator happened to leave in that memory, so the outcome was not stable across
+  platforms, compilers, or runs. **Results from `fit_distributions()` involving GeneralizedPareto
+  may change.** Refit if you kept earlier output. The candidate is now pinned against the real C#
+  library in `fixtures/analyses/fit_distributions_smoke.json`, which asserted only the Normal
+  candidate before and so did not catch this. The same read reached the GeneralizedPareto seed in
+  eight other places: a model's default parameters and its trend model, the MCMC model registry,
+  the copula marginal pre-fit, the mixture, competing-risks and point-process component seeds, and
+  Bulletin 17C. This was a port defect, not upstream behaviour; in C# the index is in range.
+
+### Documentation
+
+- **Only one of the three standard-error methods can be pinned for GeneralizedNormal, and the
+  reason is upstream.** C# `GeneralizedNormal.ParameterCovariance` and `QuantileVariance` both
+  throw `NotImplementedException`, so there is no C# answer to reproduce. The port mirrors the
+  throw rather than inventing a number, and the two methods are declared anyway so that a caller
+  capability-casting to `IStandardError` gets the same "not implemented" answer instead of a
+  silently wrong one. `quantile_gradient` is the one that is pinnable, and it is pinned at three
+  exceedance probabilities against values read from the real C# library. The C# test for it
+  compares the analytic gradient against the numerical derivative the method itself calls, so it
+  is a tautology and carries no literal to scrape.
+- `site/status.qmd`, `site/index.qmd` and `README.md` brought to v0.8.0: 43 univariate families,
+  and the `Sampling.Bootstrap` row no longer calls the pivotal workflow an omission.
+- Reference documentation for the new family and the pivotal arguments in both packages, with
+  runnable examples.
+
+### Validation
+
+ctest 90/90 (the fixture suite alone 5579 checks); oracle gate 5568 reproduced, 0 failed, 11
+skipped (the documented GEV standard-error set, unchanged); testthat 6344/0; pytest 1520 passed.
+`R CMD check --as-cran` holds at three NOTEs (the CRAN-incoming non-FOSS-license note, the
+long-path note listing vendored core headers, and a local HTML-tidy-version note) with no WARNING.
+The pivotal cross-language fixture passes at zero tolerance in all four runners; no `oracle_skip`
+and no loosened tolerance was added anywhere in this release.
 
 ## [0.7.0] - 2026-08-20
 
@@ -598,7 +700,8 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/cameronbracken/corehydro/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/cameronbracken/corehydro/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cameronbracken/corehydro/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cameronbracken/corehydro/compare/v0.4.0...v0.5.0

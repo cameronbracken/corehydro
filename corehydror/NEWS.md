@@ -1,11 +1,51 @@
-# corehydror (development version)
+# corehydror 0.8.0
 
-Two memory-safety and undefined-behaviour defects found by an AddressSanitizer and
-UndefinedBehaviorSanitizer run. Both are user-visible. See `CHANGELOG.md` at the repository root
-for the full account.
+Two gaps the port left open, closed. `GeneralizedNormal` was the one univariate family named in
+the library's type enum with nothing behind it, so the package now carries 43 distributions rather
+than 42 and `fit_distributions()` ranks 15 candidates rather than 14. The covariance-aware pivotal
+bootstrap is ported and reachable as `bootstrap_custom(run_type = "pivotal")`. This release also
+carries two memory-safety and undefined-behaviour fixes from an AddressSanitizer and
+UndefinedBehaviorSanitizer run, both user-visible. See `CHANGELOG.md` at the repository root for
+the full account.
+
+## New features
+
+* `GeneralizedNormal`, the three-parameter log-normal, available by name from
+  `distribution()` and every `dist_*` verb: `distribution("GeneralizedNormal", c(100, 10, 0))`.
+  Location, scale and shape, with the shape's sign setting which tail is bounded. Every family in
+  the library's univariate type enum now constructs.
+* `bootstrap_custom(run_type = "pivotal")` -- the covariance-aware pivotal bootstrap. A regular run
+  keeps one point estimate per replicate and throws that replicate's own estimation uncertainty
+  away; a pivotal run keeps the estimate and its covariance, standardizes each replicate against
+  the parent fit in link space, and reinflates through the parent covariance. Fit through
+  `fit_with_covariance` instead of `fit`. Nine new arguments carry it: `run_type`,
+  `fit_with_covariance`, `original_covariance`, `pivotal_links`, `pivotal_invalid_draw_policy`,
+  `regularize_pivotal_covariances`, `pivotal_z_limit`, `add_pivotal_jitter` and
+  `pivotal_jitter_scale`. `pivotal_links` takes a link function **name** per parameter (`"Log"` on
+  a scale parameter keeps every reinflated draw positive), not a function. A pivotal result adds
+  `pivotal_diagnostics` and the raw (non-pivotal) block beside the pivotal one, so the two
+  intervals can be compared in the same run; it is percentile-only, and refuses the arguments it
+  cannot use.
+
+## Changes to results
+
+* `fit_distributions()` returns 15 rows, not 14. GeneralizedNormal enters the candidate list fifth,
+  where the C# library puts it, so **code indexing the result positionally past the fourth row
+  shifts by one**. Ranking with `which.min(aic)` is unaffected, except that a new candidate can now
+  win.
+* `l_moments()`, and every fit that estimates from sample L-moments, now forms its weight products
+  in floating point. Those products overflowed a 32-bit integer at 1293 points, so the L-kurtosis
+  of any sample of **1293 or more points** was wrong: on an evenly spaced series whose true
+  L-kurtosis is 0, the old code returned -0.185 at 1293 points and -1.45 at 1300. Shorter samples
+  are bit-identical to before. This is a deliberate divergence from upstream, which still wraps, so
+  corehydror and RMC-BestFit disagree on the L-kurtosis of any sample of 1293 or more points.
 
 ## Bug fixes
 
+* `fit_distributions()` printed the new candidate's name as `"Unknown"`. The name lookup in the
+  binding glue had fourteen arms and a default; the fixture pins that candidate's AIC, BIC and
+  converged flag but not its name, so every count and metric passed while the row printed
+  `Unknown`. The test suite now asserts the name too.
 * `fit_distributions()` could report the GeneralizedPareto candidate as failed, or rank it
   differently between platforms and between runs. The distribution returned two parameter
   constraints where it has three parameters, so the candidate's starting value, bounds and prior
