@@ -17,6 +17,11 @@
 mcmc_sampler_names <- c("RWMH", "ARWMH", "DEMCz", "DEMCzs", "HMC", "NUTS", "SNIS", "Gibbs")
 mcmc_gradient_sampler_names <- c("HMC", "NUTS")
 bootstrap_ci_method_names <- c("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa")
+# The two bootstrap workflows upstream's Bootstrap<TData> has, and the three policies its pivotal
+# one applies to an invalid draw. corehydropy carries the same two as _RUN_TYPES and
+# _INVALID_DRAW_POLICIES.
+bootstrap_run_types <- c("regular", "pivotal")
+bootstrap_invalid_draw_policies <- c("drop", "use_raw", "use_parent")
 
 # Internal: validate the function argument the same way for every verb.
 callback_check_fn <- function(f) {
@@ -541,10 +546,34 @@ mcmc_posterior <- function(
 #'     by name; at every later index it is the right LENGTH but drops the wrong observation (one
 #'     off), which nothing can catch. Only the `"BCa"` method uses it; every other method ignores
 #'     it.}
+#'   \item{`fit_with_covariance(data)`}{Returns `list(parameters = , covariance = )`: the parameter
+#'     vector fitted to `data` and its covariance matrix, one row and one column per parameter.
+#'     Only `run_type = "pivotal"` uses it, and that run type uses it INSTEAD of `fit`.}
 #' }
 #'
+#' @section The pivotal run type:
+#' `run_type = "pivotal"` is upstream's other bootstrap mode. Rather than treating each resampled
+#' fit as a draw from the sampling distribution, it standardizes the fit against the original one
+#' through the resample's OWN covariance and reinflates it through the original's, so a replicate
+#' fitted on an unusually flat likelihood contributes an appropriately smaller step. It therefore
+#' needs a covariance with every fit, which is what `fit_with_covariance` supplies in place of
+#' `fit`.
+#'
+#' The original fit is the parent every draw is compared against. Left alone it is
+#' `fit_with_covariance(data)`; `parameters` replaces its parameter vector and `original_covariance`
+#' its covariance, either independently of the other.
+#'
+#' The result gains `pivotal_diagnostics` -- the six replicate counts the run kept, from
+#' `requested_replicates` down to `retained_pivotal_replicates` -- and a second interval block,
+#' `raw_lower`/`raw_upper` and companions, which is the plain percentile interval of the RAW
+#' covariance-aware fits before the transform. Comparing the two is the point of reporting both.
+#' Only `ci_method = "Percentile"` exists after a pivotal run, and asking for another is refused
+#' before the first replicate rather than after all of them.
+#'
 #' @param data the original sample: a non-empty numeric vector.
-#' @param resample,fit,statistic the three required functions, with the signatures above.
+#' @param resample,statistic the two always-required functions, with the signatures above.
+#' @param fit the fitting function, required by `run_type = "regular"` and unused -- and so
+#'   refused -- by `run_type = "pivotal"`, which fits through `fit_with_covariance` instead.
 #' @param jackknife the leave-one-out function, required by `ci_method = "BCa"` and unused by every
 #'   other method. `NULL` by default.
 #' @param replicates number of bootstrap replicates.
@@ -563,18 +592,47 @@ mcmc_posterior <- function(
 #'   is counted in `failed_replicates`. `NULL` leaves the ported default (`MaxRetries`, 20) in
 #'   force. Each retry is another crossing into R, so lowering it caps the worst case rather than
 #'   changing the typical one.
+#' @param run_type `"regular"` (the default) or `"pivotal"`; see the section above.
+#' @param fit_with_covariance the covariance-aware fitting function `run_type = "pivotal"` fits
+#'   through, with the signature above. Required by that run type and refused by the other.
+#' @param original_covariance the parent fit's covariance matrix, one row and one column per
+#'   parameter. `NULL`, the default, takes it from `fit_with_covariance(data)`. Pivotal only.
+#' @param pivotal_links one entry per parameter, each a link function name (`"Identity"`, `"Log"`,
+#'   `"Logit"`, `"Probit"`, `"ComplementaryLogLog"`, `"YeoJohnson"` or `"FisherZ"`) or `NULL` for
+#'   the identity, given as a list. The standardization happens in link space, so `"Log"` on a
+#'   scale parameter keeps every reinflated draw positive. `NULL`, the default, is the identity
+#'   throughout. Pivotal only.
+#' @param pivotal_invalid_draw_policy what to do with a draw the transform could not produce (a
+#'   non-finite standardized vector, or one outside `pivotal_z_limit`): `"drop"` (the default,
+#'   leaving it out of the ensemble), `"use_raw"` (keeping the untransformed fit) or `"use_parent"`
+#'   (substituting the original fit). Pivotal only.
+#' @param regularize_pivotal_covariances whether each link-space covariance is made symmetric
+#'   positive definite before it is factored. `TRUE` by default, as upstream. Pivotal only.
+#' @param pivotal_z_limit an absolute limit on every component of the standardized vector, beyond
+#'   which the draw is invalid and the policy above applies. `NULL`, the default, is no limit.
+#'   Pivotal only.
+#' @param add_pivotal_jitter,pivotal_jitter_scale whether to add Gaussian jitter to the
+#'   standardized vector before the limit is checked, and its base standard deviation (the applied
+#'   scale is this divided by the square root of the parameter count). `FALSE` and `0.01` by
+#'   default, as upstream. Pivotal only.
 #' @return A list with, per statistic, `estimate` (the statistic of `parameters`, not a bootstrap
 #'   average), `lower`, `upper`, `standard_error`, `mean` (the mean over valid replicates, so
 #'   `mean - estimate` is the bias estimate) and `valid_count`; the same first three for the fitted
 #'   parameters as `parameter_estimate`, `parameter_lower` and `parameter_upper`; and
-#'   `replicates`, `failed_replicates`, `alpha` and `ci_method`.
+#'   `replicates`, `failed_replicates`, `alpha`, `ci_method` and `run_type`. A pivotal run adds
+#'   `pivotal_diagnostics` (a list of the six replicate counts) and the raw block: `raw_estimate`,
+#'   `raw_lower`, `raw_upper`, `raw_standard_error`, `raw_mean`, `raw_valid_count`,
+#'   `raw_parameter_estimate`, `raw_parameter_lower` and `raw_parameter_upper`.
 #' @section How many times your functions are called:
 #' `replicates` calls of each of `resample`, `fit` and `statistic`, plus one extra `statistic` call
 #' to learn how many values it returns and one `fit` call when `parameters` is not supplied. A
 #' failed replicate is retried up to `max_retries` times (20 by default), and `"BCa"` adds one
 #' `jackknife` + `fit` + `statistic` per observation. `"BootstrapT"` is the expensive one: it
 #' multiplies the resample and fit counts by `inner_replicates`, so the ported defaults (10,000 x
-#' 300) would be three million crossings back into R. Start small.
+#' 300) would be three million crossings back into R. Start small. A pivotal run calls
+#' `fit_with_covariance` in place of `fit`, once per replicate plus once up front for the parent
+#' fit, and `statistic` once per retained draw plus once per raw fit -- so about twice as often as
+#' a regular run of the same length.
 #' @section Reproducing a run in Python:
 #' The draws come from the core's seeded Mersenne Twister, so an identical `bootstrap_custom()`
 #' call in Python resamples the identical observations. The numbers your functions compute from
@@ -609,7 +667,7 @@ mcmc_posterior <- function(
 bootstrap_custom <- function(
   data,
   resample,
-  fit,
+  fit = NULL,
   statistic,
   jackknife = NULL,
   replicates = 1000,
@@ -618,14 +676,50 @@ bootstrap_custom <- function(
   seed = 12345,
   parameters = NULL,
   inner_replicates = NULL,
-  max_retries = NULL
+  max_retries = NULL,
+  run_type = "regular",
+  fit_with_covariance = NULL,
+  original_covariance = NULL,
+  pivotal_links = NULL,
+  pivotal_invalid_draw_policy = "drop",
+  regularize_pivotal_covariances = TRUE,
+  pivotal_z_limit = NULL,
+  add_pivotal_jitter = FALSE,
+  pivotal_jitter_scale = 0.01
 ) {
   if (!is.numeric(data) || length(data) == 0L || !all(is.finite(data))) {
     stop("`data` must be a non-empty numeric vector of finite values", call. = FALSE)
   }
   bootstrap_check_fn(resample, "resample", "(data, parameters, rng)")
-  bootstrap_check_fn(fit, "fit", "(data)")
   bootstrap_check_fn(statistic, "statistic", "(parameters)")
+  run_type <- check_choice(run_type, bootstrap_run_types, "run_type")
+  pivotal <- identical(run_type, "pivotal")
+  # Which fitting delegate is required is the one thing the run type decides here rather than in
+  # C++: both are refused by name when they belong to the other run type, because a silently
+  # ignored `fit` is how a user comes to believe the pivotal run fitted through it.
+  # Only the arguments defaulting to NULL can be told apart from their own default, so those are
+  # the ones named here; the four pivotal options with concrete defaults (the draw policy, the
+  # regularization flag and the two jitter arguments) are simply not read by a regular run.
+  if (pivotal) {
+    bootstrap_check_fn(fit_with_covariance, "fit_with_covariance", "(data)")
+    if (!is.null(fit)) {
+      stop("the pivotal bootstrap fits through `fit_with_covariance`; `fit` is not used by it",
+           call. = FALSE)
+    }
+    for (name in c("jackknife", "inner_replicates")) {
+      if (!is.null(get(name))) {
+        stop(sprintf("`%s` is not used when `run_type` is \"pivotal\"", name), call. = FALSE)
+      }
+    }
+  } else {
+    bootstrap_check_fn(fit, "fit", "(data)")
+    for (name in c("fit_with_covariance", "original_covariance", "pivotal_links",
+                   "pivotal_z_limit")) {
+      if (!is.null(get(name))) {
+        stop(sprintf("`%s` is only used when `run_type` is \"pivotal\"", name), call. = FALSE)
+      }
+    }
+  }
   if (!is.null(jackknife)) bootstrap_check_fn(jackknife, "jackknife", "(data, index)")
   ci_method <- check_choice(ci_method, bootstrap_ci_method_names, "ci_method")
   # Refused HERE rather than after the run: the ported class checks it inside
@@ -672,8 +766,41 @@ bootstrap_custom <- function(
     opts$max_retries <- as.integer(max_retries)
   }
 
-  res <- ch_callback_bootstrap_(to_spec_json(opts), resample, fit, statistic, jackknife)
-  bootstrap_unflatten(res, ci_method)
+  if (pivotal) {
+    opts$run_type <- "pivotal"
+    if (!is.null(original_covariance)) {
+      opts$original_covariance <- spec_matrix(original_covariance, "original_covariance")
+    }
+    if (!is.null(pivotal_links)) {
+      if (!is.list(pivotal_links)) pivotal_links <- as.list(pivotal_links)
+      # A NULL element is the identity link, and to_spec_json() drops NULLs from a NAMED list --
+      # so each entry is turned into its own JSON value here, where NULL emits as `null`.
+      opts$pivotal_links <- spec_array(lapply(pivotal_links, function(link) {
+        if (is.null(link)) NULL else as.character(link)
+      }))
+    }
+    opts$pivotal_invalid_draw_policy <- check_choice(
+      pivotal_invalid_draw_policy, bootstrap_invalid_draw_policies, "pivotal_invalid_draw_policy"
+    )
+    opts$regularize_pivotal_covariances <- isTRUE(regularize_pivotal_covariances)
+    if (!is.null(pivotal_z_limit)) {
+      if (!is.numeric(pivotal_z_limit) || length(pivotal_z_limit) != 1L ||
+            !is.finite(pivotal_z_limit) || pivotal_z_limit <= 0) {
+        stop("`pivotal_z_limit` must be a single positive number, or NULL", call. = FALSE)
+      }
+      opts$pivotal_z_limit <- as.double(pivotal_z_limit)
+    }
+    opts$add_pivotal_jitter <- isTRUE(add_pivotal_jitter)
+    if (!is.numeric(pivotal_jitter_scale) || length(pivotal_jitter_scale) != 1L ||
+          !is.finite(pivotal_jitter_scale)) {
+      stop("`pivotal_jitter_scale` must be a single number", call. = FALSE)
+    }
+    opts$pivotal_jitter_scale <- as.double(pivotal_jitter_scale)
+  }
+
+  res <- ch_callback_bootstrap_(to_spec_json(opts), resample, fit, statistic, jackknife,
+                                fit_with_covariance)
+  bootstrap_unflatten(res, ci_method, run_type)
 }
 
 #' Fit your own moment conditions by GMM
@@ -915,7 +1042,7 @@ bootstrap_check_fn <- function(f, name, signature) {
 # Internal: slice the flat callback result back by name. The layout is documented in
 # core/include/corehydro/numerics/support/callback/bootstrap.hpp, and corehydropy's own
 # _bootstrap_unflatten() reads it identically.
-bootstrap_unflatten <- function(res, ci_method) {
+bootstrap_unflatten <- function(res, ci_method, run_type = "regular") {
   values <- as.double(unlist(res$values))
   nms <- as.character(unlist(res$names))
   dims <- as.integer(unlist(res$dims))
@@ -927,7 +1054,7 @@ bootstrap_unflatten <- function(res, ci_method) {
     as.double(values[match(sprintf("%s[%d]", prefix, seq_len(count) - 1L), nms)])
   }
 
-  list(
+  out <- list(
     estimate = block("statistic", n_stats),
     lower = block("statistic_lower", n_stats),
     upper = block("statistic_upper", n_stats),
@@ -943,8 +1070,33 @@ bootstrap_unflatten <- function(res, ci_method) {
     replicates = as.integer(by_name("replicates")),
     failed_replicates = as.integer(by_name("failed_replicates")),
     alpha = by_name("alpha"),
-    ci_method = ci_method
+    ci_method = ci_method,
+    run_type = run_type
   )
+  if (!identical(run_type, "pivotal")) {
+    return(out)
+  }
+  # The pivotal run's two additions: the raw covariance-aware fits' own percentile interval, and
+  # the six diagnostic counts, named exactly as the ported PivotalBootstrapDiagnostics fields are.
+  # corehydropy's _bootstrap_unflatten() reads both identically.
+  out$raw_estimate <- block("raw_statistic", n_stats)
+  out$raw_lower <- block("raw_statistic_lower", n_stats)
+  out$raw_upper <- block("raw_statistic_upper", n_stats)
+  out$raw_standard_error <- block("raw_statistic_se", n_stats)
+  out$raw_mean <- block("raw_statistic_mean", n_stats)
+  out$raw_valid_count <- as.integer(block("raw_statistic_valid", n_stats))
+  out$raw_parameter_estimate <- block("raw_parameter", n_params)
+  out$raw_parameter_lower <- block("raw_parameter_lower", n_params)
+  out$raw_parameter_upper <- block("raw_parameter_upper", n_params)
+  out$pivotal_diagnostics <- list(
+    requested_replicates = as.integer(by_name("requested_replicates")),
+    rejected_raw_replicates = as.integer(by_name("rejected_raw_replicates")),
+    failed_raw_replicates = as.integer(by_name("failed_raw_replicates")),
+    accepted_raw_replicates = as.integer(by_name("accepted_raw_replicates")),
+    invalid_pivotal_replicates = as.integer(by_name("invalid_pivotal_replicates")),
+    retained_pivotal_replicates = as.integer(by_name("retained_pivotal_replicates"))
+  )
+  out
 }
 
 # Internal: accept either a list of distribution() objects or a single one, and refuse anything

@@ -615,6 +615,26 @@ callback_fixture_function <- function(name) {
       slope <- num / den
       c(ybar - slope * tbar, slope)
     },
+    # The PIVOTAL member of the bootstrap catalog: upstream's Func<TData, BootstrapFit>
+    # FitWithCovarianceFunction, the delegate that run type fits through. The model is the
+    # two-parameter Normal location-scale MLE -- theta = (mu, sigma) with sigma the POPULATION
+    # standard deviation -- whose covariance is analytic, diag(s2 / n, s2 / (2n)), so the whole
+    # callback is arithmetic plus one sqrt. sqrt is the one libm function IEEE 754 requires to be
+    # correctly rounded, so unlike log or exp it is the same value in all four runners; the sums are
+    # explicit loops for the reason Fit_Mean above gives.
+    FitCov_NormalMLE = function(data) {
+      n <- length(data)
+      acc <- 0
+      for (x in data) acc <- acc + x
+      mu <- acc / n
+      ss <- 0
+      for (x in data) ss <- ss + (x - mu) * (x - mu)
+      s2 <- ss / n
+      list(
+        parameters = c(mu, sqrt(s2)),
+        covariance = matrix(c(s2 / n, 0, 0, s2 / (2 * n)), nrow = 2L, ncol = 2L)
+      )
+    },
     Stat_Identity = function(parameters) parameters,
     Stat_MeanAndSquare = function(parameters) c(parameters[1], parameters[1] * parameters[1]),
     # `index` counts from 0, as the ported delegate does, so the sample without it is
@@ -772,6 +792,13 @@ callback_fixture_function <- function(name) {
 # scalar. Recursive because the mcmc group's options carry strings (the sampler name) and an array
 # of prior OBJECTS beside their numbers.
 callback_options_value <- function(ns, v) {
+  # A JSON null INSIDE an array is a value, not an absent key: the bootstrap group's
+  # `pivotal_links` spells "the identity link for this parameter" that way, and jsonlite hands it
+  # over as a NULL element. Returned as NULL so to_spec_json() emits `null` for it -- without this
+  # it would fall through to as.double(NULL), i.e. numeric(0), and reach C++ as an empty array.
+  if (is.null(v)) {
+    return(NULL)
+  }
   if (is.list(v)) {
     nms <- names(v)
     if (!is.null(nms) && all(nzchar(nms))) {
@@ -1983,9 +2010,11 @@ test_that("oracle fixtures validate", {
           identical(spec$kind, "callback_cross_language")) {
       ns <- asNamespace("corehydror")
       # A "callback"-kind case IS its own single block; a "callback_cross_language"-kind case
-      # (fixtures/callback/callback_cross_language.json) nests two -- "mcmc" and "bootstrap" --
-      # each shaped exactly like a "callback"-kind case's construct/assertions, so the one body
-      # below drives both kinds and the cross-language fixture grows no evaluation path of its own.
+      # (fixtures/callback/callback_cross_language.json) nests one block per key OTHER than "name"
+      # -- "mcmc", "bootstrap", "pivotal" -- each shaped exactly like a "callback"-kind case's
+      # construct/assertions, so the one body below drives both kinds and the cross-language
+      # fixture grows no evaluation path of its own. The labels are read off the case rather than
+      # listed here, so a case may nest one block or five without a runner change.
       # Its assertions are spelled mode "abs" with tol 0, i.e. bit equality with the C++, Python and
       # C# runners rather than a tolerance.
       blocks <- list()
@@ -1993,7 +2022,7 @@ test_that("oracle fixtures validate", {
         if (identical(spec$kind, "callback")) {
           blocks[[length(blocks) + 1L]] <- case
         } else {
-          for (sub in c("mcmc", "bootstrap")) blocks[[length(blocks) + 1L]] <- case[[sub]]
+          for (sub in setdiff(names(case), "name")) blocks[[length(blocks) + 1L]] <- case[[sub]]
         }
       }
       for (case in blocks) {
@@ -2039,18 +2068,19 @@ test_that("oracle fixtures validate", {
           ns$ch_callback_gmm_(opts, fn, jacobian, penalty)
         } else if (identical(construct$group, "bootstrap")) {
           # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
-          # counterpart of the mcmc group's log-likelihood -- and the other three have keys of
-          # their own. An absent `jackknife` stays NULL, which is what every method but BCa means.
-          jackknife <- if (is.null(construct$jackknife)) {
-            NULL
-          } else {
-            callback_fixture_function(construct$jackknife)
+          # counterpart of the mcmc group's log-likelihood -- and the other four have keys of
+          # their own. An absent `jackknife` stays NULL, which is what every method but BCa means;
+          # `fit` and `fit_with_covariance` are the two fitting delegates the run types take, and
+          # a case supplies exactly the one its own `run_type` needs.
+          optional <- function(name) {
+            if (is.null(construct[[name]])) NULL else callback_fixture_function(construct[[name]])
           }
           ns$ch_callback_bootstrap_(
             opts, fn,
-            callback_fixture_function(construct$fit),
+            optional("fit"),
             callback_fixture_function(construct$statistic),
-            jackknife
+            optional("jackknife"),
+            optional("fit_with_covariance")
           )
         } else {
           stop(sprintf("unknown callback fixture group: %s", construct$group))

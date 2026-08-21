@@ -1135,6 +1135,31 @@ static Func<ParameterSet, double[]>? CallbackStatisticFunction(string name) => n
     "Stat_MeanAndSquare" => ps => new[] { ps.Values[0], ps.Values[0] * ps.Values[0] },
     _ => null
 };
+// The PIVOTAL member of the same catalog: upstream's `Func<TData, BootstrapFit>
+// FitWithCovarianceFunction`, the delegate that run type fits through. The model is the
+// two-parameter Normal location-scale MLE -- theta = (mu, sigma) with sigma the POPULATION standard
+// deviation -- whose covariance is analytic, diag(s2 / n, s2 / (2n)), so the whole delegate is
+// arithmetic plus one Math.Sqrt. Sqrt is the one libm function IEEE 754 requires to be correctly
+// rounded, so unlike Log or Exp it is the same value in all four runners; the sums are explicit
+// loops for the reason Fit_Mean above gives.
+static Func<double[], BootstrapFit>? CallbackFitWithCovarianceFunction(string name) => name switch
+{
+    "FitCov_NormalMLE" => data =>
+    {
+        double n = data.Length;
+        double acc = 0d;
+        foreach (double x in data) acc += x;
+        double mu = acc / n;
+        double ss = 0d;
+        foreach (double x in data) ss += (x - mu) * (x - mu);
+        double s2 = ss / n;
+        var covariance = new Matrix(2);
+        covariance[0, 0] = s2 / n;
+        covariance[1, 1] = s2 / (2d * n);
+        return new BootstrapFit(new[] { mu, Math.Sqrt(s2) }, covariance);
+    },
+    _ => null
+};
 static Func<double[], int, double[]>? CallbackJackknifeFunction(string name) => name switch
 {
     // The leave-one-out sample ComputeAccelerationConstants needs for BCa. `index` counts from 0,
@@ -1152,10 +1177,12 @@ static Func<double[], int, double[]>? CallbackJackknifeFunction(string name) => 
 
 // Flattens a callback fixture file into the (caseName, subLabel, subCase) triples its one branch
 // below drives. A "callback"-kind case IS its own single sub-block, so it yields one triple with an
-// empty label; a "callback_cross_language"-kind case nests two blocks -- "mcmc" and "bootstrap" --
-// each shaped exactly like a "callback"-kind case's construct/assertions, so it yields two. The
-// branch body is then written once and reached identically by both kinds, which is what keeps the
-// cross-language fixture from growing an evaluation path of its own.
+// empty label; a "callback_cross_language"-kind case nests one block per key OTHER than "name" --
+// "mcmc", "bootstrap", "pivotal" -- each shaped exactly like a "callback"-kind case's
+// construct/assertions, so it yields one triple each. The labels are read OFF the case rather than
+// listed here, so a case may nest one block or five without an emitter change. The branch body is
+// then written once and reached identically by both kinds, which is what keeps the cross-language
+// fixture from growing an evaluation path of its own.
 static IEnumerable<(string caseName, string subLabel, JsonElement subCase)> CallbackSubCases(
     JsonElement root, string kind)
 {
@@ -1168,8 +1195,11 @@ static IEnumerable<(string caseName, string subLabel, JsonElement subCase)> Call
         }
         else
         {
-            foreach (string sub in new[] { "mcmc", "bootstrap" })
-                yield return (caseName, sub, c.GetProperty(sub));
+            foreach (var property in c.EnumerateObject())
+            {
+                if (property.Name == "name") continue;
+                yield return (caseName, property.Name, property.Value);
+            }
         }
     }
 }
@@ -1249,6 +1279,132 @@ static (double[] values, string[] names, int[] dims) RunCallbackBootstrap(
     Push("alpha", results.Alpha);
     PushBlock("statistic", results.StatisticResults);
     PushBlock("parameter", results.ParameterResults);
+
+    return (values.ToArray(), names.ToArray(),
+            new[] { results.StatisticResults.Length, results.ParameterResults.Length });
+}
+
+// Builds + runs one callback-group bootstrap case with `"run_type": "pivotal"`, mirroring
+// callback/bootstrap.hpp's run_bootstrap_pivotal() decision for decision: the parent fit is the
+// `parameters`/`original_covariance` options over the covariance-aware fit of the original data
+// (C#'s second constructor), every pivotal property is set only when its key is present so the C#
+// class's OWN default stays in force otherwise, and the result carries the raw block and the six
+// diagnostic counts after the regular layout.
+static (double[] values, string[] names, int[] dims) RunCallbackBootstrapPivotal(
+    JsonElement options,
+    Func<double[], ParameterSet, Random, double[]> resample,
+    Func<double[], BootstrapFit> fitWithCovariance,
+    Func<ParameterSet, double[]> statistic)
+{
+    bool Has(string key) => options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
+    double Num(string key, double dflt) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
+            ? ParseNum(v) : dflt;
+
+    if (!Has("data")) throw new Exception("bootstrap/run requires the option 'data'");
+    double[] data = options.GetProperty("data").EnumerateArray().Select(ParseNum).ToArray();
+    string ciName = Has("ci_method") ? options.GetProperty("ci_method").GetString()! : "Percentile";
+    if (ParseBootstrapCIMethod(ciName) != BootstrapCIMethod.Percentile)
+        throw new Exception("Only percentile confidence intervals are supported after a pivotal bootstrap run.");
+    double alpha = Num("alpha", 0.1);
+
+    Matrix? parentCovariance = null;
+    if (Has("original_covariance"))
+    {
+        var rows = options.GetProperty("original_covariance").EnumerateArray()
+            .Select(row => row.EnumerateArray().Select(ParseNum).ToArray()).ToArray();
+        var array = new double[rows.Length, rows[0].Length];
+        for (int i = 0; i < rows.Length; i++)
+            for (int j = 0; j < rows[i].Length; j++) array[i, j] = rows[i][j];
+        parentCovariance = new Matrix(array);
+    }
+    double[] parentParameters = Has("parameters")
+        ? options.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray()
+        : Array.Empty<double>();
+    if (parentCovariance == null || parentParameters.Length == 0)
+    {
+        var probe = fitWithCovariance(data);
+        if (parentParameters.Length == 0) parentParameters = (double[])probe.Parameters.Values.Clone();
+        parentCovariance ??= probe.Covariance;
+    }
+
+    var boot = new Bootstrap<double[]>(data, new BootstrapFit(parentParameters, parentCovariance))
+    {
+        ResampleFunction = resample,
+        FitWithCovarianceFunction = fitWithCovariance,
+        StatisticFunction = statistic
+    };
+    if (Has("replicates")) boot.Replicates = (int)Num("replicates", 0);
+    if (Has("seed")) boot.PRNGSeed = (int)Num("seed", 0);
+    if (Has("prng_seed")) boot.PRNGSeed = (int)Num("prng_seed", 0);
+    if (Has("max_retries")) boot.MaxRetries = (int)Num("max_retries", 0);
+
+    if (Has("pivotal_links"))
+    {
+        var links = options.GetProperty("pivotal_links").EnumerateArray().Select(entry =>
+            entry.ValueKind == JsonValueKind.Null
+                ? null
+                : LinkFunctionFactory.Create(Enum.Parse<LinkFunctionType>(entry.GetString()!))).ToArray();
+        if (links.Length != parentParameters.Length)
+            throw new Exception("'pivotal_links' must name one link per parameter");
+        boot.PivotalLinkFactory = _ => links;
+    }
+    if (Has("pivotal_invalid_draw_policy"))
+    {
+        boot.PivotalInvalidDrawPolicy = options.GetProperty("pivotal_invalid_draw_policy").GetString() switch
+        {
+            "drop" => PivotalBootstrapInvalidDrawPolicy.Drop,
+            "use_raw" => PivotalBootstrapInvalidDrawPolicy.UseRaw,
+            "use_parent" => PivotalBootstrapInvalidDrawPolicy.UseParent,
+            var p => throw new Exception($"unknown pivotal_invalid_draw_policy '{p}'"),
+        };
+    }
+    if (Has("regularize_pivotal_covariances"))
+        boot.RegularizePivotalCovariances = options.GetProperty("regularize_pivotal_covariances").GetBoolean();
+    if (Has("pivotal_z_limit")) boot.PivotalZLimit = Num("pivotal_z_limit", 0d);
+    if (Has("add_pivotal_jitter"))
+        boot.AddPivotalJitter = options.GetProperty("add_pivotal_jitter").GetBoolean();
+    if (Has("pivotal_jitter_scale")) boot.PivotalJitterScale = Num("pivotal_jitter_scale", 0.01d);
+
+    boot.RunPivotalBootstrap();
+    var results = boot.GetConfidenceIntervals(BootstrapCIMethod.Percentile, alpha);
+    var rawResults = boot.GetRawPivotalConfidenceIntervals(alpha);
+
+    // The layout callback/bootstrap.hpp's bootstrap_flatten() plus its pivotal additions document.
+    var values = new List<double>();
+    var names = new List<string>();
+    void Push(string name, double value) { names.Add(name); values.Add(value); }
+    void PushBlock(string label, BootstrapStatisticResult[] block)
+    {
+        for (int i = 0; i < block.Length; i++)
+        {
+            string ix = $"[{i}]";
+            Push(label + ix, block[i].PopulationEstimate);
+            Push(label + "_lower" + ix, block[i].LowerCI);
+            Push(label + "_upper" + ix, block[i].UpperCI);
+            Push(label + "_se" + ix, block[i].StandardError);
+            Push(label + "_mean" + ix, block[i].Mean);
+            Push(label + "_valid" + ix, block[i].ValidCount);
+        }
+    }
+
+    Push("replicates", boot.Replicates);
+    Push("failed_replicates", results.FailedReplicates);
+    Push("alpha", results.Alpha);
+    PushBlock("statistic", results.StatisticResults);
+    PushBlock("parameter", results.ParameterResults);
+    PushBlock("raw_statistic", rawResults.StatisticResults);
+    PushBlock("raw_parameter", rawResults.ParameterResults);
+    var diagnostics = boot.PivotalDiagnostics;
+    if (diagnostics != null)
+    {
+        Push("requested_replicates", diagnostics.RequestedReplicates);
+        Push("rejected_raw_replicates", diagnostics.RejectedRawReplicates);
+        Push("failed_raw_replicates", diagnostics.FailedRawReplicates);
+        Push("accepted_raw_replicates", diagnostics.AcceptedRawReplicates);
+        Push("invalid_pivotal_replicates", diagnostics.InvalidPivotalReplicates);
+        Push("retained_pivotal_replicates", diagnostics.RetainedPivotalReplicates);
+    }
 
     return (values.ToArray(), names.ToArray(),
             new[] { results.StatisticResults.Length, results.ParameterResults.Length });
@@ -5453,25 +5609,45 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             {
                 if (method != "run") throw new Exception($"unknown bootstrap fixture method: {method}");
                 // `callback` names the RESAMPLE delegate -- the one handed the generator, this
-                // group's counterpart of the mcmc group's log-likelihood -- and the other three
-                // have keys of their own. An absent `jackknife` means every method but BCa.
+                // group's counterpart of the mcmc group's log-likelihood -- and the other four
+                // have keys of their own. An absent `jackknife` means every method but BCa; `fit`
+                // and `fit_with_covariance` are the two fitting delegates the run types take, and
+                // a case supplies exactly the one its own `run_type` needs.
                 var resampleFn = CallbackResampleFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not a resample function");
-                string fitName = construct.GetProperty("fit").GetString()!;
-                var fitFn = CallbackFitFunction(fitName)
-                    ?? throw new Exception($"callback '{fitName}' is not a fit function");
                 string statName = construct.GetProperty("statistic").GetString()!;
                 var statFn = CallbackStatisticFunction(statName)
                     ?? throw new Exception($"callback '{statName}' is not a statistic function");
-                Func<double[], int, double[]>? jackFn = null;
-                if (construct.TryGetProperty("jackknife", out var jackEl))
+                string runType = options.ValueKind == JsonValueKind.Object &&
+                                 options.TryGetProperty("run_type", out var runTypeEl)
+                    ? runTypeEl.GetString()! : "regular";
+                if (runType == "pivotal")
                 {
-                    string jn = jackEl.GetString()!;
-                    jackFn = CallbackJackknifeFunction(jn)
-                        ?? throw new Exception($"callback '{jn}' is not a jackknife function");
+                    string fitCovName = construct.GetProperty("fit_with_covariance").GetString()!;
+                    var fitCovFn = CallbackFitWithCovarianceFunction(fitCovName)
+                        ?? throw new Exception($"callback '{fitCovName}' is not a covariance-aware fit function");
+                    (values, valueNames, dims) =
+                        RunCallbackBootstrapPivotal(options, resampleFn, fitCovFn, statFn);
                 }
-                (values, valueNames, dims) =
-                    RunCallbackBootstrap(options, resampleFn, fitFn, statFn, jackFn);
+                else if (runType != "regular")
+                {
+                    throw new Exception($"unknown run_type '{runType}'; expected one of regular, pivotal");
+                }
+                else
+                {
+                    string fitName = construct.GetProperty("fit").GetString()!;
+                    var fitFn = CallbackFitFunction(fitName)
+                        ?? throw new Exception($"callback '{fitName}' is not a fit function");
+                    Func<double[], int, double[]>? jackFn = null;
+                    if (construct.TryGetProperty("jackknife", out var jackEl))
+                    {
+                        string jn = jackEl.GetString()!;
+                        jackFn = CallbackJackknifeFunction(jn)
+                            ?? throw new Exception($"callback '{jn}' is not a jackknife function");
+                    }
+                    (values, valueNames, dims) =
+                        RunCallbackBootstrap(options, resampleFn, fitFn, statFn, jackFn);
+                }
             }
             else if (group == "gmm")
             {

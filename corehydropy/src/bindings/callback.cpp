@@ -261,6 +261,17 @@ std::function<std::vector<double>(const std::vector<double>&)> as_numbers_fn(py:
     return [f, what](const std::vector<double>& x) { return as_number_list(f(x), what); };
 }
 
+// f(data) -> (parameters, covariance). Upstream's `Func<TData, BootstrapFit>
+// FitWithCovarianceFunction`, the delegate the PIVOTAL run type fits through. Defined below
+// row_major_matrix(), which it shares with the gmm moment function; declared here so it sits with
+// the other bootstrap delegates.
+//
+// nan PASSES THROUGH BOTH HALVES, unlike the gmm weighting matrix, and the file's own rule says
+// why: `IsValidFit` tests the parameters AND the covariance for finiteness itself and reads a
+// non-finite one as a failed replicate to retry. Refusing it here would steal that behaviour.
+std::function<sup::FitWithCovarianceReturn(const std::vector<double>&)> as_fit_with_covariance_fn(
+    py::function f);
+
 // --- the gmm delegates ------------------------------------------------------------------------
 //
 // The moment condition function returns TWO things at once -- upstream's `(Vector G, Matrix S)`
@@ -289,8 +300,15 @@ const char* kMomentShape =
 // holding exactly one, is accepted as the 1 x 1 matrix a one-moment-condition model has --
 // corehydror accepts a length-1 numeric with no `dim` for the same case. Anything else is refused
 // naming the element it came from.
+//
+// `allow_nan` is the one axis callers differ on, and it is drawn by what the value MEANS to the
+// ported class rather than by taste: the gmm weighting matrix and jacobian are tested for
+// finiteness by NOTHING downstream (so a nan reaches the fitted standard errors in silence and is
+// refused here), while the pivotal bootstrap's covariance is tested by `IsValidFit`, which reads a
+// non-finite one as a failed replicate to retry (so refusing it here would steal that behaviour).
 std::pair<std::vector<double>, std::vector<int>> row_major_matrix(const py::object& value,
-                                                                 const std::string& what) {
+                                                                 const std::string& what,
+                                                                 bool allow_nan = false) {
     std::vector<std::vector<double>> rows;
     bool nested = true;
     try {
@@ -326,7 +344,7 @@ std::pair<std::vector<double>, std::vector<int>> row_major_matrix(const py::obje
                                      std::to_string(cols) + " values and another holds " +
                                      std::to_string(row.size()));
         for (double x : row) {
-            if (std::isnan(x))
+            if (std::isnan(x) && !allow_nan)
                 throw std::runtime_error(what +
                                          " returned nan rather than a number; nothing in the "
                                          "estimator checks it, so it would reach the fitted "
@@ -335,6 +353,64 @@ std::pair<std::vector<double>, std::vector<int>> row_major_matrix(const py::obje
         }
     }
     return {out, std::vector<int>{static_cast<int>(rows.size()), static_cast<int>(cols)}};
+}
+
+// The definition of the bootstrap delegate declared above, placed here because row_major_matrix()
+// lives between the two groups. The two names are checked BY NAME for the same reason the moment
+// function's are: returning the wrong thing is the mistake this shape invites, and a bare sequence
+// would otherwise be read as parameters with no covariance at all. The dict form and the tuple
+// `(parameters, covariance)` are both accepted, exactly as the moment function accepts both, and
+// corehydror takes a list with the same two names.
+const char* kFitCovarianceShape =
+    "the fit_with_covariance function must return the tuple (parameters, covariance) -- or a dict "
+    "with keys 'parameters' and 'covariance' -- where 'parameters' is the fitted vector and "
+    "'covariance' is its covariance matrix";
+
+std::function<sup::FitWithCovarianceReturn(const std::vector<double>&)> as_fit_with_covariance_fn(
+    py::function f) {
+    return [f](const std::vector<double>& data) {
+        py::object out = f(data);
+        py::object parameters, covariance;
+        if (py::isinstance<py::dict>(out)) {
+            py::dict d = out.cast<py::dict>();
+            if (!d.contains("parameters") || !d.contains("covariance"))
+                throw std::runtime_error(kFitCovarianceShape);
+            parameters = d["parameters"];
+            covariance = d["covariance"];
+        } else {
+            // PySequence_Check rather than a cast, for the reason the moment function gives.
+            if (!PySequence_Check(out.ptr())) throw std::runtime_error(kFitCovarianceShape);
+            py::sequence pair = out.cast<py::sequence>();
+            if (py::len(pair) != 2) throw std::runtime_error(kFitCovarianceShape);
+            parameters = pair[0];
+            covariance = pair[1];
+            // THE ONE AMBIGUOUS RETURN on this surface, refused rather than guessed at, exactly as
+            // the moment function refuses its own: `[mu, sigma]` -- the likeliest mistake, a
+            // two-parameter fit written without its covariance -- is indistinguishable from the
+            // pair (parameters, covariance) of a ONE-parameter model, both being two bare numbers.
+            // Reading the mistake as a one-parameter fit would bootstrap a different model in
+            // silence. R cannot reach this at all: its fit returns a NAMED list, and a bare
+            // `c(mu, sigma)` is refused by the same sentence.
+            if (!PySequence_Check(parameters.ptr()) && !PySequence_Check(covariance.ptr()))
+                throw std::runtime_error(
+                    std::string(kFitCovarianceShape) +
+                    ". Both came back as bare numbers, which cannot be told apart from a fitted "
+                    "vector like [mu, sigma] returned without its covariance: write 'parameters' "
+                    "as a one-element sequence, or return the dict, which names them");
+        }
+
+        sup::FitWithCovarianceReturn result;
+        // nan passes: see the note above.
+        result.parameters = as_number_sequence(
+            parameters,
+            "the fit_with_covariance function's 'parameters' must be a sequence of numbers");
+        auto cov = row_major_matrix(covariance, "the fit_with_covariance function's 'covariance'",
+                                    /*allow_nan=*/true);
+        result.covariance = cov.first;
+        result.rows = cov.second[0];
+        result.cols = cov.second[1];
+        return result;
+    };
 }
 
 // f(parameters) -> (g, s). Upstream's
@@ -482,11 +558,14 @@ void register_callback(py::module_& m) {
         py::arg("options_json"), py::arg("f"), py::arg("proposal") = py::none(),
         py::arg("gradient") = py::none());
 
-    // Runs the callback runner's "bootstrap" group against the four delegates upstream's
+    // Runs the callback runner's "bootstrap" group against the delegates upstream's
     // `Bootstrap<TData>` takes as public properties: `resample(data, parameters, rng)`,
-    // `fit(data)`, `statistic(parameters)` and, for the BCa method alone, `jackknife(data,
-    // index)`. `jackknife` may be None; every other argument is required. The flat result is the
-    // layout documented in numerics/support/callback/bootstrap.hpp;
+    // `fit(data)`, `statistic(parameters)`, `jackknife(data, index)` for the BCa method alone, and
+    // `fit_with_covariance(data)` for the pivotal run type alone. `resample` and `statistic` are
+    // always required; which of `fit` and `fit_with_covariance` is required is decided by the
+    // options' own `run_type`, in the core, once for all four runners -- so both arrive as
+    // py::object and either may be None here. The flat result is the layout documented in
+    // numerics/support/callback/bootstrap.hpp;
     // corehydropy.callback's bootstrap_custom() reads it back by name.
     //
     // The resample delegate is handed a handle on the replicate's own generator, so a seeded run
@@ -494,18 +573,21 @@ void register_callback(py::module_& m) {
     // mcmc note above describes, and for the same reason.
     m.def(
         "callback_bootstrap",
-        [](const std::string& options_json, py::function resample, py::function fit,
-           py::function statistic, py::object jackknife) {
+        [](const std::string& options_json, py::function resample, py::object fit,
+           py::function statistic, py::object jackknife, py::object fit_with_covariance) {
             sup::CallbackSet cbs;
             cbs.data_rng = as_resample_fn(resample);
-            cbs.data_vector = as_numbers_fn(fit, "fit");
+            if (!fit.is_none()) cbs.data_vector = as_numbers_fn(fit.cast<py::function>(), "fit");
             cbs.vector_vector = as_numbers_fn(statistic, "statistic");
             if (!jackknife.is_none())
                 cbs.data_index = as_jackknife_fn(jackknife.cast<py::function>());
+            if (!fit_with_covariance.is_none())
+                cbs.data_covariance =
+                    as_fit_with_covariance_fn(fit_with_covariance.cast<py::function>());
             return pack(sup::run_callback("bootstrap", "run", options_json, cbs));
         },
         py::arg("options_json"), py::arg("resample"), py::arg("fit"), py::arg("statistic"),
-        py::arg("jackknife") = py::none());
+        py::arg("jackknife") = py::none(), py::arg("fit_with_covariance") = py::none());
 
     // Runs the callback runner's "gmm" group against the delegates upstream's
     // `GeneralizedMethodOfMoments` takes in its delegate-based constructor (C# 143):

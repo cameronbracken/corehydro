@@ -1833,6 +1833,13 @@ def _callback_fixture_function(name):
     # a multiply-add by default and Python never does. See the C++ catalog's own note.
     if name == "Fit_LinearTrend":
         return _boot_fit_linear_trend
+    # The PIVOTAL member of the same catalog: upstream's Func<TData, BootstrapFit>
+    # FitWithCovarianceFunction, the delegate that run type fits through. The model is the
+    # two-parameter Normal location-scale MLE, whose covariance is analytic -- diag(s2 / n,
+    # s2 / (2n)) -- so the whole callback is arithmetic plus one sqrt, and sqrt is the one libm
+    # function IEEE 754 requires to be correctly rounded.
+    if name == "FitCov_NormalMLE":
+        return _boot_fit_with_covariance
     if name == "Stat_Identity":
         return _boot_stat_identity
     if name == "Stat_MeanAndSquare":
@@ -1990,6 +1997,25 @@ def _boot_fit_linear_trend(data):
     return [ybar - slope * tbar, slope]
 
 
+def _boot_fit_with_covariance(data):
+    # The two-parameter Normal location-scale MLE -- theta = (mu, sigma) with sigma the POPULATION
+    # standard deviation -- and its analytic covariance, diag(s2 / n, s2 / (2n)). Explicit loops
+    # rather than sum()/mean(), for the same reason _boot_fit_mean uses one.
+    n = float(len(data))
+    acc = 0.0
+    for x in data:
+        acc += x
+    mu = acc / n
+    ss = 0.0
+    for x in data:
+        ss += (x - mu) * (x - mu)
+    s2 = ss / n
+    return {
+        "parameters": [mu, math.sqrt(s2)],
+        "covariance": [[s2 / n, 0.0], [0.0, s2 / (2.0 * n)]],
+    }
+
+
 def _boot_stat_identity(parameters):
     return parameters
 
@@ -2134,17 +2160,20 @@ def _run_callback_case(case):
         r = _core.callback_gmm(options_json, fn, jacobian, penalty)
     elif construct["group"] == "bootstrap":
         # `callback` names the RESAMPLE delegate -- the one handed the generator, this group's
-        # counterpart of the mcmc group's log-likelihood -- and the other three have keys of their
-        # own. An absent `jackknife` stays None, which is what every method but BCa means.
-        jackknife = (
-            _callback_fixture_function(construct["jackknife"]) if "jackknife" in construct else None
-        )
+        # counterpart of the mcmc group's log-likelihood -- and the other four have keys of their
+        # own. An absent `jackknife` stays None, which is what every method but BCa means; `fit`
+        # and `fit_with_covariance` are the two fitting delegates the run types take, and a case
+        # supplies exactly the one its own `run_type` needs.
+        def optional(key):
+            return _callback_fixture_function(construct[key]) if key in construct else None
+
         r = _core.callback_bootstrap(
             options_json,
             fn,
-            _callback_fixture_function(construct["fit"]),
+            optional("fit"),
             _callback_fixture_function(construct["statistic"]),
-            jackknife,
+            optional("jackknife"),
+            optional("fit_with_covariance"),
         )
     else:
         raise KeyError(f"unknown callback fixture group: {construct['group']}")
@@ -2167,17 +2196,21 @@ def _run_callback_case(case):
             raise KeyError(f"unknown callback fixture assertion method: {a['method']}")
 
 
-# callback_cross_language [each case nests "mcmc" and "bootstrap", each shaped exactly like a
-# "callback"-kind case's construct/assertions]: a case of
-# fixtures/callback/callback_cross_language.json asserts a seeded posterior and a seeded bootstrap
-# interval TOGETHER, because the file's job is proving both reproduce identically across languages
-# in one guarantee rather than two.
+# callback_cross_language [each case nests one sub-block per key OTHER than "name" -- "mcmc",
+# "bootstrap", "pivotal" -- each shaped exactly like a "callback"-kind case's
+# construct/assertions]: a case of fixtures/callback/callback_cross_language.json asserts a seeded
+# posterior and a seeded bootstrap interval TOGETHER, because the file's job is proving they
+# reproduce identically across languages in one guarantee rather than in a file each. The labels
+# are read off the case rather than listed here, so a case may nest one block or five without a
+# runner change.
 # Reuses _run_callback_case verbatim; no new evaluation logic, just the nesting. Its assertions are
 # spelled mode "abs" with tol 0, i.e. bit equality with the C++, R and C# runners rather than a
 # tolerance.
 def _run_callback_cross_language_case(case):
-    for sub in ("mcmc", "bootstrap"):
-        _run_callback_case(case[sub])
+    for sub, block in case.items():
+        if sub == "name":
+            continue
+        _run_callback_case(block)
 
 
 # toolbox_cross_language [one case nests "optimizer" (shaped like an "optimizer"-kind

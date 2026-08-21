@@ -1722,7 +1722,8 @@ static void run_one_callback_case(const std::string& where_prefix, const json& c
     // delegate: the resample, or the moment conditions). An absent key means that delegate is
     // not supplied, which is what "no jackknife", "the ported numerical Jacobian" and "no
     // penalty" mean.
-    for (const char* key : {"fit", "statistic", "jackknife", "jacobian", "penalty"})
+    for (const char* key :
+         {"fit", "fit_with_covariance", "statistic", "jackknife", "jacobian", "penalty"})
         if (construct.contains(key)) fixture_catalog::callback_set(construct[key].get<std::string>(), cbs);
     json options = construct.contains("options") ? construct["options"] : json::object();
     tbx::CallbackResult r =
@@ -1768,21 +1769,24 @@ static void run_callback_kind(const json& spec) {
 
 // --- callback_cross_language path (Task 8) -----------------------------------------------
 //
-// each of fixtures/callback/callback_cross_language.json's cases nests two sub-blocks -- "mcmc" and
-// "bootstrap", each shaped exactly like a "callback"-kind case's construct/assertions -- under one
-// case name, because the file's job is proving both reproduce identically across languages in ONE
-// guarantee rather than two separate files. (The second case adds a purpose: its two callbacks
-// carry the contractible arithmetic that makes core/CMakeLists.txt's -ffp-contract=off on the
-// catalog a flag this suite can detect the loss of.) Reuses run_one_callback_case verbatim; no new
-// evaluation logic, just the nesting. The assertions there are spelled mode "abs" with tol 0, so
-// this runner's agreement with the R, Python and C# ones is bit equality rather than a tolerance.
+// a case of fixtures/callback/callback_cross_language.json nests its sub-blocks -- EVERY key but
+// "name", each shaped exactly like a "callback"-kind case's construct/assertions -- under one case
+// name, because the file's job is proving they reproduce identically across languages in ONE
+// guarantee rather than in a file each. (The second case adds a purpose: its two callbacks carry
+// the contractible arithmetic that makes core/CMakeLists.txt's -ffp-contract=off on the catalog a
+// flag this suite can detect the loss of.) The labels are the case's own -- "mcmc", "bootstrap",
+// "pivotal" -- and are read OFF the case rather than listed here, so a case may nest one block or
+// five without a runner change; only "name" is reserved. Reuses run_one_callback_case verbatim; no
+// new evaluation logic, just the nesting. The assertions there are spelled mode "abs" with tol 0,
+// so this runner's agreement with the R, Python and C# ones is bit equality rather than a tolerance.
 static void run_callback_cross_language_kind(const json& spec) {
     for (const auto& c : spec["cases"]) {
         std::string name = c["name"].get<std::string>();
-        for (const char* sub : {"mcmc", "bootstrap"}) {
-            const json& block = c[sub];
-            run_one_callback_case("callback_cross_language/" + name + "/" + sub, block["construct"],
-                                  block["assertions"]);
+        for (auto it = c.begin(); it != c.end(); ++it) {
+            if (it.key() == "name") continue;
+            const json& block = it.value();
+            run_one_callback_case("callback_cross_language/" + name + "/" + it.key(),
+                                  block["construct"], block["assertions"]);
         }
     }
 }

@@ -1,13 +1,14 @@
 {
   "kind": "callback",
   "source": "Numerics/Sampling/Bootstrap/Bootstrap.cs (the four delegate properties) @ 2a0357a",
-  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"bootstrap\", method \"run\", against the four delegates named by `construct.callback` (the resample), `construct.fit`, `construct.statistic` and `construct.jackknife` -- each a function the four runners write themselves as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case crosses the real host-language boundary four ways. This is upstream's OWN API: Bootstrap<TData> exposes ResampleFunction, FitFunction, StatisticFunction and JackknifeFunction as public properties and a C# caller supplies all of them; the model registry under sampling/bootstrap/ that the `bootstrap` kind drives is corehydro fixture scaffolding, and until this group existed the packages could reach the bootstrap only through it. EVERY expected value here is EMITTER-READ: no upstream test bootstraps this model, so the oracle is the real Numerics Bootstrap driven by tools/oracle_emitter with the equivalent C# delegates, never a value computed by this repo's own C++. Every catalog callback is built from + - * / and comparisons alone, with the summation written as an explicit loop rather than any language's sum(), mean() or Average(): R's sum() and mean() accumulate in extended precision where C++, Python and C# accumulate in double, and one differing bit in a fitted mean moves a percentile. The result layout (replicates / failed_replicates / alpha, then statistic[i] with its five companions, then parameter[j] with the same, and dims = {n_statistics, n_parameters}) is documented in core/include/corehydro/numerics/support/callback/bootstrap.hpp; the `named` assertions below read it by label rather than by an index that shifts with the statistic count. TWO CASES ARE A MATCHED PAIR: bias_corrected_two_statistics and percentile_beside_bias_corrected differ in exactly one option, `ci_method`. They share the data, the seed, the replicate count and all three delegates, so the replicate stream behind them is identical and the only thing that can move an interval is the method. That pairing exists because the bias-corrected case ORIGINALLY ran on seed 12345, where the z0 shift happened to land on the same two order statistics the plain percentile does and the case returned 4.750000000000001 and 5.175 -- the numbers percentile_iid_mean already pins, bit for bit, so nothing in the file would have caught a regression that confused BiasCorrected with Percentile. Seed 2024 separates them by 0.070 on the lower bound of the first statistic and by 0.024 on the upper, and both methods are now pinned on the same replicates.",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"bootstrap\", method \"run\", against the four delegates named by `construct.callback` (the resample), `construct.fit`, `construct.statistic` and `construct.jackknife` -- each a function the four runners write themselves as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case crosses the real host-language boundary four ways. This is upstream's OWN API: Bootstrap<TData> exposes ResampleFunction, FitFunction, StatisticFunction and JackknifeFunction as public properties and a C# caller supplies all of them; the model registry under sampling/bootstrap/ that the `bootstrap` kind drives is corehydro fixture scaffolding, and until this group existed the packages could reach the bootstrap only through it. EVERY expected value here is EMITTER-READ: no upstream test bootstraps this model, so the oracle is the real Numerics Bootstrap driven by tools/oracle_emitter with the equivalent C# delegates, never a value computed by this repo's own C++. Every catalog callback is built from + - * / and comparisons alone, with the summation written as an explicit loop rather than any language's sum(), mean() or Average(): R's sum() and mean() accumulate in extended precision where C++, Python and C# accumulate in double, and one differing bit in a fitted mean moves a percentile. The result layout (replicates / failed_replicates / alpha, then statistic[i] with its five companions, then parameter[j] with the same, and dims = {n_statistics, n_parameters}) is documented in core/include/corehydro/numerics/support/callback/bootstrap.hpp; the `named` assertions below read it by label rather than by an index that shifts with the statistic count. TWO CASES ARE A MATCHED PAIR: bias_corrected_two_statistics and percentile_beside_bias_corrected differ in exactly one option, `ci_method`. They share the data, the seed, the replicate count and all three delegates, so the replicate stream behind them is identical and the only thing that can move an interval is the method. That pairing exists because the bias-corrected case ORIGINALLY ran on seed 12345, where the z0 shift happened to land on the same two order statistics the plain percentile does and the case returned 4.750000000000001 and 5.175 -- the numbers percentile_iid_mean already pins, bit for bit, so nothing in the file would have caught a regression that confused BiasCorrected with Percentile. Seed 2024 separates them by 0.070 on the lower bound of the first statistic and by 0.024 on the upper, and both methods are now pinned on the same replicates. THE PIVOTAL CASES (run_type \"pivotal\") drive upstream's OTHER bootstrap mode, which fits through a FIFTH delegate -- `construct.fit_with_covariance`, upstream's Func<TData, BootstrapFit> -- and has no FitFunction at all. They pin the transform (both Cholesky factors and the reflection through them), the link array PivotalLinkFactory returns, the invalid-draw policy, the jitter stream, and all six PivotalBootstrapDiagnostics counts, plus the RAW percentile block GetRawPivotalConfidenceIntervals returns beside the pivotal one. Two of the five C# pivotal delegates are deliberately not on this surface and so have no case here: PivotalReplicateFilter and PivotalParameterValidator (see callback/bootstrap.hpp's header on why).",
   "callbacks": {
     "Resample_Iid": "resample(data, parameters, prng) -> n draws of data[prng.Next(0, n)], n = data.Length  [corehydro addition, upstream's Func<TData, ParameterSet, Random, TData> shape: the ordinary nonparametric bootstrap resample, drawing every index off the generator the replicate hands in -- which is the property the RNG handle exists for. The index is 0-based, as the ported MersenneTwister.Next(minInclusive, maxExclusive) is]",
     "Fit_Mean": "fit(data) -> [sum(data) / data.Length], summed in an explicit loop  [corehydro addition, upstream's Func<TData, ParameterSet> shape: a one-parameter model whose fit is the sample mean]",
     "Stat_Identity": "statistic(parameters) -> parameters  [corehydro addition, upstream's Func<ParameterSet, double[]> shape: the statistic IS the fitted parameter, so the interval is an interval on the mean]",
     "Stat_MeanAndSquare": "statistic(parameters) -> [p0, p0 * p0]  [corehydro addition: two statistics rather than one, so the per-statistic layout and the second statistic's own interval are pinned]",
-    "Jack_LeaveOneOut": "jackknife(data, index) -> data without element `index`, counting from 0  [corehydro addition, upstream's Func<TData, int, TData> shape: the leave-one-out sample ComputeAccelerationConstants needs for BCa]"
+    "Jack_LeaveOneOut": "jackknife(data, index) -> data without element `index`, counting from 0  [corehydro addition, upstream's Func<TData, int, TData> shape: the leave-one-out sample ComputeAccelerationConstants needs for BCa]",
+    "FitCov_NormalMLE": "fit_with_covariance(data) -> (parameters = [mean, population sd], covariance = diag(s2/n, s2/(2n))), summed in explicit loops  [corehydro addition, upstream's Func<TData, BootstrapFit> shape: the two-parameter Normal location-scale MLE, the delegate the PIVOTAL run type fits through. Its covariance is analytic, so the callback is arithmetic plus one sqrt -- and sqrt is the one libm function IEEE 754 requires to be correctly rounded, so unlike log or exp it is the same value in all four runners]"
   },
   "cases": [
     {
@@ -478,6 +479,425 @@
           "mode": "rel",
           "tol": 1e-12,
           "source": "EMITTER-READ: StatisticResults[0].PopulationEstimate, which the acceleration constant does not touch, so this half of the BCa case stays pinned tight"
+        }
+      ]
+    },
+    {
+      "name": "pivotal_normal_location_scale",
+      "construct": {
+        "group": "bootstrap",
+        "method": "run",
+        "callback": "Resample_Iid",
+        "fit_with_covariance": "FitCov_NormalMLE",
+        "statistic": "Stat_Identity",
+        "options": {
+          "data": [
+            4.1,
+            5.2,
+            4.8,
+            5.5,
+            4.9,
+            5.1,
+            5.3,
+            4.7
+          ],
+          "replicates": 200,
+          "seed": 12345,
+          "alpha": 0.1,
+          "ci_method": "Percentile",
+          "run_type": "pivotal"
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "statistic[0]",
+          "expected": 4.95,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].PopulationEstimate -- the parent fit's mean, the theta-hat every pivotal draw is reflected about. Comes from FitWithCovarianceFunction(data), not from FitFunction: the pivotal run type has no FitFunction at all"
+        },
+        {
+          "method": "named",
+          "name": "statistic_lower[0]",
+          "expected": 4.5677601616611,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].LowerCI, the percentile of the PIVOTAL ensemble -- every raw fit standardized through its own Cholesky factor and reinflated through the parent's. This is the assertion that a wrong factor, a wrong reflection or one differing resampled index all break"
+        },
+        {
+          "method": "named",
+          "name": "statistic_upper[0]",
+          "expected": 5.140545071728662,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].UpperCI"
+        },
+        {
+          "method": "named",
+          "name": "statistic_lower[1]",
+          "expected": 0.3182992562465546,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[1].LowerCI -- the scale parameter's own pivotal interval, which the second row of both Cholesky factors stands behind"
+        },
+        {
+          "method": "named",
+          "name": "statistic_upper[1]",
+          "expected": 0.9257315366348623,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[1].UpperCI"
+        },
+        {
+          "method": "named",
+          "name": "raw_statistic_lower[0]",
+          "expected": 4.750000000000001,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: GetRawPivotalConfidenceIntervals(alpha).StatisticResults[0].LowerCI -- the plain percentile interval of the RAW covariance-aware fits, before the transform. Pinned beside the pivotal one because the pair is what the run reports and a transform that quietly did nothing would leave them equal"
+        },
+        {
+          "method": "named",
+          "name": "raw_statistic_upper[0]",
+          "expected": 5.175,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: the raw block's UpperCI for the first statistic"
+        },
+        {
+          "method": "named",
+          "name": "raw_statistic_lower[1]",
+          "expected": 0.17824659702857087,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: the raw block's LowerCI for the second statistic"
+        },
+        {
+          "method": "named",
+          "name": "parameter_lower[0]",
+          "expected": 4.5677601616611,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: ParameterResults[0].LowerCI. After a pivotal run GetConfidenceIntervals takes plain percentiles of the retained pivotal parameter draws whatever is asked for, so this equals the statistic interval HERE (the statistic is the identity)"
+        },
+        {
+          "method": "named",
+          "name": "requested_replicates",
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.RequestedReplicates -- what was asked for, which the five counts below account for"
+        },
+        {
+          "method": "named",
+          "name": "failed_raw_replicates",
+          "expected": 0,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.FailedRawReplicates -- no covariance-aware fit of an iid resample of a finite sample fails"
+        },
+        {
+          "method": "named",
+          "name": "rejected_raw_replicates",
+          "expected": 0,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.RejectedRawReplicates -- nothing is rejected without a PivotalReplicateFilter, which this surface does not expose"
+        },
+        {
+          "method": "named",
+          "name": "accepted_raw_replicates",
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.AcceptedRawReplicates"
+        },
+        {
+          "method": "named",
+          "name": "invalid_pivotal_replicates",
+          "expected": 0,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.InvalidPivotalReplicates -- no draw is invalid without a z limit; pivotal_z_limit_use_raw below is the case where this is not zero"
+        },
+        {
+          "method": "named",
+          "name": "retained_pivotal_replicates",
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.RetainedPivotalReplicates = accepted - invalid under the Drop default"
+        },
+        {
+          "method": "dim",
+          "args": [
+            0
+          ],
+          "expected": 2,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: StatisticResults.Length -- two statistics, the two fitted parameters"
+        },
+        {
+          "method": "dim",
+          "args": [
+            1
+          ],
+          "expected": 2,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: ParameterResults.Length"
+        }
+      ]
+    },
+    {
+      "name": "pivotal_log_link_on_the_mean",
+      "construct": {
+        "group": "bootstrap",
+        "method": "run",
+        "callback": "Resample_Iid",
+        "fit_with_covariance": "FitCov_NormalMLE",
+        "statistic": "Stat_Identity",
+        "options": {
+          "data": [
+            4.1,
+            5.2,
+            4.8,
+            5.5,
+            4.9,
+            5.1,
+            5.3,
+            4.7
+          ],
+          "replicates": 200,
+          "seed": 12345,
+          "alpha": 0.1,
+          "ci_method": "Percentile",
+          "run_type": "pivotal",
+          "pivotal_links": [
+            "Log",
+            null
+          ]
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "statistic_lower[0]",
+          "expected": 4.575354850274244,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].LowerCI with a LOG link on the first parameter -- the standardization then happens in log space, so this is a different number from pivotal_normal_location_scale's above and the link array is proved to reach PivotalLinkFactory. The link is on the MEAN and not on the scale on purpose: for this model's analytic covariance (sigma^2 / 2n for sigma-hat) the log link on sigma is INVARIANT -- identity gives a + (a / r)(a - r) = a^2 / r and the log link gives exp(2 log a - log r) = a^2 / r, the same number to ~1e-11 -- so a case linking sigma would pass whether or not the link arrived"
+        },
+        {
+          "method": "named",
+          "name": "statistic_upper[0]",
+          "expected": 5.1387366661016545,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].UpperCI under the same log link"
+        },
+        {
+          "method": "named",
+          "name": "statistic_lower[1]",
+          "expected": 0.3182992562465592,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[1].LowerCI. The second entry of the link array is null, i.e. the identity -- C#'s own null-element convention, which this pins by leaving the scale interval where the unlinked case has it"
+        }
+      ]
+    },
+    {
+      "name": "pivotal_z_limit_use_raw",
+      "construct": {
+        "group": "bootstrap",
+        "method": "run",
+        "callback": "Resample_Iid",
+        "fit_with_covariance": "FitCov_NormalMLE",
+        "statistic": "Stat_Identity",
+        "options": {
+          "data": [
+            4.1,
+            5.2,
+            4.8,
+            5.5,
+            4.9,
+            5.1,
+            5.3,
+            4.7
+          ],
+          "replicates": 200,
+          "seed": 12345,
+          "alpha": 0.1,
+          "ci_method": "Percentile",
+          "run_type": "pivotal",
+          "pivotal_z_limit": 0.5,
+          "pivotal_invalid_draw_policy": "use_raw"
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "invalid_pivotal_replicates",
+          "expected": 158,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.InvalidPivotalReplicates -- a z limit of 0.5 rejects any draw whose standardized vector has a component past it, which is the only way a draw becomes invalid on this surface (the parameter validator is deliberately not exposed)"
+        },
+        {
+          "method": "named",
+          "name": "retained_pivotal_replicates",
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.RetainedPivotalReplicates. Under UseRaw this equals AcceptedRawReplicates rather than accepted - invalid: the invalid draws are REPLACED by their raw fits, not dropped, which is the one thing the policy can be observed to do"
+        },
+        {
+          "method": "named",
+          "name": "accepted_raw_replicates",
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.AcceptedRawReplicates -- unchanged by the limit, which applies after acceptance"
+        },
+        {
+          "method": "named",
+          "name": "statistic_lower[0]",
+          "expected": 4.750000000000001,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].LowerCI over the mixed ensemble of transformed and substituted raw draws"
+        }
+      ]
+    },
+    {
+      "name": "pivotal_jitter",
+      "construct": {
+        "group": "bootstrap",
+        "method": "run",
+        "callback": "Resample_Iid",
+        "fit_with_covariance": "FitCov_NormalMLE",
+        "statistic": "Stat_Identity",
+        "options": {
+          "data": [
+            4.1,
+            5.2,
+            4.8,
+            5.5,
+            4.9,
+            5.1,
+            5.3,
+            4.7
+          ],
+          "replicates": 200,
+          "seed": 12345,
+          "alpha": 0.1,
+          "ci_method": "Percentile",
+          "run_type": "pivotal",
+          "add_pivotal_jitter": true,
+          "pivotal_jitter_scale": 0.5
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "statistic_lower[0]",
+          "expected": 4.541643724040295,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].LowerCI with jitter on. The jitter opens a SECOND Mersenne Twister on the same seed, independent of the one the resampling loop advanced, and draws one standard-normal per pivotal vector component in accepted-fit order -- so this value pins that second stream and its consumption order as much as it pins the transform"
+        },
+        {
+          "method": "named",
+          "name": "statistic_upper[1]",
+          "expected": 0.9171481330823908,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[1].UpperCI under the same jitter"
+        },
+        {
+          "method": "named",
+          "name": "retained_pivotal_replicates",
+          "expected": 200,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: PivotalDiagnostics.RetainedPivotalReplicates -- jitter alone invalidates nothing; it is the z limit that does"
+        }
+      ]
+    },
+    {
+      "name": "pivotal_explicit_parent_fit",
+      "construct": {
+        "group": "bootstrap",
+        "method": "run",
+        "callback": "Resample_Iid",
+        "fit_with_covariance": "FitCov_NormalMLE",
+        "statistic": "Stat_Identity",
+        "options": {
+          "data": [
+            4.1,
+            5.2,
+            4.8,
+            5.5,
+            4.9,
+            5.1,
+            5.3,
+            4.7
+          ],
+          "replicates": 200,
+          "seed": 12345,
+          "alpha": 0.1,
+          "ci_method": "Percentile",
+          "run_type": "pivotal",
+          "parameters": [
+            5.0,
+            0.5
+          ],
+          "original_covariance": [
+            [
+              0.25,
+              0.0
+            ],
+            [
+              0.0,
+              0.0625
+            ]
+          ]
+        }
+      },
+      "assertions": [
+        {
+          "method": "named",
+          "name": "statistic[0]",
+          "expected": 5.0,
+          "mode": "abs",
+          "tol": 0,
+          "source": "EMITTER-READ: StatisticResults[0].PopulationEstimate -- the parent parameters supplied verbatim rather than fitted, i.e. C#'s second constructor taking a BootstrapFit the caller built"
+        },
+        {
+          "method": "named",
+          "name": "statistic_lower[0]",
+          "expected": 3.9636787935981896,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].LowerCI. The parent covariance is the one every draw is reinflated THROUGH, so a much wider one than the fit's own (0.25 against ~0.026) widens the pivotal interval while leaving the raw block below untouched"
+        },
+        {
+          "method": "named",
+          "name": "statistic_upper[0]",
+          "expected": 5.8474400823055275,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: StatisticResults[0].UpperCI"
+        },
+        {
+          "method": "named",
+          "name": "raw_statistic_lower[0]",
+          "expected": 4.750000000000001,
+          "mode": "rel",
+          "tol": 1e-12,
+          "source": "EMITTER-READ: the raw block's LowerCI -- identical to pivotal_normal_location_scale's, and that is the point: the parent fit moves the transform and nothing about the raw fits"
         }
       ]
     }
