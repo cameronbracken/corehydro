@@ -662,6 +662,31 @@ mcmc_posterior <- function(
 #'   replicates = 500, seed = 12345
 #' )
 #' c(res$lower, res$estimate, res$upper)
+#'
+#' # The pivotal run type. It fits through `fit_with_covariance` instead of `fit`: a Normal
+#' # location-scale MLE here, whose covariance is diag(s2 / n, s2 / 2n) in closed form. The
+#' # "Log" link standardizes the scale parameter in log space, keeping every draw positive.
+#' fit_with_cov <- function(data) {
+#'   n <- length(data)
+#'   mu <- sum(data) / n
+#'   s2 <- sum((data - mu)^2) / n
+#'   list(parameters = c(mu, sqrt(s2)),
+#'        covariance = matrix(c(s2 / n, 0, 0, s2 / (2 * n)), nrow = 2L, ncol = 2L))
+#' }
+#' piv <- bootstrap_custom(
+#'   data = x,
+#'   resample = function(data, parameters, rng) {
+#'     data[rng_integers(rng, length(data), 0, length(data)) + 1L]
+#'   },
+#'   statistic = function(parameters) parameters,
+#'   fit_with_covariance = fit_with_cov,
+#'   run_type = "pivotal",
+#'   pivotal_links = list(NULL, "Log"),
+#'   replicates = 200, seed = 12345
+#' )
+#' # Two interval blocks: the pivotal ensemble, and the raw fits it was built from.
+#' rbind(pivotal = c(piv$lower[1], piv$upper[1]), raw = c(piv$raw_lower[1], piv$raw_upper[1]))
+#' unlist(piv$pivotal_diagnostics)
 #' }
 #' @export
 bootstrap_custom <- function(

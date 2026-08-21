@@ -28,9 +28,14 @@ new_composite_dist <- function(family, spec_json) {
 #'
 #' Construct a distribution from its family name and parameter vector. The
 #' result is a lightweight object accepted by [dist_pdf()], [dist_cdf()],
-#' [dist_quantile()], [dist_random()], [dist_moments()], and friends. All 38
-#' factory-constructible families of the USACE-RMC Numerics library are
-#' supported; see [distribution_names()] for the list.
+#' [dist_quantile()], [dist_random()], [dist_moments()], and friends. The 38
+#' families of the USACE-RMC Numerics library that take a flat parameter vector
+#' are all supported, from `Normal` and `Gumbel` through `GeneralizedNormal`
+#' (the three-parameter LogNormal) and `KappaFour`; [distribution_names()]
+#' returns them. The five composite families it lists under `"structured"` have
+#' no flat parameter vector and are built by [dist_truncated()],
+#' [dist_mixture()], [dist_competing_risks()], [dist_empirical()], and
+#' [dist_kde()] instead.
 #'
 #' Parameters are positional, in the same order as the C# constructor for the
 #' family (for example `Normal` takes `c(mean, sd)` and
@@ -38,7 +43,8 @@ new_composite_dist <- function(family, spec_json) {
 #' [dist_params()] on a constructed object to see the parameter names.
 #'
 #' @param family the distribution family name, e.g. `"Normal"`,
-#'   `"LogNormal"`, `"Gumbel"`, `"GeneralizedExtremeValue"`.
+#'   `"LogNormal"`, `"Gumbel"`, `"GeneralizedExtremeValue"`,
+#'   `"GeneralizedNormal"`.
 #' @param params numeric vector of parameters, in constructor order.
 #' @return An object of class `corehydro_dist`.
 #' @seealso [dist_fit()] to estimate one from data, [distribution_names()].
@@ -47,6 +53,10 @@ new_composite_dist <- function(family, spec_json) {
 #' d <- distribution("Normal", c(100, 15))
 #' d
 #' dist_cdf(d, 100)
+#'
+#' # GeneralizedNormal is the three-parameter LogNormal: at shape 0 it is the Normal.
+#' gn <- distribution("GeneralizedNormal", c(100, 15, 0))
+#' dist_cdf(gn, 100)
 distribution <- function(family, params) {
   if (!is.character(family) || length(family) != 1L) {
     stop("`family` must be a single distribution name; see distribution_names()")

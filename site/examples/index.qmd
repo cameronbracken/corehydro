@@ -10,8 +10,8 @@ a Jupyter notebook you can download and run) and an R version (`corehydror`, a
 Quarto document). The pair uses the same seeds and prints the same numbers: both
 packages run the same compiled core with a bit-exact Mersenne Twister.
 
-Two pages carry a condition on that, and say so where it applies. On the callback
-surface (examples 13, 14 and 15) the ported routine's input is a function you write,
+Some pages carry a condition on that, and say so where it applies. On the callback
+surface (examples 13, 14, 15 and 17) the ported routine's input is a function you write,
 so the draws come from the core generator but your own R or Python arithmetic decides
 the values. A seeded run there reproduces across the two languages if and only if your
 function returns bit-identical values.
@@ -37,6 +37,8 @@ here.
 | 13 | A custom objective | [Python](13-custom-objective/python.ipynb) | [R](13-custom-objective/r.qmd) |
 | 14 | A custom posterior | [Python](14-custom-posterior/python.ipynb) | [R](14-custom-posterior/r.qmd) |
 | 15 | A custom bootstrap | [Python](15-custom-bootstrap/python.ipynb) | [R](15-custom-bootstrap/r.qmd) |
+| 16 | Ranking fifteen candidate families | [Python](16-fifteen-candidate-fitting/python.ipynb) | [R](16-fifteen-candidate-fitting/r.qmd) |
+| 17 | A pivotal bootstrap | [Python](17-pivotal-bootstrap/python.ipynb) | [R](17-pivotal-bootstrap/r.qmd) |
 | 20 | Bayesian regression | [Python](20-bayesian-regression/python.ipynb) | [R](20-bayesian-regression/r.qmd) |
 | 21 | Flood frequency analysis | [Python](21-flood-frequency/python.ipynb) | [R](21-flood-frequency/r.qmd) |
 | 22 | Reliability analysis | [Python](22-reliability/python.ipynb) | [R](22-reliability/r.qmd) |

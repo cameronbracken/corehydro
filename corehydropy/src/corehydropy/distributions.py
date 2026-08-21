@@ -74,6 +74,14 @@ def distribution_names(kind: str = "flat") -> list[str]:
 class Distribution:
     """A univariate distribution from the ported Numerics library.
 
+    The 38 families of the USACE-RMC Numerics library that take a flat
+    parameter vector are all supported, from ``Normal`` and ``Gumbel`` through
+    ``GeneralizedNormal`` (the three-parameter LogNormal) and ``KappaFour``;
+    :func:`distribution_names` returns them. The five composite families it
+    lists under ``"structured"`` have no flat parameter vector and are built by
+    :func:`dist_truncated`, :func:`dist_mixture`, :func:`dist_competing_risks`,
+    :func:`dist_empirical`, and :func:`dist_kde` instead.
+
     Parameters are positional, in the same order as the C# constructor for
     the family (for example ``Normal`` takes ``[mean, sd]`` and
     ``GeneralizedExtremeValue`` takes ``[location, scale, shape]``). Use
@@ -96,6 +104,11 @@ class Distribution:
     0.5
     >>> d.random(3, seed=123)  # doctest: +SKIP
     array([107.71408450, 108.43058699,  91.52951859])
+
+    GeneralizedNormal is the three-parameter LogNormal: at shape 0 it is the Normal.
+
+    >>> Distribution("GeneralizedNormal", [100, 15, 0]).cdf(100)
+    0.5
     """
 
     def __init__(self, family: str, params) -> None:

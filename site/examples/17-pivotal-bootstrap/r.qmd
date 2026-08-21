@@ -1,0 +1,400 @@
+---
+title: "17. A pivotal bootstrap"
+---
+
+::: {.callout-note appearance="minimal" icon=false}
+Language: **R** (Quarto) - [Python version](python.ipynb)
+:::
+
+Example 15 built a bootstrap out of four functions you write. This page is about the other run type
+the ported Numerics `Bootstrap` class has, reached with `run_type = "pivotal"`. It replaces the
+resampled fit with a pivot of that fit around the original one, standardized through the resample's
+own covariance and reinflated through the original's, so a replicate fitted on an unusually flat
+likelihood contributes an appropriately smaller step. It therefore needs a covariance with every
+fit, which is why it fits through a fifth function, `fit_with_covariance`, instead of `fit`.
+
+Like examples 13 and 15, it has no upstream counterpart.
+
+## What you'll learn
+
+- What the pivotal transform does to a replicate, in one line of algebra.
+- The signature of `fit_with_covariance`, the one function this run type adds.
+- Both interval blocks a pivotal run reports, and why it reports two.
+- `pivotal_diagnostics`: six counts that say what happened to the replicates you asked for.
+- Standardizing in link space, and which links change the answer.
+- Where the cross-language guarantee stops on the callback path, and how to stay inside it.
+
+## Setup
+
+```{r}
+library(corehydror)
+```
+
+## The transform
+
+Write $\theta$ for a parameter vector and $\Sigma$ for its covariance. The parent fit is
+$(\hat{\theta}, \hat{\Sigma})$, from the whole sample; a replicate gives $(\theta^*, \Sigma^*)$.
+With $L$ for the lower Cholesky factor of each covariance, the pivotal draw is
+
+$$
+z = (L^*)^{-1}(\hat{\theta} - \theta^*), \qquad
+\theta^{\text{piv}} = \hat{\theta} + \hat{L} z
+$$
+
+Two things follow from the sign. The difference is taken parent minus replicate, so a replicate that
+landed BELOW the parent produces a draw ABOVE it. The ensemble is reflected through the parent
+rather than centered on the replicates, which is the same idea as the basic bootstrap's
+$2\hat{\theta} - \theta^*$, generalized to a correlated parameter vector. And the step is measured
+in units of the replicate's own standard error and re-expressed in units of the parent's, so a
+replicate whose fit was poorly determined contributes a shorter step than one whose fit was sharp.
+
+## The record and the model
+
+Forty years of $\log_{10}$ annual peak discharge, drawn from a Normal population through the seeded
+core so the Python twin has the identical record. Working in $\log_{10}$ keeps the model a plain
+location-scale Normal, whose maximum likelihood estimate and covariance are both closed form. That
+matters here for a reason beyond convenience, taken up at the end of the page: it makes the callback
+pure arithmetic.
+
+```{r}
+log_peaks <- dist_random(distribution("Normal", c(4.60, 0.22)), 40, seed = 2027)
+
+cat(sprintf("n = %d, mean = %.4f (%.0f cfs), sd = %.4f\n",
+            length(log_peaks), mean(log_peaks), 10^mean(log_peaks),
+            sqrt(mean((log_peaks - mean(log_peaks))^2))))
+```
+
+The three functions the run needs. `resample` is the ordinary iid one from example 15, drawing its
+indices from the generator the replicate hands it.
+
+```{r}
+resample_iid <- function(data, parameters, rng) {
+  data[rng_integers(rng, length(data), 0, length(data)) + 1L]
+}
+```
+
+`fit_with_covariance(data)` is the one signature this run type adds. It returns a list with
+`parameters` and `covariance`: the fitted vector, and its covariance as a matrix with one row and
+one column per parameter. For the Normal MLE both are textbook,
+$\operatorname{Var}(\hat\mu) = \sigma^2/n$ and $\operatorname{Var}(\hat\sigma) = \sigma^2/2n$, with
+no covariance between them.
+
+```{r}
+normal_mle <- function(data) {
+  n <- length(data)
+  acc <- 0
+  for (x in data) acc <- acc + x
+  mu <- acc / n
+  ss <- 0
+  for (x in data) ss <- ss + (x - mu) * (x - mu)
+  list(mu = mu, s2 = ss / n, n = n)
+}
+
+fit_with_cov <- function(data) {
+  f <- normal_mle(data)
+  list(parameters = c(f$mu, sqrt(f$s2)),
+       covariance = matrix(c(f$s2 / f$n, 0,
+                             0, f$s2 / (2 * f$n)), nrow = 2L, ncol = 2L))
+}
+
+fit_only <- function(data) {
+  f <- normal_mle(data)
+  c(f$mu, sqrt(f$s2))
+}
+```
+
+`statistic(parameters)` turns a parameter vector into the numbers to be given intervals. Here it
+returns the two parameters and the design quantity built from them, the 1% annual chance
+$\log_{10}$ peak, $\mu + z_{0.99}\sigma$. The standard normal deviate is computed once, outside the
+callback, so the callback itself does nothing but multiply and add.
+
+```{r}
+z99 <- dist_quantile(distribution("Normal", c(0, 1)), 0.99)
+
+design_statistic <- function(parameters) {
+  c(parameters[1], parameters[2], parameters[1] + z99 * parameters[2])
+}
+```
+
+## The regular run, for comparison
+
+```{r}
+regular <- bootstrap_custom(
+  data = log_peaks, resample = resample_iid, fit = fit_only,
+  statistic = design_statistic, replicates = 400, alpha = 0.1, seed = 2027
+)
+
+show_block <- function(estimate, lower, upper) {
+  data.frame(statistic = c("mean", "sd", "1% AEP"),
+             estimate = estimate, lower = lower, upper = upper,
+             width = upper - lower)
+}
+print(show_block(regular$estimate, regular$lower, regular$upper), row.names = FALSE, digits = 6)
+```
+
+## The pivotal run
+
+The same data, the same seed, the same statistic. `fit` is replaced by `fit_with_covariance`, and
+passing both is an error rather than a silent preference for one of them.
+
+```{r}
+piv <- bootstrap_custom(
+  data = log_peaks, resample = resample_iid, statistic = design_statistic,
+  fit_with_covariance = fit_with_cov, run_type = "pivotal",
+  replicates = 400, alpha = 0.1, seed = 2027
+)
+
+cat("pivotal ensemble:\n")
+print(show_block(piv$estimate, piv$lower, piv$upper), row.names = FALSE, digits = 6)
+cat("\nraw covariance-aware fits:\n")
+print(show_block(piv$raw_estimate, piv$raw_lower, piv$raw_upper), row.names = FALSE, digits = 6)
+```
+
+A pivotal run reports two interval blocks, and comparing them is the point of reporting both. The
+raw block is the plain percentile interval of the covariance-aware fits, before the transform. It is
+the answer the regular run gives, and here it is that answer to the last bit, because the two runs
+resampled the same observations in the same order from the same seed.
+
+```{r}
+stopifnot(identical(regular$lower, piv$raw_lower), identical(regular$upper, piv$raw_upper))
+cat("raw block and regular run agree exactly.\n")
+```
+
+The pivotal block is different, and on this sample it is wider on the two quantities that matter.
+
+```{r}
+comparison <- data.frame(
+  statistic = c("mean", "sd", "1% AEP"),
+  raw_width = piv$raw_upper - piv$raw_lower,
+  pivotal_width = piv$upper - piv$lower
+)
+comparison$ratio <- comparison$pivotal_width / comparison$raw_width
+print(comparison, row.names = FALSE, digits = 4)
+```
+
+The mean's interval barely moves, the scale parameter's grows by 8% and the design quantile's, which
+is built from both, by 9%. That is the reflection at work: the percentile interval of the replicates
+understates a skewed sampling distribution on the side the replicates cluster away from, and
+pivoting through the parent puts the width back on the other side. Read as discharge rather than as
+its logarithm, the 1% annual chance peak moves from a 90% interval of 106,000 to 172,000 cfs to one
+of 112,000 to 190,000 cfs. The upper end, which is the end a design decision turns on, moves by
+10%.
+
+```{r}
+cat(sprintf("raw:     %6.0f to %6.0f cfs\n", 10^piv$raw_lower[3], 10^piv$raw_upper[3]))
+cat(sprintf("pivotal: %6.0f to %6.0f cfs\n", 10^piv$lower[3], 10^piv$upper[3]))
+```
+
+## The diagnostics
+
+A pivotal replicate can be lost at three separate places, so the run reports six counts rather than
+the single `failed_replicates` a regular run has.
+
+```{r}
+print(unlist(piv$pivotal_diagnostics))
+```
+
+`requested_replicates` is what you asked for. `failed_raw_replicates` counts the resample-and-fit
+pairs that never produced a fit, after their retries, and `rejected_raw_replicates` counts fits a
+filter discarded. `accepted_raw_replicates` is what reached the transform, and it is the raw block's
+sample size. Of those, `invalid_pivotal_replicates` could not be transformed and
+`retained_pivotal_replicates` is what the pivotal block was computed from; those two always add up
+to `accepted_raw_replicates`. Nothing went wrong here, so all 400 survive. The next section makes
+them fail on purpose.
+
+## Standardizing in link space
+
+`pivotal_links` gives one link function per parameter, and the standardization happens in link
+space: $\eta = g(\theta)$ is what gets differenced and reinflated, and $g^{-1}$ brings the draw
+back. A `"Log"` link on a positive parameter is the usual reason to do this, because it keeps every
+reinflated draw positive no matter how far the step reaches. `NULL` in a slot is the identity.
+
+```{r}
+linked <- bootstrap_custom(
+  data = log_peaks, resample = resample_iid, statistic = design_statistic,
+  fit_with_covariance = fit_with_cov, run_type = "pivotal",
+  pivotal_links = list("Log", NULL),
+  replicates = 400, alpha = 0.1, seed = 2027
+)
+
+print(data.frame(statistic = c("mean", "sd", "1% AEP"),
+                 identity_lower = piv$lower, log_lower = linked$lower,
+                 identity_upper = piv$upper, log_upper = linked$upper),
+      row.names = FALSE, digits = 10)
+```
+
+The link is on the mean here, the first parameter, and it moves the interval in the fifth decimal.
+Small, but it is a real difference and not a rounding artifact: the difference and the reinflation
+are being taken on $\log \mu$ rather than on $\mu$, and the two disagree because the transform is
+not linear.
+
+A link on the scale parameter would be the more natural choice, and it is worth knowing that on
+THIS model it does nothing measurable. For a Normal MLE the two Cholesky factors of the
+$\hat\sigma$ variance are in the ratio $\hat\sigma / \sigma^*$, so the identity draw works out to
+$\hat\sigma^2/\sigma^*$, and so does the log draw,
+$\exp(2\log\hat\sigma - \log\sigma^*)$. They agree to about 1e-11, which is Cholesky and `log`
+rounding rather than a difference in the answer. That invariance is a property of this covariance,
+not of log links, and it is the reason this page links the mean when it wants to show a link
+working.
+
+## Draws the transform cannot make
+
+`pivotal_z_limit` bounds every component of the standardized vector $z$, and a draw outside it is
+invalid. `pivotal_invalid_draw_policy` decides what happens to an invalid draw: `"drop"` leaves it
+out of the ensemble, `"use_raw"` keeps the untransformed fit, `"use_parent"` substitutes the parent.
+A limit of 1.5 standard units is aggressive enough to reject a third of the draws here, which is
+what makes the three policies visibly different.
+
+```{r}
+policies <- do.call(rbind, lapply(c("drop", "use_raw", "use_parent"), function(policy) {
+  r <- bootstrap_custom(
+    data = log_peaks, resample = resample_iid, statistic = design_statistic,
+    fit_with_covariance = fit_with_cov, run_type = "pivotal",
+    pivotal_z_limit = 1.5, pivotal_invalid_draw_policy = policy,
+    replicates = 400, alpha = 0.1, seed = 2027
+  )
+  data.frame(policy = policy,
+             retained = r$pivotal_diagnostics$retained_pivotal_replicates,
+             invalid = r$pivotal_diagnostics$invalid_pivotal_replicates,
+             lower = r$lower[3], upper = r$upper[3], width = r$upper[3] - r$lower[3])
+}))
+print(policies, row.names = FALSE, digits = 6)
+```
+
+All three see the same 133 invalid draws, which is a property of the limit and not of the policy.
+What they do about them differs, and so does the interval. `"drop"`, the default, computes the
+percentile from the 267 survivors, and because a limit on $z$ removes the largest steps first, those
+survivors are the central ones and the interval is narrow. `"use_raw"` fills the gaps with the
+untransformed fits, which reach further out than the surviving pivotal draws in both directions, so
+it gives the widest interval of the three. `"use_parent"` fills them with the parent, 133 copies of
+one point in the middle, and gives the narrowest by construction.
+
+None of the three is a repair. A limit tight enough to reject a third of the draws is telling you
+the parametrization needs a link, not that the draws need a policy, and `"use_parent"` in particular
+reports a confidence interval computed partly from the estimate it is supposed to be uncertain
+about.
+
+```{r}
+rows <- rbind(
+  data.frame(label = "regular", lower = regular$lower[3], upper = regular$upper[3]),
+  data.frame(label = "raw block", lower = piv$raw_lower[3], upper = piv$raw_upper[3]),
+  data.frame(label = "pivotal", lower = piv$lower[3], upper = piv$upper[3]),
+  data.frame(label = "pivotal, log link", lower = linked$lower[3], upper = linked$upper[3]),
+  data.frame(label = paste0("z<1.5, ", policies$policy), lower = policies$lower,
+             upper = policies$upper)
+)
+
+op <- par(mar = c(4.5, 9, 3, 1))
+y <- rev(seq_len(nrow(rows)))
+plot(NA, xlim = range(c(rows$lower, rows$upper)), ylim = c(0.5, nrow(rows) + 0.5),
+     yaxt = "n", ylab = "", xlab = expression(log[10] ~ "of the 1% annual chance peak"),
+     main = "90% intervals for one design statistic")
+axis(2, at = y, labels = rows$label, las = 1, cex.axis = 0.85)
+abline(v = piv$estimate[3], col = "#6b7f3f", lty = 2, lwd = 2)
+segments(rows$lower, y, rows$upper, y, col = "#5b7a8c", lwd = 4)
+points(rep(piv$estimate[3], nrow(rows)), y, pch = 19, col = "#b06a3b")
+legend("bottomright", c("Interval", "Point estimate"), lty = c(1, 2), lwd = c(4, 2),
+       col = c("#5b7a8c", "#6b7f3f"), bty = "n")
+par(op)
+```
+
+## What reproduces across languages, and what does not
+
+Most pages on this site can promise that a seeded run gives bit-identical numbers in R and Python,
+because every operation on them happens inside the shared C++ core and the two packages call the
+same compiled code. The callback path is where that promise needs a condition attached, and it is
+better stated plainly than buried. It applies here, to example 13's custom objective, to example
+14's custom posterior and to example 15's custom bootstrap alike.
+
+The resampled INDICES still come from the core generator, so a given seed selects the identical
+observations in the identical order in both languages, replicate for replicate. That half is
+unconditional. The other half is not: `fit_with_covariance` and `statistic` are your own R or Python
+code, and the two languages do not guarantee identical rounding for the same formula. A run
+reproduces across languages if and only if your functions return bit-identical values.
+
+The functions on this page do, and by construction rather than by luck. They add, subtract, multiply
+and divide, and they take one square root. Arithmetic is IEEE-deterministic, and `sqrt` is the one
+library function IEEE 754 requires to be correctly rounded, so both languages must return the same
+bits for it. That is why the model here is a location-scale Normal in $\log_{10}$ space instead of
+something fitted numerically: it keeps `log` and `exp` out of the callback, where they would put the
+last bit at the mercy of two different math libraries. Every number this page prints is identical in
+the Python twin.
+
+The package's own cross-language fixture pins the same construct.
+`fixtures/callback/callback_cross_language.json` runs this exact model, on eight observations at
+seed 12345, and asserts the pivotal and raw endpoints at ZERO tolerance, meaning bit equality rather
+than a tolerance, across all four runners: the C++ fixture harness, R, Python, and the dotnet oracle
+emitter driving the real C# `Bootstrap` class. The reproduction check below is that construct.
+
+## Key takeaways
+
+1. `run_type = "pivotal"` reflects each replicate through the parent fit, standardized by the
+   replicate's own covariance and reinflated by the parent's.
+2. It fits through `fit_with_covariance(data)`, returning `parameters` and `covariance`. Passing
+   `fit` as well is an error, not a preference.
+3. Every pivotal run reports two interval blocks. The raw one is what a regular run would have said;
+   the difference between them is the transform's contribution.
+4. Read `pivotal_diagnostics` before reading the interval. `retained_pivotal_replicates` is the
+   sample size the interval was actually computed from.
+5. Standardize in link space when a parameter is constrained. Whether a given link changes the
+   answer depends on the covariance, so check rather than assume.
+6. Only `ci_method = "Percentile"` exists after a pivotal run, and asking for another is refused
+   before the first replicate rather than after all of them.
+
+## Reproduction check
+
+Two halves, carrying different weight.
+
+The first pins this page's own numbers. Nothing upstream computes them, so they are a regression on
+this file: they check that the page still produces what it produced when it was written. Because the
+callbacks are arithmetic and `sqrt`, they are also the numbers the Python twin prints.
+
+The second is the construct the package's cross-language fixture pins, at zero tolerance, in all
+four runners. Eight observations, the same Normal MLE with its analytic covariance, 200 replicates
+at seed 12345. The literals were read from the real C# `Bootstrap` class by the dotnet oracle
+emitter. They are checked here at 1e-15 relative, since R's decimal parser can land one ulp off a
+written literal.
+
+```{r}
+near <- \(x, literal, tol = 1e-15) abs(x / literal - 1) < tol
+
+x <- c(4.1, 5.2, 4.8, 5.5, 4.9, 5.1, 5.3, 4.7)
+check <- bootstrap_custom(
+  data = x, resample = resample_iid, statistic = function(parameters) parameters,
+  fit_with_covariance = fit_with_cov, run_type = "pivotal",
+  replicates = 200, alpha = 0.1, seed = 12345
+)
+
+stopifnot(
+  # This page's own run: a within-R regression, not an upstream literal (see above).
+  near(piv$estimate[3], 5.1357565099517092),
+  near(piv$lower[1], 4.6002343747987944),
+  near(piv$upper[1], 4.7039019441786021),
+  near(piv$lower[2], 0.16695444885212568),
+  near(piv$upper[2], 0.27612953833178760),
+  near(piv$lower[3], 5.0510777889516243),
+  near(piv$upper[3], 5.2776613147818380),
+  near(piv$raw_lower[3], 5.0264321098309954),
+  near(piv$raw_upper[3], 5.2345946299122988),
+  identical(regular$lower, piv$raw_lower),
+  piv$pivotal_diagnostics$retained_pivotal_replicates == 400L,
+  piv$pivotal_diagnostics$invalid_pivotal_replicates == 0L,
+  near(linked$lower[1], 4.6002794038957076),
+  near(linked$upper[3], 5.2776620830082027),
+  policies$retained == c(267L, 400L, 400L),
+  policies$invalid == c(133L, 133L, 133L),
+
+  # The cross-language construct, read from the real C# Bootstrap class and pinned at zero
+  # tolerance in fixtures/callback/callback_cross_language.json.
+  near(check$lower[1], 4.5677601616611),
+  near(check$upper[1], 5.140545071728662),
+  near(check$lower[2], 0.3182992562465546),
+  near(check$upper[2], 0.9257315366348623),
+  near(check$standard_error[1], 0.22495884650687556),
+  near(check$raw_lower[1], 4.750000000000001),
+  near(check$raw_upper[2], 0.5183806274882354),
+  check$pivotal_diagnostics$retained_pivotal_replicates == 200L,
+  length(check$estimate) == 2L
+)
+cat("All reproduction checks passed.\n")
+```

@@ -1028,6 +1028,27 @@ def bootstrap_custom(
     >>> res = ch.bootstrap_custom(x, resample, fit, lambda p: p, replicates=500, seed=12345)
     >>> bool(res["lower"][0] < res["estimate"][0] < res["upper"][0])
     True
+
+    The pivotal run type. It fits through ``fit_with_covariance`` instead of ``fit``: a Normal
+    location-scale MLE here, whose covariance is ``diag(s2 / n, s2 / 2n)`` in closed form. The
+    ``"Log"`` link standardizes the scale parameter in log space, keeping every draw positive.
+
+    >>> def fit_with_cov(data):
+    ...     n = len(data)
+    ...     mu = sum(data) / n
+    ...     s2 = sum((xi - mu) ** 2 for xi in data) / n
+    ...     return {"parameters": [mu, s2 ** 0.5],
+    ...             "covariance": [[s2 / n, 0.0], [0.0, s2 / (2 * n)]]}
+    >>> piv = ch.bootstrap_custom(
+    ...     x, resample, statistic=lambda p: p, fit_with_covariance=fit_with_cov,
+    ...     run_type="pivotal", pivotal_links=[None, "Log"], replicates=200, seed=12345)
+    >>> piv["pivotal_diagnostics"]["retained_pivotal_replicates"]
+    200
+
+    Two interval blocks: the pivotal ensemble, and the raw fits it was built from.
+
+    >>> bool(piv["lower"][0] < piv["raw_lower"][0])
+    True
     """
     point = np.asarray(data, dtype=float).ravel()
     if point.size == 0 or not np.all(np.isfinite(point)):

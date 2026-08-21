@@ -61,7 +61,7 @@ static analyses::UncertaintyMethod parse_uncertainty_method(const std::string& s
 }
 
 // The C# type name (matching the distribution factory names) for a fitted candidate. Covers the
-// 14 FittingAnalysis candidates; a fallback keeps the binding total (never throws on an unexpected
+// 15 FittingAnalysis candidates; a fallback keeps the binding total (never throws on an unexpected
 // type). No reverse map exists in the core, so this small local helper mirrors the factory's
 // forward name->type table for exactly the candidates FittingAnalysis produces.
 static std::string type_name(UDT type) {
@@ -70,6 +70,7 @@ static std::string type_name(UDT type) {
         case UDT::GammaDistribution: return "GammaDistribution";
         case UDT::GeneralizedExtremeValue: return "GeneralizedExtremeValue";
         case UDT::GeneralizedLogistic: return "GeneralizedLogistic";
+        case UDT::GeneralizedNormal: return "GeneralizedNormal";
         case UDT::GeneralizedPareto: return "GeneralizedPareto";
         case UDT::Gumbel: return "Gumbel";
         case UDT::KappaFour: return "KappaFour";
