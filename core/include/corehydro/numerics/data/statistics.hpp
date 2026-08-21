@@ -120,11 +120,22 @@ inline std::vector<double> linear_moments(const std::vector<double>& data) {
 
     double B0 = 0, B1 = 0, B2 = 0, B3 = 0;
     for (int i = 1; i <= static_cast<int>(N); ++i) {
+        // DELIBERATE DIVERGENCE (docs/upstream-csharp-issues.md): C# forms the weight
+        // numerators `(i-2)*(i-1)` and `(i-3)*(i-2)*(i-1)` in `int`. The triple product
+        // exceeds int32 at i = 1293, and C#'s default unchecked context WRAPS silently --
+        // the real Numerics library returns T4 = -0.185 for a 1293-point arithmetic
+        // sequence whose L-kurtosis is 0. In C++ that same overflow is undefined
+        // behaviour, which CRAN's UBSan run reports. Forming the products in `double`
+        // removes the UB and is bit-identical to the C# for every sample below the
+        // overflow (the products are exact integers far under 2^53); above it the port
+        // returns the mathematically correct weight where C# returns a wrapped one.
+        const double di = static_cast<double>(i);
         B0 += sorted[i - 1];
-        if (i > 1) B1 += (i - 1) / (N - 1) * sorted[i - 1];
-        if (i > 2) B2 += (i - 2) * (i - 1) / ((N - 2) * (N - 1)) * sorted[i - 1];
+        if (i > 1) B1 += (di - 1) / (N - 1) * sorted[i - 1];
+        if (i > 2) B2 += (di - 2) * (di - 1) / ((N - 2) * (N - 1)) * sorted[i - 1];
         if (i > 3)
-            B3 += (i - 3) * (i - 2) * (i - 1) / ((N - 3) * (N - 2) * (N - 1)) * sorted[i - 1];
+            B3 += (di - 3) * (di - 2) * (di - 1) / ((N - 3) * (N - 2) * (N - 1)) *
+                  sorted[i - 1];
     }
     B0 /= N;
     B1 /= N;

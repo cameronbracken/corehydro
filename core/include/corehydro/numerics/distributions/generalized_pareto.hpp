@@ -272,7 +272,11 @@ class GeneralizedPareto : public UnivariateDistributionBase,
     }
 
     // Initial values and bounds for MLE optimization.
-    // GPA MLE: xi is fixed at min(sample); only alpha and kappa are optimized.
+    // C# returns the FULL NumberOfParameters-length (xi, alpha, kappa) arrays here
+    // (GeneralizedPareto.cs 515-549); the xi-is-fixed 2-parameter slice belongs to MLE,
+    // which applies `.Subset(1)` at the NelderMead call (line 570). Folding that slice
+    // into this method truncated the arrays to 2 for every OTHER caller of the
+    // IMaximumLikelihoodEstimation interface -- see mle() below.
     void get_parameter_constraints(const std::vector<double>& sample,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
@@ -294,15 +298,20 @@ class GeneralizedPareto : public UnivariateDistributionBase,
         if (all_initials[1] <= scl_lower || all_initials[1] >= scl_upper)
             all_initials[1] = 0.5 * (scl_lower + scl_upper);
         if (all_initials[2] <= -10.0 || all_initials[2] >= 10.0) all_initials[2] = 0.0;
-        // Return 2-param (alpha, kappa) constraints — xi is fixed to min(sample) in MLE
-        initials = {all_initials[1], all_initials[2]};
-        lowers = {scl_lower, -10.0};
-        uppers = {scl_upper, 10.0};
+        // C# 548: the full 3-parameter (xi, alpha, kappa) constraint triple.
+        initials = {all_initials[0], all_initials[1], all_initials[2]};
+        lowers = {loc_lower, scl_lower, -10.0};
+        uppers = {loc_upper, scl_upper, 10.0};
     }
 
     std::vector<double> mle(const std::vector<double>& sample) const {
-        std::vector<double> initials, lowers, uppers;
-        get_parameter_constraints(sample, initials, lowers, uppers);
+        std::vector<double> all_initials, all_lowers, all_uppers;
+        get_parameter_constraints(sample, all_initials, all_lowers, all_uppers);
+        // C# 570: `Initials.Subset(1)` / `Lowers.Subset(1)` / `Uppers.Subset(1)` -- xi is
+        // fixed at min(sample), so only (alpha, kappa) reach the optimizer.
+        std::vector<double> initials(all_initials.begin() + 1, all_initials.end());
+        std::vector<double> lowers(all_lowers.begin() + 1, all_lowers.end());
+        std::vector<double> uppers(all_uppers.begin() + 1, all_uppers.end());
         double xi_fixed = *std::min_element(sample.begin(), sample.end());
         auto log_lh = [&sample, xi_fixed](const std::vector<double>& x) {
             GeneralizedPareto g;

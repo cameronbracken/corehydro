@@ -103,6 +103,8 @@ set(BF_TESTS
   test_optimizer_runner
   test_callback_runner
   test_rng_handle
+  test_parameter_constraint_sizes
+  test_linear_moments_overflow
 )
 
 # Sobol test takes the direction-number file as its sole argument.
