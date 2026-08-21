@@ -5,14 +5,15 @@
 // that is A5's UnivariateAnalysis) and stores a FittedDistribution DTO (AIC / BIC / RMSE + a
 // fit-succeeded flag) per candidate. Ranking is left to the consumer.
 //
-// CANDIDATE-LIST COUNT (15 -> 14 deviation, documented). The C# DistributionList (C# 215-231) has
-// 15 candidates. GeneralizedNormal is NOT ported -- it exists only in the type enum; the factory
-// switch has no case for it and hits the default that throws. This port therefore SKIPS
-// GeneralizedNormal and builds the remaining 14 candidates, in the C# order:
+// CANDIDATE-LIST COUNT (15, matching C#). The C# DistributionList (C# 215-231) has 15 candidates
+// and so does this port, in the C# order:
 //   Exponential, GammaDistribution, GeneralizedExtremeValue, GeneralizedLogistic,
-//   GeneralizedPareto, Gumbel, KappaFour, LnNormal, Logistic, LogNormal, LogPearsonTypeIII,
-//   Normal, PearsonTypeIII, Weibull.
-// Every downstream count (DistributionList / FittedDistributions size) is 14, not 15.
+//   GeneralizedNormal, GeneralizedPareto, Gumbel, KappaFour, LnNormal, Logistic, LogNormal,
+//   LogPearsonTypeIII, Normal, PearsonTypeIII, Weibull.
+// Every downstream count (DistributionList / FittedDistributions size) is 15. (Through Phase 10
+// this list held only 14: GeneralizedNormal existed in the type enum but had no factory case, so
+// it was skipped. Porting the distribution and giving the factory its case restored the 15th
+// candidate at its C# position, between GeneralizedLogistic and GeneralizedPareto.)
 //
 // OWNERSHIP (deviation from the C# GC references).
 //   * The C# ctor takes a DataFrame GC reference (`?? throw ArgumentNullException`). Here the
@@ -115,12 +116,12 @@ class FittingAnalysis : public AnalysisBase, public IProbabilityOrdinates {
     ProbabilityOrdinates& probability_ordinates() override { return probability_ordinates_; }
     const ProbabilityOrdinates& probability_ordinates() const { return probability_ordinates_; }
 
-    // C# `FittedDistributions` (C# 195): one FittedDistribution per candidate (14).
+    // C# `FittedDistributions` (C# 195): one FittedDistribution per candidate (15).
     const std::vector<FittedDistribution>& fitted_distributions() const {
         return fitted_distributions_;
     }
 
-    // C# `DistributionList` (C# 215): the 14 ported candidate distributions (owning). Exposed so
+    // C# `DistributionList` (C# 215): the 15 candidate distributions (owning). Exposed so
     // consumers / tests can inspect the candidate set and its types.
     const std::vector<std::unique_ptr<UnivariateDistributionBase>>& distribution_list() const {
         return distribution_list_;
@@ -140,7 +141,7 @@ class FittingAnalysis : public AnalysisBase, public IProbabilityOrdinates {
     }
 
     // C# `RunAsync` (C# 261), synchronous. Guards (unset frame / invalid config) -> clear_results
-    // -> serial fit over the 14 candidates -> IsEstimated = true.
+    // -> serial fit over the 15 candidates -> IsEstimated = true.
     void run() override {
         // C# `if (DataFrame == null) throw InvalidOperationException` (C# 264).
         if (!has_data_frame()) {
@@ -261,16 +262,15 @@ class FittingAnalysis : public AnalysisBase, public IProbabilityOrdinates {
     }
 
    private:
-    // Builds the 14 ported candidate distributions, in the C# order minus GeneralizedNormal (see
-    // the file header COUNT note). Called from both constructors (the C# field initializer runs on
-    // every construction path).
+    // Builds the 15 candidate distributions, in the C# order (see the file header COUNT note).
+    // Called from both constructors (the C# field initializer runs on every construction path).
     void build_distribution_list() {
         static const UnivariateDistributionType kCandidates[] = {
             UnivariateDistributionType::Exponential,
             UnivariateDistributionType::GammaDistribution,
             UnivariateDistributionType::GeneralizedExtremeValue,
             UnivariateDistributionType::GeneralizedLogistic,
-            // GeneralizedNormal SKIPPED: not ported (factory throws); 15 -> 14.
+            UnivariateDistributionType::GeneralizedNormal,
             UnivariateDistributionType::GeneralizedPareto,
             UnivariateDistributionType::Gumbel,
             UnivariateDistributionType::KappaFour,

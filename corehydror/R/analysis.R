@@ -88,7 +88,7 @@ univariate_analysis <- function(data, distribution, sampler = "DEMCz", iteration
 
 #' Fit and rank candidate distributions
 #'
-#' Fit each of the 14 candidate distributions to a sample by maximum likelihood and return their
+#' Fit each of the 15 candidate distributions to a sample by maximum likelihood and return their
 #' goodness-of-fit metrics. Ranking is left to the caller. Wraps the shared C++ `FittingAnalysis`.
 #'
 #' @param data numeric vector of observations.

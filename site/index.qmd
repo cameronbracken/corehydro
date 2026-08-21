@@ -24,7 +24,7 @@ for the details of what is currently implemented in the core library and in the 
 
 ## What's inside
 
-- All 42 univariate distributions of the Numerics library, with moments,
+- All 43 univariate distributions of the Numerics library, with moments,
   density/quantile functions, seeded random generation, and MOM / MLE / L-moment
   fitting.
 - Bayesian estimation with eight MCMC samplers (RWMH, ARWMH, DEMCz, DEMCzs, HMC,

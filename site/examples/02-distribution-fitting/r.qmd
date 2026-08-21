@@ -289,17 +289,19 @@ plot(sorted_data, weibull_pp, pch = 16, col = adjustcolor("#6b7f3f", 0.7),
 
 ## Ranking many families at once
 
-Beyond comparing estimation methods for one family, `fit_distributions` fits 14
+Beyond comparing estimation methods for one family, `fit_distributions` fits 15
 candidate families by MLE and reports AIC, BIC, and RMSE for each. On this sample
 the LogNormal fits rank near the top, as they should for LogNormal data; two
 flexible three-parameter families edge it out by a point of AIC, a normal outcome
 for a single 100-value sample. Rows with `converged` FALSE are candidates whose
-MLE failed on this sample; the MLE for the difficult families uses a stochastic
-global optimizer that is not seeded (matching the C# behavior), so the borderline
-GeneralizedPareto row can flip between converged and failed from run to run,
-while the ranked rows above are stable. (This analysis-level RMSE follows the C# convention of
-using the DataFrame's Hirsch-Stedinger plotting positions, so it is not comparable
-to the Weibull-based RMSE computed above.)
+MLE failed on this sample: here KappaFour, whose four-parameter fit did not
+converge on these data. The run is deterministic, seed and all, so the
+table is the same on every call and in both languages. (This analysis-level RMSE
+follows the C# convention of using the DataFrame's Hirsch-Stedinger plotting
+positions, so it is not comparable to the Weibull-based RMSE computed above.)
+[Example 16](../16-fifteen-candidate-fitting/r.qmd) is about this verb on its own,
+including what the fifteenth candidate is and why a ranking on a short record
+should not be trusted.
 
 ```{r}
 ranking <- as.data.frame(fit_distributions(data))
@@ -314,7 +316,7 @@ You have:
 - compared the fits with log-likelihood, AIC, BIC, and RMSE computed inline,
 - checked the fits visually against the empirical CDF and Weibull plotting
   positions,
-- ranked 14 candidate families at once with `fit_distributions`.
+- ranked 15 candidate families at once with `fit_distributions`.
 
 ## Exercise
 

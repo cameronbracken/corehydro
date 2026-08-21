@@ -1,0 +1,267 @@
+---
+title: "16. Ranking fifteen candidate families"
+---
+
+::: {.callout-note appearance="minimal" icon=false}
+Language: **R** (Quarto) - [Python version](python.ipynb)
+:::
+
+`dist_fit()` answers "what are the parameters of this family". `fit_distributions()` answers the
+question that comes before it: which family. It fits every candidate in the RMC.BestFit
+`DistributionList` to the same sample by maximum likelihood and reports AIC, BIC and RMSE for each,
+leaving the ranking to you. There are fifteen candidates, and this page is about reading their
+table honestly on a record short enough that the ranking is not settled.
+
+Example 02 uses `fit_distributions()` in passing, at the end of a page about estimation methods.
+This one is about the verb itself. It has no upstream counterpart: the USACE-RMC
+Numerics-Python-Examples repository has no distribution-selection notebook.
+
+## What you'll learn
+
+- What the fifteen candidates are, and which of them can fail on a given sample.
+- Why AIC, BIC and RMSE can each name a different winner, and what to do about that.
+- How to read the `converged` column, which is not a warning to ignore.
+- How to get the parameters of the family you picked, which the ranking does not carry.
+
+## Setup
+
+```{r}
+library(corehydror)
+```
+
+## The record
+
+Twenty annual peak discharges, the same series the package's own oracle fixture uses, so the
+numbers below are pinned against the real C# `FittingAnalysis` at the bottom of this page.
+
+```{r}
+peaks <- c(45000, 38000, 52000, 61000, 33000, 49000, 55000, 42000, 67000, 39000,
+           48000, 51000, 36000, 58000, 44000, 53000, 47000, 62000, 41000, 50000)
+
+cat(sprintf("n = %d, mean = %.0f cfs, range = %.0f to %.0f cfs\n",
+            length(peaks), mean(peaks), min(peaks), max(peaks)))
+```
+
+Twenty years is a short record, and the point of this page is that the ranking says so.
+
+## The ranking
+
+One call. The result is a list of four parallel vectors, one entry per candidate, which
+`as.data.frame()` turns into a table.
+
+```{r}
+ranking <- as.data.frame(fit_distributions(peaks))
+ranking$dAIC <- ranking$aic - min(ranking$aic, na.rm = TRUE)
+
+print(ranking[order(ranking$aic), c("distribution", "aic", "dAIC", "bic", "rmse", "converged")],
+      row.names = FALSE, digits = 6)
+```
+
+Fifteen rows, one per candidate. `converged` is `FALSE` for KappaFour, whose four-parameter fit did
+not converge on this sample; its metrics are `NaN` and it cannot be ranked. A failed candidate is
+not a defect in the sample or in the fit. It is the honest report that this family had nothing to
+say about this record, and its row is kept rather than dropped so that a candidate cannot disappear
+from the list without being noticed.
+
+## Three criteria, three winners
+
+Sorting the same table by each of the three metrics gives three different leaders.
+
+```{r}
+leader <- function(metric) {
+  ok <- ranking[!is.na(ranking[[metric]]), ]
+  ok$distribution[which.min(ok[[metric]])]
+}
+
+cat(sprintf("lowest AIC:  %s\n", leader("aic")))
+cat(sprintf("lowest BIC:  %s\n", leader("bic")))
+cat(sprintf("lowest RMSE: %s\n", leader("rmse")))
+```
+
+They disagree because they reward different things. AIC penalizes each parameter by 2, BIC by
+$\ln n$, which is 3.0 at twenty points, so BIC is stiffer and demotes every three-parameter family
+by about one point relative to AIC. RMSE is not a likelihood criterion at all: it measures the
+distance between the fitted quantiles and the observations at their Hirsch-Stedinger plotting
+positions, so it rewards a family that tracks the middle of the record even when the likelihood
+prefers another.
+
+The AIC column has the more useful reading. Twelve of the fourteen rankable candidates fall within
+three AIC points of the best, and six of them within two, which on twenty observations is not
+evidence of anything. The table's real message is that most of these families describe this record
+about equally well, and that picking one of them by its rank alone is picking noise.
+
+```{r}
+ranked <- ranking[order(ranking$aic), ]
+ranked <- ranked[!is.na(ranked$aic), ]
+
+op <- par(mar = c(4.5, 10, 3, 1))
+plot(ranked$dAIC, rev(seq_len(nrow(ranked))), pch = 19, col = "#5b7a8c",
+     yaxt = "n", ylab = "", xlab = "AIC above the best candidate",
+     main = "Fifteen candidates, three points of AIC")
+axis(2, at = rev(seq_len(nrow(ranked))), labels = ranked$distribution, las = 1, cex.axis = 0.8)
+abline(v = 2, col = "#b06a3b", lty = 2)
+text(2, 1.5, " 2 points", col = "#b06a3b", adj = 0, cex = 0.8)
+par(op)
+```
+
+## The winner, and why to distrust it
+
+`fit_distributions()` reports metrics, not parameters. Refit the family you picked with
+`dist_fit()` to get them.
+
+```{r}
+best <- dist_fit("GeneralizedPareto", peaks, method = "mle")
+best
+
+bounds <- c(dist_params(best)[1],
+            dist_params(best)[1] + dist_params(best)[2] / dist_params(best)[3])
+cat(sprintf("support: %.0f to %.0f cfs\n", bounds[1], bounds[2]))
+cat(sprintf("observed: %.0f to %.0f cfs\n", min(peaks), max(peaks)))
+cat(sprintf("quantile at p = 0.99999: %.0f cfs\n", dist_quantile(best, 0.99999)))
+```
+
+Look at what the AIC winner actually did. Its location parameter is 33,000, exactly the smallest
+observation, and with a positive shape the family is bounded above as well, here at 67,370 cfs,
+370 cfs past the largest observation. The fit has pulled its entire support onto the observed range.
+It follows that this distribution assigns probability zero to any flood above 67,370 cfs: the
+quantile at a one-in-100,000 exceedance is still 67,368.
+
+Nothing in the table reports that. AIC rewards the likelihood, and a support squeezed onto the data
+is where the likelihood is largest, so a bounded three-parameter family will often top a short
+record. It is a property of twenty observations, not a finding about the river. Read `dAIC` rather
+than the rank, look at the support of whatever wins, and prefer a family you can defend on physical
+grounds when the table is this flat.
+
+## The fifteenth candidate
+
+`GeneralizedNormal` is the three-parameter LogNormal, called the generalized normal in Hosking's
+L-moment work: location $\xi$, scale $\alpha$, shape $\kappa$. At $\kappa = 0$ it is the plain
+Normal; $\kappa < 0$ bounds it below at $\xi + \alpha / \kappa$ and skews it right, and $\kappa > 0$
+does the mirror image.
+
+```{r}
+gn <- dist_fit("GeneralizedNormal", peaks, method = "mle")
+gn
+
+cat(sprintf("implied lower bound: %.0f cfs\n",
+            dist_params(gn)[1] + dist_params(gn)[2] / dist_params(gn)[3]))
+cat(sprintf("100-year peak: %.0f cfs\n", dist_quantile(gn, 0.99)))
+```
+
+Its shape parameter is barely below zero, so the fitted density is nearly Normal and the implied
+lower bound falls at about -15,000 cfs, far outside anything a river can do. That is the sensible
+reading of a small $\kappa$: the bound is not a claim about discharge, it is the family telling you
+it found no skew worth the third parameter. Which is why the row sits in the middle of the AIC
+table. It spent a parameter to repeat what the Normal already said.
+
+## The frequency curve
+
+The three leading families, plotted against the record on its Weibull plotting positions. This is
+the plot that shows what a three-point AIC spread means.
+
+```{r}
+families <- c("GeneralizedPareto", "GammaDistribution", "LogNormal")
+fits <- lapply(families, dist_fit, data = peaks, method = "mle")
+pp <- plotting_positions(length(peaks))
+grid <- seq(0.01, 0.995, length.out = 300)
+colors <- c("#6b7f3f", "#b06a3b", "#5b7a8c")
+
+plot(1 / (1 - pp), sort(peaks), log = "x", pch = 16, col = "#3f3f3f",
+     xlim = c(1, 200), ylim = c(30000, 100000),
+     main = "Three families, one 20-year record",
+     xlab = "Return period (years)", ylab = "Annual peak (cfs)")
+for (i in seq_along(fits)) {
+  lines(1 / (1 - grid), dist_quantile(fits[[i]], grid), col = colors[i], lwd = 2)
+}
+legend("topleft", c(families, "Observed"), bty = "n",
+       lty = c(1, 1, 1, NA), lwd = c(2, 2, 2, NA), pch = c(NA, NA, NA, 16),
+       col = c(colors, "#3f3f3f"))
+```
+
+The three curves track each other over the range the data cover and part company past it, which is
+exactly where a design estimate is read. The AIC winner is the one that flattens: its curve bends
+into the ceiling described above, while the two families ranked below it keep rising. Ranking
+settles which family fits the observations. It does not settle the extrapolation, and no table
+built from twenty points can.
+
+```{r}
+extrap <- sapply(fits, dist_quantile, p = 0.99)
+names(extrap) <- families
+print(round(extrap))
+```
+
+## Key takeaways
+
+1. `fit_distributions()` fits fifteen candidates and reports AIC, BIC and RMSE. Ranking is yours,
+   and so is the decision not to trust the ranking.
+2. AIC, BIC and RMSE reward different things and can each name a different winner. On a short
+   record that disagreement is the finding.
+3. `converged = FALSE` means that candidate's MLE failed and its metrics are `NaN`. The row stays
+   in the table so the failure is visible.
+4. The ranking carries no parameters. Refit with `dist_fit()` and look at what the winner did. A
+   bounded family whose support has collapsed onto the observed range has fit the record length,
+   not the river, and the table cannot tell you that.
+
+## Exercise
+
+1. Draw 200 values from `distribution("LogNormal", c(4.7, 0.1))` with `dist_random()` and rank the
+   candidates on them.
+2. Compare the AIC spread with the one above. Does the true family win, and by how much?
+3. Repeat at n = 20 with a different seed a few times, and watch the winner change.
+
+## Reproduction check
+
+The block below has two halves.
+
+The first pins the numbers this page prints, at 1e-15 relative tolerance. They are deterministic:
+`fit_distributions()` optimizes through a seeded DifferentialEvolution run, so the same sample gives
+the same table on every call and in both languages. The Python twin of this page prints the
+identical digits.
+
+The second pins the same quantities against the real C# `RMC.BestFit.FittingAnalysis`, whose values
+live in `fixtures/analyses/fit_distributions_smoke.json` and are read out of the running C# library
+by the repository's dotnet oracle gate. AIC and BIC agree with that library to a few units in the
+last place, so they are compared at the same 1e-15 relative tolerance every literal on this site
+uses. RMSE gets 1e-8, the tolerance the fixture itself carries for it: the C# goodness-of-fit helper
+accumulates that sum in a different order and the two answers agree to about 3e-12 relative rather
+than exactly. Each tolerance is the measured disagreement, not a margin chosen to make the check
+pass.
+
+```{r}
+near <- \(x, literal, tol = 1e-15) abs(x / literal - 1) < tol
+aic_of <- \(name) ranking$aic[ranking$distribution == name]
+bic_of <- \(name) ranking$bic[ranking$distribution == name]
+rmse_of <- \(name) ranking$rmse[ranking$distribution == name]
+
+stopifnot(
+  # Structure: fifteen candidates, KappaFour the only failure.
+  nrow(ranking) == 15L,
+  sum(!ranking$converged) == 1L,
+  ranking$distribution[!ranking$converged] == "KappaFour",
+  "GeneralizedNormal" %in% ranking$distribution,
+
+  # This page's own table, at full precision.
+  near(aic_of("GeneralizedPareto"), 423.31191701519708),
+  near(aic_of("GammaDistribution"), 424.15293208959202),
+  near(aic_of("Normal"), 424.51926984004484),
+  near(aic_of("GeneralizedNormal"), 426.19502666475483),
+  near(bic_of("GeneralizedPareto"), 426.29911383585903),
+  near(rmse_of("GeneralizedPareto"), 1278.6425510135564),
+  near(rmse_of("Normal"), 1436.0968615642446)
+)
+
+# The C# oracle: fixtures/analyses/fit_distributions_smoke.json, read from the running
+# RMC.BestFit.FittingAnalysis by tools/verify_oracles.py. Candidate index 4 is GeneralizedNormal,
+# 5 is GeneralizedPareto, 12 is Normal.
+stopifnot(
+  near(aic_of("GeneralizedNormal"), 426.19502666475506),
+  near(aic_of("GeneralizedPareto"), 423.311917015197),
+  near(bic_of("GeneralizedPareto"), 426.299113835859),
+  near(aic_of("Normal"), 424.51926984004484),
+  near(bic_of("Normal"), 426.5107343871528),
+  # RMSE: a different summation order in the C# helper, agreeing to ~3e-12 relative.
+  near(rmse_of("GeneralizedPareto"), 1278.642551017543, tol = 1e-8),
+  near(rmse_of("Normal"), 1436.0968615640775, tol = 1e-8)
+)
+cat("All reproduction checks passed.\n")
+```

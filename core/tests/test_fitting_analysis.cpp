@@ -8,12 +8,11 @@
 // are the A11 emitter's job). A real run() over a small exact-data frame is included but only
 // its STRUCTURAL / finite properties are asserted, never exact GoF values.
 //
-// PORTED-SURFACE COUNT DEVIATION (documented): the C# DistributionList has 15 candidates, but
-// GeneralizedNormal is NOT ported (the factory has no case for it and throws). The ported list
-// is therefore 14 -- every count below is 14, not 15. The two C# tests that assert 15
-// (Constructor_InitializesDistributionList, Constructor_InitializesFittedDistributions) and the
-// membership test (DistributionList_ContainsAll15Distributions) become count==14 + membership
-// over the 14 ported types, in order, minus GeneralizedNormal.
+// CANDIDATE COUNT: the C# DistributionList has 15 candidates and so does the port, so the two C#
+// count tests (Constructor_InitializesDistributionList, Constructor_InitializesFittedDistributions)
+// and the membership test (DistributionList_ContainsAll15Distributions) transcribe directly.
+// (Through Phase 10 the port held only 14 -- GeneralizedNormal had no distribution-factory case --
+// which is why the git history of this file counts to 14.)
 //
 // SKIPPED C# tests (all target dropped XML/INPC/cancellation surface):
 //   ToXElement_CreatesValidXml, XmlRoundTrip_PreservesConfiguration,
@@ -48,14 +47,14 @@ using UDT = corehydro::numerics::distributions::UnivariateDistributionType;
 
 namespace {
 
-// The 14 ported candidate types, in the C# DistributionList order minus GeneralizedNormal.
+// The 15 candidate types, in the C# DistributionList order.
 const std::vector<UDT>& expected_types() {
     static const std::vector<UDT> t = {
-        UDT::Exponential,       UDT::GammaDistribution,   UDT::GeneralizedExtremeValue,
-        UDT::GeneralizedLogistic, UDT::GeneralizedPareto, UDT::Gumbel,
-        UDT::KappaFour,         UDT::LnNormal,            UDT::Logistic,
-        UDT::LogNormal,         UDT::LogPearsonTypeIII,   UDT::Normal,
-        UDT::PearsonTypeIII,    UDT::Weibull};
+        UDT::Exponential,         UDT::GammaDistribution, UDT::GeneralizedExtremeValue,
+        UDT::GeneralizedLogistic, UDT::GeneralizedNormal, UDT::GeneralizedPareto,
+        UDT::Gumbel,              UDT::KappaFour,         UDT::LnNormal,
+        UDT::Logistic,            UDT::LogNormal,         UDT::LogPearsonTypeIII,
+        UDT::Normal,              UDT::PearsonTypeIII,    UDT::Weibull};
     return t;
 }
 
@@ -86,12 +85,11 @@ std::unique_ptr<FittingAnalysis> make_analysis(const std::vector<double>& values
     return std::make_unique<FittingAnalysis>(make_frame(values));
 }
 
-// ---- Constructor initializes the candidate list to the 14 ported types ----
-// (C# Constructor_InitializesDistributionList / DistributionList_ContainsAll15Distributions,
-// adapted to 14 for the GeneralizedNormal skip.)
+// ---- Constructor initializes the candidate list to the 15 C# types ----
+// (C# Constructor_InitializesDistributionList / DistributionList_ContainsAll15Distributions.)
 void test_candidate_count_and_membership() {
     auto analysis = make_analysis(sample_peaks());
-    CHECK_EQ(analysis->distribution_list().size(), static_cast<std::size_t>(14));
+    CHECK_EQ(analysis->distribution_list().size(), static_cast<std::size_t>(15));
     CHECK_EQ(analysis->distribution_list().size(), expected_types().size());
     for (std::size_t i = 0; i < expected_types().size(); ++i) {
         CHECK_TRUE(analysis->distribution_list()[i]->type() == expected_types()[i]);
@@ -99,10 +97,10 @@ void test_candidate_count_and_membership() {
 }
 
 // ---- Constructor initializes FittedDistributions to one default entry per candidate ----
-// (C# Constructor_InitializesFittedDistributions, adapted to 14.)
+// (C# Constructor_InitializesFittedDistributions.)
 void test_fitted_distributions_initialized() {
     auto analysis = make_analysis(sample_peaks());
-    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(14));
+    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(15));
     for (const auto& fd : analysis->fitted_distributions()) {
         CHECK_TRUE(!fd.fit_succeeded());
         CHECK_TRUE(std::isnan(fd.aic()));
@@ -141,7 +139,7 @@ void test_is_estimated_before_run_and_clear() {
     CHECK_TRUE(!analysis->is_estimated());
     analysis->clear_results();
     CHECK_TRUE(!analysis->is_estimated());
-    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(14));
+    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(15));
 }
 
 // ---- Ordinate change on a fresh (not-estimated) analysis is a no-op on fit state ----
@@ -150,7 +148,7 @@ void test_probability_ordinates_change_is_noop() {
     auto analysis = make_analysis(small_values());
     analysis->probability_ordinates().add(0.005);
     CHECK_TRUE(!analysis->is_estimated());
-    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(14));
+    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(15));
 }
 
 // ---- A real run() over a small exact frame: structural / finite properties only ----
@@ -159,7 +157,7 @@ void test_run_structural() {
     auto analysis = make_analysis(small_values());
     analysis->run();
     CHECK_TRUE(analysis->is_estimated());
-    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(14));
+    CHECK_EQ(analysis->fitted_distributions().size(), static_cast<std::size_t>(15));
     bool any_succeeded = false;
     for (const auto& fd : analysis->fitted_distributions()) {
         CHECK_TRUE(fd.distribution() != nullptr);

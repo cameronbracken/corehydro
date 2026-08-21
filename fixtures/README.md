@@ -54,9 +54,10 @@ generic dispatcher supports `random_value [sample_size, seed, index]`: element `
 (0-based) of the vector returned by `generate_random_values(sample_size, seed)`. Stateless
 (a fresh seeded Mersenne Twister per call), so it locks the seeded C# draw stream
 bit-for-bit across all four runners; see the `seeded_random_draws` cases in `normal.json`,
-`log_normal.json`, `ln_normal.json`, `gumbel.json`, `gamma_distribution.json`, and
-`weibull.json`. It also supports `partial_kp [skewness, probability]` -- a direct call to
-the static `GammaDistribution.PartialKp` utility, independent of the case's own
+`log_normal.json`, `ln_normal.json`, `gumbel.json`, `gamma_distribution.json`,
+`weibull.json`, and `generalized_normal.json`. It also supports `partial_kp [skewness,
+probability]` -- a direct call to the static `GammaDistribution.PartialKp` utility, independent
+of the case's own
 `construct` (which just needs to build *some* valid distribution instance for the dispatch
 plumbing; only `gamma_distribution.json` uses it, to pin the v2.1.4 near-zero-skew
 derivative-limit fix).
@@ -66,6 +67,23 @@ derivative-limit fix).
 assertion rather than named as a dataset because every case that uses it wants a handful of
 points chosen to sit inside the target's support -- inside a `TruncatedDistribution`'s bounds,
 inside an `Empirical` grid -- not a whole record.
+
+The three `IStandardError` methods -- `parameter_covariance [sample_size, row, col]`,
+`quantile_variance [probability, sample_size]`, and `quantile_gradient [probability, index]` --
+are reached by a capability cast, so a family that does not implement the mixin throws rather
+than returning NaN. The estimation method is fixed at `MaximumLikelihood`. The args above are
+flattened (the underlying calls return a whole matrix or vector; the runner indexes), which is
+the same vocabulary the bespoke GEV slice speaks, so one fixture spelling covers both. The GEV
+rows are the corpus's 11 documented oracle skips: they were validated in Phase 0 and the dotnet
+gate does not re-run them. `generalized_normal.json` is the one family dispatched for real, and
+only through `quantile_gradient` -- upstream `GeneralizedNormal.cs` throws
+`NotImplementedException` for the other two and the port mirrors the throw, so there is nothing
+to pin. `quantile_se [probability, sample_size]` is a GEV-only method (the square root of
+`quantile_variance`) that is deliberately emitter-only and NOT dispatched by the R/Python fixture
+runners; it exists as an oracle surface for the toolchain itself but has no package export. A
+future `IStandardError` family adding a `quantile_se` row must first wire the dispatcher arms in
+`corehydror/tests/testthat/test-fixtures.R` and `corehydropy/tests/test_fixtures.py` before the
+value can be pinned.
 
 #### Composite `univariate_distribution` targets
 
@@ -1564,7 +1582,7 @@ analyses from the same spec.
         // UnivariateAnalysis: parameter [i], mode_curve [i], mean_curve [i], lower_ci [i],
         //   upper_ci [i] (indexed by the exceedance grid), and scalars aic / bic / dic / rmse.
         { "method": "parameter", "args": [0], "expected": 16775.69498994981, "mode": "rel", "tol": 1e-9 },
-        // FittingAnalysis: candidate_count (exact 14), candidate_aic / candidate_bic /
+        // FittingAnalysis: candidate_count (exact 15), candidate_aic / candidate_bic /
         //   candidate_rmse / candidate_converged [candidate_index].
         // Bulletin17CAnalysis: exceedance_probability [i], point_estimate [i] (log10 space),
         //   lower_ci [i], upper_ci [i] (discharge space), beta1 [i], nu [i],
@@ -1612,7 +1630,7 @@ patched `Bulletin17CAnalysis.cs` clears the CS0104 `YeoJohnsonLink` ambiguity; s
 against the real C# analyses. Deterministic point values (GMM point estimate + parameters, mode
 curve = InverseCDF, candidate aic/bic) use `rel 1e-9`; GoF/quadrature-derived quantities (candidate
 rmse, Cohn CI bounds, the credible band) use `rel 1e-8`; DIC keeps `rel 1e-6` (parallel-reduction
-noise). `candidate_count == 14`, `confidence_level`, and the exceedance-probability round-trip stay
+noise). `candidate_count == 15`, `confidence_level`, and the exceedance-probability round-trip stay
 exact structural invariants (`abs 1e-12..1e-15`, `equal`). The UnivariateAnalysis case PINS
 `thinning_interval = 1`: the sampler-default thin=20 exposes a real C#-vs-C++ divergence in the
 thinned population-sampler stream (documented in `docs/upstream-csharp-issues.md` as a tracked

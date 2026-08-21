@@ -8,7 +8,8 @@ distribution(family, params)
 }
 \arguments{
 \item{family}{the distribution family name, e.g. \code{"Normal"},
-\code{"LogNormal"}, \code{"Gumbel"}, \code{"GeneralizedExtremeValue"}.}
+\code{"LogNormal"}, \code{"Gumbel"}, \code{"GeneralizedExtremeValue"},
+\code{"GeneralizedNormal"}.}
 
 \item{params}{numeric vector of parameters, in constructor order.}
 }
@@ -18,9 +19,14 @@ An object of class \code{corehydro_dist}.
 \description{
 Construct a distribution from its family name and parameter vector. The
 result is a lightweight object accepted by \code{\link[=dist_pdf]{dist_pdf()}}, \code{\link[=dist_cdf]{dist_cdf()}},
-\code{\link[=dist_quantile]{dist_quantile()}}, \code{\link[=dist_random]{dist_random()}}, \code{\link[=dist_moments]{dist_moments()}}, and friends. All 38
-factory-constructible families of the USACE-RMC Numerics library are
-supported; see \code{\link[=distribution_names]{distribution_names()}} for the list.
+\code{\link[=dist_quantile]{dist_quantile()}}, \code{\link[=dist_random]{dist_random()}}, \code{\link[=dist_moments]{dist_moments()}}, and friends. The 38
+families of the USACE-RMC Numerics library that take a flat parameter vector
+are all supported, from \code{Normal} and \code{Gumbel} through \code{GeneralizedNormal}
+(the three-parameter LogNormal) and \code{KappaFour}; \code{\link[=distribution_names]{distribution_names()}}
+returns them. The five composite families it lists under \code{"structured"} have
+no flat parameter vector and are built by \code{\link[=dist_truncated]{dist_truncated()}},
+\code{\link[=dist_mixture]{dist_mixture()}}, \code{\link[=dist_competing_risks]{dist_competing_risks()}}, \code{\link[=dist_empirical]{dist_empirical()}}, and
+\code{\link[=dist_kde]{dist_kde()}} instead.
 }
 \details{
 Parameters are positional, in the same order as the C# constructor for the
@@ -32,6 +38,10 @@ family (for example \code{Normal} takes \code{c(mean, sd)} and
 d <- distribution("Normal", c(100, 15))
 d
 dist_cdf(d, 100)
+
+# GeneralizedNormal is the three-parameter LogNormal: at shape 0 it is the Normal.
+gn <- distribution("GeneralizedNormal", c(100, 15, 0))
+dist_cdf(gn, 100)
 }
 \seealso{
 \code{\link[=dist_fit]{dist_fit()}} to estimate one from data, \code{\link[=distribution_names]{distribution_names()}}.

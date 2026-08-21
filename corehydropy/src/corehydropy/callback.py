@@ -571,6 +571,11 @@ def mcmc_posterior(
 
 
 _CI_METHODS = ("Percentile", "BiasCorrected", "Normal", "BootstrapT", "BCa")
+# The two bootstrap workflows upstream's Bootstrap<TData> has, and the three policies its pivotal
+# one applies to an invalid draw. corehydror carries the same two as bootstrap_run_types and
+# bootstrap_invalid_draw_policies.
+_RUN_TYPES = ("regular", "pivotal")
+_INVALID_DRAW_POLICIES = ("drop", "use_raw", "use_parent")
 
 
 def fit_gmm_moments(
@@ -835,8 +840,8 @@ def _check_bootstrap_fn(f: object, name: str, signature: str) -> None:
 def bootstrap_custom(
     data: Sequence[float],
     resample: Callable,
-    fit: Callable,
-    statistic: Callable,
+    fit: Callable | None = None,
+    statistic: Callable | None = None,
     jackknife: Callable | None = None,
     replicates: int = 1000,
     alpha: float = 0.1,
@@ -845,6 +850,15 @@ def bootstrap_custom(
     parameters: Sequence[float] | None = None,
     inner_replicates: int | None = None,
     max_retries: int | None = None,
+    run_type: str = "regular",
+    fit_with_covariance: Callable | None = None,
+    original_covariance: Sequence[Sequence[float]] | None = None,
+    pivotal_links: Sequence[str | None] | None = None,
+    pivotal_invalid_draw_policy: str = "drop",
+    regularize_pivotal_covariances: bool = True,
+    pivotal_z_limit: float | None = None,
+    add_pivotal_jitter: bool = False,
+    pivotal_jitter_scale: float = 0.01,
 ) -> dict:
     """Bootstrap your own statistic.
 
@@ -874,13 +888,39 @@ def bootstrap_custom(
         Returns ``data`` with observation ``index`` left out. ``index`` counts from 0, matching the
         ported delegate, so the Python spelling is ``data[:index] + data[index + 1:]``. Only the
         ``"BCa"`` method uses it; every other method ignores it.
+    ``fit_with_covariance(data)``
+        Returns ``{"parameters": ..., "covariance": ...}`` -- or the tuple
+        ``(parameters, covariance)`` -- with the parameters fitted to ``data`` and their covariance
+        matrix, one row and one column per parameter. Only ``run_type="pivotal"`` uses it, and that
+        run type uses it INSTEAD of ``fit``.
+
+    **The pivotal run type.** ``run_type="pivotal"`` is upstream's other bootstrap mode. Rather
+    than treating each resampled fit as a draw from the sampling distribution, it standardizes the
+    fit against the original one through the resample's OWN covariance and reinflates it through
+    the original's, so a replicate fitted on an unusually flat likelihood contributes an
+    appropriately smaller step. It therefore needs a covariance with every fit, which is what
+    ``fit_with_covariance`` supplies in place of ``fit``.
+
+    The original fit is the parent every draw is compared against. Left alone it is
+    ``fit_with_covariance(data)``; ``parameters`` replaces its parameter vector and
+    ``original_covariance`` its covariance, either independently of the other.
+
+    The result gains ``pivotal_diagnostics`` -- the six replicate counts the run kept, from
+    ``requested_replicates`` down to ``retained_pivotal_replicates`` -- and a second interval block,
+    ``raw_lower``/``raw_upper`` and companions, which is the plain percentile interval of the RAW
+    covariance-aware fits before the transform. Comparing the two is the point of reporting both.
+    Only ``ci_method="Percentile"`` exists after a pivotal run, and asking for another is refused
+    before the first replicate rather than after all of them.
 
     Parameters
     ----------
     data : array_like
         The original sample: non-empty and finite.
-    resample, fit, statistic : callable
-        The three required functions, with the signatures above.
+    resample, statistic : callable
+        The two always-required functions, with the signatures above.
+    fit : callable
+        The fitting function, required by ``run_type="regular"`` and unused -- and so refused -- by
+        ``run_type="pivotal"``, which fits through ``fit_with_covariance`` instead.
     jackknife : callable, optional
         The leave-one-out function, required by ``ci_method="BCa"`` and unused by every other
         method.
@@ -906,6 +946,33 @@ def bootstrap_custom(
         ``failed_replicates``. Left unset, the ported default (``MaxRetries``, 20) applies. Each
         retry is another crossing into Python, so lowering it caps the worst case rather than
         changing the typical one.
+    run_type : {"regular", "pivotal"}
+        See the section above.
+    fit_with_covariance : callable, optional
+        The covariance-aware fitting function ``run_type="pivotal"`` fits through, with the
+        signature above. Required by that run type and refused by the other.
+    original_covariance : array_like, optional
+        The parent fit's covariance matrix as a sequence of rows, one row and one column per
+        parameter. Left unset, it is taken from ``fit_with_covariance(data)``. Pivotal only.
+    pivotal_links : sequence, optional
+        One entry per parameter, each a link function name (``"Identity"``, ``"Log"``, ``"Logit"``,
+        ``"Probit"``, ``"ComplementaryLogLog"``, ``"YeoJohnson"`` or ``"FisherZ"``) or ``None`` for
+        the identity. The standardization happens in link space, so ``"Log"`` on a scale parameter
+        keeps every reinflated draw positive. Left unset, the identity throughout. Pivotal only.
+    pivotal_invalid_draw_policy : {"drop", "use_raw", "use_parent"}
+        What to do with a draw the transform could not produce (a non-finite standardized vector,
+        or one outside ``pivotal_z_limit``): leave it out of the ensemble, keep the untransformed
+        fit, or substitute the original fit. Pivotal only.
+    regularize_pivotal_covariances : bool
+        Whether each link-space covariance is made symmetric positive definite before it is
+        factored. True by default, as upstream. Pivotal only.
+    pivotal_z_limit : float, optional
+        An absolute limit on every component of the standardized vector, beyond which the draw is
+        invalid and the policy above applies. Left unset, no limit. Pivotal only.
+    add_pivotal_jitter, pivotal_jitter_scale : bool, float
+        Whether to add Gaussian jitter to the standardized vector before the limit is checked, and
+        its base standard deviation (the applied scale is this divided by the square root of the
+        parameter count). False and 0.01 by default, as upstream. Pivotal only.
 
     Returns
     -------
@@ -914,7 +981,11 @@ def bootstrap_custom(
         ``lower``, ``upper``, ``standard_error``, ``mean`` (the mean over valid replicates, so
         ``mean - estimate`` is the bias estimate) and ``valid_count``; the same first three for the
         fitted parameters as ``parameter_estimate``, ``parameter_lower`` and ``parameter_upper``;
-        and ``replicates``, ``failed_replicates``, ``alpha`` and ``ci_method``.
+        and ``replicates``, ``failed_replicates``, ``alpha``, ``ci_method`` and ``run_type``. A
+        pivotal run adds ``pivotal_diagnostics`` (a dict of the six replicate counts) and the raw
+        block: ``raw_estimate``, ``raw_lower``, ``raw_upper``, ``raw_standard_error``, ``raw_mean``,
+        ``raw_valid_count``, ``raw_parameter_estimate``, ``raw_parameter_lower`` and
+        ``raw_parameter_upper``.
 
     Notes
     -----
@@ -924,7 +995,10 @@ def bootstrap_custom(
     up to ``max_retries`` times (20 by default), and ``"BCa"`` adds one ``jackknife`` + ``fit`` +
     ``statistic`` per observation. ``"BootstrapT"`` is the expensive one: it multiplies the resample
     and fit counts by ``inner_replicates``, so the ported defaults (10,000 x 300) would be three
-    million crossings back into Python. Start small.
+    million crossings back into Python. Start small. A pivotal run calls ``fit_with_covariance`` in
+    place of ``fit``, once per replicate plus once up front for the parent fit, and ``statistic``
+    once per retained draw plus once per raw fit -- so about twice as often as a regular run of the
+    same length.
 
     **Reproducing a run in R.** The draws come from the core's seeded Mersenne Twister, so an
     identical ``bootstrap_custom()`` call in R resamples the identical observations. The numbers
@@ -954,13 +1028,61 @@ def bootstrap_custom(
     >>> res = ch.bootstrap_custom(x, resample, fit, lambda p: p, replicates=500, seed=12345)
     >>> bool(res["lower"][0] < res["estimate"][0] < res["upper"][0])
     True
+
+    The pivotal run type. It fits through ``fit_with_covariance`` instead of ``fit``: a Normal
+    location-scale MLE here, whose covariance is ``diag(s2 / n, s2 / 2n)`` in closed form. The
+    ``"Log"`` link standardizes the scale parameter in log space, keeping every draw positive.
+
+    >>> def fit_with_cov(data):
+    ...     n = len(data)
+    ...     mu = sum(data) / n
+    ...     s2 = sum((xi - mu) ** 2 for xi in data) / n
+    ...     return {"parameters": [mu, s2 ** 0.5],
+    ...             "covariance": [[s2 / n, 0.0], [0.0, s2 / (2 * n)]]}
+    >>> piv = ch.bootstrap_custom(
+    ...     x, resample, statistic=lambda p: p, fit_with_covariance=fit_with_cov,
+    ...     run_type="pivotal", pivotal_links=[None, "Log"], replicates=200, seed=12345)
+    >>> piv["pivotal_diagnostics"]["retained_pivotal_replicates"]
+    200
+
+    Two interval blocks: the pivotal ensemble, and the raw fits it was built from.
+
+    >>> bool(piv["lower"][0] < piv["raw_lower"][0])
+    True
     """
     point = np.asarray(data, dtype=float).ravel()
     if point.size == 0 or not np.all(np.isfinite(point)):
         raise ValueError("`data` must be a non-empty numeric vector of finite values")
     _check_bootstrap_fn(resample, "resample", "(data, parameters, rng)")
-    _check_bootstrap_fn(fit, "fit", "(data)")
     _check_bootstrap_fn(statistic, "statistic", "(parameters)")
+    if run_type not in _RUN_TYPES:
+        raise ValueError(f"unknown run_type '{run_type}'; use one of {_RUN_TYPES}")
+    pivotal = run_type == "pivotal"
+    # Which fitting delegate is required is the one thing the run type decides here rather than in
+    # C++: both are refused by name when they belong to the other run type, because a silently
+    # ignored `fit` is how a user comes to believe the pivotal run fitted through it.
+    # Only the arguments defaulting to None can be told apart from their own default, so those are
+    # the ones named here; the four pivotal options with concrete defaults (the draw policy, the
+    # regularization flag and the two jitter arguments) are simply not read by a regular run.
+    if pivotal:
+        _check_bootstrap_fn(fit_with_covariance, "fit_with_covariance", "(data)")
+        if fit is not None:
+            raise ValueError(
+                "the pivotal bootstrap fits through `fit_with_covariance`; `fit` is not used by it"
+            )
+        for name, value in (("jackknife", jackknife), ("inner_replicates", inner_replicates)):
+            if value is not None:
+                raise ValueError(f'`{name}` is not used when `run_type` is "pivotal"')
+    else:
+        _check_bootstrap_fn(fit, "fit", "(data)")
+        for name, value in (
+            ("fit_with_covariance", fit_with_covariance),
+            ("original_covariance", original_covariance),
+            ("pivotal_links", pivotal_links),
+            ("pivotal_z_limit", pivotal_z_limit),
+        ):
+            if value is not None:
+                raise ValueError(f'`{name}` is only used when `run_type` is "pivotal"')
     if jackknife is not None:
         _check_bootstrap_fn(jackknife, "jackknife", "(data, index)")
     if ci_method not in _CI_METHODS:
@@ -1003,13 +1125,53 @@ def bootstrap_custom(
             raise ValueError("`max_retries` must be a single positive whole number")
         options["max_retries"] = int(max_retries)
 
+    if pivotal:
+        options["run_type"] = "pivotal"
+        if original_covariance is not None:
+            options["original_covariance"] = _as_row_matrix(
+                original_covariance, "original_covariance"
+            )
+        if pivotal_links is not None:
+            options["pivotal_links"] = [
+                None if link is None else str(link) for link in pivotal_links
+            ]
+        if pivotal_invalid_draw_policy not in _INVALID_DRAW_POLICIES:
+            raise ValueError(
+                f"unknown pivotal_invalid_draw_policy '{pivotal_invalid_draw_policy}'; use one of "
+                f"{_INVALID_DRAW_POLICIES}"
+            )
+        options["pivotal_invalid_draw_policy"] = pivotal_invalid_draw_policy
+        options["regularize_pivotal_covariances"] = bool(regularize_pivotal_covariances)
+        if pivotal_z_limit is not None:
+            z_limit = float(pivotal_z_limit)
+            if not np.isfinite(z_limit) or not z_limit > 0.0:
+                raise ValueError("`pivotal_z_limit` must be a single positive number, or None")
+            options["pivotal_z_limit"] = z_limit
+        options["add_pivotal_jitter"] = bool(add_pivotal_jitter)
+        jitter_scale = float(pivotal_jitter_scale)
+        if not np.isfinite(jitter_scale):
+            raise ValueError("`pivotal_jitter_scale` must be a single finite number")
+        options["pivotal_jitter_scale"] = jitter_scale
+
     res = _core.callback_bootstrap(
-        json.dumps(options), resample, fit, statistic, jackknife
+        json.dumps(options), resample, fit, statistic, jackknife, fit_with_covariance
     )
-    return _bootstrap_unflatten(res, ci_method)
+    return _bootstrap_unflatten(res, ci_method, run_type)
 
 
-def _bootstrap_unflatten(res: dict, ci_method: str) -> dict:
+def _as_row_matrix(value, what: str) -> list:
+    """Internal: a matrix as the list OF ROWS every matrix on the spec surfaces takes (the C++
+    side reads a covariance the same way whether it came from R, Python or a fixture). corehydror's
+    spec_matrix() does the same job, and has more to do: R stores a matrix column-major."""
+    matrix = np.asarray(value, dtype=float)
+    if matrix.ndim == 0:
+        matrix = matrix.reshape(1, 1)
+    if matrix.ndim != 2 or matrix.shape[0] == 0 or matrix.shape[1] == 0:
+        raise ValueError(f"`{what}` must be a matrix -- a sequence of rows")
+    return [[float(v) for v in row] for row in matrix]
+
+
+def _bootstrap_unflatten(res: dict, ci_method: str, run_type: str = "regular") -> dict:
     """Internal: slice the flat callback result back by name. The layout is documented in
     ``core/include/corehydro/numerics/support/callback/bootstrap.hpp``, and ``corehydror``'s own
     ``bootstrap_unflatten()`` reads it identically."""
@@ -1020,7 +1182,7 @@ def _bootstrap_unflatten(res: dict, ci_method: str) -> dict:
     def block(prefix, count):
         return np.asarray([values[index[f"{prefix}[{j}]"]] for j in range(count)], dtype=float)
 
-    return {
+    out = {
         "estimate": block("statistic", n_statistics),
         "lower": block("statistic_lower", n_statistics),
         "upper": block("statistic_upper", n_statistics),
@@ -1037,7 +1199,34 @@ def _bootstrap_unflatten(res: dict, ci_method: str) -> dict:
         "failed_replicates": int(values[index["failed_replicates"]]),
         "alpha": float(values[index["alpha"]]),
         "ci_method": ci_method,
+        "run_type": run_type,
     }
+    if run_type != "pivotal":
+        return out
+    # The pivotal run's two additions: the raw covariance-aware fits' own percentile interval, and
+    # the six diagnostic counts, named exactly as the ported PivotalBootstrapDiagnostics fields are.
+    # corehydror's bootstrap_unflatten() reads both identically.
+    out["raw_estimate"] = block("raw_statistic", n_statistics)
+    out["raw_lower"] = block("raw_statistic_lower", n_statistics)
+    out["raw_upper"] = block("raw_statistic_upper", n_statistics)
+    out["raw_standard_error"] = block("raw_statistic_se", n_statistics)
+    out["raw_mean"] = block("raw_statistic_mean", n_statistics)
+    out["raw_valid_count"] = block("raw_statistic_valid", n_statistics).astype(int)
+    out["raw_parameter_estimate"] = block("raw_parameter", n_parameters)
+    out["raw_parameter_lower"] = block("raw_parameter_lower", n_parameters)
+    out["raw_parameter_upper"] = block("raw_parameter_upper", n_parameters)
+    out["pivotal_diagnostics"] = {
+        name: int(values[index[name]])
+        for name in (
+            "requested_replicates",
+            "rejected_raw_replicates",
+            "failed_raw_replicates",
+            "accepted_raw_replicates",
+            "invalid_pivotal_replicates",
+            "retained_pivotal_replicates",
+        )
+    }
+    return out
 
 
 def _prior_specs(priors) -> list:

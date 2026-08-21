@@ -1,24 +1,26 @@
 {
   "target": "FittingAnalysis",
   "kind": "analysis",
-  "source": "RMC-BestFit/src/RMC.BestFit/Analyses/DistributionFitting/FittingAnalysis.cs @ fc28c0c -- A11 EXACT oracle, verified against the real RMC.BestFit FittingAnalysis by the dotnet gate. FittingAnalysis fits the 14 ported candidate distributions (GeneralizedNormal is skipped -- the C++ distribution factory has no case for it; 15 -> 14, so candidate index 11 == Normal; the emitter removes GeneralizedNormal from the C# DistributionList to drive the SAME 14-candidate set) by MLE over an exact-only frame. The GoF metrics come from the seeded DifferentialEvolution optimizer (fixed default prng_seed), so they are deterministic; aic/bic reproduce bit-identically C#-vs-C++, rmse to rel 1e-8 (a distinct GoodnessOfFit summation path). candidate_count is an exact structural invariant (14). The candidate 4 (GeneralizedPareto) row was added later and its four values are EMITTER-READ from the real C# FittingAnalysis via verify_oracles.py --dump, not scraped from a C# test file. It pins the path that the truncated GeneralizedPareto::get_parameter_constraints used to corrupt: before that fix the C++ seeded the GPD candidate from out-of-bounds heap memory and reported it as failed (aic NaN, converged 0), while C# converges it at aic 423.311917015197, the lowest of all 14. Only candidate 11 was asserted here, which is why nothing caught it.",
+  "source": "RMC-BestFit/src/RMC.BestFit/Analyses/DistributionFitting/FittingAnalysis.cs @ fc28c0c -- A11 EXACT oracle, verified against the real RMC.BestFit FittingAnalysis by the dotnet gate. FittingAnalysis fits the 15 candidate distributions of the C# DistributionList by MLE over an exact-only frame, so candidate index 4 == GeneralizedNormal, 5 == GeneralizedPareto, 12 == Normal. The GoF metrics come from the seeded DifferentialEvolution optimizer (fixed default prng_seed), so they are deterministic; aic/bic reproduce bit-identically C#-vs-C++, rmse to rel 1e-8 (a distinct GoodnessOfFit summation path). candidate_count is an exact structural invariant (15). Every value asserted here is EMITTER-READ from the real C# FittingAnalysis via verify_oracles.py --dump, not scraped from a C# test file. The GeneralizedPareto row pins the path that the truncated GeneralizedPareto::get_parameter_constraints used to corrupt: before that fix the C++ seeded the GPD candidate from out-of-bounds heap memory and reported it as failed (aic NaN, converged 0), while C# converges it at aic 423.311917015197, the lowest of any candidate. Only the Normal row was asserted at the time, which is why nothing caught it. The GeneralizedNormal row is the newest: this port carried 14 candidates through Phase 10 because GeneralizedNormal had no distribution-factory case, and the C++ candidate list and the emitter (which used to strip GeneralizedNormal from the C# DistributionList) were flipped to 15 in one change once the distribution was ported.",
   "datasets": {
     "peaks": [45000, 38000, 52000, 61000, 33000, 49000, 55000, 42000, 67000, 39000, 48000, 51000, 36000, 58000, 44000, 53000, 47000, 62000, 41000, 50000]
   },
   "cases": [
     {
-      "name": "fit_14_candidates",
+      "name": "fit_15_candidates",
       "construct": { "dataset": "peaks" },
       "assertions": [
-        { "method": "candidate_count", "expected": 14, "mode": "equal" },
+        { "method": "candidate_count", "expected": 15, "mode": "equal" },
         { "method": "candidate_converged", "args": [4], "expected": 1, "mode": "equal" },
-        { "method": "candidate_aic", "args": [4], "expected": 423.311917015197, "mode": "rel", "tol": 1e-9 },
-        { "method": "candidate_bic", "args": [4], "expected": 426.299113835859, "mode": "rel", "tol": 1e-9 },
-        { "method": "candidate_rmse", "args": [4], "expected": 1278.642551017543, "mode": "rel", "tol": 1e-8 },
-        { "method": "candidate_converged", "args": [11], "expected": 1, "mode": "equal" },
-        { "method": "candidate_aic", "args": [11], "expected": 424.51926984004484, "mode": "rel", "tol": 1e-9 },
-        { "method": "candidate_bic", "args": [11], "expected": 426.5107343871528, "mode": "rel", "tol": 1e-9 },
-        { "method": "candidate_rmse", "args": [11], "expected": 1436.0968615640772, "mode": "rel", "tol": 1e-8 }
+        { "method": "candidate_aic", "args": [4], "expected": 426.19502666475506, "mode": "rel", "tol": 1e-9 },
+        { "method": "candidate_converged", "args": [5], "expected": 1, "mode": "equal" },
+        { "method": "candidate_aic", "args": [5], "expected": 423.311917015197, "mode": "rel", "tol": 1e-9 },
+        { "method": "candidate_bic", "args": [5], "expected": 426.299113835859, "mode": "rel", "tol": 1e-9 },
+        { "method": "candidate_rmse", "args": [5], "expected": 1278.642551017543, "mode": "rel", "tol": 1e-8 },
+        { "method": "candidate_converged", "args": [12], "expected": 1, "mode": "equal" },
+        { "method": "candidate_aic", "args": [12], "expected": 424.51926984004484, "mode": "rel", "tol": 1e-9 },
+        { "method": "candidate_bic", "args": [12], "expected": 426.5107343871528, "mode": "rel", "tol": 1e-9 },
+        { "method": "candidate_rmse", "args": [12], "expected": 1436.0968615640775, "mode": "rel", "tol": 1e-8 }
       ]
     }
   ]

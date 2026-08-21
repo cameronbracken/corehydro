@@ -69,10 +69,10 @@ extern "C" SEXP _corehydror_ch_callback_mcmc_(SEXP options_json, SEXP f, SEXP pr
   END_CPP11
 }
 // callback.cpp
-list ch_callback_bootstrap_(std::string options_json, function resample, function fit, function statistic, sexp jackknife);
-extern "C" SEXP _corehydror_ch_callback_bootstrap_(SEXP options_json, SEXP resample, SEXP fit, SEXP statistic, SEXP jackknife) {
+list ch_callback_bootstrap_(std::string options_json, function resample, sexp fit, function statistic, sexp jackknife, sexp fit_with_covariance);
+extern "C" SEXP _corehydror_ch_callback_bootstrap_(SEXP options_json, SEXP resample, SEXP fit, SEXP statistic, SEXP jackknife, SEXP fit_with_covariance) {
   BEGIN_CPP11
-    return cpp11::as_sexp(ch_callback_bootstrap_(cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(resample), cpp11::as_cpp<cpp11::decay_t<function>>(fit), cpp11::as_cpp<cpp11::decay_t<function>>(statistic), cpp11::as_cpp<cpp11::decay_t<sexp>>(jackknife)));
+    return cpp11::as_sexp(ch_callback_bootstrap_(cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(resample), cpp11::as_cpp<cpp11::decay_t<sexp>>(fit), cpp11::as_cpp<cpp11::decay_t<function>>(statistic), cpp11::as_cpp<cpp11::decay_t<sexp>>(jackknife), cpp11::as_cpp<cpp11::decay_t<sexp>>(fit_with_covariance)));
   END_CPP11
 }
 // callback.cpp
@@ -587,7 +587,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_box_cox_lambda_",               (DL_FUNC) &_corehydror_ch_box_cox_lambda_,                1},
     {"_corehydror_ch_bve_cdf_",                      (DL_FUNC) &_corehydror_ch_bve_cdf_,                       7},
     {"_corehydror_ch_bve_cdf_after_set_parameters_", (DL_FUNC) &_corehydror_ch_bve_cdf_after_set_parameters_, 11},
-    {"_corehydror_ch_callback_bootstrap_",           (DL_FUNC) &_corehydror_ch_callback_bootstrap_,            5},
+    {"_corehydror_ch_callback_bootstrap_",           (DL_FUNC) &_corehydror_ch_callback_bootstrap_,            6},
     {"_corehydror_ch_callback_gmm_",                 (DL_FUNC) &_corehydror_ch_callback_gmm_,                  4},
     {"_corehydror_ch_callback_math_",                (DL_FUNC) &_corehydror_ch_callback_math_,                 3},
     {"_corehydror_ch_callback_mcmc_",                (DL_FUNC) &_corehydror_ch_callback_mcmc_,                 4},
