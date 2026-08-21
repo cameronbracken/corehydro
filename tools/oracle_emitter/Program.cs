@@ -1141,7 +1141,9 @@ static Func<ParameterSet, double[]>? CallbackStatisticFunction(string name) => n
 // deviation -- whose covariance is analytic, diag(s2 / n, s2 / (2n)), so the whole delegate is
 // arithmetic plus one Math.Sqrt. Sqrt is the one libm function IEEE 754 requires to be correctly
 // rounded, so unlike Log or Exp it is the same value in all four runners; the sums are explicit
-// loops for the reason Fit_Mean above gives.
+// loops for the reason Fit_Mean above gives. `ss += (x - mu) * (x - mu)` is itself a
+// contraction-bearing shape, so this zero-tolerance guarantee also depends on the C++ catalog's
+// own -ffp-contract=off scoping in core/CMakeLists.txt.
 static Func<double[], BootstrapFit>? CallbackFitWithCovarianceFunction(string name) => name switch
 {
     "FitCov_NormalMLE" => data =>

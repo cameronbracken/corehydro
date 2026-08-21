@@ -1197,6 +1197,25 @@ test_that("the pivotal run type refuses the arguments it cannot use", {
     ),
     "'parameters'"
   )
+  # Both pivotal-only scalar options are refused by name when non-finite: a NaN jitter scale would
+  # otherwise silently empty the retained ensemble under the drop policy, and an infinite z-limit is
+  # refused even though it is technically "positive". Python mirrors both refusals exactly.
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345, pivotal_jitter_scale = NaN
+    ),
+    "`pivotal_jitter_scale` must be a single number"
+  )
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345, pivotal_z_limit = Inf
+    ),
+    "`pivotal_z_limit` must be a single positive number"
+  )
 })
 
 test_that("an explicit original_covariance replaces the one the fit reports", {

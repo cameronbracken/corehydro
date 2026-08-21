@@ -1122,11 +1122,15 @@ def bootstrap_custom(
         options["pivotal_invalid_draw_policy"] = pivotal_invalid_draw_policy
         options["regularize_pivotal_covariances"] = bool(regularize_pivotal_covariances)
         if pivotal_z_limit is not None:
-            if not float(pivotal_z_limit) > 0.0:
+            z_limit = float(pivotal_z_limit)
+            if not np.isfinite(z_limit) or not z_limit > 0.0:
                 raise ValueError("`pivotal_z_limit` must be a single positive number, or None")
-            options["pivotal_z_limit"] = float(pivotal_z_limit)
+            options["pivotal_z_limit"] = z_limit
         options["add_pivotal_jitter"] = bool(add_pivotal_jitter)
-        options["pivotal_jitter_scale"] = float(pivotal_jitter_scale)
+        jitter_scale = float(pivotal_jitter_scale)
+        if not np.isfinite(jitter_scale):
+            raise ValueError("`pivotal_jitter_scale` must be a single finite number")
+        options["pivotal_jitter_scale"] = jitter_scale
 
     res = _core.callback_bootstrap(
         json.dumps(options), resample, fit, statistic, jackknife, fit_with_covariance

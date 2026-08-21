@@ -1837,7 +1837,9 @@ def _callback_fixture_function(name):
     # FitWithCovarianceFunction, the delegate that run type fits through. The model is the
     # two-parameter Normal location-scale MLE, whose covariance is analytic -- diag(s2 / n,
     # s2 / (2n)) -- so the whole callback is arithmetic plus one sqrt, and sqrt is the one libm
-    # function IEEE 754 requires to be correctly rounded.
+    # function IEEE 754 requires to be correctly rounded. `ss += (x - mu) * (x - mu)` is itself a
+    # contraction-bearing shape, so this zero-tolerance guarantee also depends on the C++ catalog's
+    # own -ffp-contract=off scoping in core/CMakeLists.txt.
     if name == "FitCov_NormalMLE":
         return _boot_fit_with_covariance
     if name == "Stat_Identity":

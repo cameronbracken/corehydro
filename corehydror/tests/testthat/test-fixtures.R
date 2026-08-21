@@ -621,7 +621,9 @@ callback_fixture_function <- function(name) {
     # standard deviation -- whose covariance is analytic, diag(s2 / n, s2 / (2n)), so the whole
     # callback is arithmetic plus one sqrt. sqrt is the one libm function IEEE 754 requires to be
     # correctly rounded, so unlike log or exp it is the same value in all four runners; the sums are
-    # explicit loops for the reason Fit_Mean above gives.
+    # explicit loops for the reason Fit_Mean above gives. `ss <- ss + (x - mu) * (x - mu)` is itself
+    # a contraction-bearing shape, so this zero-tolerance guarantee also depends on the C++
+    # catalog's own -ffp-contract=off scoping in core/CMakeLists.txt.
     FitCov_NormalMLE = function(data) {
       n <- length(data)
       acc <- 0

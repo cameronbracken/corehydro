@@ -1208,6 +1208,22 @@ def test_the_pivotal_run_type_refuses_the_arguments_it_cannot_use():
             fit_with_covariance=lambda data: [1.0, 2.0],
             run_type="pivotal", replicates=20, seed=12345,
         )
+    # Both pivotal-only scalar options are refused by name when non-finite, matching R
+    # (corehydror/R/callback.R): a NaN jitter scale would otherwise pass through `float(...)`
+    # unchecked and silently empty the retained ensemble under the drop policy, and R refuses an
+    # infinite z-limit even though it is technically "positive".
+    with pytest.raises(ValueError, match="`pivotal_jitter_scale` must be a single finite number"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=20, seed=12345, pivotal_jitter_scale=float("nan"),
+        )
+    with pytest.raises(ValueError, match="`pivotal_z_limit` must be a single positive number"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=20, seed=12345, pivotal_z_limit=float("inf"),
+        )
 
 
 def test_an_explicit_original_covariance_replaces_the_one_the_fit_reports():
