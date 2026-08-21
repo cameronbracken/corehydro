@@ -146,17 +146,29 @@ target_compile_options(test_fixtures PRIVATE
 # the other three runners write for the same names -- and every one of them is specified as
 # arithmetic in double. Clang and GCC contract `y - a - b*t` and `sum + r*r` into fused
 # multiply-adds by default, which computes a DIFFERENT (more accurate) function than the one the
-# fixture names: measured on this catalog's own kernels, the contracted Mcmc_LinearKernel differs
-# from the written arithmetic in the last 4 ulp and Mcmc_GaussianKernel in the last 1, and the flag
-# removes 38 fma instructions from this object file. Turning contraction off makes the C++ catalog
-# evaluate the same arithmetic the other three runners do, which is what the bit-equality
-# assertions in fixtures/callback/callback_cross_language.json (mode "abs", tol 0) are entitled to
-# assume. Note what is NOT claimed: removing the flag does not currently fail the suite, because
-# those two tol-0 cases name Mcmc_UniformWidthKernel (comparisons only) and Resample_Iid (index
-# draws) -- neither has arithmetic to contract -- while every arithmetic-bearing case asserts at
-# rel 1e-12, four orders looser than the drift. The flag keeps the guarantee true for the next
-# tol-0 case over an arithmetic kernel rather than repairing a live failure. MSVC needs no flag:
-# /fp:precise, its default, does not contract, so the asymmetry below is correct.
+# fixture names; R, Python and .NET never fuse one on their own. Turning contraction off makes the
+# C++ catalog evaluate the same arithmetic the other three runners do, which is what the
+# bit-equality assertions in fixtures/callback/callback_cross_language.json (mode "abs", tol 0) are
+# entitled to assume.
+#
+# THE FLAG IS EXERCISED, and by exactly one case: that file's
+# `linear_model_contractible_arithmetic_short_exact`, which was written for this purpose after the
+# flag was found to guard nothing detectable. Remove the flag and test_fixtures fails there twice,
+# measured on this machine (Apple clang 21, arm64):
+#   .../bootstrap/named: expected 0.03571428571428292, got 0.035714285714283256  [statistic[0],
+#     Fit_LinearTrend's intercept on the original sample -- about 50 ulp, because the fused
+#     accumulations move the slope in its last bit and `ybar - slope * tbar` then amplifies that]
+#   .../mcmc/named:      expected -0.11662553103451964, got -0.11662553103451963  [map_fitness,
+#     Mcmc_LinearKernel's own value at the MAP state -- 1 ulp, the size of the effect on one kernel
+#     evaluation; 72% of that kernel's values over the case's proposal box move at all]
+# The file's other case cannot detect the flag and never could: it names Mcmc_UniformWidthKernel
+# (comparisons only) and Resample_Iid (index draws), neither of which has a product to fuse.
+#
+# TWO LIMITS, both real. The flag is inert on x86-64 unless FMA is enabled there (-mfma, or
+# -march=x86-64-v3 and up), because a baseline x86-64 compiler has no fma instruction to contract
+# into -- so removing it changes nothing on a default Linux or Windows x86-64 build, and the
+# failure above reproduces on arm64 and on any x86-64 build with FMA on. And MSVC needs no flag at
+# all: /fp:precise, its default, does not contract, so the asymmetry below is correct.
 #
 # The catalog is a translation unit of its own precisely so this flag reaches ONLY it. corehydro_core
 # is an INTERFACE library, so the header-only core is compiled INTO whichever TU includes it: a flag

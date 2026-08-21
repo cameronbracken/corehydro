@@ -3,7 +3,10 @@
 // translation unit of its own: -ffp-contract=off is scoped to THIS file, so the lambdas below
 // evaluate the arithmetic the fixtures name, while test_fixtures.cpp compiles the ported core
 // exactly as the shipped R and Python packages compile it. Do not fold this file back into
-// test_fixtures.cpp -- doing so puts the whole header-only core back under the flag.
+// test_fixtures.cpp -- doing so puts the whole header-only core back under the flag. The case that
+// FAILS without it is callback_cross_language.json's
+// `linear_model_contractible_arithmetic_short_exact`, over `Mcmc_LinearKernel` and
+// `Fit_LinearTrend` below; see core/CMakeLists.txt for the two values it moves and by how much.
 #include "fixture_callback_catalog.hpp"
 
 #include <algorithm>
@@ -134,6 +137,28 @@ void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
             }
             return std::vector<double>{lo + scope.handle()->uniform(1).at(0) * (hi - lo)};
         };
+    } else if (name == "Prop_UniformBox") {
+        // The TWO-parameter member of the proposal catalog, written for
+        // fixtures/callback/callback_cross_language.json's second case. It is an INDEPENDENCE
+        // proposal: it ignores the state it is handed and draws each parameter from a fixed
+        // interval, `lo + u * (hi - lo)`, exactly as `Prop_UniformConditional` above does for one
+        // parameter. Gibbs accepts every proposal, so the recorded chain is a sequence of
+        // independent draws from that box and the log-density's only reachable mark on the run is
+        // the fitness it reports -- which is what makes `map_fitness` there a pin on the KERNEL's
+        // arithmetic and nothing else. Both intervals sit strictly inside that case's priors, and
+        // the box brackets the least-squares fit of `Mcmc_LinearKernel`'s eight observations
+        // (intercept ~0.036, slope ~1.998), so the states visit the region where the kernel varies.
+        // One `uniform(2)` call, not two of `uniform(1)`: a single call cannot split the stream.
+        cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {
+            const double lo[] = {-1.0, 1.5};
+            const double hi[] = {1.0, 2.5};
+            tbx::RngScope scope(prng);
+            std::vector<double> u = scope.handle()->uniform(2);
+            std::vector<double> out;
+            out.reserve(2);
+            for (std::size_t j = 0; j < 2; ++j) out.push_back(lo[j] + u[j] * (hi[j] - lo[j]));
+            return out;
+        };
     } else if (name == "Grad_GaussianKernel") {
         // The gradient catalog: (parameters) -> vector, upstream's HMC.Gradient shape. The
         // analytic derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu).
@@ -199,6 +224,43 @@ void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
             double acc = 0.0;
             for (double x : data) acc += x;
             return std::vector<double>{acc / static_cast<double>(data.size())};
+        };
+    } else if (name == "Fit_LinearTrend") {
+        // The CONTRACTION-BEARING member of the bootstrap catalog, written for
+        // fixtures/callback/callback_cross_language.json's second case: the ordinary least-squares
+        // line of the sample against its position t = 1..n, in the centered form
+        //   slope = sum(dt * dy) / sum(dt * dt),   intercept = ybar - slope * tbar
+        // and returned as [intercept, slope]. Every one of those accumulations is `acc + a * b`,
+        // the shape clang and gcc fuse into a multiply-add by default, and the intercept subtracts
+        // two nearly equal quantities on top of it -- so the fused and unfused values of THIS
+        // function differ where the rest of the catalog's differ only in the last bit or not at
+        // all. That is the whole reason it exists: core/CMakeLists.txt turns contraction off for
+        // this file, and the case that names this callback is what fails if the flag is removed.
+        // Measured on the eight observations that case bootstraps, the intercept moves by about 50
+        // ulp (0.035714285714282923 unfused against 0.035714285714283256 fused) and 40% of the 200
+        // resampled fits move at all.
+        //
+        // Arithmetic and an explicit loop only, for the same reason `Fit_Mean` above is: R's sum()
+        // and mean() accumulate in extended precision where C++, Python and C# accumulate in
+        // double. `den` is sum((t - tbar)^2) over 1..n, which depends only on n, so no resample of
+        // a finite sample can make this fit fail.
+        cbs.data_vector = [](const std::vector<double>& data) {
+            const double n = static_cast<double>(data.size());
+            double st = 0.0, sy = 0.0;
+            for (std::size_t i = 0; i < data.size(); ++i) {
+                st += static_cast<double>(i + 1);
+                sy += data[i];
+            }
+            const double tbar = st / n, ybar = sy / n;
+            double num = 0.0, den = 0.0;
+            for (std::size_t i = 0; i < data.size(); ++i) {
+                double dt = static_cast<double>(i + 1) - tbar;
+                double dy = data[i] - ybar;
+                num += dt * dy;
+                den += dt * dt;
+            }
+            const double slope = num / den;
+            return std::vector<double>{ybar - slope * tbar, slope};
         };
     } else if (name == "Stat_Identity") {
         cbs.vector_vector = [](const std::vector<double>& p) { return p; };

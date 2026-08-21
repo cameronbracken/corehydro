@@ -1004,6 +1004,22 @@ static Gibbs.Proposal? CallbackProposalFunction(string name) => name switch
         }
         return new[] { lo + prng.NextDouble() * (hi - lo) };
     },
+    // The TWO-parameter member of the catalog, written for the second case of
+    // fixtures/callback/callback_cross_language.json. An INDEPENDENCE proposal: it ignores the
+    // state it is handed and draws each parameter from a fixed interval, lo + u * (hi - lo),
+    // exactly as the one above does for a single parameter. Gibbs accepts every proposal, so the
+    // recorded chain is a sequence of independent draws from that box and the only mark the
+    // log-density leaves on the run is the fitness it reports. Two successive NextDouble calls, in
+    // the order the other three runners' single length-two draw consumes them.
+    "Prop_UniformBox" => (parameters, prng) =>
+    {
+        double[] lo = { -1.0, 1.5 };
+        double[] hi = { 1.0, 2.5 };
+        var v = new double[2];
+        double[] u = { prng.NextDouble(), prng.NextDouble() };
+        for (int j = 0; j < 2; j++) v[j] = lo[j] + u[j] * (hi[j] - lo[j]);
+        return v;
+    },
     _ => null
 };
 static HMC.Gradient? CallbackGradientFunction(string name) => name switch
@@ -1064,6 +1080,31 @@ static Func<double[], ParameterSet>? CallbackFitFunction(string name) => name sw
         double acc = 0d;
         foreach (double x in data) acc += x;
         return new ParameterSet(new[] { acc / data.Length }, double.NaN);
+    },
+    // The CONTRACTION-BEARING member of the catalog, written for the second case of
+    // fixtures/callback/callback_cross_language.json: the ordinary least-squares line of the
+    // sample against its position t = 1..n, in the centered form
+    //   slope = sum(dt * dy) / sum(dt * dt),   intercept = ybar - slope * tbar
+    // returned as [intercept, slope]. Every accumulation is `acc + a * b`, the shape clang and gcc
+    // fuse into a multiply-add by default; RyuJIT never fuses one on its own (C# spells that
+    // Math.FusedMultiplyAdd), so this delegate computes the written arithmetic and the C++ catalog
+    // matches it only because core/CMakeLists.txt turns contraction off for that translation unit.
+    "Fit_LinearTrend" => data =>
+    {
+        double n = data.Length;
+        double st = 0d, sy = 0d;
+        for (int i = 0; i < data.Length; i++) { st += (double)(i + 1); sy += data[i]; }
+        double tbar = st / n, ybar = sy / n;
+        double num = 0d, den = 0d;
+        for (int i = 0; i < data.Length; i++)
+        {
+            double dt = (double)(i + 1) - tbar;
+            double dy = data[i] - ybar;
+            num += dt * dy;
+            den += dt * dt;
+        }
+        double slope = num / den;
+        return new ParameterSet(new[] { ybar - slope * tbar, slope }, double.NaN);
     },
     _ => null
 };
@@ -5324,8 +5365,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
     // value (`args: [index]` into the flat result), dim (`args: [index]` into {rows, cols}), or
     // status. The hessian result is flattened row-major, exactly as the C++ runner flattens it.
     //
-    // The same branch drives "callback_cross_language" (Task 8), whose one case nests an "mcmc" and
-    // a "bootstrap" sub-block, each shaped exactly like a "callback"-kind case: CallbackSubCases
+    // The same branch drives "callback_cross_language" (Task 8), each of whose cases nests an
+    // "mcmc" and a "bootstrap" sub-block shaped exactly like a "callback"-kind case: CallbackSubCases
     // above flattens both kinds into the same triples, so the cross-language fixture reuses this
     // evaluation path verbatim rather than growing one of its own.
     if (kindStr == "callback" || kindStr == "callback_cross_language")

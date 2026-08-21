@@ -1774,6 +1774,13 @@ def _callback_fixture_function(name):
     # (parameters, rng) -> parameters, upstream's Gibbs.Proposal shape, drawing through the HANDLE.
     if name == "Prop_UniformConditional":
         return _mcmc_uniform_conditional
+    # The TWO-parameter member of the proposal catalog, written for the second case of
+    # fixtures/callback/callback_cross_language.json. An INDEPENDENCE proposal: it ignores the
+    # state it is handed and draws each parameter from a fixed interval, exactly as
+    # Prop_UniformConditional does for one. Gibbs accepts every proposal, so the only mark the
+    # log-density leaves on the run is the fitness it reports.
+    if name == "Prop_UniformBox":
+        return _mcmc_uniform_box
     # (parameters) -> vector, upstream's HMC.Gradient shape: d/dmu of Mcmc_GaussianKernel.
     if name == "Grad_GaussianKernel":
         return _mcmc_gaussian_gradient
@@ -1796,6 +1803,12 @@ def _callback_fixture_function(name):
         return _boot_resample_iid
     if name == "Fit_Mean":
         return _boot_fit_mean
+    # The CONTRACTION-BEARING member of the same catalog, written for the second case of
+    # fixtures/callback/callback_cross_language.json: the least-squares line of the sample against
+    # its position, whose every accumulation is `acc + a * b` -- the shape clang and gcc fuse into
+    # a multiply-add by default and Python never does. See the C++ catalog's own note.
+    if name == "Fit_LinearTrend":
+        return _boot_fit_linear_trend
     if name == "Stat_Identity":
         return _boot_stat_identity
     if name == "Stat_MeanAndSquare":
@@ -1881,6 +1894,14 @@ def _mcmc_uniform_conditional(parameters, rng):
     return [lo + rng.uniform(1)[0] * (hi - lo)]
 
 
+def _mcmc_uniform_box(parameters, rng):
+    # One uniform(2) call, not two of length one: a single call cannot split the stream.
+    lo = (-1.0, 1.5)
+    hi = (1.0, 2.5)
+    u = rng.uniform(2)
+    return [lo[j] + u[j] * (hi[j] - lo[j]) for j in range(2)]
+
+
 def _mcmc_gaussian_gradient(p):
     data = (4.9, 5.1, 5.0, 5.2, 4.8)
     acc = 0.0
@@ -1920,6 +1941,29 @@ def _boot_fit_mean(data):
     for x in data:
         acc += x
     return [acc / len(data)]
+
+
+def _boot_fit_linear_trend(data):
+    # Centered ordinary least squares of the sample against its position t = 1..n:
+    #   slope = sum(dt * dy) / sum(dt * dt),  intercept = ybar - slope * tbar.
+    # Explicit loops rather than sum()/mean(), for the same reason _boot_fit_mean uses one.
+    n = float(len(data))
+    st = 0.0
+    sy = 0.0
+    for i in range(len(data)):
+        st += float(i + 1)
+        sy += data[i]
+    tbar = st / n
+    ybar = sy / n
+    num = 0.0
+    den = 0.0
+    for i in range(len(data)):
+        dt = float(i + 1) - tbar
+        dy = data[i] - ybar
+        num += dt * dy
+        den += dt * dt
+    slope = num / den
+    return [ybar - slope * tbar, slope]
 
 
 def _boot_stat_identity(parameters):
@@ -2099,10 +2143,11 @@ def _run_callback_case(case):
             raise KeyError(f"unknown callback fixture assertion method: {a['method']}")
 
 
-# callback_cross_language [one case nests "mcmc" and "bootstrap", each shaped exactly like a
-# "callback"-kind case's construct/assertions]: fixtures/callback/callback_cross_language.json's
-# one case asserts a seeded posterior and a seeded bootstrap interval TOGETHER, because the file's
-# job is proving both reproduce identically across languages in one guarantee rather than two.
+# callback_cross_language [each case nests "mcmc" and "bootstrap", each shaped exactly like a
+# "callback"-kind case's construct/assertions]: a case of
+# fixtures/callback/callback_cross_language.json asserts a seeded posterior and a seeded bootstrap
+# interval TOGETHER, because the file's job is proving both reproduce identically across languages
+# in one guarantee rather than two.
 # Reuses _run_callback_case verbatim; no new evaluation logic, just the nesting. Its assertions are
 # spelled mode "abs" with tol 0, i.e. bit equality with the C++, R and C# runners rather than a
 # tolerance.

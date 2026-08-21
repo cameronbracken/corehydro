@@ -1749,10 +1749,12 @@ static void run_callback_kind(const json& spec) {
 
 // --- callback_cross_language path (Task 8) -----------------------------------------------
 //
-// fixtures/callback/callback_cross_language.json's one case nests two sub-blocks -- "mcmc" and
+// each of fixtures/callback/callback_cross_language.json's cases nests two sub-blocks -- "mcmc" and
 // "bootstrap", each shaped exactly like a "callback"-kind case's construct/assertions -- under one
 // case name, because the file's job is proving both reproduce identically across languages in ONE
-// guarantee rather than two separate files. Reuses run_one_callback_case verbatim; no new
+// guarantee rather than two separate files. (The second case adds a purpose: its two callbacks
+// carry the contractible arithmetic that makes core/CMakeLists.txt's -ffp-contract=off on the
+// catalog a flag this suite can detect the loss of.) Reuses run_one_callback_case verbatim; no new
 // evaluation logic, just the nesting. The assertions there are spelled mode "abs" with tol 0, so
 // this runner's agreement with the R, Python and C# ones is bit equality rather than a tolerance.
 static void run_callback_cross_language_kind(const json& spec) {

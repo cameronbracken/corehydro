@@ -488,6 +488,21 @@ callback_fixture_function <- function(name) {
       hi <- min(data) + 1
       lo + rng_uniform(rng, 1) * (hi - lo)
     },
+    # The TWO-parameter member of the proposal catalog, written for the second case of
+    # fixtures/callback/callback_cross_language.json. An INDEPENDENCE proposal: it ignores the
+    # state it is handed and draws each parameter from a fixed interval, lo + u * (hi - lo),
+    # exactly as Prop_UniformConditional above does for one. Gibbs accepts every proposal, so the
+    # chain is a sequence of independent draws from that box and the only mark the log-density
+    # leaves on the run is the fitness it reports. One rng_uniform(rng, 2) call, not two of length
+    # one: a single call cannot split the stream.
+    Prop_UniformBox = function(parameters, rng) {
+      lo <- c(-1, 1.5)
+      hi <- c(1, 2.5)
+      u <- rng_uniform(rng, 2)
+      out <- numeric(2)
+      for (j in 1:2) out[j] <- lo[j] + u[j] * (hi[j] - lo[j])
+      out
+    },
     # The gradient catalog: (parameters) -> vector, upstream's HMC.Gradient shape. The analytic
     # derivative of Mcmc_GaussianKernel, d/dmu = sum(x - mu), summed in an explicit loop.
     Grad_GaussianKernel = function(p) {
@@ -542,6 +557,37 @@ callback_fixture_function <- function(name) {
       acc <- 0
       for (x in data) acc <- acc + x
       acc / length(data)
+    },
+    # The CONTRACTION-BEARING member of the bootstrap catalog, written for the second case of
+    # fixtures/callback/callback_cross_language.json: the ordinary least-squares line of the sample
+    # against its position t = 1..n, in the centered form
+    #   slope = sum(dt * dy) / sum(dt * dt),   intercept = ybar - slope * tbar
+    # returned as c(intercept, slope). Every accumulation is acc + a * b, the shape clang and gcc
+    # fuse into a multiply-add by default, and the intercept subtracts two nearly equal quantities
+    # on top of it. R never fuses, so this closure computes the written arithmetic; the C++ catalog
+    # matches it only because core/CMakeLists.txt turns contraction off for that file, and the case
+    # naming this callback is what fails if that flag is removed. Explicit loops rather than sum()
+    # or mean(), for the same reason Fit_Mean above uses one.
+    Fit_LinearTrend = function(data) {
+      n <- length(data)
+      st <- 0
+      sy <- 0
+      for (i in seq_len(n)) {
+        st <- st + as.double(i)
+        sy <- sy + data[i]
+      }
+      tbar <- st / n
+      ybar <- sy / n
+      num <- 0
+      den <- 0
+      for (i in seq_len(n)) {
+        dt <- as.double(i) - tbar
+        dy <- data[i] - ybar
+        num <- num + dt * dy
+        den <- den + dt * dt
+      }
+      slope <- num / den
+      c(ybar - slope * tbar, slope)
     },
     Stat_Identity = function(parameters) parameters,
     Stat_MeanAndSquare = function(parameters) c(parameters[1], parameters[1] * parameters[1]),
