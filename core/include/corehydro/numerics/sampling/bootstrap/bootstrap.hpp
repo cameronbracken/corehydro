@@ -46,19 +46,22 @@
 // value. `Interlocked.Increment(ref _failedCount)` becomes a plain `++failed_count_` (safe
 // under the same no-cross-replicate-aliasing argument).
 //
-// Threading, the PIVOTAL loop specifically (`RunPivotalBootstrap`'s own `Parallel.For`): the
-// same argument holds and is re-verified here rather than assumed. Replicate `index` reads
-// only `seeds[index]` (again an up-front array computed before the loop), `_originalData`, and
-// `parentFit.Parameters` -- all three immutable for the duration -- and writes only to
-// `rawFits[index]`, plus `Interlocked.Increment(ref failed)`, which is a COUNT and therefore
-// order-independent by construction (integer addition, no floating-point reassociation). No
-// replicate reads or mutates another's slot, and no replicate touches the instance fields, so
-// serial and parallel execution produce identical `rawFits` contents AND an identical `failed`
-// value. The `rawFits.Where(f => f != null)` compaction that follows preserves index order in
-// both cases, so the accepted-fit sequence handed to the transform is identical too. The
-// transformation loop inside `TransformPivotalBootstrap` is a plain serial `for` in C# as
-// well -- that matters, because it is the loop that consumes `jitterRng`, whose draw ORDER is
-// observable in the output when `AddPivotalJitter` is on.
+// Threading, the PIVOTAL loop specifically (`RunPivotalBootstrap`'s own `Parallel.For`): for
+// pure-function delegates with no side effects, serial and parallel execution produce
+// identical results. For delegates that carry mutable state (e.g. a callback closing over a
+// counter), C#'s `Parallel.For` order is nondeterministic while this port's serial loop is
+// deterministic and fixed -- the port is STRICTLY MORE DETERMINISTIC, and no oracle depends
+// on the parallel ordering. Replicate `index` reads: `seeds[index]` (an up-front array
+// computed before the loop), `_originalData`, `parentFit.parameters()` (all immutable for the
+// duration), plus the read-only members `max_retries`, `resample_function`, and
+// `fit_with_covariance_function`. Each replicate writes only to `rawFits[index]` plus
+// `Interlocked.Increment(ref failed)`, which is a COUNT and therefore order-independent by
+// construction (integer addition, no floating-point reassociation). No replicate reads or
+// mutates another's slot. The `rawFits.Where(f => f != null)` compaction that follows
+// preserves index order in both cases, so the accepted-fit sequence handed to the transform is
+// identical too. The transformation loop inside `TransformPivotalBootstrap` is a plain serial
+// `for` in C# as well -- that matters, because it is the loop that consumes `jitterRng`,
+// whose draw ORDER is observable in the output when `AddPivotalJitter` is on.
 //
 // Per-replicate seeding cascade (transcribed verbatim, load-bearing for cross-language
 // reproducibility, and identical for `Run`/`RunDoubleBootstrap`/`RunWithStudentizedBootstrap`/
