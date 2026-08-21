@@ -74,8 +74,34 @@ dispatch_generic <- function(target, p, method, args) {
       as.integer(args[[2]]))[[as.integer(args[[3]]) + 1L]],
     # Static GammaDistribution utility, not tied to `p` -- args: [skewness, probability].
     partial_kp = ns$ch_dist_gamma_partial_kp_(as.double(args[[1]]), as.double(args[[2]])),
+    parameter_covariance = ,
+    quantile_variance = ,
+    quantile_gradient = dispatch_standard_error(target, p, method, args),
     stop(sprintf("unknown fixture method: %s", method))
   )
+}
+
+# The IStandardError surface. It has no bespoke ch_dist_* glue (nothing outside the fixtures
+# calls it), so it routes through the shared dist_runner, which reaches it by the same
+# capability cast the C++ and Python runners use. Args follow the flattened convention the
+# bespoke GEV slice above already speaks -- parameter_covariance [sample_size, row, col],
+# quantile_variance [probability, sample_size], quantile_gradient [probability, index] -- while
+# the runner returns the whole matrix (row-major) or vector, so the indexing happens here.
+# GeneralizedNormal is the only family reaching this today, and only through quantile_gradient:
+# C# throws NotImplementedException for its other two, and the port mirrors that.
+dispatch_standard_error <- function(target, p, method, args) {
+  ns <- asNamespace("corehydror")
+  # as.list keeps `parameters` a JSON ARRAY: auto_unbox would collapse a length-1 vector to a
+  # scalar, which the spec reader rejects.
+  spec <- to_runner_json(list(family = target, parameters = as.list(as.double(p))))
+  if (identical(method, "quantile_variance")) {
+    v <- ns$ch_dist_spec_run_(spec, method,
+      to_runner_json(list(as.double(args[[1]]), as.double(args[[2]]))))$values
+    return(v[[1]])
+  }
+  v <- ns$ch_dist_spec_run_(spec, method, to_runner_json(list(as.double(args[[1]]))))$values
+  if (identical(method, "quantile_gradient")) return(v[[as.integer(args[[2]]) + 1L]])
+  v[[as.integer(args[[2]]) * length(p) + as.integer(args[[3]]) + 1L]]
 }
 
 # data_utility [function, args, data]: MGBT count, Box-Cox / Yeo-Johnson lambda +

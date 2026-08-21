@@ -54,8 +54,8 @@ generic dispatcher supports `random_value [sample_size, seed, index]`: element `
 (0-based) of the vector returned by `generate_random_values(sample_size, seed)`. Stateless
 (a fresh seeded Mersenne Twister per call), so it locks the seeded C# draw stream
 bit-for-bit across all four runners; see the `seeded_random_draws` cases in `normal.json`,
-`log_normal.json`, `ln_normal.json`, `gumbel.json`, `gamma_distribution.json`, and
-`weibull.json`. It also supports `partial_kp [skewness, probability]` -- a direct call to
+`log_normal.json`, `ln_normal.json`, `gumbel.json`, `gamma_distribution.json`,
+`weibull.json`, and `generalized_normal.json`. It also supports `partial_kp [skewness, probability]` -- a direct call to
 the static `GammaDistribution.PartialKp` utility, independent of the case's own
 `construct` (which just needs to build *some* valid distribution instance for the dispatch
 plumbing; only `gamma_distribution.json` uses it, to pin the v2.1.4 near-zero-skew
@@ -66,6 +66,19 @@ derivative-limit fix).
 assertion rather than named as a dataset because every case that uses it wants a handful of
 points chosen to sit inside the target's support -- inside a `TruncatedDistribution`'s bounds,
 inside an `Empirical` grid -- not a whole record.
+
+The three `IStandardError` methods -- `parameter_covariance [sample_size, row, col]`,
+`quantile_variance [probability, sample_size]`, and `quantile_gradient [probability, index]` --
+are reached by a capability cast, so a family that does not implement the mixin throws rather
+than returning NaN. The estimation method is fixed at `MaximumLikelihood`. The args above are
+flattened (the underlying calls return a whole matrix or vector; the runner indexes), which is
+the same vocabulary the bespoke GEV slice speaks, so one fixture spelling covers both. The GEV
+rows are the corpus's 11 documented oracle skips: they were validated in Phase 0 and the dotnet
+gate does not re-run them. `generalized_normal.json` is the one family dispatched for real, and
+only through `quantile_gradient` -- upstream `GeneralizedNormal.cs` throws
+`NotImplementedException` for the other two and the port mirrors the throw, so there is nothing
+to pin. `quantile_se [probability, sample_size]` is GEV-only (the square root of
+`quantile_variance`).
 
 #### Composite `univariate_distribution` targets
 

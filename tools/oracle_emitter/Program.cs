@@ -314,12 +314,33 @@ static double? Dispatch(UnivariateDistributionBase d, string m, JsonElement[] a)
         // Static GammaDistribution utility, not tied to `d`'s own parameters -- args:
         // [skewness, probability].
         case "partial_kp": return GammaDistribution.PartialKp(a[0].GetDouble(), a[1].GetDouble());
-        // GEV bespoke standard-error methods -- validated in Phase 0, not re-checked here.
+        // The IStandardError surface. GEV's four bespoke standard-error methods were validated
+        // in Phase 0 against the bespoke C# calls and are not re-checked here -- they are the 11
+        // documented skips. Every other implementer is dispatched for real, by the same
+        // capability cast the C++, R and Python runners use, with the estimation method fixed at
+        // MaximumLikelihood (matching dist_runner.hpp and test_fixtures.cpp's dispatch_generic).
+        // Args follow the flattened fixture convention those runners already speak:
+        // parameter_covariance [sample_size, row, col], quantile_variance [probability,
+        // sample_size], quantile_gradient [probability, index], quantile_se [probability,
+        // sample_size].
         case "quantile_gradient":
         case "parameter_covariance":
         case "quantile_variance":
         case "quantile_se":
-            return null;
+        {
+            if (d is GeneralizedExtremeValue || d is not IStandardError se) return null;
+            var seMethod = ParameterEstimationMethod.MaximumLikelihood;
+            return m switch
+            {
+                "parameter_covariance" =>
+                    se.ParameterCovariance(a[0].GetInt32(), seMethod)[a[1].GetInt32(),
+                                                                     a[2].GetInt32()],
+                "quantile_variance" =>
+                    se.QuantileVariance(a[0].GetDouble(), a[1].GetInt32(), seMethod),
+                "quantile_gradient" => se.QuantileGradient(a[0].GetDouble())[a[1].GetInt32()],
+                _ => Math.Sqrt(se.QuantileVariance(a[0].GetDouble(), a[1].GetInt32(), seMethod)),
+            };
+        }
         default:
             throw new Exception($"unknown fixture method: {m}");
     }

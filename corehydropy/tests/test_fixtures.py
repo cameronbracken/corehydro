@@ -270,7 +270,31 @@ def _dispatch_generic(target, params, method, args):
     if method == "partial_kp":
         # Static GammaDistribution utility, not tied to `params` -- args: [skewness, probability].
         return _core.dist_gamma_partial_kp(float(args[0]), float(args[1]))
+    if method in ("parameter_covariance", "quantile_variance", "quantile_gradient"):
+        return _dispatch_standard_error(target, params, method, args)
     raise KeyError(f"unknown fixture method: {method}")
+
+
+def _dispatch_standard_error(target, params, method, args):
+    """The IStandardError surface.
+
+    It has no bespoke `_core.dist_*` binding (nothing outside the fixtures calls it), so it
+    routes through the shared dist_runner, which reaches it by the same capability cast the C++
+    and R runners use. Args follow the flattened convention the bespoke GEV slice above already
+    speaks -- parameter_covariance [sample_size, row, col], quantile_variance [probability,
+    sample_size], quantile_gradient [probability, index] -- while the runner returns the whole
+    matrix (row-major) or vector, so the indexing happens here. GeneralizedNormal is the only
+    family reaching this today, and only through quantile_gradient: C# throws
+    NotImplementedException for its other two, and the port mirrors that.
+    """
+    spec = _json({"family": target, "parameters": [float(v) for v in params]})
+    if method == "quantile_variance":
+        return _core.dist_spec_run(spec, method,
+                                   _json([float(args[0]), float(args[1])]))["values"][0]
+    values = _core.dist_spec_run(spec, method, _json([float(args[0])]))["values"]
+    if method == "quantile_gradient":
+        return values[int(args[1])]
+    return values[int(args[1]) * len(params) + int(args[2])]
 
 
 # --- multivariate_distribution path -----------------------------------------------------
