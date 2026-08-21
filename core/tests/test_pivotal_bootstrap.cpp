@@ -82,6 +82,13 @@ BootstrapFit fit_of(const std::vector<double>& values, const Matrix& covariance)
 // Test_PivotalBootstrap.cs:453 -- `CreatePivotalBootstrap(BootstrapFit parent)`.
 Boot create_pivotal_bootstrap(const BootstrapFit& parent) { return Boot(Data{}, parent); }
 
+// The two sample sizes the C# tests declare as function locals live at file scope here because
+// both are read inside a resample lambda. MSVC raises C3493 on the implicit use of a const local
+// in a lambda with no default capture, and clang warns (-Wunused-lambda-capture) if it IS
+// captured, so neither form is portable while the constant is a local.
+constexpr int kSeededSampleSize = 25;    // Test_PivotalBootstrap.cs:490.
+constexpr int kCoverageSampleSize = 100; // Test_PivotalBootstrap.cs:404.
+
 // Local transcription of Normal.ParameterCovariance (Normal.cs:800), MoM/MLE branch. See the
 // file header for why it lives here rather than on `Normal`.
 Matrix normal_parameter_covariance(const Normal& dist, int sample_size) {
@@ -172,15 +179,15 @@ class LinearScaleLink final : public ILinkFunction {
 
 // Test_PivotalBootstrap.cs:490 -- `CreateSeededNormalPivotalBootstrap()`.
 Boot create_seeded_normal_pivotal_bootstrap() {
-    const int sample_size = 25;
     Normal distribution(3.0, 0.7);
     BootstrapFit parent(ParameterSet(distribution.get_parameters(), kNaN),
-                        normal_parameter_covariance(distribution, sample_size));
-    Boot boot(Data(static_cast<std::size_t>(sample_size), 0.0), parent);
+                        normal_parameter_covariance(distribution, kSeededSampleSize));
+    Boot boot(Data(static_cast<std::size_t>(kSeededSampleSize), 0.0), parent);
     boot.replicates = 50;
     boot.prng_seed = 8675309;
     boot.resample_function = [](const Data&, const ParameterSet& ps, MersenneTwister& rng) {
-        return Normal(ps.values[0], ps.values[1]).generate_random_values(sample_size, rng.next());
+        return Normal(ps.values[0], ps.values[1])
+            .generate_random_values(kSeededSampleSize, rng.next());
     };
     boot.fit_with_covariance_function = fit_normal;
     boot.pivotal_link_factory = [](const corehydro::numerics::sampling::PivotalBootstrapContext&) {
@@ -488,19 +495,19 @@ void test_run_pivotal_bootstrap_with_same_seed_is_reproducible() {
 
 // Run_NormalLocationScale_MatchesObjectiveBayesQuantileIntervals (line 404).
 void test_run_normal_location_scale_matches_objective_bayes_quantile_intervals() {
-    const int sample_size = 100;
     const int replicates = 2500;
     Normal parent_distribution(3.0, 0.7);
     BootstrapFit parent(ParameterSet(parent_distribution.get_parameters(), kNaN),
-                        normal_parameter_covariance(parent_distribution, sample_size));
-    Data original_data(static_cast<std::size_t>(sample_size), 0.0);
+                        normal_parameter_covariance(parent_distribution, kCoverageSampleSize));
+    Data original_data(static_cast<std::size_t>(kCoverageSampleSize), 0.0);
     const std::vector<double> probabilities = {0.5, 0.95};
     Boot boot(original_data, parent);
 
     boot.replicates = replicates;
     boot.prng_seed = 12345;
     boot.resample_function = [](const Data&, const ParameterSet& ps, MersenneTwister& rng) {
-        return Normal(ps.values[0], ps.values[1]).generate_random_values(sample_size, rng.next());
+        return Normal(ps.values[0], ps.values[1])
+            .generate_random_values(kCoverageSampleSize, rng.next());
     };
     boot.fit_with_covariance_function = fit_normal;
     boot.pivotal_link_factory = [](const corehydro::numerics::sampling::PivotalBootstrapContext&) {
@@ -517,7 +524,8 @@ void test_run_normal_location_scale_matches_objective_bayes_quantile_intervals()
     boot.run_pivotal_bootstrap();
     BootstrapResults quantile_intervals = boot.get_confidence_intervals(BootstrapCIMethod::Percentile, 0.1);
     auto objective_bayes_intervals =
-        monte_carlo_ci(parent_distribution, sample_size, 12000, probabilities, {0.05, 0.95});
+        monte_carlo_ci(parent_distribution, kCoverageSampleSize, 12000, probabilities,
+                       {0.05, 0.95});
 
     CHECK_TRUE(static_cast<double>(boot.bootstrap_parameter_sets().size()) > 0.98 * replicates);
     for (std::size_t i = 0; i < probabilities.size(); ++i) {
