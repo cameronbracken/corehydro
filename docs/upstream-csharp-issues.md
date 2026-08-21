@@ -2007,6 +2007,87 @@ J-statistic) are unchanged and still correct as written.
   deeper fix belongs in `ComputeAccelerationConstants`, which should report that it had no usable
   jackknife samples rather than hand a NaN acceleration constant downstream.
 
+## FIDELITY (C++ port only) — `GeneralizedPareto.GetParameterConstraints` was truncated to 2 of its 3 parameters, so every non-MLE caller read past the end (FIXED, port defect)
+
+- **Where:** `Numerics/Distributions/Univariate/GeneralizedPareto.cs` lines 515-549
+  (`GetParameterConstraints`) and line 570 (`MLE`); ported at
+  `core/include/corehydro/numerics/distributions/generalized_pareto.hpp`.
+- **What:** the C# fills `initialVals` / `lowerVals` / `upperVals` to `NumberOfParameters` = 3
+  and returns all three. Only `MLE` wants the 2-parameter view, and it takes it at the call
+  site: `new NelderMead(logLH, 2, Initials.Subset(1), Lowers.Subset(1), Uppers.Subset(1))`,
+  because ξ is fixed at `min(sample)` and never optimized. The port folded that `.Subset(1)`
+  INTO the constraint method, returning `{alpha, kappa}` triples of length 2. `MLE` was the
+  only caller that wanted it that way.
+- **Consequence:** eight other call sites index the arrays by
+  `distribution->number_of_parameters()`, which is 3 for a GPD —
+  `UnivariateDistributionModel::set_default_parameters` and `::set_trend_model`, the MCMC
+  model registry, the copula IFM/MPL marginal pre-fit, the Mixture / CompetingRisks /
+  PointProcess component seeds, and Bulletin17C. Every one of them read `initials[2]`,
+  `lowers[2]` and `uppers[2]` off the end of a 16-byte allocation. The values landed in the
+  model's default parameter values, its bounds, its `IsPositive` flag and its `Uniform` prior,
+  so a GPD candidate inside `fit_distributions()` was seeded from adjacent heap memory.
+- **Evidence:** an ASan build of the ctest suite reports
+  `heap-buffer-overflow ... READ of size 8 ... univariate_distribution_model_trends.hpp:92`,
+  `0 bytes after 16-byte region`, allocated at `generalized_pareto.hpp:298`, from three
+  binaries: `test_univariate_distribution_model` (direct construction),
+  `test_fitting_analysis` and `test_fixtures` (both through `FittingAnalysis::run`, which
+  builds a model for each of the 14 candidates). No test FAILED, which is why it survived; the
+  read is invisible to every assertion the suite makes.
+- **Status: FIXED, and it was a port defect, not upstream behaviour.** In C# the same index is
+  in range. `get_parameter_constraints` now emits the full `{xi, alpha, kappa}` triple
+  (`{loc_lower, scl_lower, -10.0}` / `{loc_upper, scl_upper, 10.0}`), and `mle()` takes the
+  `begin() + 1` slice at its own call site, mirroring C# line 570. No numeric behaviour changed
+  on the MLE path (the slice is the same two values in the same order); the other eight callers
+  now see the values C# gives them instead of heap garbage. Guarded by
+  `core/tests/test_parameter_constraint_sizes.cpp`, which asserts the
+  length-equals-`NumberOfParameters` contract for every `IMaximumLikelihoodEstimation`
+  implementer. No fixture value moved: ctest, testthat, pytest and the oracle gate are all
+  unchanged.
+- **Suggested C# fix:** none — the C# is correct.
+
+## BUG — `Statistics.LinearMoments` overflows `int` in its weight numerators at 1293 points and silently returns a wrong L-kurtosis
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs` lines 509-520 (`LinearMoments`); ported at
+  `core/include/corehydro/numerics/data/statistics.hpp`.
+- **What:** the probability-weighted-moment accumulators form their numerators in `int`:
+  `B2 += (i - 2) * (i - 1) / ((N - 2) * (N - 1)) * sortedData[i - 1]` and
+  `B3 += (i - 3) * (i - 2) * (i - 1) / (...)`. `N` is a `double`, but `i` is an `int`, so the
+  products are integer arithmetic. The triple product first exceeds `int.MaxValue` at
+  `i = 1293` (`1290 * 1291 * 1292 = 2,151,683,880` against a ceiling of `2,147,483,647`), and
+  C#'s default unchecked context wraps it to a negative number rather than throwing. The pair
+  product `(i-2)*(i-1)` wraps too, at `i = 46,342`. Any sample of 1293 or more values returns a
+  corrupt τ4.
+- **Evidence (real C#, driven at the pinned `2a0357a`):** for the evenly spaced sample
+  `x[i] = 1 + 0.5i`, whose L-skewness and L-kurtosis are both 0 at every length,
+  `Statistics.LinearMoments` returns
+
+  | n | τ3 | τ4 |
+  |---|---|---|
+  | 1292 | `-3.1086244689504383E-15` | `-1.7763568394002505E-15` |
+  | 1293 | `-1.7763568394002505E-15` | `-0.18525251648817065` |
+  | 1300 | `-1.3766765505351941E-14` | `-1.446418581370934` |
+
+  λ1 and λ2 are unaffected (they use no product), and τ3 is unaffected (the pair product does
+  not wrap until 46,342), so the error is confined to τ4 and grows with n. There is no warning
+  and no exception; a Kappa-4 or a GEV fit off L-moments would take the corrupt value as a real
+  shape statistic.
+- **Why it is defined in C# and not in C++:** C# specifies unchecked integer arithmetic as
+  two's-complement wrapping. C++ leaves signed overflow UNDEFINED, so the ported expression is
+  a UBSan finding: `statistics.hpp:127:37: runtime error: signed integer overflow: 1665390 *
+  1292 cannot be represented in type 'int'`. That is the class of finding CRAN's sanitizer run
+  rejects a package for, and it cannot be left in place on the grounds that the compiler
+  happens to wrap the same way today.
+- **Status: DELIBERATE DIVERGENCE.** The port now forms the numerators in `double`
+  (`(di - 3) * (di - 2) * (di - 1)`, `di = (double)i`). Below the overflow the products are
+  exact integers far under 2^53, so the result is bit-identical to the C# for every sample the
+  library has ever been pinned against — no shipped fixture carries a sample longer than a few
+  hundred points, and no oracle value moved. Above the overflow the port returns the
+  mathematically correct weight where C# returns a wrapped one. Guarded by
+  `core/tests/test_linear_moments_overflow.cpp`.
+- **Suggested C# fix:** make the numerators `double` — `((double)i - 3) * ((double)i - 2) *
+  ((double)i - 1)` — or hoist `double di = i` at the top of the loop, matching what `N` already
+  is. `long` would push the failure out to about 2.1 million points rather than removing it.
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a
