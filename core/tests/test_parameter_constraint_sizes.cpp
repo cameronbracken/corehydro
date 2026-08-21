@@ -16,12 +16,19 @@
 //
 // The test is structural on purpose: the out-of-bounds read changed no assertable output, so
 // the honest regression guard is the size contract every caller already assumes. Revert the
-// `generalized_pareto.hpp` fix and the GeneralizedPareto rows below fail 3 checks.
+// `generalized_pareto.hpp` fix and the GeneralizedPareto rows below fail 10 checks (measured:
+// 3 in the loop, 7 in the direct block).
+//
+// The numeric consequence of the same defect is pinned separately, as a real oracle, by the
+// candidate-4 rows in `fixtures/analyses/fit_distributions_smoke.json`: before the fix
+// `FittingAnalysis::run()` reported the GeneralizedPareto candidate as failed (aic NaN), where
+// C# converges it at the lowest aic of all 14.
 //
 // No fixture equivalent: `fixtures/README.md` has no schema for "assert this array's length,"
 // and array lengths are a structural/interface property rather than a numeric oracle to
 // reproduce against the real C#.
 #include <array>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -95,15 +102,25 @@ int main() {
 
     // Every IMaximumLikelihoodEstimation implementer must fill all three arrays to
     // number_of_parameters(), because that is the length every caller indexes to.
+    int not_constructible = 0;   // factory refused the type
+    int no_mle_surface = 0;      // family does not implement IMaximumLikelihoodEstimation
+    int rejected_sample = 0;     // family threw on this particular sample
+    int exercised = 0;           // family actually reached the three size assertions
+
     for (UnivariateDistributionType type : kConstructibleTypes) {
         std::unique_ptr<corehydro::numerics::distributions::UnivariateDistributionBase> dist;
         try {
             dist = create_distribution(type);
         } catch (...) {
-            continue;  // Not constructible here; test_univariate_distribution_factory covers it.
+            // Not constructible here; test_univariate_distribution_factory covers it.
+            ++not_constructible;
+            continue;
         }
         auto* mle = dynamic_cast<IMaximumLikelihoodEstimation*>(dist.get());
-        if (mle == nullptr) continue;  // Family has no MLE surface; nothing to check.
+        if (mle == nullptr) {
+            ++no_mle_surface;  // Family has no MLE surface; nothing to check.
+            continue;
+        }
 
         std::vector<double> initials, lowers, uppers;
         try {
@@ -111,6 +128,7 @@ int main() {
         } catch (...) {
             // A family that rejects this particular sample (the discrete ones) still has no
             // size contract to violate. Skipping keeps the test about lengths, not support.
+            ++rejected_sample;
             continue;
         }
 
@@ -118,7 +136,23 @@ int main() {
         CHECK_EQ(initials.size(), n);
         CHECK_EQ(lowers.size(), n);
         CHECK_EQ(uppers.size(), n);
+        ++exercised;
     }
+
+    // The three `continue`s above mean the loop could stop asserting anything without failing.
+    // Pin the census so it cannot: every type is accounted for exactly once, and the number that
+    // actually reaches the size assertions has a floor. As measured today the split is 17
+    // exercised / 22 without an MLE surface / 0 rejected-sample / 0 not-constructible, so both
+    // catch blocks are currently dead and the real filter is the `dynamic_cast`. Raise
+    // kExercisedFloor when a skipped family gains a constraint surface; do not lower it.
+    constexpr int kExercisedFloor = 17;
+    CHECK_EQ(not_constructible + no_mle_surface + rejected_sample + exercised,
+             static_cast<int>(kConstructibleTypes.size()));
+    CHECK_TRUE(exercised >= kExercisedFloor);
+    std::printf("  constraint-size census: %d exercised, %d no-MLE-surface, %d rejected-sample, "
+                "%d not-constructible (of %d types)\n",
+                exercised, no_mle_surface, rejected_sample, not_constructible,
+                static_cast<int>(kConstructibleTypes.size()));
 
     // The headline case, asserted directly so it cannot be skipped by the loop's guards:
     // GeneralizedPareto has three parameters and must report three constraints.

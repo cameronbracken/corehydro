@@ -1,3 +1,31 @@
+# corehydror (development version)
+
+Two memory-safety and undefined-behaviour defects found by an AddressSanitizer and
+UndefinedBehaviorSanitizer run. Both are user-visible. See `CHANGELOG.md` at the repository root
+for the full account.
+
+## Bug fixes
+
+* `fit_distributions()` could report the GeneralizedPareto candidate as failed, or rank it
+  differently between platforms and between runs. The distribution returned two parameter
+  constraints where it has three parameters, so the candidate's starting value, bounds and prior
+  were read one element past the end of a vector, from whatever the allocator had left there. On
+  the dataset used by the test fixtures the candidate came back with an AIC of `NaN` where it
+  should converge at 423.31, the lowest of all 14 candidates. **Results from `fit_distributions()`
+  involving GeneralizedPareto may change; refit if you kept earlier output.** The same read reached
+  the GeneralizedPareto seed used by `model_*()` defaults and trend models, `mcmc_sample()`'s model
+  registry, the copula marginal pre-fit, the mixture, competing-risks and point-process component
+  seeds, and Bulletin 17C.
+
+## Changes to results
+
+* `l_moments()`, and every fit that estimates from sample L-moments, now forms its weight products
+  in floating point. Those products overflowed a 32-bit integer at 1293 points, so the L-kurtosis
+  of any sample of **1293 or more points** was wrong: on an evenly spaced series whose true
+  L-kurtosis is 0, the old code returned -0.185 at 1293 points and -1.45 at 1300. Shorter samples
+  are bit-identical to before. This is a deliberate divergence from upstream, which still wraps, so
+  corehydror and RMC-BestFit disagree on the L-kurtosis of any sample of 1293 or more points.
+
 # corehydror 0.7.0
 
 The callback layer. Five upstream classes are delegate-driven by design, and until now the package

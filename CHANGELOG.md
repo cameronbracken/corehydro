@@ -7,6 +7,40 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fit_distributions()` could rank GeneralizedPareto as failed, or rank it differently between
+  platforms and between runs.** `GeneralizedPareto::get_parameter_constraints` returned two values
+  for a three-parameter distribution, so every caller that reads all three read one element past
+  the end of the vector. Inside `fit_distributions()` that out-of-bounds value became the
+  GeneralizedPareto candidate's starting parameter, its bounds, and its prior. On the fitting
+  dataset used by the test fixtures the candidate came back failed, with an AIC of `NaN`, where the
+  C# library converges it at an AIC of 423.31, the lowest of all 14 candidates. What was read is
+  whatever the allocator happened to leave in that memory, so the outcome was not stable across
+  platforms, compilers, or runs. **Results from `fit_distributions()` involving GeneralizedPareto
+  may change.** Refit if you kept earlier output. The candidate is now pinned against the real C#
+  library in `fixtures/analyses/fit_distributions_smoke.json`, which asserted only the Normal
+  candidate before and so did not catch this. The same read reached the GeneralizedPareto seed in
+  eight other places: a model's default parameters and its trend model, the MCMC model registry,
+  the copula marginal pre-fit, the mixture, competing-risks and point-process component seeds, and
+  Bulletin 17C. This was a port defect, not upstream behaviour; in C# the index is in range.
+
+### Changed
+
+- **L-moments form their integer products in floating point, so long samples return correct
+  values.** `l_moments()`, and every distribution fit that estimates from sample L-moments,
+  computed the probability-weighted-moment weights `(i - 2) * (i - 1)` and
+  `(i - 3) * (i - 2) * (i - 1)` in 32-bit integers. The triple product exceeds the 32-bit range at
+  `i = 1293` and the pair product at `i = 46,343`, which corrupts the L-kurtosis of any sample of
+  **1293 or more points**. On an evenly spaced series whose true L-kurtosis is 0, the old code
+  returned -0.185 at 1293 points and -1.45 at 1300, with no warning. The products are now formed in
+  `double`. Below 1293 points they are exact integers well under 2^53 and the result is
+  bit-identical to before, so nothing changes for a shorter sample. Above it corehydro returns the
+  mathematically correct weight. This is a deliberate divergence from upstream: the C# Numerics
+  library and RMC-BestFit still wrap, so **corehydro and RMC-BestFit disagree on the L-kurtosis of
+  any sample of 1293 or more points.** C# defines signed overflow as wrapping, while C++ leaves it
+  undefined, so keeping the C# expression was not an option either.
+
 ## [0.7.0] - 2026-08-20
 
 The callback layer. Five upstream classes are delegate-driven by design, and until now both

@@ -2055,7 +2055,8 @@ J-statistic) are unchanged and still correct as written.
   products are integer arithmetic. The triple product first exceeds `int.MaxValue` at
   `i = 1293` (`1290 * 1291 * 1292 = 2,151,683,880` against a ceiling of `2,147,483,647`), and
   C#'s default unchecked context wraps it to a negative number rather than throwing. The pair
-  product `(i-2)*(i-1)` wraps too, at `i = 46,342`. Any sample of 1293 or more values returns a
+  product `(i-2)*(i-1)` wraps too, at `i = 46,343` (`46,341 * 46,342 = 2,147,534,622`; the last
+  safe index is `i = 46,342`, where `46,340 * 46,341 = 2,147,441,940`). Any sample of 1293 or more values returns a
   corrupt τ4.
 - **Evidence (real C#, driven at the pinned `2a0357a`):** for the evenly spaced sample
   `x[i] = 1 + 0.5i`, whose L-skewness and L-kurtosis are both 0 at every length,
@@ -2068,7 +2069,7 @@ J-statistic) are unchanged and still correct as written.
   | 1300 | `-1.3766765505351941E-14` | `-1.446418581370934` |
 
   λ1 and λ2 are unaffected (they use no product), and τ3 is unaffected (the pair product does
-  not wrap until 46,342), so the error is confined to τ4 and grows with n. There is no warning
+  not wrap until 46,343), so the error is confined to τ4 and grows with n. There is no warning
   and no exception; a Kappa-4 or a GEV fit off L-moments would take the corrupt value as a real
   shape statistic.
 - **Why it is defined in C# and not in C++:** C# specifies unchecked integer arithmetic as
