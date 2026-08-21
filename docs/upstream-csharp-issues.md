@@ -1923,8 +1923,9 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   `n * g' S^-1 g`, in place of the `V.Inverse()` call in `PostProcess`. Either form is stable
   against the rank deficiency V carries by construction, and both reproduce across compilers and
   optimizers.
-- **Status: open upstream.** Found in v0.7.0 by the first over-identified GMM fit either package
-  could run, since `fit_gmm()` reaches only Bulletin 17C. Not reported to RMC yet.
+- **Status: open upstream, reported.** Found in v0.7.0 by the first over-identified GMM fit either
+  package could run, since `fit_gmm()` reaches only Bulletin 17C. Filed with RMC as
+  https://github.com/USACE-RMC/RMC-BestFit/issues/18.
 
 ---
 

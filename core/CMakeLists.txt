@@ -129,24 +129,42 @@ foreach(t ${BF_TESTS})
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
 
-# Generic fixture-driven runner: reads the canonical fixtures/ shared by all languages.
-add_executable(test_fixtures tests/test_fixtures.cpp)
+# Generic fixture-driven runner: reads the canonical fixtures/ shared by all languages. It is two
+# translation units, and the split is deliberate -- see the -ffp-contract=off comment below before
+# merging them back together.
+add_executable(test_fixtures tests/test_fixtures.cpp tests/fixture_callback_catalog.cpp)
 target_link_libraries(test_fixtures PRIVATE corehydro_core)
 target_include_directories(test_fixtures PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-# This translation unit dispatches every fixture kind for every family, and crossed MSVC's
+# test_fixtures.cpp dispatches every fixture kind for every family, and crossed MSVC's
 # 65,536-section object-file cap (error C1128) as the toolbox surface landed. MSVC-only.
-#
-# -ffp-contract=off is the callback surface's requirement, and it is about correctness of the
-# COMPARISON rather than of the core. This file writes the fixture callback catalog as C++ lambdas
-# -- the counterparts of the R closures, Python functions and C# delegates the other three runners
-# write for the same names -- and every one of them is specified as arithmetic in double. Clang and
-# GCC contract `y - a - b*t` and `sum + r*r` into fused multiply-adds by default, which computes a
-# DIFFERENT (more accurate) function than the one the fixture names, so the C++ runner drifted a few
-# ulp from the other three and fixtures/callback/callback_cross_language.json's bit-equality
-# assertions could not hold. Turning contraction off makes the C++ catalog evaluate the same
-# arithmetic the other three do. MSVC needs no flag: /fp:precise, its default, does not contract.
 target_compile_options(test_fixtures PRIVATE
-  $<$<CXX_COMPILER_ID:MSVC>:/bigobj>
-  $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffp-contract=off>)
+  $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
+
+# -ffp-contract=off is the callback surface's requirement, and it is about correctness of the
+# COMPARISON rather than of the core. fixture_callback_catalog.cpp writes the fixture callback
+# catalog as C++ lambdas -- the counterparts of the R closures, Python functions and C# delegates
+# the other three runners write for the same names -- and every one of them is specified as
+# arithmetic in double. Clang and GCC contract `y - a - b*t` and `sum + r*r` into fused
+# multiply-adds by default, which computes a DIFFERENT (more accurate) function than the one the
+# fixture names: measured on this catalog's own kernels, the contracted Mcmc_LinearKernel differs
+# from the written arithmetic in the last 4 ulp and Mcmc_GaussianKernel in the last 1, and the flag
+# removes 38 fma instructions from this object file. Turning contraction off makes the C++ catalog
+# evaluate the same arithmetic the other three runners do, which is what the bit-equality
+# assertions in fixtures/callback/callback_cross_language.json (mode "abs", tol 0) are entitled to
+# assume. Note what is NOT claimed: removing the flag does not currently fail the suite, because
+# those two tol-0 cases name Mcmc_UniformWidthKernel (comparisons only) and Resample_Iid (index
+# draws) -- neither has arithmetic to contract -- while every arithmetic-bearing case asserts at
+# rel 1e-12, four orders looser than the drift. The flag keeps the guarantee true for the next
+# tol-0 case over an arithmetic kernel rather than repairing a live failure. MSVC needs no flag:
+# /fp:precise, its default, does not contract, so the asymmetry below is correct.
+#
+# The catalog is a translation unit of its own precisely so this flag reaches ONLY it. corehydro_core
+# is an INTERFACE library, so the header-only core is compiled INTO whichever TU includes it: a flag
+# on the whole target would de-contract the ported core as well, and the C++ runner would then be
+# exercising a differently-compiled core than the one the R and Python packages build and ship (they
+# pass no such flag). Keep the catalog out of test_fixtures.cpp.
+set_source_files_properties(tests/fixture_callback_catalog.cpp
+  PROPERTIES COMPILE_OPTIONS
+    "$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffp-contract=off>")
 add_test(NAME test_fixtures
          COMMAND test_fixtures ${CMAKE_CURRENT_SOURCE_DIR}/../fixtures)
