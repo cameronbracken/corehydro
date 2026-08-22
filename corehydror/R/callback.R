@@ -205,10 +205,12 @@ root_find_system <- function(f, jacobian, first_guess, tolerance = NULL, max_ite
 #'   between the two nested estimates the adaptive methods compare (`"gauss_kronrod"`,
 #'   `"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`, `"gauss_lobatto"`). Each must lie
 #'   between 1e-15 and 1. `NULL`, the default, leaves the ported integrator's own defaults (1e-8)
-#'   in force. Unused by the five fixed-rule methods.
+#'   in force. Only apply to the adaptive methods; supplying either for one of the five fixed-rule
+#'   methods raises an error.
 #' @param max_function_evaluations the cap on evaluations of `f`, for the adaptive methods.
 #'   Reaching it stops the subdivision and reports it in the status rather than raising an error.
-#'   `NULL`, the default, leaves the ported integrator's own default in force.
+#'   `NULL`, the default, leaves the ported integrator's own default in force. Supplying it for
+#'   one of the five fixed-rule methods raises an error.
 #' @param steps the number of integration steps for `method` `"simpsons_fixed"`,
 #'   `"trapezoidal_fixed"`, or `"midpoint"` alone. `NULL`, the default, leaves the ported static's
 #'   own default (2) in force.
@@ -255,6 +257,10 @@ quadrature <- function(f, lower, upper,
     opts$method <- method
   }
   if (!is.null(absolute_tolerance)) {
+    if (method %in% fixed_methods) {
+      stop("`absolute_tolerance` only applies to the adaptive methods, not method = \"",
+           method, "\"", call. = FALSE)
+    }
     if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
         absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
       stop("`absolute_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
@@ -262,6 +268,10 @@ quadrature <- function(f, lower, upper,
     opts$absolute_tolerance <- as.double(absolute_tolerance)
   }
   if (!is.null(relative_tolerance)) {
+    if (method %in% fixed_methods) {
+      stop("`relative_tolerance` only applies to the adaptive methods, not method = \"",
+           method, "\"", call. = FALSE)
+    }
     if (!is.numeric(relative_tolerance) || length(relative_tolerance) != 1L ||
         relative_tolerance < 1e-15 || relative_tolerance > 1) {
       stop("`relative_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
@@ -269,6 +279,10 @@ quadrature <- function(f, lower, upper,
     opts$relative_tolerance <- as.double(relative_tolerance)
   }
   if (!is.null(max_function_evaluations)) {
+    if (method %in% fixed_methods) {
+      stop("`max_function_evaluations` only applies to the adaptive methods, not method = \"",
+           method, "\"", call. = FALSE)
+    }
     if (!is.numeric(max_function_evaluations) || length(max_function_evaluations) != 1L ||
         max_function_evaluations < 1) {
       stop("`max_function_evaluations` must be a single positive integer", call. = FALSE)

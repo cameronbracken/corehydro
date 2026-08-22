@@ -202,6 +202,16 @@ def test_quadrature_supports_method_variants():
     with pytest.raises(ValueError, match="steps"):
         ch.quadrature(lambda x: x, 0, 1, method="gauss_lobatto", steps=10)
 
+    # The tolerance-family options only apply to the five adaptive methods, not the five
+    # fixed-rule statics: a fixed-rule method silently ignoring these used to be a no-op (review
+    # finding).
+    with pytest.raises(ValueError, match="absolute_tolerance"):
+        ch.quadrature(lambda x: x, 0, 1, method="midpoint", absolute_tolerance=1e-12)
+    with pytest.raises(ValueError, match="relative_tolerance"):
+        ch.quadrature(lambda x: x, 0, 1, method="gauss_legendre", relative_tolerance=1e-12)
+    with pytest.raises(ValueError, match="max_function_evaluations"):
+        ch.quadrature(lambda x: x, 0, 1, method="simpsons_fixed", max_function_evaluations=100)
+
 
 def test_quadrature_2d_integrates_over_a_rectangle():
     q = ch.quadrature_2d(lambda x, y: x + y, 0, 1, 0, 1)

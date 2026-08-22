@@ -130,6 +130,14 @@ test_that("quadrature supports the deterministic method variants (P2 math extras
   # `steps` only applies to the fixed-step statics and midpoint.
   expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "gauss_lobatto",
                           steps = 10), "steps")
+  # The tolerance-family options only apply to the five adaptive methods, not the five fixed-rule
+  # statics: a fixed-rule method silently ignoring these used to be a no-op (review finding).
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "midpoint",
+                          absolute_tolerance = 1e-12), "absolute_tolerance")
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "gauss_legendre",
+                          relative_tolerance = 1e-12), "relative_tolerance")
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "simpsons_fixed",
+                          max_function_evaluations = 100L), "max_function_evaluations")
 })
 
 test_that("quadrature_2d integrates a user-written R function over a 2D rectangle", {

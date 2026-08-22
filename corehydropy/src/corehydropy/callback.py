@@ -367,12 +367,13 @@ def quadrature(
         The convergence tolerances on the difference between the two nested estimates the
         adaptive methods compare (``"gauss_kronrod"``, ``"simpsons"``, ``"trapezoidal"``,
         ``"adaptive_simpsons"``, ``"gauss_lobatto"``). Each must lie between 1e-15 and 1. Left
-        unset, the ported integrator's own defaults (1e-8) apply. Unused by the five fixed-rule
-        methods.
+        unset, the ported integrator's own defaults (1e-8) apply. Only apply to the adaptive
+        methods; supplying either for one of the five fixed-rule methods raises ``ValueError``.
     max_function_evaluations : int, optional
         The cap on evaluations of ``f``, for the adaptive methods. Reaching it stops the
         subdivision and is reported in the status rather than raising. Left unset, the ported
-        integrator's own default applies.
+        integrator's own default applies. Supplying it for one of the five fixed-rule methods
+        raises ``ValueError``.
     steps : int, optional
         The number of integration steps, for ``method`` ``"simpsons_fixed"``,
         ``"trapezoidal_fixed"``, or ``"midpoint"`` alone. Left unset, the ported static's own
@@ -417,14 +418,27 @@ def quadrature(
     if method != "gauss_kronrod":
         options["method"] = method
     if absolute_tolerance is not None:
+        if method in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                f'`absolute_tolerance` only applies to the adaptive methods, not method="{method}"'
+            )
         if not 1e-15 <= float(absolute_tolerance) <= 1:
             raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
         options["absolute_tolerance"] = float(absolute_tolerance)
     if relative_tolerance is not None:
+        if method in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                f'`relative_tolerance` only applies to the adaptive methods, not method="{method}"'
+            )
         if not 1e-15 <= float(relative_tolerance) <= 1:
             raise ValueError("`relative_tolerance` must be a single number between 1e-15 and 1")
         options["relative_tolerance"] = float(relative_tolerance)
     if max_function_evaluations is not None:
+        if method in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                "`max_function_evaluations` only applies to the adaptive methods, not "
+                f'method="{method}"'
+            )
         if int(max_function_evaluations) < 1:
             raise ValueError("`max_function_evaluations` must be a single positive integer")
         options["max_function_evaluations"] = int(max_function_evaluations)

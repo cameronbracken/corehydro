@@ -33,11 +33,13 @@ infinite (every one of these rules integrates a finite interval).}
 between the two nested estimates the adaptive methods compare (\code{"gauss_kronrod"},
 \code{"simpsons"}, \code{"trapezoidal"}, \code{"adaptive_simpsons"}, \code{"gauss_lobatto"}). Each must lie
 between 1e-15 and 1. \code{NULL}, the default, leaves the ported integrator's own defaults (1e-8)
-in force. Unused by the five fixed-rule methods.}
+in force. Only apply to the adaptive methods; supplying either for one of the five fixed-rule
+methods raises an error.}
 
 \item{max_function_evaluations}{the cap on evaluations of \code{f}, for the adaptive methods.
 Reaching it stops the subdivision and reports it in the status rather than raising an error.
-\code{NULL}, the default, leaves the ported integrator's own default in force.}
+\code{NULL}, the default, leaves the ported integrator's own default in force. Supplying it for
+one of the five fixed-rule methods raises an error.}
 
 \item{steps}{the number of integration steps for \code{method} \code{"simpsons_fixed"},
 \code{"trapezoidal_fixed"}, or \code{"midpoint"} alone. \code{NULL}, the default, leaves the ported static's
