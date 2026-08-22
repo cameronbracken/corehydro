@@ -65,6 +65,10 @@ struct CallbackSet {
     // which guards this and `scalar` with a SHARED abort state for the reason gmm.hpp's file
     // header gives for its own multi-callback groups.
     std::function<double(double)> scalar_deriv;
+    // f(x, y) -> z. The 2D integrand math/quadrature_2d takes (AdaptiveSimpsonsRule2D's
+    // function), P2 "math extras". Its own member rather than a reuse of `scalar`, because the
+    // arity differs; see callback/math.hpp's quadrature_2d arm.
+    std::function<double(double, double)> scalar_xy;
     // f(theta) -> y. Log-likelihood, gradient/hessian target, GMM penalty.
     std::function<double(const std::vector<double>&)> vector_scalar;
     // f(theta) -> vector. Gradient callback, GMM moment conditions, bootstrap statistic.

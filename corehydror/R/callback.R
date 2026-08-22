@@ -184,35 +184,61 @@ root_find_system <- function(f, jacobian, first_guess, tolerance = NULL, max_ite
 
 #' Integrate a user-written function
 #'
-#' Computes the definite integral of `f` over `[lower, upper]` with the ported Numerics
-#' adaptive Gauss-Kronrod rule (10-point Gauss, 21-point Kronrod), which subdivides the
-#' interval until the two nested estimates agree to the requested tolerance.
+#' Computes the definite integral of `f` over `[lower, upper]`. The default `method`,
+#' `"gauss_kronrod"`, is the ported Numerics adaptive Gauss-Kronrod rule (10-point Gauss, 21-point
+#' Kronrod), which subdivides the interval until the two nested estimates agree to the requested
+#' tolerance. Nine other ported methods (P2 "math extras") are available: three more adaptive
+#' rules (`"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`, `"gauss_lobatto"`) and five fixed
+#' rules with no adaptive refinement (`"gauss_legendre"`, `"gauss_legendre20"`,
+#' `"simpsons_fixed"`, `"trapezoidal_fixed"`, `"midpoint"`).
 #'
 #' The name is `quadrature()` rather than `integrate()` so it does not mask
 #' [stats::integrate()].
 #'
 #' @param f a function taking one number and returning one number.
 #' @param lower,upper the limits of integration. `upper` must be above `lower`; neither may be
-#'   infinite (the ported rule integrates a finite interval).
+#'   infinite (every one of these rules integrates a finite interval).
+#' @param method one of `"gauss_kronrod"` (the default), `"simpsons"`, `"trapezoidal"`,
+#'   `"adaptive_simpsons"`, `"gauss_lobatto"`, `"gauss_legendre"`, `"gauss_legendre20"`,
+#'   `"simpsons_fixed"`, `"trapezoidal_fixed"`, or `"midpoint"`.
 #' @param absolute_tolerance,relative_tolerance the convergence tolerances on the difference
-#'   between the Gauss and Kronrod estimates. Each must lie between 1e-15 and 1. `NULL`, the
-#'   default, leaves the ported integrator's own defaults (1e-8) in force.
-#' @param max_function_evaluations the cap on evaluations of `f`. Reaching it stops the
-#'   subdivision and reports it in the status rather than raising an error. `NULL`, the default,
-#'   leaves the ported integrator's own default in force.
+#'   between the two nested estimates the adaptive methods compare (`"gauss_kronrod"`,
+#'   `"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`, `"gauss_lobatto"`). Each must lie
+#'   between 1e-15 and 1. `NULL`, the default, leaves the ported integrator's own defaults (1e-8)
+#'   in force. Unused by the five fixed-rule methods.
+#' @param max_function_evaluations the cap on evaluations of `f`, for the adaptive methods.
+#'   Reaching it stops the subdivision and reports it in the status rather than raising an error.
+#'   `NULL`, the default, leaves the ported integrator's own default in force.
+#' @param steps the number of integration steps for `method` `"simpsons_fixed"`,
+#'   `"trapezoidal_fixed"`, or `"midpoint"` alone. `NULL`, the default, leaves the ported static's
+#'   own default (2) in force.
+#' @param min_depth,max_depth the recursion-depth bounds for `method = "adaptive_simpsons"` alone.
+#'   `NULL`, the default, leaves the ported class's own defaults (0 and 100) in force.
 #' @return the integral, a single number, carrying three attributes: `status`, one of `"Success"`,
-#'   `"MaximumFunctionEvaluationsReached"`, `"MaximumIterationsReached"`, `"Failure"` or
-#'   `"None"`; `function_evaluations`, the number of times `f` was called; and `standard_error`,
-#'   the rule's own error estimate (the square root of the accumulated squared differences between
-#'   the Gauss and Kronrod estimates, zero when the interval never needed subdividing).
+#'   `"MaximumFunctionEvaluationsReached"`, `"MaximumIterationsReached"`, `"Failure"` or `"None"`
+#'   for the five adaptive methods (always `"Success"` for the five fixed-rule methods, which have
+#'   no such status of their own); `function_evaluations`, the number of times `f` was called
+#'   (`NA` for the five fixed-rule methods, whose ported statics report no count); and
+#'   `standard_error`, the rule's own error estimate where the driven class has one (zero for
+#'   `"simpsons"`, `"trapezoidal"`, and `"gauss_lobatto"`, which have none; `NA` for the five
+#'   fixed-rule methods).
 #' @examples
 #' quadrature(function(x) x^2, lower = 0, upper = 3)
 #' q <- quadrature(sin, lower = 0, upper = pi)
 #' attr(q, "status")
 #' attr(q, "standard_error")
+#' quadrature(function(x) x^3, lower = 0, upper = 1, method = "gauss_lobatto")
+#' quadrature(function(x) x^3, lower = 0, upper = 1, method = "midpoint", steps = 1000)
 #' @export
-quadrature <- function(f, lower, upper, absolute_tolerance = NULL, relative_tolerance = NULL,
-                       max_function_evaluations = NULL) {
+quadrature <- function(f, lower, upper,
+                       method = c("gauss_kronrod", "simpsons", "trapezoidal",
+                                  "adaptive_simpsons", "gauss_lobatto", "gauss_legendre",
+                                  "gauss_legendre20", "simpsons_fixed", "trapezoidal_fixed",
+                                  "midpoint"),
+                       absolute_tolerance = NULL, relative_tolerance = NULL,
+                       max_function_evaluations = NULL, steps = NULL,
+                       min_depth = NULL, max_depth = NULL) {
+  method <- match.arg(method)
   callback_check_fn(f)
   if (!is.numeric(lower) || length(lower) != 1L || !is.finite(lower) ||
       !is.numeric(upper) || length(upper) != 1L || !is.finite(upper)) {
@@ -221,8 +247,13 @@ quadrature <- function(f, lower, upper, absolute_tolerance = NULL, relative_tole
   if (lower >= upper) {
     stop("`lower` must be below `upper`", call. = FALSE)
   }
+  fixed_methods <- c("gauss_legendre", "gauss_legendre20", "simpsons_fixed",
+                     "trapezoidal_fixed", "midpoint")
   # See root_find() above: a key is written only when the caller supplied it.
   opts <- list(lower = as.double(lower), upper = as.double(upper))
+  if (method != "gauss_kronrod") {
+    opts$method <- method
+  }
   if (!is.null(absolute_tolerance)) {
     if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
         absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
@@ -244,7 +275,120 @@ quadrature <- function(f, lower, upper, absolute_tolerance = NULL, relative_tole
     }
     opts$max_function_evaluations <- as.integer(max_function_evaluations)
   }
+  if (!is.null(steps)) {
+    if (!method %in% fixed_methods) {
+      stop("`steps` only applies to method = \"simpsons_fixed\", \"trapezoidal_fixed\", or ",
+           "\"midpoint\"", call. = FALSE)
+    }
+    if (!is.numeric(steps) || length(steps) != 1L || steps < 1) {
+      stop("`steps` must be a single positive integer", call. = FALSE)
+    }
+    opts$steps <- as.integer(steps)
+  }
+  if (!is.null(min_depth) || !is.null(max_depth)) {
+    if (!identical(method, "adaptive_simpsons")) {
+      stop("`min_depth`/`max_depth` only apply to method = \"adaptive_simpsons\"", call. = FALSE)
+    }
+    if (!is.null(min_depth)) {
+      if (!is.numeric(min_depth) || length(min_depth) != 1L || min_depth < 0) {
+        stop("`min_depth` must be a single non-negative integer", call. = FALSE)
+      }
+      opts$min_depth <- as.integer(min_depth)
+    }
+    if (!is.null(max_depth)) {
+      if (!is.numeric(max_depth) || length(max_depth) != 1L || max_depth < 0) {
+        stop("`max_depth` must be a single non-negative integer", call. = FALSE)
+      }
+      opts$max_depth <- as.integer(max_depth)
+    }
+  }
   res <- ch_callback_math_("quadrature", to_spec_json(opts), f)
+  # The five fixed-rule statics return values = {integral} alone (see the file header): no
+  # function_evaluations or standard_error to report, so those two attributes carry NA rather
+  # than reading past the end of the result.
+  if (length(res$values) >= 3L) {
+    structure(res$values[[1]],
+              status = res$status,
+              function_evaluations = as.integer(res$values[[2]]),
+              standard_error = res$values[[3]])
+  } else {
+    structure(res$values[[1]],
+              status = res$status,
+              function_evaluations = NA_integer_,
+              standard_error = NA_real_)
+  }
+}
+
+#' Integrate a user-written function of two variables over a rectangle
+#'
+#' Computes the definite integral of `f(x, y)` over the rectangle `[min_x, max_x] x
+#' [min_y, max_y]` with the ported Numerics adaptive Simpson's rule in two dimensions
+#' (P2 "math extras"): the tensor-product 3x3-point Simpson estimate over the whole domain is
+#' compared against the sum of the four quadrant sub-estimates, and the domain is subdivided into
+#' quadrants until the two agree to the requested tolerance.
+#'
+#' @param f a function taking two numbers (`x`, `y`) and returning one number.
+#' @param min_x,max_x,min_y,max_y the bounds of the rectangle. `max_x` must be above `min_x`, and
+#'   `max_y` above `min_y`.
+#' @param absolute_tolerance,relative_tolerance the convergence tolerances on the difference
+#'   between the whole-domain and quadrant-subdivided estimates, each between 1e-15 and 1.
+#'   `NULL`, the default, leaves the ported integrator's own defaults (1e-8) in force.
+#' @param min_depth,max_depth the recursion-depth bounds. `NULL`, the default, leaves the ported
+#'   class's own defaults (0 and 100) in force.
+#' @return the integral, a single number, carrying the same three attributes [quadrature()]
+#'   returns: `status`, `function_evaluations`, and `standard_error`.
+#' @examples
+#' quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1)
+#' @export
+quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NULL,
+                          relative_tolerance = NULL, min_depth = NULL, max_depth = NULL) {
+  if (!is.function(f)) {
+    stop("`f` must be a function taking two numbers and returning a single number", call. = FALSE)
+  }
+  check_bound <- function(x, name) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      stop("`", name, "` must be a single finite number", call. = FALSE)
+    }
+  }
+  check_bound(min_x, "min_x")
+  check_bound(max_x, "max_x")
+  check_bound(min_y, "min_y")
+  check_bound(max_y, "max_y")
+  if (min_x >= max_x) {
+    stop("`min_x` must be below `max_x`", call. = FALSE)
+  }
+  if (min_y >= max_y) {
+    stop("`min_y` must be below `max_y`", call. = FALSE)
+  }
+  opts <- list(min_x = as.double(min_x), max_x = as.double(max_x),
+              min_y = as.double(min_y), max_y = as.double(max_y))
+  if (!is.null(absolute_tolerance)) {
+    if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
+        absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
+      stop("`absolute_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+    }
+    opts$absolute_tolerance <- as.double(absolute_tolerance)
+  }
+  if (!is.null(relative_tolerance)) {
+    if (!is.numeric(relative_tolerance) || length(relative_tolerance) != 1L ||
+        relative_tolerance < 1e-15 || relative_tolerance > 1) {
+      stop("`relative_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+    }
+    opts$relative_tolerance <- as.double(relative_tolerance)
+  }
+  if (!is.null(min_depth)) {
+    if (!is.numeric(min_depth) || length(min_depth) != 1L || min_depth < 0) {
+      stop("`min_depth` must be a single non-negative integer", call. = FALSE)
+    }
+    opts$min_depth <- as.integer(min_depth)
+  }
+  if (!is.null(max_depth)) {
+    if (!is.numeric(max_depth) || length(max_depth) != 1L || max_depth < 0) {
+      stop("`max_depth` must be a single non-negative integer", call. = FALSE)
+    }
+    opts$max_depth <- as.integer(max_depth)
+  }
+  res <- ch_callback_math_xy_("quadrature_2d", to_spec_json(opts), f)
   structure(res$values[[1]],
             status = res$status,
             function_evaluations = as.integer(res$values[[2]]),

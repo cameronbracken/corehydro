@@ -93,6 +93,58 @@ test_that("quadrature reports the rule's own standard error", {
   expect_lt(attr(peak, "standard_error"), 1e-6)
 })
 
+test_that("quadrature supports the deterministic method variants (P2 math extras)", {
+  # Test_AdaptiveGaussLobatto.Test_FXX: 0.5 + 24x + 3x^2 on [0, 2], true = 57.
+  expect_equal(as.numeric(quadrature(function(x) 0.5 + 24 * x + 3 * x^2, lower = 0, upper = 2,
+                                     method = "gauss_lobatto")),
+               57, tolerance = 1e-3)
+  # Test_Integration.Test_MidPoint: x^3 on [0, 1] with 1000 fixed steps, true = 0.25.
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "midpoint", steps = 1000)),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1, method = "simpsons")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "trapezoidal")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "adaptive_simpsons")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "gauss_legendre")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "gauss_legendre20")),
+               0.25, tolerance = 1e-10)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "simpsons_fixed", steps = 1000)),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "trapezoidal_fixed", steps = 1000)),
+               0.25, tolerance = 1e-3)
+  # Absent `method` still reaches the AdaptiveGaussKronrod path, byte-identical to before.
+  expect_equal(attr(quadrature(function(x) x^2, lower = 0, upper = 3), "status"), "Success")
+
+  # `min_depth`/`max_depth` only apply to method = "adaptive_simpsons".
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, min_depth = 1), "adaptive_simpsons")
+  # `steps` only applies to the fixed-step statics and midpoint.
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "gauss_lobatto",
+                          steps = 10), "steps")
+})
+
+test_that("quadrature_2d integrates a user-written R function over a 2D rectangle", {
+  q <- quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1)
+  expect_equal(as.numeric(q), 1, tolerance = 1e-3)
+  expect_equal(attr(q, "status"), "Success")
+  expect_gt(attr(q, "function_evaluations"), 0L)
+  expect_gte(attr(q, "standard_error"), 0)
+
+  boom <- function(x, y) stop("my own error")
+  expect_error(quadrature_2d(boom, min_x = 0, max_x = 1, min_y = 0, max_y = 1), "my own error")
+  expect_error(quadrature_2d(function(x, y) x + y, min_x = 1, max_x = 0, min_y = 0, max_y = 1),
+               "must be below")
+})
+
 test_that("an unsupplied option leaves the ported routine's own default in force", {
   # The wrapper writes an option key only when the caller passes one, so NULL and the ported
   # default must give the identical run. Python's twin asserts the same.

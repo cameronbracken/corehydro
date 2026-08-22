@@ -1825,6 +1825,29 @@ same key and shape the `"gmm"` group's optional Jacobian already uses, reused ra
 duplicated), `options.first_guess` is a vector giving the system's dimension n, and the result's
 `dims` is `{n}` rather than empty, matching `math/gradient`'s own vector-shaped result.
 
+P2 "math extras" also widened `math/quadrature` and added `math/quadrature_2d`, over the four
+deterministic integrators ported alongside AdaptiveGaussKronrod (`numerics/math/integration/`):
+SimpsonsRule, TrapezoidalRule, AdaptiveSimpsonsRule, AdaptiveGaussLobatto, AdaptiveSimpsonsRule2D,
+and the five `Integration` statics (GaussLegendre, GaussLegendre20, TrapezoidalRule(steps),
+SimpsonsRule(steps), Midpoint). `quadrature`'s `options.method` is now one of `"gauss_kronrod"`
+(the default, absent-key-compatible with every fixture written before this key existed),
+`"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`, `"gauss_lobatto"` (the four other
+Integrator-class arms, which keep the existing `{integral, function_evaluations, standard_error}`
+triple and a real status -- `0.0` for `standard_error` where the driven class has none of its own,
+namely SimpsonsRule/TrapezoidalRule/AdaptiveGaussLobatto), or `"gauss_legendre"`,
+`"gauss_legendre20"`, `"simpsons_fixed"`, `"trapezoidal_fixed"`, `"midpoint"` (the five statics,
+which return `values = {integral}` alone and `status = "Success"` unconditionally, since none has
+an Integrator to report one -- those `"status"` assertions are therefore structural rather than
+`EMITTER-READ`, the same distinction the file header draws for `root_find`/`derivative`/
+`gradient`/`hessian`). `"adaptive_simpsons"` alone takes the optional `min_depth`/`max_depth`;
+the three fixed-step statics take the optional `steps` (default 2). `quadrature_2d` is a SEPARATE
+method rather than a `quadrature` arm, because its callback is `f(x, y)` rather than `f(x)`; it
+always drives AdaptiveSimpsonsRule2D and always returns the result triple + status, with
+`options.min_x`/`max_x`/`min_y`/`max_y` required and `absolute_tolerance`/`relative_tolerance`/
+`min_depth`/`max_depth` optional. `Quad2D_XPlusY` and `Quad2D_PI2D` in
+`fixtures/callback/math.json` are its two catalog entries, both real upstream integrands
+(`Test_AdaptiveSimpsonsRule2D.Test_XPlusY`/`Test_PI`, the latter Integrands.PI2D).
+
 The `"rng"` group has one method, `probe`, and one job: prove that a draw taken INSIDE a
 host-language callback comes off the core's seeded stream rather than off R's or Python's own
 generator. Its `options` carry exactly one of `seed` (a number, the C# `MersenneTwister(int)`

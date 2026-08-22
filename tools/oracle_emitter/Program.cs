@@ -886,6 +886,18 @@ static Func<double[], double>? CallbackVectorFunction(string name) => name switc
     _ => null
 };
 
+// P2 "math extras", the math/quadrature_2d catalog: Test_AdaptiveSimpsonsRule2D's own integrands
+// (Mathematics/Integration/Integrands.cs), the C# counterpart of the four runners' native (x, y)
+// closures.
+static Func<double, double, double>? CallbackScalarXyFunction(string name) => name switch
+{
+    "Quad2D_XPlusY" => (x, y) => x + y,
+    // Integrands.PI2D: the indicator of the unit disc, whose integral over [-1, 1] x [-1, 1]
+    // approximates pi.
+    "Quad2D_PI2D" => (x, y) => (x * x + y * y < 1d) ? 1d : 0d,
+    _ => null
+};
+
 // P2 "math extras", the math/root_find_system catalog: Test_NewtonRaphson.Test_Multi_LinearSystem's
 // system, F([x;y]) = [3x + y - 9, x + 2y - 8] with the constant Jacobian [[3, 1], [1, 2]], whose
 // unique root is [2, 3]. `double[,]`, not `Matrix`, so this catalog's shape matches
@@ -5823,23 +5835,128 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             {
                 var f = CallbackScalarFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
-                var agk = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod(
-                    f, Opt("lower", 0d), Opt("upper", 0d));
-                // Written only when the fixture carries the key, exactly as callback/math.hpp
-                // does, so an absent key exercises the C# class's OWN default.
+                // P2 "math extras": `options.method` picks the ported integrator/static, absent
+                // meaning "gauss_kronrod" -- preserving every fixture written before this key
+                // existed, exactly as callback/math.hpp's own quadrature arm does. See that file's
+                // header for the result-shape split between the Integrator-class arms (a real
+                // status/function_evaluations/standard_error) and the static arms (integral only,
+                // status unconditionally "Success").
+                string qMethod = options.ValueKind == JsonValueKind.Object &&
+                                 options.TryGetProperty("method", out var qmEl)
+                    ? qmEl.GetString()! : "gauss_kronrod";
+                void ApplyTolerances(Numerics.Mathematics.Integration.Integrator integ)
+                {
+                    if (options.ValueKind != JsonValueKind.Object) return;
+                    if (options.TryGetProperty("absolute_tolerance", out var at))
+                        integ.AbsoluteTolerance = ParseNum(at);
+                    if (options.TryGetProperty("relative_tolerance", out var rt))
+                        integ.RelativeTolerance = ParseNum(rt);
+                    if (options.TryGetProperty("max_function_evaluations", out var mfe))
+                        integ.MaxFunctionEvaluations = (int)ParseNum(mfe);
+                }
+                if (qMethod == "gauss_kronrod")
+                {
+                    var agk = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(agk);
+                    agk.Integrate();
+                    values = [agk.Result, agk.FunctionEvaluations, agk.StandardError];
+                    dims = [];
+                    statusName = agk.Status.ToString();
+                }
+                else if (qMethod == "simpsons")
+                {
+                    var sr = new Numerics.Mathematics.Integration.SimpsonsRule(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(sr);
+                    sr.Integrate();
+                    values = [sr.Result, sr.FunctionEvaluations, 0d];
+                    dims = [];
+                    statusName = sr.Status.ToString();
+                }
+                else if (qMethod == "trapezoidal")
+                {
+                    var tr = new Numerics.Mathematics.Integration.TrapezoidalRule(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(tr);
+                    tr.Integrate();
+                    values = [tr.Result, tr.FunctionEvaluations, 0d];
+                    dims = [];
+                    statusName = tr.Status.ToString();
+                }
+                else if (qMethod == "adaptive_simpsons")
+                {
+                    var asr = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(asr);
+                    if (Has("min_depth")) asr.MinDepth = (int)Opt("min_depth", 0d);
+                    if (Has("max_depth")) asr.MaxDepth = (int)Opt("max_depth", 100d);
+                    asr.Integrate();
+                    values = [asr.Result, asr.FunctionEvaluations, asr.StandardError];
+                    dims = [];
+                    statusName = asr.Status.ToString();
+                }
+                else if (qMethod == "gauss_lobatto")
+                {
+                    var gl = new Numerics.Mathematics.Integration.AdaptiveGaussLobatto(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(gl);
+                    gl.Integrate();
+                    values = [gl.Result, gl.FunctionEvaluations, 0d];
+                    dims = [];
+                    statusName = gl.Status.ToString();
+                }
+                else if (qMethod == "gauss_legendre" || qMethod == "gauss_legendre20" ||
+                         qMethod == "simpsons_fixed" || qMethod == "trapezoidal_fixed" ||
+                         qMethod == "midpoint")
+                {
+                    int qSteps = (int)Opt("steps", 2d);
+                    double integral = qMethod switch
+                    {
+                        "gauss_legendre" => Numerics.Mathematics.Integration.Integration.GaussLegendre(
+                            f, Opt("lower", 0d), Opt("upper", 0d)),
+                        "gauss_legendre20" => Numerics.Mathematics.Integration.Integration.GaussLegendre20(
+                            f, Opt("lower", 0d), Opt("upper", 0d)),
+                        "simpsons_fixed" => Numerics.Mathematics.Integration.Integration.SimpsonsRule(
+                            f, Opt("lower", 0d), Opt("upper", 0d), qSteps),
+                        "trapezoidal_fixed" => Numerics.Mathematics.Integration.Integration.TrapezoidalRule(
+                            f, Opt("lower", 0d), Opt("upper", 0d), qSteps),
+                        _ => Numerics.Mathematics.Integration.Integration.Midpoint(
+                            f, Opt("lower", 0d), Opt("upper", 0d), qSteps)
+                    };
+                    values = [integral];
+                    dims = [];
+                    statusName = "Success";
+                }
+                else
+                {
+                    throw new Exception($"math/quadrature: unknown method '{qMethod}'");
+                }
+            }
+            else if (method == "quadrature_2d")
+            {
+                // P2 "math extras": the (x, y) half of the math group, always driving
+                // AdaptiveSimpsonsRule2D and always returning the result triple + status, exactly
+                // as quadrature's Integrator-class arms do. See callback/math.hpp's file header.
+                var f2 = CallbackScalarXyFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an (x, y) function");
+                var asr2d = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule2D(
+                    f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
                 if (options.ValueKind == JsonValueKind.Object)
                 {
-                    if (options.TryGetProperty("absolute_tolerance", out var at))
-                        agk.AbsoluteTolerance = ParseNum(at);
-                    if (options.TryGetProperty("relative_tolerance", out var rt))
-                        agk.RelativeTolerance = ParseNum(rt);
-                    if (options.TryGetProperty("max_function_evaluations", out var mfe))
-                        agk.MaxFunctionEvaluations = (int)ParseNum(mfe);
+                    if (options.TryGetProperty("absolute_tolerance", out var at2))
+                        asr2d.AbsoluteTolerance = ParseNum(at2);
+                    if (options.TryGetProperty("relative_tolerance", out var rt2))
+                        asr2d.RelativeTolerance = ParseNum(rt2);
+                    if (options.TryGetProperty("min_depth", out var mnd))
+                        asr2d.MinDepth = (int)ParseNum(mnd);
+                    if (options.TryGetProperty("max_depth", out var mxd))
+                        asr2d.MaxDepth = (int)ParseNum(mxd);
                 }
-                agk.Integrate();
-                values = [agk.Result, agk.FunctionEvaluations, agk.StandardError];
+                asr2d.Integrate();
+                values = [asr2d.Result, asr2d.FunctionEvaluations, asr2d.StandardError];
                 dims = [];
-                statusName = agk.Status.ToString();
+                statusName = asr2d.Status.ToString();
             }
             else
             {

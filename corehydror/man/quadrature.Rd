@@ -8,36 +8,62 @@ quadrature(
   f,
   lower,
   upper,
+  method = c("gauss_kronrod", "simpsons", "trapezoidal", "adaptive_simpsons",
+    "gauss_lobatto", "gauss_legendre", "gauss_legendre20", "simpsons_fixed",
+    "trapezoidal_fixed", "midpoint"),
   absolute_tolerance = NULL,
   relative_tolerance = NULL,
-  max_function_evaluations = NULL
+  max_function_evaluations = NULL,
+  steps = NULL,
+  min_depth = NULL,
+  max_depth = NULL
 )
 }
 \arguments{
 \item{f}{a function taking one number and returning one number.}
 
 \item{lower, upper}{the limits of integration. \code{upper} must be above \code{lower}; neither may be
-infinite (the ported rule integrates a finite interval).}
+infinite (every one of these rules integrates a finite interval).}
+
+\item{method}{one of \code{"gauss_kronrod"} (the default), \code{"simpsons"}, \code{"trapezoidal"},
+\code{"adaptive_simpsons"}, \code{"gauss_lobatto"}, \code{"gauss_legendre"}, \code{"gauss_legendre20"},
+\code{"simpsons_fixed"}, \code{"trapezoidal_fixed"}, or \code{"midpoint"}.}
 
 \item{absolute_tolerance, relative_tolerance}{the convergence tolerances on the difference
-between the Gauss and Kronrod estimates. Each must lie between 1e-15 and 1. \code{NULL}, the
-default, leaves the ported integrator's own defaults (1e-8) in force.}
+between the two nested estimates the adaptive methods compare (\code{"gauss_kronrod"},
+\code{"simpsons"}, \code{"trapezoidal"}, \code{"adaptive_simpsons"}, \code{"gauss_lobatto"}). Each must lie
+between 1e-15 and 1. \code{NULL}, the default, leaves the ported integrator's own defaults (1e-8)
+in force. Unused by the five fixed-rule methods.}
 
-\item{max_function_evaluations}{the cap on evaluations of \code{f}. Reaching it stops the
-subdivision and reports it in the status rather than raising an error. \code{NULL}, the default,
-leaves the ported integrator's own default in force.}
+\item{max_function_evaluations}{the cap on evaluations of \code{f}, for the adaptive methods.
+Reaching it stops the subdivision and reports it in the status rather than raising an error.
+\code{NULL}, the default, leaves the ported integrator's own default in force.}
+
+\item{steps}{the number of integration steps for \code{method} \code{"simpsons_fixed"},
+\code{"trapezoidal_fixed"}, or \code{"midpoint"} alone. \code{NULL}, the default, leaves the ported static's
+own default (2) in force.}
+
+\item{min_depth, max_depth}{the recursion-depth bounds for \code{method = "adaptive_simpsons"} alone.
+\code{NULL}, the default, leaves the ported class's own defaults (0 and 100) in force.}
 }
 \value{
 the integral, a single number, carrying three attributes: \code{status}, one of \code{"Success"},
-\code{"MaximumFunctionEvaluationsReached"}, \code{"MaximumIterationsReached"}, \code{"Failure"} or
-\code{"None"}; \code{function_evaluations}, the number of times \code{f} was called; and \code{standard_error},
-the rule's own error estimate (the square root of the accumulated squared differences between
-the Gauss and Kronrod estimates, zero when the interval never needed subdividing).
+\code{"MaximumFunctionEvaluationsReached"}, \code{"MaximumIterationsReached"}, \code{"Failure"} or \code{"None"}
+for the five adaptive methods (always \code{"Success"} for the five fixed-rule methods, which have
+no such status of their own); \code{function_evaluations}, the number of times \code{f} was called
+(\code{NA} for the five fixed-rule methods, whose ported statics report no count); and
+\code{standard_error}, the rule's own error estimate where the driven class has one (zero for
+\code{"simpsons"}, \code{"trapezoidal"}, and \code{"gauss_lobatto"}, which have none; \code{NA} for the five
+fixed-rule methods).
 }
 \description{
-Computes the definite integral of \code{f} over \verb{[lower, upper]} with the ported Numerics
-adaptive Gauss-Kronrod rule (10-point Gauss, 21-point Kronrod), which subdivides the
-interval until the two nested estimates agree to the requested tolerance.
+Computes the definite integral of \code{f} over \verb{[lower, upper]}. The default \code{method},
+\code{"gauss_kronrod"}, is the ported Numerics adaptive Gauss-Kronrod rule (10-point Gauss, 21-point
+Kronrod), which subdivides the interval until the two nested estimates agree to the requested
+tolerance. Nine other ported methods (P2 "math extras") are available: three more adaptive
+rules (\code{"simpsons"}, \code{"trapezoidal"}, \code{"adaptive_simpsons"}, \code{"gauss_lobatto"}) and five fixed
+rules with no adaptive refinement (\code{"gauss_legendre"}, \code{"gauss_legendre20"},
+\code{"simpsons_fixed"}, \code{"trapezoidal_fixed"}, \code{"midpoint"}).
 }
 \details{
 The name is \code{quadrature()} rather than \code{integrate()} so it does not mask
@@ -48,4 +74,6 @@ quadrature(function(x) x^2, lower = 0, upper = 3)
 q <- quadrature(sin, lower = 0, upper = pi)
 attr(q, "status")
 attr(q, "standard_error")
+quadrature(function(x) x^3, lower = 0, upper = 1, method = "gauss_lobatto")
+quadrature(function(x) x^3, lower = 0, upper = 1, method = "midpoint", steps = 1000)
 }

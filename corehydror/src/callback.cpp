@@ -56,6 +56,20 @@ std::function<double(double)> as_scalar_fn(function f) {
     };
 }
 
+// Converts an R closure of two arguments into the (x, y) -> z signature math/quadrature_2d takes
+// (P2 "math extras"). Mirrors as_scalar_fn's shape check and error wording.
+std::function<double(double, double)> as_scalar_xy_fn(function f) {
+    return [f](double x, double y) mutable -> double {
+        sexp out = f(writable::doubles({x}), writable::doubles({y}));
+        doubles v = as_doubles(out);
+        if (v.size() != 1)
+            throw std::runtime_error(
+                "the function must return a single number; got a value of length " +
+                std::to_string(static_cast<long long>(v.size())));
+        return v[0];
+    };
+}
+
 std::function<double(const std::vector<double>&)> as_vector_scalar_fn(function f) {
     return [f](const std::vector<double>& p) mutable -> double {
         writable::doubles par(static_cast<R_xlen_t>(p.size()));
@@ -467,6 +481,20 @@ list ch_callback_math2_(std::string method, std::string options_json, function f
         cbs.vector_matrix = as_matrix_fn(g, "the jacobian function");
     } else {
         stop("unknown two-callback math method: %s", method.c_str());
+    }
+    return pack(sup::run_callback("math", method, options_json, cbs));
+}
+
+// The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" alone, split from
+// ch_callback_math_ above for the same reason ch_callback_math2_ is -- the arity differs from
+// every other math method's. `f` marshals through as_scalar_xy_fn into `cbs.scalar_xy`.
+[[cpp11::register]]
+list ch_callback_math_xy_(std::string method, std::string options_json, function f) {
+    sup::CallbackSet cbs;
+    if (method == "quadrature_2d") {
+        cbs.scalar_xy = as_scalar_xy_fn(f);
+    } else {
+        stop("unknown xy-callback math method: %s", method.c_str());
     }
     return pack(sup::run_callback("math", method, options_json, cbs));
 }

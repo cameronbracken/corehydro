@@ -24,6 +24,7 @@ __all__ = [
     "root_find",
     "root_find_system",
     "quadrature",
+    "quadrature_2d",
     "QuadratureResult",
     "derivative",
     "gradient",
@@ -58,29 +59,37 @@ class QuadratureResult(float):
         One of ``"Success"``, ``"MaximumFunctionEvaluationsReached"``,
         ``"MaximumIterationsReached"``, ``"Failure"`` or ``"None"`` -- the ported Numerics
         ``IntegrationStatus``.
-    function_evaluations : int
-        The number of times ``f`` was called.
-    standard_error : float
+    function_evaluations : int or None
+        The number of times ``f`` was called. ``None`` for one of the five fixed-rule
+        ``quadrature()`` methods (P2 "math extras": ``"gauss_legendre"``, ``"gauss_legendre20"``,
+        ``"simpsons_fixed"``, ``"trapezoidal_fixed"``, ``"midpoint"``), whose ported Numerics
+        statics report no such count.
+    standard_error : float or None
         The rule's own error estimate, the ported ``StandardError``: the square root of the
-        accumulated squared differences between the Gauss and Kronrod estimates. Zero when the
-        interval never needed subdividing.
+        accumulated squared differences between the two nested estimates the adaptive methods
+        compare. Zero when the interval never needed subdividing, or when the driven class (P2
+        "math extras": ``"simpsons"``, ``"trapezoidal"``, ``"gauss_lobatto"``) has no such
+        estimate at all; ``None`` for the same five fixed-rule methods
+        ``function_evaluations`` is.
     """
 
     status: str
-    function_evaluations: int
-    standard_error: float
+    function_evaluations: int | None
+    standard_error: float | None
 
     def __new__(
         cls,
         value: float,
         status: str,
-        function_evaluations: int,
-        standard_error: float,
+        function_evaluations: int | None,
+        standard_error: float | None,
     ) -> "QuadratureResult":
         self = super().__new__(cls, value)
         self.status = status
-        self.function_evaluations = int(function_evaluations)
-        self.standard_error = float(standard_error)
+        self.function_evaluations = (
+            None if function_evaluations is None else int(function_evaluations)
+        )
+        self.standard_error = None if standard_error is None else float(standard_error)
         return self
 
     # A float subclass whose __new__ takes more than the value cannot be reconstructed by the
@@ -116,6 +125,29 @@ def _check_point(x: object) -> np.ndarray:
 
 
 _ROOT_FIND_METHODS = ("brent", "bisection", "secant", "newton")
+# The ten `quadrature()` methods (P2 "math extras"): the default plus four more adaptive rules
+# (each a ported Integrator subclass, with a real status/function_evaluations/standard_error to
+# report) and five fixed rules with no adaptive refinement (ported Integration statics, which
+# report only the integral). corehydror carries the same two lists in R/callback.R.
+_QUADRATURE_METHODS = (
+    "gauss_kronrod",
+    "simpsons",
+    "trapezoidal",
+    "adaptive_simpsons",
+    "gauss_lobatto",
+    "gauss_legendre",
+    "gauss_legendre20",
+    "simpsons_fixed",
+    "trapezoidal_fixed",
+    "midpoint",
+)
+_FIXED_QUADRATURE_METHODS = (
+    "gauss_legendre",
+    "gauss_legendre20",
+    "simpsons_fixed",
+    "trapezoidal_fixed",
+    "midpoint",
+)
 
 
 def root_find(
@@ -300,15 +332,23 @@ def quadrature(
     f: Callable[[float], float],
     lower: float,
     upper: float,
+    method: str = "gauss_kronrod",
     absolute_tolerance: float | None = None,
     relative_tolerance: float | None = None,
     max_function_evaluations: int | None = None,
+    steps: int | None = None,
+    min_depth: int | None = None,
+    max_depth: int | None = None,
 ) -> QuadratureResult:
     """Integrate a user-written function over a finite interval.
 
-    Computes the definite integral of ``f`` over ``[lower, upper]`` with the ported Numerics
-    adaptive Gauss-Kronrod rule (10-point Gauss, 21-point Kronrod), which subdivides the interval
-    until the two nested estimates agree to the requested tolerance.
+    Computes the definite integral of ``f`` over ``[lower, upper]``. The default ``method``,
+    ``"gauss_kronrod"``, is the ported Numerics adaptive Gauss-Kronrod rule (10-point Gauss,
+    21-point Kronrod), which subdivides the interval until the two nested estimates agree to the
+    requested tolerance. Nine other ported methods (P2 "math extras") are available: three more
+    adaptive rules (``"simpsons"``, ``"trapezoidal"``, ``"adaptive_simpsons"``,
+    ``"gauss_lobatto"``) and five fixed rules with no adaptive refinement (``"gauss_legendre"``,
+    ``"gauss_legendre20"``, ``"simpsons_fixed"``, ``"trapezoidal_fixed"``, ``"midpoint"``).
 
     Named ``quadrature`` rather than ``integrate`` to stay in step with ``corehydror``, where the
     latter would mask ``stats::integrate``.
@@ -319,19 +359,37 @@ def quadrature(
         A function taking one number and returning one number.
     lower, upper : float
         The limits of integration. ``upper`` must be above ``lower``; neither may be infinite.
+    method : str
+        One of ``"gauss_kronrod"`` (the default), ``"simpsons"``, ``"trapezoidal"``,
+        ``"adaptive_simpsons"``, ``"gauss_lobatto"``, ``"gauss_legendre"``,
+        ``"gauss_legendre20"``, ``"simpsons_fixed"``, ``"trapezoidal_fixed"``, or ``"midpoint"``.
     absolute_tolerance, relative_tolerance : float, optional
-        The convergence tolerances on the difference between the Gauss and Kronrod estimates.
-        Each must lie between 1e-15 and 1. Left unset, the ported integrator's own defaults
-        (1e-8) apply.
+        The convergence tolerances on the difference between the two nested estimates the
+        adaptive methods compare (``"gauss_kronrod"``, ``"simpsons"``, ``"trapezoidal"``,
+        ``"adaptive_simpsons"``, ``"gauss_lobatto"``). Each must lie between 1e-15 and 1. Left
+        unset, the ported integrator's own defaults (1e-8) apply. Unused by the five fixed-rule
+        methods.
     max_function_evaluations : int, optional
-        The cap on evaluations of ``f``. Reaching it stops the subdivision and is reported in the
-        status rather than raising. Left unset, the ported integrator's own default applies.
+        The cap on evaluations of ``f``, for the adaptive methods. Reaching it stops the
+        subdivision and is reported in the status rather than raising. Left unset, the ported
+        integrator's own default applies.
+    steps : int, optional
+        The number of integration steps, for ``method`` ``"simpsons_fixed"``,
+        ``"trapezoidal_fixed"``, or ``"midpoint"`` alone. Left unset, the ported static's own
+        default (2) applies.
+    min_depth, max_depth : int, optional
+        The recursion-depth bounds, for ``method="adaptive_simpsons"`` alone. Left unset, the
+        ported class's own defaults (0 and 100) apply.
 
     Returns
     -------
     QuadratureResult
         The integral, a ``float`` carrying ``status``, ``function_evaluations`` and
-        ``standard_error``.
+        ``standard_error``. For the five fixed-rule methods, which have no adaptive status or
+        evaluation count of their own, ``status`` is always ``"Success"`` and
+        ``function_evaluations``/``standard_error`` are ``None``; ``standard_error`` is also 0.0
+        for ``"simpsons"``, ``"trapezoidal"``, and ``"gauss_lobatto"``, which have no such
+        estimate of their own either.
 
     Examples
     --------
@@ -340,7 +398,13 @@ def quadrature(
     9.0
     >>> ch.quadrature(lambda x: x**2, 0, 3).status
     'Success'
+    >>> round(ch.quadrature(lambda x: x**3, 0, 1, method="gauss_lobatto"), 3)
+    0.25
+    >>> round(ch.quadrature(lambda x: x**3, 0, 1, method="midpoint", steps=1000), 3)
+    0.25
     """
+    if method not in _QUADRATURE_METHODS:
+        raise ValueError(f"`method` must be one of {_QUADRATURE_METHODS}")
     _check_fn(f)
     lower = float(lower)
     upper = float(upper)
@@ -349,7 +413,9 @@ def quadrature(
     if lower >= upper:
         raise ValueError("`lower` must be below `upper`")
     # See root_find above: a key is written only when the caller supplied it.
-    options: dict[str, float | int] = {"lower": lower, "upper": upper}
+    options: dict[str, float | int | str] = {"lower": lower, "upper": upper}
+    if method != "gauss_kronrod":
+        options["method"] = method
     if absolute_tolerance is not None:
         if not 1e-15 <= float(absolute_tolerance) <= 1:
             raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
@@ -362,7 +428,120 @@ def quadrature(
         if int(max_function_evaluations) < 1:
             raise ValueError("`max_function_evaluations` must be a single positive integer")
         options["max_function_evaluations"] = int(max_function_evaluations)
+    if steps is not None:
+        if method not in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                '`steps` only applies to method="simpsons_fixed", "trapezoidal_fixed", or '
+                '"midpoint"'
+            )
+        if int(steps) < 1:
+            raise ValueError("`steps` must be a single positive integer")
+        options["steps"] = int(steps)
+    if min_depth is not None or max_depth is not None:
+        if method != "adaptive_simpsons":
+            raise ValueError('`min_depth`/`max_depth` only apply to method="adaptive_simpsons"')
+        if min_depth is not None:
+            if int(min_depth) < 0:
+                raise ValueError("`min_depth` must be a single non-negative integer")
+            options["min_depth"] = int(min_depth)
+        if max_depth is not None:
+            if int(max_depth) < 0:
+                raise ValueError("`max_depth` must be a single non-negative integer")
+            options["max_depth"] = int(max_depth)
     res = _core.callback_math("quadrature", json.dumps(options), f)
+    # The five fixed-rule statics return values = {integral} alone (see callback/math.hpp's file
+    # header): no function_evaluations or standard_error to report, so those two fields are None
+    # rather than reading past the end of the result.
+    if len(res["values"]) >= 3:
+        return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
+    return QuadratureResult(res["values"][0], res["status"], None, None)
+
+
+def quadrature_2d(
+    f: Callable[[float, float], float],
+    min_x: float,
+    max_x: float,
+    min_y: float,
+    max_y: float,
+    absolute_tolerance: float | None = None,
+    relative_tolerance: float | None = None,
+    min_depth: int | None = None,
+    max_depth: int | None = None,
+) -> QuadratureResult:
+    """Integrate a user-written function of two variables over a rectangle.
+
+    Computes the definite integral of ``f(x, y)`` over the rectangle ``[min_x, max_x] x
+    [min_y, max_y]`` with the ported Numerics adaptive Simpson's rule in two dimensions
+    (P2 "math extras"): the tensor-product 3x3-point Simpson estimate over the whole domain is
+    compared against the sum of the four quadrant sub-estimates, and the domain is subdivided
+    into quadrants until the two agree to the requested tolerance.
+
+    Parameters
+    ----------
+    f : callable
+        A function taking two numbers (``x``, ``y``) and returning one number.
+    min_x, max_x, min_y, max_y : float
+        The bounds of the rectangle. ``max_x`` must be above ``min_x``, and ``max_y`` above
+        ``min_y``.
+    absolute_tolerance, relative_tolerance : float, optional
+        The convergence tolerances on the difference between the whole-domain and
+        quadrant-subdivided estimates. Each must lie between 1e-15 and 1. Left unset, the ported
+        integrator's own defaults (1e-8) apply.
+    min_depth, max_depth : int, optional
+        The recursion-depth bounds. Left unset, the ported class's own defaults (0 and 100)
+        apply.
+
+    Returns
+    -------
+    QuadratureResult
+        The integral, a ``float`` carrying the same three fields :func:`quadrature` returns:
+        ``status``, ``function_evaluations``, and ``standard_error``.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> round(ch.quadrature_2d(lambda x, y: x + y, 0, 1, 0, 1), 3)
+    1.0
+    """
+    _check_fn(f)
+
+    def _check_bound(x: object, name: str) -> float:
+        x = float(x)
+        if not np.isfinite(x):
+            raise ValueError(f"`{name}` must be a single finite number")
+        return x
+
+    min_x = _check_bound(min_x, "min_x")
+    max_x = _check_bound(max_x, "max_x")
+    min_y = _check_bound(min_y, "min_y")
+    max_y = _check_bound(max_y, "max_y")
+    if min_x >= max_x:
+        raise ValueError("`min_x` must be below `max_x`")
+    if min_y >= max_y:
+        raise ValueError("`min_y` must be below `max_y`")
+    options: dict[str, float | int] = {
+        "min_x": min_x,
+        "max_x": max_x,
+        "min_y": min_y,
+        "max_y": max_y,
+    }
+    if absolute_tolerance is not None:
+        if not 1e-15 <= float(absolute_tolerance) <= 1:
+            raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
+        options["absolute_tolerance"] = float(absolute_tolerance)
+    if relative_tolerance is not None:
+        if not 1e-15 <= float(relative_tolerance) <= 1:
+            raise ValueError("`relative_tolerance` must be a single number between 1e-15 and 1")
+        options["relative_tolerance"] = float(relative_tolerance)
+    if min_depth is not None:
+        if int(min_depth) < 0:
+            raise ValueError("`min_depth` must be a single non-negative integer")
+        options["min_depth"] = int(min_depth)
+    if max_depth is not None:
+        if int(max_depth) < 0:
+            raise ValueError("`max_depth` must be a single non-negative integer")
+        options["max_depth"] = int(max_depth)
+    res = _core.callback_math_xy("quadrature_2d", json.dumps(options), f)
     return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
 
 

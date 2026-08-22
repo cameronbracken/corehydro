@@ -36,6 +36,10 @@ ch_callback_math2_ <- function(method, options_json, f, g) {
   .Call(`_corehydror_ch_callback_math2_`, method, options_json, f, g)
 }
 
+ch_callback_math_xy_ <- function(method, options_json, f) {
+  .Call(`_corehydror_ch_callback_math_xy_`, method, options_json, f)
+}
+
 ch_callback_mcmc_ <- function(options_json, f, proposal, gradient) {
   .Call(`_corehydror_ch_callback_mcmc_`, options_json, f, proposal, gradient)
 }

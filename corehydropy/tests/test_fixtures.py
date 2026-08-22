@@ -1798,6 +1798,13 @@ def _callback_fixture_function(name):
         # subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
         # bit and the evaluation count is a real oracle.
         return lambda x: 1.0 / (1.0 + 1.0e4 * x * x)
+    # P2 "math extras", the math/quadrature_2d catalog: Test_AdaptiveSimpsonsRule2D.Test_XPlusY.
+    if name == "Quad2D_XPlusY":
+        return lambda x, y: x + y
+    # Test_AdaptiveSimpsonsRule2D.Test_PI, upstream's Integrands.PI2D: the indicator of the unit
+    # disc, whose integral over [-1, 1] x [-1, 1] approximates pi.
+    if name == "Quad2D_PI2D":
+        return lambda x, y: 1.0 if x * x + y * y < 1.0 else 0.0
     # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
     # sum in an explicit loop rather than through sum(): a Markov chain turns one differing bit
     # into a different chain outright, so the four runners have to agree to the last bit for these
@@ -2161,6 +2168,10 @@ def _run_callback_case(case):
         second_key = "df" if construct["method"] == "root_find_newton" else "jacobian"
         g = _callback_fixture_function(construct[second_key])
         r = _core.callback_math2(construct["method"], options_json, fn, g)
+    elif construct["group"] == "math" and construct["method"] == "quadrature_2d":
+        # P2 "math extras": the (x, y) half of the math group, callback_math_xy -- see
+        # callback_math2 above for why a differing arity gets its own Python entry point.
+        r = _core.callback_math_xy(construct["method"], options_json, fn)
     elif construct["group"] == "math":
         r = _core.callback_math(construct["method"], options_json, fn)
     elif construct["group"] == "rng":

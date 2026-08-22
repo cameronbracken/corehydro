@@ -153,6 +153,20 @@ std::function<double(double)> as_scalar_fn(py::function f) {
     };
 }
 
+// Converts a Python callable of two arguments into the (x, y) -> z signature math/quadrature_2d
+// takes (P2 "math extras"). Mirrors as_scalar_fn's cast and error wording.
+std::function<double(double, double)> as_scalar_xy_fn(py::function f) {
+    return [f](double x, double y) -> double {
+        py::object out = f(x, y);
+        try {
+            return out.cast<double>();
+        } catch (const py::cast_error&) {
+            throw std::runtime_error("the function must return a single number; got " +
+                                     std::string(py::str(out)));
+        }
+    };
+}
+
 // f(theta) -> vector, the shape the HMC/NUTS gradient callback and the Gibbs proposal take. The
 // length is checked in the core (against the prior count, which is the only place that knows it);
 // here the job is refusing something that is not a sequence of numbers at all, and refusing a nan
@@ -542,6 +556,22 @@ void register_callback(py::module_& m) {
             return pack(sup::run_callback("math", method, options_json, cbs));
         },
         py::arg("method"), py::arg("options_json"), py::arg("f"), py::arg("g"));
+
+    // The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" alone, split from
+    // "callback_math" above for the same reason "callback_math2" is -- the arity differs from
+    // every other math method's. `f` marshals through as_scalar_xy_fn into `cbs.scalar_xy`.
+    m.def(
+        "callback_math_xy",
+        [](const std::string& method, const std::string& options_json, py::function f) {
+            sup::CallbackSet cbs;
+            if (method == "quadrature_2d") {
+                cbs.scalar_xy = as_scalar_xy_fn(f);
+            } else {
+                throw std::invalid_argument("unknown xy-callback math method: " + method);
+            }
+            return pack(sup::run_callback("math", method, options_json, cbs));
+        },
+        py::arg("method"), py::arg("options_json"), py::arg("f"));
 
     // Runs the callback runner's "mcmc" group against a Python log-likelihood: `f` is called with
     // the whole parameter vector as a list and must return a single number, exactly as upstream's

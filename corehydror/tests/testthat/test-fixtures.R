@@ -488,6 +488,11 @@ callback_fixture_function <- function(name) {
     # branch of the recursion. Written with `x * x` rather than `x^2`, arithmetic only, so all
     # four runners agree bit for bit and the evaluation count is a real oracle.
     Quad_Peak = function(x) 1 / (1 + 1e4 * x * x),
+    # P2 "math extras", the math/quadrature_2d catalog: Test_AdaptiveSimpsonsRule2D.Test_XPlusY.
+    Quad2D_XPlusY = function(x, y) x + y,
+    # Test_AdaptiveSimpsonsRule2D.Test_PI, upstream's Integrands.PI2D: the indicator of the unit
+    # disc, whose integral over [-1, 1] x [-1, 1] approximates pi.
+    Quad2D_PI2D = function(x, y) if (x^2 + y^2 < 1) 1 else 0,
     # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
     # sum in an explicit `for` loop rather than through sum(): R's sum() accumulates in extended
     # precision where C++, Python and C# accumulate in double, and a Markov chain turns one
@@ -2055,6 +2060,11 @@ test_that("oracle fixtures validate", {
           second_key <- if (identical(construct$method, "root_find_newton")) "df" else "jacobian"
           g <- callback_fixture_function(construct[[second_key]])
           ns$ch_callback_math2_(construct$method, opts, fn, g)
+        } else if (identical(construct$group, "math") &&
+                     identical(construct$method, "quadrature_2d")) {
+          # P2 "math extras": the (x, y) half of the math group, ch_callback_math_xy_ -- see
+          # ch_callback_math2_ above for why a differing arity gets its own R entry point.
+          ns$ch_callback_math_xy_(construct$method, opts, fn)
         } else if (identical(construct$group, "math")) {
           ns$ch_callback_math_(construct$method, opts, fn)
         } else if (identical(construct$group, "rng")) {

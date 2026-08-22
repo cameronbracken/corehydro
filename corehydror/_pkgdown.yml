@@ -251,6 +251,7 @@ reference:
       - root_find
       - root_find_system
       - quadrature
+      - quadrature_2d
       - derivative
   - title: The generator a callback is handed
     desc: >

@@ -164,6 +164,61 @@ def test_a_quadrature_result_reprs_its_report():
     assert "standard_error=" in text
 
 
+def test_quadrature_supports_method_variants():
+    # Test_AdaptiveGaussLobatto.Test_FXX: 0.5 + 24x + 3x^2 on [0, 2], true = 57.
+    assert ch.quadrature(
+        lambda x: 0.5 + 24.0 * x + 3.0 * x**2, 0, 2, method="gauss_lobatto"
+    ) == pytest.approx(57.0, abs=1e-3)
+    # Test_Integration.Test_MidPoint: x^3 on [0, 1] with 1000 fixed steps, true = 0.25.
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="midpoint", steps=1000) == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="simpsons") == pytest.approx(0.25, abs=1e-3)
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="trapezoidal") == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="adaptive_simpsons") == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="gauss_legendre") == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="gauss_legendre20") == pytest.approx(
+        0.25, abs=1e-10
+    )
+    assert ch.quadrature(
+        lambda x: x**3, 0, 1, method="simpsons_fixed", steps=1000
+    ) == pytest.approx(0.25, abs=1e-3)
+    assert ch.quadrature(
+        lambda x: x**3, 0, 1, method="trapezoidal_fixed", steps=1000
+    ) == pytest.approx(0.25, abs=1e-3)
+    # Absent `method` still reaches the AdaptiveGaussKronrod path, byte-identical to before.
+    assert ch.quadrature(lambda x: x**2, 0, 3).status == "Success"
+
+    # `min_depth`/`max_depth` only apply to method="adaptive_simpsons".
+    with pytest.raises(ValueError, match="adaptive_simpsons"):
+        ch.quadrature(lambda x: x, 0, 1, min_depth=1)
+    # `steps` only applies to the fixed-step statics and midpoint.
+    with pytest.raises(ValueError, match="steps"):
+        ch.quadrature(lambda x: x, 0, 1, method="gauss_lobatto", steps=10)
+
+
+def test_quadrature_2d_integrates_over_a_rectangle():
+    q = ch.quadrature_2d(lambda x, y: x + y, 0, 1, 0, 1)
+    assert float(q) == pytest.approx(1.0, abs=1e-3)
+    assert q.status == "Success"
+    assert q.function_evaluations > 0
+    assert q.standard_error >= 0.0
+
+    def boom(x, y):
+        raise ValueError("my own error")
+
+    with pytest.raises(ValueError, match="my own error"):
+        ch.quadrature_2d(boom, 0, 1, 0, 1)
+    with pytest.raises(ValueError, match="must be below"):
+        ch.quadrature_2d(lambda x, y: x + y, 1, 0, 0, 1)
+
+
 def test_an_unsupplied_option_leaves_the_ported_default_in_force():
     # The wrapper writes an option key only when the caller passes one, so None and the ported
     # default must give the identical run. R's twin asserts the same.

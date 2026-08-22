@@ -1,6 +1,6 @@
 {
   "kind": "callback",
-  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs, Integration/Test_AdaptiveGaussKronrod.cs}",
+  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs, Integration/Test_AdaptiveGaussKronrod.cs, Integration/Test_SimpsonsRule.cs, Integration/Test_TrapezoidalRule.cs, Integration/Test_AdaptiveSimpsonsRule.cs, Integration/Test_AdaptiveGaussLobatto.cs, Integration/Test_Integration.cs, Integration/Test_AdaptiveSimpsonsRule2D.cs}",
   "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python lambda, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. NOTE the catalog names here are NOT the `optimizer`-kind catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), not the unrelated TestFunctions.FXYZ the optimizer fixtures use. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal, transcribed verbatim, EXCEPT the assertions whose `source` opens with EMITTER-READ: no upstream test reads AdaptiveGaussKronrod's FunctionEvaluations, StandardError or Status, so those are read off the REAL C# library through tools/oracle_emitter instead. Neither kind is ever a value computed by this repo's own C++. `Quad_Peak` is likewise a corehydro addition rather than an upstream integrand: every Integrands.cs function the upstream tests integrate converges on the first whole-interval evaluation at 21 function evaluations, so without it the subdividing branch of the recursion has no oracle at all.",
   "callbacks": {
     "Root_Quadratic": "f(x) = x^2 - 2  [Mathematics/Root Finding/TestFunctions.Quadratic]",
@@ -19,7 +19,9 @@
     "Quad_Sine": "f(x) = sin(x)  [Mathematics/Integration/Integrands.Sine]",
     "Quad_FXX": "f(x) = 0.5 + 24x + 3x^2  [Mathematics/Integration/Integrands.FXX]",
     "Quad_FXXX": "f(x) = 0.5 + 24x + 3x^2 + 8x^3  [Mathematics/Integration/Integrands.FXXX]",
-    "Quad_Peak": "f(x) = 1 / (1 + 1e4 * x^2)  [corehydro addition, NOT an upstream integrand -- see quadrature_peak_subdivides]"
+    "Quad_Peak": "f(x) = 1 / (1 + 1e4 * x^2)  [corehydro addition, NOT an upstream integrand -- see quadrature_peak_subdivides]",
+    "Quad2D_XPlusY": "f(x, y) = x + y  [Mathematics/Integration/Test_AdaptiveSimpsonsRule2D.Test_XPlusY]",
+    "Quad2D_PI2D": "f(x, y) = (x^2 + y^2 < 1) ? 1 : 0  [Mathematics/Integration/Integrands.PI2D, driven by Test_AdaptiveSimpsonsRule2D.Test_PI]"
   },
   "cases": [
     {
@@ -257,6 +259,155 @@
         { "method": "value", "args": [0], "expected": 12.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" },
         { "method": "value", "args": [4], "expected": 48.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" },
         { "method": "value", "args": [8], "expected": 160.0, "mode": "abs", "tol": 1e-3, "source": "Test_Differentiation.Test_Hessian_Diagonal" }
+      ]
+    },
+    {
+      "name": "quadrature_simpsons_cosine",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_Cosine",
+        "options": { "method": "simpsons", "lower": -1.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.6829419, "mode": "abs", "tol": 1e-3, "source": "Test_SimpsonsRule.Test_Cosine (trueResult = 1.6829419d)" },
+        { "method": "value", "args": [1], "expected": 129, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: FunctionEvaluations read off the driven C# SimpsonsRule" },
+        { "method": "value", "args": [2], "expected": 0.0, "mode": "abs", "tol": 0, "source": "SimpsonsRule has no StandardError of its own (see callback/math.hpp's file header); the C++ runner reports 0.0 for it" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# SimpsonsRule after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_trapezoidal_fx3",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "method": "trapezoidal", "lower": 0.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-3, "source": "Test_TrapezoidalRule.Test_FX3 (trueResult = 0.25d)" },
+        { "method": "value", "args": [1], "expected": 32769, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: FunctionEvaluations read off the driven C# TrapezoidalRule" },
+        { "method": "value", "args": [2], "expected": 0.0, "mode": "abs", "tol": 0, "source": "TrapezoidalRule has no StandardError of its own (see callback/math.hpp's file header); the C++ runner reports 0.0 for it" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# TrapezoidalRule after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_adaptive_simpsons_fxxx",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FXXX",
+        "options": { "method": "adaptive_simpsons", "lower": 0.0, "upper": 2.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 89.0, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveSimpsonsRule.Test_FXXX (trueResult = 89)" },
+        { "method": "value", "args": [1], "expected": 5, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: FunctionEvaluations read off the driven C# AdaptiveSimpsonsRule -- a cubic converges on the first whole-interval evaluation with no subdivision" },
+        { "method": "value", "args": [2], "expected": 0.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: StandardError read off the driven C# AdaptiveSimpsonsRule; exactly zero, no subdivision happens for a cubic" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# AdaptiveSimpsonsRule after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_lobatto_fxx",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FXX",
+        "options": { "method": "gauss_lobatto", "lower": 0.0, "upper": 2.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 57.0, "mode": "abs", "tol": 1e-3, "source": "Test_AdaptiveGaussLobatto.Test_FXX (trueResult = 57)" },
+        { "method": "value", "args": [1], "expected": 18, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: FunctionEvaluations read off the driven C# AdaptiveGaussLobatto -- the whole-interval 13-point evaluation converges with no further recursion for a 2nd-order polynomial" },
+        { "method": "value", "args": [2], "expected": 0.0, "mode": "abs", "tol": 0, "source": "AdaptiveGaussLobatto has no StandardError of its own (see callback/math.hpp's file header); the C++ runner reports 0.0 for it" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# AdaptiveGaussLobatto after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_gauss_legendre_fx3",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "method": "gauss_legendre", "lower": 0.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-3, "source": "Test_Integration.Test_GaussLegendre" },
+        { "method": "status", "expected": "Success", "source": "structural: Integration.GaussLegendre is a static with no status of its own; the C++ runner (and this emitter) report Success unconditionally for every static quadrature method, exactly as callback/math.hpp's file header documents" }
+      ]
+    },
+    {
+      "name": "quadrature_gauss_legendre20_fx3",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "method": "gauss_legendre20", "lower": 0.0, "upper": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-14, "source": "Test_Integration.Test_GaussLegendre20 (x^3 over [0,1], exact for degree <= 39)" }
+      ]
+    },
+    {
+      "name": "quadrature_simpsons_fixed_fx3",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "method": "simpsons_fixed", "lower": 0.0, "upper": 1.0, "steps": 1000 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-3, "source": "Test_Integration.Test_SimpsonsRule (Integration.SimpsonsRule(f, 0, 1, 1000))" }
+      ]
+    },
+    {
+      "name": "quadrature_trapezoidal_fixed_fx3",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "method": "trapezoidal_fixed", "lower": 0.0, "upper": 1.0, "steps": 1000 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-3, "source": "Test_Integration.Test_TrapezoidalRule (Integration.TrapezoidalRule(f, 0, 1, 1000))" }
+      ]
+    },
+    {
+      "name": "quadrature_midpoint_fx3",
+      "construct": {
+        "group": "math",
+        "method": "quadrature",
+        "callback": "Quad_FX3",
+        "options": { "method": "midpoint", "lower": 0.0, "upper": 1.0, "steps": 1000 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.25, "mode": "abs", "tol": 1e-3, "source": "Test_Integration.Test_MidPoint (Integration.Midpoint(f, 0, 1, 1000))" }
+      ]
+    },
+    {
+      "name": "quadrature_2d_x_plus_y",
+      "construct": {
+        "group": "math",
+        "method": "quadrature_2d",
+        "callback": "Quad2D_XPlusY",
+        "options": { "min_x": -1.0, "max_x": 1.0, "min_y": -1.0, "max_y": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-5, "source": "Test_AdaptiveSimpsonsRule2D.Test_XPlusY (trueResult = 0, delta 1E-5)" },
+        { "method": "value", "args": [1], "expected": 25, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: FunctionEvaluations read off the driven C# AdaptiveSimpsonsRule2D -- the whole-domain 9-point evaluation is exact for x + y, so no subdivision happens" },
+        { "method": "value", "args": [2], "expected": 0.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ, no upstream test literal: StandardError read off the driven C# AdaptiveSimpsonsRule2D; exactly zero, no subdivision happens" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# AdaptiveSimpsonsRule2D after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_2d_pi",
+      "construct": {
+        "group": "math",
+        "method": "quadrature_2d",
+        "callback": "Quad2D_PI2D",
+        "options": { "min_x": -1.0, "max_x": 1.0, "min_y": -1.0, "max_y": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 3.14, "mode": "abs", "tol": 0.00314, "source": "Test_AdaptiveSimpsonsRule2D.Test_PI (trueResult = 3.14, delta 1E-3 * trueResult)" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# AdaptiveSimpsonsRule2D after Integrate() -- the indicator function subdivides heavily but still converges within the default MaxFunctionEvaluations" }
       ]
     }
   ]

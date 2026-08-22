@@ -18,6 +18,31 @@
 //   hessian:    {"point": [1.0, 2.0]}
 //   quadrature: {"lower": 0.0, "upper": 3.0, "absolute_tolerance": 1e-8,
 //                "relative_tolerance": 1e-8, "max_function_evaluations": 10000000}
+//   quadrature_2d: {"min_x": 0.0, "max_x": 1.0, "min_y": 0.0, "max_y": 1.0,
+//                   "absolute_tolerance": 1e-8, "relative_tolerance": 1e-8,
+//                   "min_depth": 0, "max_depth": 100}
+//
+// `quadrature`'s `method` (P2 "math extras") is OPTIONAL and one of "gauss_kronrod" (the
+// default, preserving every fixture that predates this key), "simpsons", "trapezoidal",
+// "adaptive_simpsons", "gauss_lobatto" (the five ported Integrator subclasses -- SimpsonsRule,
+// TrapezoidalRule, AdaptiveSimpsonsRule, AdaptiveGaussLobatto, AdaptiveGaussKronrod itself), or
+// "gauss_legendre", "gauss_legendre20", "simpsons_fixed", "trapezoidal_fixed", "midpoint" (the
+// five ported Integration statics). The Integrator-class arms keep the existing result triple
+// {integral, function_evaluations, standard_error} + a status read off the driven object's own
+// IntegrationStatus, standard_error 0.0 where the class has none (SimpsonsRule, TrapezoidalRule,
+// AdaptiveGaussLobatto); the static arms return values={integral}, names={"integral"}, status
+// "Success" unconditionally, since none of them has an Integrator to report one. `min_depth`/
+// `max_depth` are optional and apply to "adaptive_simpsons" alone; `steps` (default 2, per the
+// ported statics' own default) is optional and applies to "simpsons_fixed"/"trapezoidal_fixed"/
+// "midpoint" alone. Every arm shares the absolute_tolerance/relative_tolerance plumbing the
+// gauss_kronrod arm already has, where the driven class has the member to set (the statics take
+// none).
+//
+// `quadrature_2d` (P2 "math extras") is a SEPARATE method rather than a `quadrature` arm, because
+// it needs a second callback shape (`cbs.scalar_xy`, f(x, y) rather than f(x)) -- the 2D
+// counterpart of why root_find_newton is its own method rather than a root_find option. It always
+// drives AdaptiveSimpsonsRule2D and always returns the result triple + status, exactly as
+// quadrature's Integrator-class arms do.
 //
 // `root_find`'s `method` is OPTIONAL and one of "brent" (the default, preserving every fixture
 // that predates this key), "bisection", or "secant". `lower`/`upper` are required by all three;
@@ -83,6 +108,12 @@
 
 #include "corehydro/numerics/math/differentiation/numerical_derivative.hpp"
 #include "corehydro/numerics/math/integration/adaptive_gauss_kronrod.hpp"
+#include "corehydro/numerics/math/integration/adaptive_gauss_lobatto.hpp"
+#include "corehydro/numerics/math/integration/adaptive_simpsons_rule.hpp"
+#include "corehydro/numerics/math/integration/adaptive_simpsons_rule_2d.hpp"
+#include "corehydro/numerics/math/integration/integration.hpp"
+#include "corehydro/numerics/math/integration/simpsons_rule.hpp"
+#include "corehydro/numerics/math/integration/trapezoidal_rule.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
 #include "corehydro/numerics/math/rootfinding/bisection.hpp"
@@ -326,26 +357,166 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
     if (method == "quadrature") {
         if (!cbs.scalar) throw std::invalid_argument("math/quadrature requires a scalar function");
         GuardedCall<double, double> g(cbs.scalar, std::numeric_limits<double>::quiet_NaN());
-        double lower = require_double(o, "lower", "math/quadrature");
-        double upper = require_double(o, "upper", "math/quadrature");
-        integration::AdaptiveGaussKronrod agk([&g](double x) { return g(x); }, lower, upper);
+        auto fx = [&g](double x) { return g(x); };
+        // Absent means "gauss_kronrod", preserving every fixture that predates this key -- the
+        // same rule root_find's own `method` option follows above. See the file header for the
+        // full method list and the result-shape split between the Integrator-class arms and the
+        // static arms.
+        std::string qmethod = o.value_or("method", "gauss_kronrod");
+
+        if (qmethod == "gauss_kronrod") {
+            double lower = require_double(o, "lower", "math/quadrature");
+            double upper = require_double(o, "upper", "math/quadrature");
+            integration::AdaptiveGaussKronrod agk(fx, lower, upper);
+            if (o.contains("absolute_tolerance"))
+                agk.absolute_tolerance = o.at("absolute_tolerance").as_double();
+            if (o.contains("relative_tolerance"))
+                agk.relative_tolerance = o.at("relative_tolerance").as_double();
+            if (o.contains("max_function_evaluations"))
+                agk.max_function_evaluations = o.at("max_function_evaluations").as_int();
+            try {
+                agk.integrate();
+            } catch (...) {
+                g.rethrow_if_aborted();
+                throw;
+            }
+            g.rethrow_if_aborted();
+            r.values = {agk.result(), static_cast<double>(agk.function_evaluations()),
+                        agk.standard_error()};
+            r.names = {"integral", "function_evaluations", "standard_error"};
+            r.status = integration::status_name(agk.status());
+            return r;
+        }
+
+        if (qmethod == "simpsons" || qmethod == "trapezoidal" || qmethod == "adaptive_simpsons" ||
+            qmethod == "gauss_lobatto") {
+            double lower = require_double(o, "lower", "math/quadrature");
+            double upper = require_double(o, "upper", "math/quadrature");
+            // A small local closure over `integ` (rather than one shared polymorphic Integrator*)
+            // because each class's extras differ: AdaptiveSimpsonsRule alone takes min_depth/
+            // max_depth, and only it and AdaptiveGaussKronrod have a standard_error() to read --
+            // SimpsonsRule, TrapezoidalRule, and AdaptiveGaussLobatto report 0.0, per the file
+            // header's rule.
+            double integral = 0.0, standard_error = 0.0;
+            int function_evaluations = 0;
+            integration::IntegrationStatus status = integration::IntegrationStatus::None;
+            auto apply_tolerances = [&](integration::Integrator& integ) {
+                if (o.contains("absolute_tolerance"))
+                    integ.absolute_tolerance = o.at("absolute_tolerance").as_double();
+                if (o.contains("relative_tolerance"))
+                    integ.relative_tolerance = o.at("relative_tolerance").as_double();
+                if (o.contains("max_function_evaluations"))
+                    integ.max_function_evaluations = o.at("max_function_evaluations").as_int();
+            };
+            try {
+                if (qmethod == "simpsons") {
+                    integration::SimpsonsRule integ(fx, lower, upper);
+                    apply_tolerances(integ);
+                    integ.integrate();
+                    integral = integ.result();
+                    function_evaluations = integ.function_evaluations();
+                    status = integ.status();
+                } else if (qmethod == "trapezoidal") {
+                    integration::TrapezoidalRule integ(fx, lower, upper);
+                    apply_tolerances(integ);
+                    integ.integrate();
+                    integral = integ.result();
+                    function_evaluations = integ.function_evaluations();
+                    status = integ.status();
+                } else if (qmethod == "adaptive_simpsons") {
+                    integration::AdaptiveSimpsonsRule integ(fx, lower, upper);
+                    apply_tolerances(integ);
+                    if (o.contains("min_depth")) integ.min_depth = o.at("min_depth").as_int();
+                    if (o.contains("max_depth")) integ.max_depth = o.at("max_depth").as_int();
+                    integ.integrate();
+                    integral = integ.result();
+                    function_evaluations = integ.function_evaluations();
+                    standard_error = integ.standard_error();
+                    status = integ.status();
+                } else {  // gauss_lobatto
+                    integration::AdaptiveGaussLobatto integ(fx, lower, upper);
+                    apply_tolerances(integ);
+                    integ.integrate();
+                    integral = integ.result();
+                    function_evaluations = integ.function_evaluations();
+                    status = integ.status();
+                }
+            } catch (...) {
+                g.rethrow_if_aborted();
+                throw;
+            }
+            g.rethrow_if_aborted();
+            r.values = {integral, static_cast<double>(function_evaluations), standard_error};
+            r.names = {"integral", "function_evaluations", "standard_error"};
+            r.status = integration::status_name(status);
+            return r;
+        }
+
+        if (qmethod == "gauss_legendre" || qmethod == "gauss_legendre20" ||
+            qmethod == "simpsons_fixed" || qmethod == "trapezoidal_fixed" ||
+            qmethod == "midpoint") {
+            double lower = require_double(o, "lower", "math/quadrature");
+            double upper = require_double(o, "upper", "math/quadrature");
+            // `steps` applies to the three fixed-step statics alone; gauss_legendre/
+            // gauss_legendre20 take no such option. Absent means the ported statics' own default
+            // of 2, per the file header's rule that an absent key is not a copy of the default
+            // made here.
+            int steps = o.value_or("steps", 2);
+            double integral = 0.0;
+            try {
+                if (qmethod == "gauss_legendre") {
+                    integral = integration::Integration::gauss_legendre(fx, lower, upper);
+                } else if (qmethod == "gauss_legendre20") {
+                    integral = integration::Integration::gauss_legendre20(fx, lower, upper);
+                } else if (qmethod == "simpsons_fixed") {
+                    integral = integration::Integration::simpsons_rule(fx, lower, upper, steps);
+                } else if (qmethod == "trapezoidal_fixed") {
+                    integral = integration::Integration::trapezoidal_rule(fx, lower, upper, steps);
+                } else {  // midpoint
+                    integral = integration::Integration::midpoint(fx, lower, upper, steps);
+                }
+            } catch (...) {
+                g.rethrow_if_aborted();
+                throw;
+            }
+            g.rethrow_if_aborted();
+            r.values = {integral};
+            r.names = {"integral"};
+            r.status = "Success";
+            return r;
+        }
+
+        throw std::invalid_argument("math/quadrature: unknown 'method' '" + qmethod + "'");
+    }
+
+    if (method == "quadrature_2d") {
+        if (!cbs.scalar_xy)
+            throw std::invalid_argument("math/quadrature_2d requires a scalar function 'f(x, y)'");
+        GuardedCall<double, double, double> g(cbs.scalar_xy,
+                                              std::numeric_limits<double>::quiet_NaN());
+        auto fxy = [&g](double x, double y) { return g(x, y); };
+        double min_x = require_double(o, "min_x", "math/quadrature_2d");
+        double max_x = require_double(o, "max_x", "math/quadrature_2d");
+        double min_y = require_double(o, "min_y", "math/quadrature_2d");
+        double max_y = require_double(o, "max_y", "math/quadrature_2d");
+        integration::AdaptiveSimpsonsRule2D integ(fxy, min_x, max_x, min_y, max_y);
         if (o.contains("absolute_tolerance"))
-            agk.absolute_tolerance = o.at("absolute_tolerance").as_double();
+            integ.absolute_tolerance = o.at("absolute_tolerance").as_double();
         if (o.contains("relative_tolerance"))
-            agk.relative_tolerance = o.at("relative_tolerance").as_double();
-        if (o.contains("max_function_evaluations"))
-            agk.max_function_evaluations = o.at("max_function_evaluations").as_int();
+            integ.relative_tolerance = o.at("relative_tolerance").as_double();
+        if (o.contains("min_depth")) integ.min_depth = o.at("min_depth").as_int();
+        if (o.contains("max_depth")) integ.max_depth = o.at("max_depth").as_int();
         try {
-            agk.integrate();
+            integ.integrate();
         } catch (...) {
             g.rethrow_if_aborted();
             throw;
         }
         g.rethrow_if_aborted();
-        r.values = {agk.result(), static_cast<double>(agk.function_evaluations()),
-                    agk.standard_error()};
+        r.values = {integ.result(), static_cast<double>(integ.function_evaluations()),
+                    integ.standard_error()};
         r.names = {"integral", "function_evaluations", "standard_error"};
-        r.status = integration::status_name(agk.status());
+        r.status = integration::status_name(integ.status());
         return r;
     }
 
