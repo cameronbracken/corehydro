@@ -109,6 +109,7 @@ set(BF_TESTS
   test_generalized_normal_jacobian
   test_root_finding_extras
   test_integration_extras
+  test_integration_random
 )
 
 # Sobol test takes the direction-number file as its sole argument.
@@ -134,6 +135,12 @@ foreach(t ${BF_TESTS})
     $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+
+# test_integration_random (Miser/Vegas) needs the Sobol direction-numbers file for dimensions > 1,
+# but is registered through the plain BF_TESTS loop above (no argv passed, unlike test_sobol/
+# test_fixtures below); a compile definition is simpler than special-casing this one target's argv.
+target_compile_definitions(test_integration_random PRIVATE
+  SOBOL_DATA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data/new-joe-kuo-6.21201")
 
 # Generic fixture-driven runner: reads the canonical fixtures/ shared by all languages. It is two
 # translation units, and the split is deliberate -- see the -ffp-contract=off comment below before
