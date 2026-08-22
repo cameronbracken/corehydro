@@ -4,7 +4,12 @@
   "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python lambda, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. NOTE the catalog names here are NOT the `optimizer`-kind catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), not the unrelated TestFunctions.FXYZ the optimizer fixtures use. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal, transcribed verbatim, EXCEPT the assertions whose `source` opens with EMITTER-READ: no upstream test reads AdaptiveGaussKronrod's FunctionEvaluations, StandardError or Status, so those are read off the REAL C# library through tools/oracle_emitter instead. Neither kind is ever a value computed by this repo's own C++. `Quad_Peak` is likewise a corehydro addition rather than an upstream integrand: every Integrands.cs function the upstream tests integrate converges on the first whole-interval evaluation at 21 function evaluations, so without it the subdividing branch of the recursion has no oracle at all.",
   "callbacks": {
     "Root_Quadratic": "f(x) = x^2 - 2  [Mathematics/Root Finding/TestFunctions.Quadratic]",
+    "RootD_Quadratic": "f'(x) = 2x  [Mathematics/Root Finding/TestFunctions.Quadratic_Deriv]",
     "Root_Cubic": "f(x) = x^3 - x - 1  [Mathematics/Root Finding/TestFunctions.Cubic]",
+    "Root_Trigonometric": "f(x) = 2 sin(x) - 3 cos(x) - 0.5  [Mathematics/Root Finding/TestFunctions.Trigonometric]",
+    "RootD_Trigonometric": "f'(x) = 2 cos(x) + 3 sin(x)  [Mathematics/Root Finding/TestFunctions.Trigonometric_Deriv]",
+    "Sys_Linear_F": "F([x,y]) = [3x + y - 9, x + 2y - 8], root [2, 3]  [Test_NewtonRaphson.Test_Multi_LinearSystem]",
+    "Sys_Linear_J": "J([x,y]) = [[3, 1], [1, 2]] (constant)  [Test_NewtonRaphson.Test_Multi_LinearSystem]",
     "Diff_FX": "f(x) = x^3  [Test_Differentiation.FX]",
     "Diff_FXY": "f(x, y) = x^2 * y^3  [Test_Differentiation.FXY]",
     "Diff_FXYZ": "f(x, y, z) = x^3 + y^4 + z^5  [Test_Differentiation.FXYZ]",
@@ -39,6 +44,71 @@
       },
       "assertions": [
         { "method": "value", "args": [0], "expected": 1.32472, "mode": "abs", "tol": 1e-5, "source": "Test_Brent.Test_Cubic" }
+      ]
+    },
+    {
+      "name": "root_find_bisection_quadratic",
+      "construct": {
+        "group": "math",
+        "method": "root_find",
+        "callback": "Root_Quadratic",
+        "options": { "method": "bisection", "lower": 0.0, "upper": 4.0, "first_guess": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.4142135623730951, "mode": "abs", "tol": 1e-5, "source": "Test_Bisection.Test_Quadratic (trueX = Math.Sqrt(2))" }
+      ]
+    },
+    {
+      "name": "root_find_secant_cubic",
+      "construct": {
+        "group": "math",
+        "method": "root_find",
+        "callback": "Root_Cubic",
+        "options": { "method": "secant", "lower": -1.0, "upper": 5.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.32472, "mode": "abs", "tol": 1e-5, "source": "Test_Secant.Test_Cubic" }
+      ]
+    },
+    {
+      "name": "newton_quadratic",
+      "construct": {
+        "group": "math",
+        "method": "root_find_newton",
+        "callback": "Root_Quadratic",
+        "df": "RootD_Quadratic",
+        "options": { "first_guess": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.4142135623730951, "mode": "abs", "tol": 1e-5, "source": "Test_NewtonRaphson.Test_Quadratic (trueX = Math.Sqrt(2)); no bracket, so the basic NewtonRaphson.Solve is driven" }
+      ]
+    },
+    {
+      "name": "newton_robust_trig",
+      "construct": {
+        "group": "math",
+        "method": "root_find_newton",
+        "callback": "Root_Trigonometric",
+        "df": "RootD_Trigonometric",
+        "options": { "first_guess": 0.5, "lower": 0.0, "upper": 3.141592653589793 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.12191713, "mode": "abs", "tol": 1e-5, "source": "Test_NewtonRaphson.Test_Robust_Trigonometric; both lower and upper are present, so the robust (bracketed) NewtonRaphson.RobustSolve is driven" }
+      ]
+    },
+    {
+      "name": "system_linear",
+      "construct": {
+        "group": "math",
+        "method": "root_find_system",
+        "callback": "Sys_Linear_F",
+        "jacobian": "Sys_Linear_J",
+        "options": { "first_guess": [0.0, 0.0] }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 2.0, "mode": "abs", "tol": 1e-5, "source": "Test_NewtonRaphson.Test_Multi_LinearSystem" },
+        { "method": "value", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-5, "source": "Test_NewtonRaphson.Test_Multi_LinearSystem" },
+        { "method": "dim", "args": [0], "expected": 2, "mode": "abs", "tol": 0, "source": "Test_NewtonRaphson.Test_Multi_LinearSystem (a 2-equation system)" }
       ]
     },
     {

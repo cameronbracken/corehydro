@@ -517,6 +517,32 @@ void register_callback(py::module_& m) {
         },
         py::arg("method"), py::arg("options_json"), py::arg("f"));
 
+    // The two-callback half of the math group (P2 "math extras"): "root_find_newton" (f, its
+    // analytic derivative df) and "root_find_system" (F, its Jacobian J). Split from
+    // "callback_math" above because pybind11 arguments are fixed too -- every other math method
+    // takes exactly one Python function, and these two need a second. `f`/`g` play different roles
+    // by method: for "root_find_newton" they are the scalar function and its scalar derivative
+    // (`cbs.scalar`/`cbs.scalar_deriv`); for "root_find_system" they are the vector-valued system
+    // function and its Jacobian (`cbs.vector_vector`/`cbs.vector_matrix`, the same shapes the mcmc
+    // gradient and gmm jacobian callbacks already use).
+    m.def(
+        "callback_math2",
+        [](const std::string& method, const std::string& options_json, py::function f,
+           py::function g) {
+            sup::CallbackSet cbs;
+            if (method == "root_find_newton") {
+                cbs.scalar = as_scalar_fn(f);
+                cbs.scalar_deriv = as_scalar_fn(g);
+            } else if (method == "root_find_system") {
+                cbs.vector_vector = as_vector_vector_fn(f);
+                cbs.vector_matrix = as_matrix_fn(g, "the jacobian function");
+            } else {
+                throw std::invalid_argument("unknown two-callback math method: " + method);
+            }
+            return pack(sup::run_callback("math", method, options_json, cbs));
+        },
+        py::arg("method"), py::arg("options_json"), py::arg("f"), py::arg("g"));
+
     // Runs the callback runner's "mcmc" group against a Python log-likelihood: `f` is called with
     // the whole parameter vector as a list and must return a single number, exactly as upstream's
     // own `LogLikelihood` delegate does. The flat result is the layout documented in

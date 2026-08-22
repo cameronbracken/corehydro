@@ -249,6 +249,7 @@ reference:
       NumericalDerivative routines over a user-written R function.
     contents:
       - root_find
+      - root_find_system
       - quadrature
       - derivative
   - title: The generator a callback is handed

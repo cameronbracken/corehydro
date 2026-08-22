@@ -42,33 +42,63 @@ callback_check_point <- function(x) {
 
 #' Find a root of a user-written function
 #'
-#' Solves `f(x) = 0` on `[lower, upper]` with the ported Numerics Brent root finder. `f` must
-#' change sign across the interval.
+#' Solves `f(x) = 0` with a ported Numerics root finder: Brent (the default), Bisection, Secant,
+#' or Newton-Raphson. `method = "brent"`, `"bisection"`, and `"secant"` all bracket the root on
+#' `[lower, upper]`, over which `f` must change sign; `method = "newton"` takes an analytic
+#' derivative `df` and a `first_guess` instead, with the bracket optional (see below).
 #'
 #' @param f a function taking one number and returning one number.
-#' @param lower,upper the bracketing interval.
-#' @param tolerance the convergence tolerance on the bracket width. `NULL`, the default, leaves the
-#'   ported Brent solver's own default (1e-8) in force; the value is not restated here, so a change
-#'   to it lands in one place.
+#' @param lower,upper the bracketing interval. Required for `method` `"brent"`, `"bisection"`,
+#'   and `"secant"`. For `"newton"` they are optional, and it is their PRESENCE -- both together --
+#'   that selects the robust (bracket-aware) Newton-Raphson variant over the plain one, matching
+#'   the ported class's own two entry points rather than a method sub-argument.
+#' @param method one of `"brent"` (the default), `"bisection"`, `"secant"`, or `"newton"`.
+#' @param df the analytic derivative of `f`, a function taking one number and returning one
+#'   number. Required for, and only used by, `method = "newton"`.
+#' @param first_guess the running root Bisection and Newton-Raphson seed themselves with (the
+#'   bracket only seeds their initial step direction / bracket maintenance). Required for
+#'   `method = "bisection"` and `method = "newton"`; unused by `"brent"` and `"secant"`, which
+#'   pick their own starting point off the bracket.
+#' @param tolerance the convergence tolerance on the root. `NULL`, the default, leaves the ported
+#'   solver's own default (1e-8) in force; the value is not restated here, so a change to it lands
+#'   in one place.
 #' @param max_iterations the iteration cap; the search raises an error if it is reached. `NULL`,
 #'   the default, leaves the ported solver's own default (1000) in force.
 #' @return the root, a single number.
 #' @examples
 #' root_find(function(x) x^2 - 2, lower = 0, upper = 2)
+#' root_find(function(x) x^2 - 2, lower = 0, upper = 4, method = "bisection", first_guess = 1)
+#' root_find(function(x) x^3 - x - 1, lower = -1, upper = 5, method = "secant")
+#' root_find(function(x) x^2 - 2, method = "newton", df = function(x) 2 * x, first_guess = 1)
 #' @export
-root_find <- function(f, lower, upper, tolerance = NULL, max_iterations = NULL) {
+root_find <- function(f, lower = NULL, upper = NULL,
+                      method = c("brent", "bisection", "secant", "newton"),
+                      df = NULL, first_guess = NULL, tolerance = NULL, max_iterations = NULL) {
+  method <- match.arg(method)
   callback_check_fn(f)
-  if (!is.numeric(lower) || length(lower) != 1L || !is.finite(lower) ||
-      !is.numeric(upper) || length(upper) != 1L || !is.finite(upper)) {
-    stop("`lower` and `upper` must each be a single finite number", call. = FALSE)
+  check_bound <- function(x, name) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      stop("`", name, "` must be a single finite number", call. = FALSE)
+    }
   }
-  if (lower >= upper) {
-    stop("`lower` must be below `upper`", call. = FALSE)
-  }
+  has_lower <- !is.null(lower)
+  has_upper <- !is.null(upper)
   # An option key is written ONLY when the caller supplied it, so an unset argument reaches the
   # ported routine's own default rather than a copy of that default made here. Mirrors
   # corehydropy's root_find() and the same rule in callback/math.hpp and the oracle emitter.
-  opts <- list(lower = as.double(lower), upper = as.double(upper))
+  opts <- list()
+  if (has_lower || has_upper) {
+    if (!has_lower || !has_upper) {
+      stop("`lower` and `upper` must both be supplied, or both left NULL", call. = FALSE)
+    }
+    check_bound(lower, "lower")
+    check_bound(upper, "upper")
+    if (lower >= upper) {
+      stop("`lower` must be below `upper`", call. = FALSE)
+    }
+    opts$lower <- as.double(lower)
+    opts$upper <- as.double(upper)
+  }
   if (!is.null(tolerance)) {
     if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
       stop("`tolerance` must be a single positive number", call. = FALSE)
@@ -81,7 +111,75 @@ root_find <- function(f, lower, upper, tolerance = NULL, max_iterations = NULL) 
     }
     opts$max_iterations <- as.integer(max_iterations)
   }
+
+  if (method == "newton") {
+    if (is.null(df)) {
+      stop("`df`, the analytic derivative of `f`, is required for method = \"newton\"", call. = FALSE)
+    }
+    callback_check_fn(df)
+    if (is.null(first_guess)) {
+      stop("`first_guess` is required for method = \"newton\"", call. = FALSE)
+    }
+    check_bound(first_guess, "first_guess")
+    opts$first_guess <- as.double(first_guess)
+    return(ch_callback_math2_("root_find_newton", to_spec_json(opts), f, df)$values[[1]])
+  }
+
+  if (method == "bisection") {
+    if (is.null(first_guess)) {
+      stop("`first_guess` is required for method = \"bisection\"", call. = FALSE)
+    }
+    check_bound(first_guess, "first_guess")
+    opts$first_guess <- as.double(first_guess)
+  }
+  if (!has_lower) {
+    stop("`lower` and `upper` are required for method = \"", method, "\"", call. = FALSE)
+  }
+  opts$method <- method
   ch_callback_math_("root_find", to_spec_json(opts), f)$values[[1]]
+}
+
+#' Solve a system of nonlinear equations
+#'
+#' Solves `F(x) = 0` for a vector-valued `F` with the ported Numerics multivariate Newton-Raphson
+#' method, iterating `x_(n+1) = x_n - J(x_n)^-1 F(x_n)`.
+#'
+#' @param f the system of equations: a function taking a numeric vector and returning a numeric
+#'   vector of the same length.
+#' @param jacobian the Jacobian of `f`: a function taking the same numeric vector and returning the
+#'   square matrix of partial derivatives, one ROW per equation.
+#' @param first_guess the starting vector; its length fixes the dimension of the system.
+#' @param tolerance the convergence tolerance, applied to both the step size and the residual.
+#'   `NULL`, the default, leaves the ported solver's own default (1e-8) in force.
+#' @param max_iterations the iteration cap; the search raises an error if it is reached. `NULL`,
+#'   the default, leaves the ported solver's own default (1000) in force.
+#' @return the root, a numeric vector the length of `first_guess`.
+#' @examples
+#' f <- function(v) c(3 * v[1] + v[2] - 9, v[1] + 2 * v[2] - 8)
+#' j <- function(v) matrix(c(3, 1, 1, 2), nrow = 2, byrow = TRUE)
+#' root_find_system(f, j, first_guess = c(0, 0))
+#' @export
+root_find_system <- function(f, jacobian, first_guess, tolerance = NULL, max_iterations = NULL) {
+  callback_check_fn(f)
+  callback_check_fn(jacobian)
+  if (!is.numeric(first_guess) || length(first_guess) == 0L || !all(is.finite(first_guess))) {
+    stop("`first_guess` must be a non-empty numeric vector of finite values", call. = FALSE)
+  }
+  opts <- list(first_guess = spec_array(as.double(first_guess)))
+  if (!is.null(tolerance)) {
+    if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
+      stop("`tolerance` must be a single positive number", call. = FALSE)
+    }
+    opts$tolerance <- as.double(tolerance)
+  }
+  if (!is.null(max_iterations)) {
+    if (!is.numeric(max_iterations) || length(max_iterations) != 1L || max_iterations < 1) {
+      stop("`max_iterations` must be a single positive integer", call. = FALSE)
+    }
+    opts$max_iterations <- as.integer(max_iterations)
+  }
+  res <- ch_callback_math2_("root_find_system", to_spec_json(opts), f, jacobian)
+  as.numeric(res$values)
 }
 
 #' Integrate a user-written function

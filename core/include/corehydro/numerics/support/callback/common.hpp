@@ -59,6 +59,12 @@ struct FitWithCovarianceReturn {
 struct CallbackSet {
     // f(x) -> y. Root finding, quadrature, single-variable differentiation.
     std::function<double(double)> scalar;
+    // f'(x) -> y. The analytic derivative Newton-Raphson root finding takes alongside `scalar`
+    // (its own f). Named distinctly from `scalar` rather than reused positionally, because
+    // root_find_newton needs both live at once -- see callback/math.hpp's root_find_newton arm,
+    // which guards this and `scalar` with a SHARED abort state for the reason gmm.hpp's file
+    // header gives for its own multi-callback groups.
+    std::function<double(double)> scalar_deriv;
     // f(theta) -> y. Log-likelihood, gradient/hessian target, GMM penalty.
     std::function<double(const std::vector<double>&)> vector_scalar;
     // f(theta) -> vector. Gradient callback, GMM moment conditions, bootstrap statistic.

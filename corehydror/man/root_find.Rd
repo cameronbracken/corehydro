@@ -4,16 +4,38 @@
 \alias{root_find}
 \title{Find a root of a user-written function}
 \usage{
-root_find(f, lower, upper, tolerance = NULL, max_iterations = NULL)
+root_find(
+  f,
+  lower = NULL,
+  upper = NULL,
+  method = c("brent", "bisection", "secant", "newton"),
+  df = NULL,
+  first_guess = NULL,
+  tolerance = NULL,
+  max_iterations = NULL
+)
 }
 \arguments{
 \item{f}{a function taking one number and returning one number.}
 
-\item{lower, upper}{the bracketing interval.}
+\item{lower, upper}{the bracketing interval. Required for \code{method} \code{"brent"}, \code{"bisection"},
+and \code{"secant"}. For \code{"newton"} they are optional, and it is their PRESENCE -- both together --
+that selects the robust (bracket-aware) Newton-Raphson variant over the plain one, matching
+the ported class's own two entry points rather than a method sub-argument.}
 
-\item{tolerance}{the convergence tolerance on the bracket width. \code{NULL}, the default, leaves the
-ported Brent solver's own default (1e-8) in force; the value is not restated here, so a change
-to it lands in one place.}
+\item{method}{one of \code{"brent"} (the default), \code{"bisection"}, \code{"secant"}, or \code{"newton"}.}
+
+\item{df}{the analytic derivative of \code{f}, a function taking one number and returning one
+number. Required for, and only used by, \code{method = "newton"}.}
+
+\item{first_guess}{the running root Bisection and Newton-Raphson seed themselves with (the
+bracket only seeds their initial step direction / bracket maintenance). Required for
+\code{method = "bisection"} and \code{method = "newton"}; unused by \code{"brent"} and \code{"secant"}, which
+pick their own starting point off the bracket.}
+
+\item{tolerance}{the convergence tolerance on the root. \code{NULL}, the default, leaves the ported
+solver's own default (1e-8) in force; the value is not restated here, so a change to it lands
+in one place.}
 
 \item{max_iterations}{the iteration cap; the search raises an error if it is reached. \code{NULL},
 the default, leaves the ported solver's own default (1000) in force.}
@@ -22,9 +44,14 @@ the default, leaves the ported solver's own default (1000) in force.}
 the root, a single number.
 }
 \description{
-Solves \code{f(x) = 0} on \verb{[lower, upper]} with the ported Numerics Brent root finder. \code{f} must
-change sign across the interval.
+Solves \code{f(x) = 0} with a ported Numerics root finder: Brent (the default), Bisection, Secant,
+or Newton-Raphson. \code{method = "brent"}, \code{"bisection"}, and \code{"secant"} all bracket the root on
+\verb{[lower, upper]}, over which \code{f} must change sign; \code{method = "newton"} takes an analytic
+derivative \code{df} and a \code{first_guess} instead, with the bracket optional (see below).
 }
 \examples{
 root_find(function(x) x^2 - 2, lower = 0, upper = 2)
+root_find(function(x) x^2 - 2, lower = 0, upper = 4, method = "bisection", first_guess = 1)
+root_find(function(x) x^3 - x - 1, lower = -1, upper = 5, method = "secant")
+root_find(function(x) x^2 - 2, method = "newton", df = function(x) 2 * x, first_guess = 1)
 }

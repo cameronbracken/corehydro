@@ -461,7 +461,20 @@ optimizer_fixture_objective <- function(name) {
 callback_fixture_function <- function(name) {
   switch(name,
     Root_Quadratic = function(x) x^2 - 2,
+    # P2 "math extras": TestFunctions.Quadratic_Deriv, the newton catalog's counterpart of
+    # Root_Quadratic.
+    RootD_Quadratic = function(x) 2 * x,
     Root_Cubic = function(x) x^3 - x - 1,
+    # TestFunctions.Trigonometric, root ~1.12191713 on [0, pi].
+    Root_Trigonometric = function(x) 2 * sin(x) - 3 * cos(x) - 0.5,
+    # TestFunctions.Trigonometric_Deriv.
+    RootD_Trigonometric = function(x) 2 * cos(x) + 3 * sin(x),
+    # Test_NewtonRaphson.Test_Multi_LinearSystem's system, F([x;y]) = [3x + y - 9, x + 2y - 8],
+    # whose unique root is [2, 3].
+    Sys_Linear_F = function(v) c(3 * v[1] + v[2] - 9, v[1] + 2 * v[2] - 8),
+    # The (constant) Jacobian of Sys_Linear_F, one ROW per equation: [[3, 1], [1, 2]]. matrix()
+    # fills COLUMN-major; the glue transposes to row-major, and this matrix is symmetric anyway.
+    Sys_Linear_J = function(v) matrix(c(3, 1, 1, 2), nrow = 2, ncol = 2),
     Diff_FX = function(x) x^3,
     Diff_FXY = function(p) p[1]^2 * p[2]^3,
     Diff_FXYZ = function(p) p[1]^3 + p[2]^4 + p[3]^5,
@@ -2033,7 +2046,16 @@ test_that("oracle fixtures validate", {
         # ch_callback_mcmc_, ch_callback_gmm_ and ch_callback_bootstrap_.
         opts <- callback_options_json(ns, construct$options)
         fn <- callback_fixture_function(construct$callback)
-        r <- if (identical(construct$group, "math")) {
+        r <- if (identical(construct$group, "math") &&
+                    construct$method %in% c("root_find_newton", "root_find_system")) {
+          # P2 "math extras": these two math methods need a SECOND callback (the analytic
+          # derivative `df`, or the Jacobian reusing gmm's `jacobian` key), which
+          # ch_callback_math_ has no argument for -- ch_callback_math2_ is the two-callback entry
+          # point, mirroring ch_callback_gmm_'s own optional second/third delegates above.
+          second_key <- if (identical(construct$method, "root_find_newton")) "df" else "jacobian"
+          g <- callback_fixture_function(construct[[second_key]])
+          ns$ch_callback_math2_(construct$method, opts, fn, g)
+        } else if (identical(construct$group, "math")) {
           ns$ch_callback_math_(construct$method, opts, fn)
         } else if (identical(construct$group, "rng")) {
           ns$ch_rng_probe_(opts, fn)

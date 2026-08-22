@@ -63,6 +63,7 @@ from .callback import (
     mcmc_posterior,
     quadrature,
     root_find,
+    root_find_system,
 )
 from .gof import (
     aic,
@@ -194,6 +195,7 @@ __all__ = [
     "optim_minimize",
     "optim_maximize",
     "root_find",
+    "root_find_system",
     "quadrature",
     "QuadratureResult",
     "derivative",

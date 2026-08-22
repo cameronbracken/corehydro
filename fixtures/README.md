@@ -1808,6 +1808,23 @@ addition rather than an upstream integrand: every upstream integrand converges o
 whole-interval evaluation at 21 evaluations, so it is the one callback pinning the SUBDIVIDING
 branch of the recursion.
 
+P2 "math extras" widened `math/root_find` and added two methods, all over the ported
+Bisection/Secant/NewtonRaphson root finders (`numerics/math/rootfinding/`) beside the pre-existing
+Brent. `root_find`'s `options.method` is now one of `"brent"` (the default, absent-key-compatible
+with every fixture written before this key existed), `"bisection"`, or `"secant"` --
+`"bisection"` additionally requires `first_guess`, the running root Bisection.Solve seeds itself
+with (the bracket only seeds its initial step direction); `"secant"` takes no `first_guess`, since
+Secant.Solve picks its own starting point off the bracket. `root_find_newton` is a SEPARATE
+method rather than a fourth `root_find` arm, because it needs a second callback (`construct.df`,
+resolved out of the same catalog as `callback`) rather than a second option: `first_guess` is
+required, and `lower`/`upper` are optional -- their PRESENCE together, not a sub-key, selects
+`NewtonRaphson.RobustSolve` over the plain `NewtonRaphson.Solve`, mirroring the ported class's own
+two entry points. `root_find_system` solves a system of equations: `callback` names `F` (theta ->
+vector) and `construct.jacobian` names `J` (theta -> matrix, ROW-major with its own shape -- the
+same key and shape the `"gmm"` group's optional Jacobian already uses, reused rather than
+duplicated), `options.first_guess` is a vector giving the system's dimension n, and the result's
+`dims` is `{n}` rather than empty, matching `math/gradient`'s own vector-shaped result.
+
 The `"rng"` group has one method, `probe`, and one job: prove that a draw taken INSIDE a
 host-language callback comes off the core's seeded stream rather than off R's or Python's own
 generator. Its `options` carry exactly one of `seed` (a number, the C# `MersenneTwister(int)`

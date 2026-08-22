@@ -24,6 +24,71 @@ def test_root_find_needs_a_bracketed_root():
         ch.root_find(lambda x: x**2 + 1, lower=0, upper=2)
 
 
+def test_root_find_solves_with_bisection_secant_and_newton():
+    def quad(x):
+        return x**2 - 2
+
+    def quad_deriv(x):
+        return 2 * x
+
+    assert ch.root_find(
+        quad, lower=0, upper=4, method="bisection", first_guess=1
+    ) == pytest.approx(math.sqrt(2), abs=1e-5)
+
+    def cubic(x):
+        return x**3 - x - 1
+
+    assert ch.root_find(cubic, lower=-1, upper=5, method="secant") == pytest.approx(
+        1.32472, abs=1e-5
+    )
+
+    # The basic (unbracketed) variant.
+    assert ch.root_find(
+        quad, method="newton", df=quad_deriv, first_guess=1
+    ) == pytest.approx(math.sqrt(2), abs=1e-5)
+
+    # Both lower and upper present selects the robust (bracket-aware) variant.
+    def trig(x):
+        return 2 * math.sin(x) - 3 * math.cos(x) - 0.5
+
+    def trig_deriv(x):
+        return 2 * math.cos(x) + 3 * math.sin(x)
+
+    assert ch.root_find(
+        trig, method="newton", df=trig_deriv, first_guess=0.5, lower=0, upper=math.pi
+    ) == pytest.approx(1.12191713, abs=1e-5)
+
+    with pytest.raises(Exception, match="first_guess"):
+        ch.root_find(quad, lower=0, upper=4, method="bisection")
+    with pytest.raises(Exception, match="df"):
+        ch.root_find(quad, method="newton", first_guess=1)
+    with pytest.raises(Exception, match="first_guess"):
+        ch.root_find(quad, method="newton", df=quad_deriv)
+    with pytest.raises(Exception, match="lower.*upper"):
+        ch.root_find(quad, method="secant")
+    with pytest.raises(Exception, match="lower.*upper"):
+        ch.root_find(quad, lower=0, upper=None)
+
+
+def test_root_find_system_solves_a_linear_system():
+    # Test_NewtonRaphson.Test_Multi_LinearSystem: F([x;y]) = [3x + y - 9, x + 2y - 8], root [2, 3].
+    def f(v):
+        return [3 * v[0] + v[1] - 9, v[0] + 2 * v[1] - 8]
+
+    def j(v):
+        return [[3, 1], [1, 2]]
+
+    root = ch.root_find_system(f, j, first_guess=[0, 0])
+    np.testing.assert_allclose(root, [2, 3], atol=1e-5)
+
+    # An error inside either callback reaches the caller unchanged, the same guard contract every
+    # other callback method carries.
+    with pytest.raises(Exception, match="my own error"):
+        ch.root_find_system(_boom, j, first_guess=[0, 0])
+    with pytest.raises(Exception, match="my own error"):
+        ch.root_find_system(f, _boom, first_guess=[0, 0])
+
+
 def test_derivative_differentiates_a_python_function():
     # f(x) = x^3, f'(2) = 12
     assert ch.derivative(lambda x: x**3, 2) == pytest.approx(12.0, abs=1e-6)

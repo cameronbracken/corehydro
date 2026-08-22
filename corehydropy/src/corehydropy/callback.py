@@ -22,6 +22,7 @@ from .distributions import Distribution, _as_spec
 
 __all__ = [
     "root_find",
+    "root_find_system",
     "quadrature",
     "QuadratureResult",
     "derivative",
@@ -114,28 +115,49 @@ def _check_point(x: object) -> np.ndarray:
     return point
 
 
+_ROOT_FIND_METHODS = ("brent", "bisection", "secant", "newton")
+
+
 def root_find(
     f: Callable[[float], float],
-    lower: float,
-    upper: float,
+    lower: float | None = None,
+    upper: float | None = None,
+    method: str = "brent",
+    df: Callable[[float], float] | None = None,
+    first_guess: float | None = None,
     tolerance: float | None = None,
     max_iterations: int | None = None,
 ) -> float:
     """Find a root of a user-written function.
 
-    Solves ``f(x) = 0`` on ``[lower, upper]`` with the ported Numerics Brent root finder. ``f``
-    must change sign across the interval.
+    Solves ``f(x) = 0`` with a ported Numerics root finder: Brent (the default), Bisection,
+    Secant, or Newton-Raphson. ``method`` ``"brent"``, ``"bisection"``, and ``"secant"`` all
+    bracket the root on ``[lower, upper]``, over which ``f`` must change sign; ``method =
+    "newton"`` takes an analytic derivative ``df`` and a ``first_guess`` instead, with the
+    bracket optional (see below).
 
     Parameters
     ----------
     f : callable
         A function taking one number and returning one number.
-    lower, upper : float
-        The bracketing interval.
+    lower, upper : float, optional
+        The bracketing interval. Required for ``method`` ``"brent"``, ``"bisection"``, and
+        ``"secant"``. For ``"newton"`` they are optional, and it is their PRESENCE -- both
+        together -- that selects the robust (bracket-aware) Newton-Raphson variant over the plain
+        one, matching the ported class's own two entry points rather than a method sub-argument.
+    method : {"brent", "bisection", "secant", "newton"}
+        The root finder to use.
+    df : callable, optional
+        The analytic derivative of ``f``, a function taking one number and returning one number.
+        Required for, and only used by, ``method = "newton"``.
+    first_guess : float, optional
+        The running root Bisection and Newton-Raphson seed themselves with (the bracket only
+        seeds their initial step direction / bracket maintenance). Required for ``method =
+        "bisection"`` and ``method = "newton"``; unused by ``"brent"`` and ``"secant"``, which
+        pick their own starting point off the bracket.
     tolerance : float, optional
-        The convergence tolerance on the bracket width. Left unset, the ported Brent solver's own
-        default (1e-8) applies; the value is not restated here, so a change to it lands in one
-        place.
+        The convergence tolerance on the root. Left unset, the ported solver's own default
+        (1e-8) applies; the value is not restated here, so a change to it lands in one place.
     max_iterations : int, optional
         The iteration cap; the search raises if it is reached. Left unset, the ported solver's own
         default (1000) applies.
@@ -150,18 +172,40 @@ def root_find(
     >>> import corehydropy as ch
     >>> round(ch.root_find(lambda x: x**2 - 2, lower=0, upper=2), 6)
     1.414214
+    >>> round(ch.root_find(lambda x: x**2 - 2, lower=0, upper=4,
+    ...                    method="bisection", first_guess=1), 6)
+    1.414214
+    >>> round(ch.root_find(lambda x: x**3 - x - 1, lower=-1, upper=5, method="secant"), 5)
+    1.32472
+    >>> round(ch.root_find(lambda x: x**2 - 2, method="newton",
+    ...                    df=lambda x: 2 * x, first_guess=1), 6)
+    1.414214
     """
+    if method not in _ROOT_FIND_METHODS:
+        raise ValueError(f"`method` must be one of {_ROOT_FIND_METHODS}")
     _check_fn(f)
-    lower = float(lower)
-    upper = float(upper)
-    if not np.isfinite(lower) or not np.isfinite(upper):
-        raise ValueError("`lower` and `upper` must each be a single finite number")
-    if lower >= upper:
-        raise ValueError("`lower` must be below `upper`")
-    # An option key is written ONLY when the caller supplied it, so an unset argument reaches the
-    # ported routine's own default rather than a copy of that default made here. Mirrors
-    # corehydror's root_find() and the same rule in callback/math.hpp and the oracle emitter.
-    options: dict[str, float | int] = {"lower": lower, "upper": upper}
+
+    def _check_bound(x: object, name: str) -> float:
+        x = float(x)
+        if not np.isfinite(x):
+            raise ValueError(f"`{name}` must be a single finite number")
+        return x
+
+    has_lower = lower is not None
+    has_upper = upper is not None
+    options: dict[str, float | int] = {}
+    if has_lower or has_upper:
+        if not (has_lower and has_upper):
+            raise ValueError("`lower` and `upper` must both be supplied, or both left None")
+        lower = _check_bound(lower, "lower")
+        upper = _check_bound(upper, "upper")
+        if lower >= upper:
+            raise ValueError("`lower` must be below `upper`")
+        # An option key is written ONLY when the caller supplied it, so an unset argument reaches
+        # the ported routine's own default rather than a copy of that default made here. Mirrors
+        # corehydror's root_find() and the same rule in callback/math.hpp and the oracle emitter.
+        options["lower"] = lower
+        options["upper"] = upper
     if tolerance is not None:
         if float(tolerance) <= 0:
             raise ValueError("`tolerance` must be a single positive number")
@@ -170,7 +214,86 @@ def root_find(
         if int(max_iterations) < 1:
             raise ValueError("`max_iterations` must be a single positive integer")
         options["max_iterations"] = int(max_iterations)
+
+    if method == "newton":
+        if df is None:
+            raise ValueError('`df`, the analytic derivative of `f`, is required for method="newton"')
+        _check_fn(df)
+        if first_guess is None:
+            raise ValueError('`first_guess` is required for method="newton"')
+        options["first_guess"] = _check_bound(first_guess, "first_guess")
+        return float(
+            _core.callback_math2("root_find_newton", json.dumps(options), f, df)["values"][0]
+        )
+
+    if method == "bisection":
+        if first_guess is None:
+            raise ValueError('`first_guess` is required for method="bisection"')
+        options["first_guess"] = _check_bound(first_guess, "first_guess")
+    if not has_lower:
+        raise ValueError(f'`lower` and `upper` are required for method="{method}"')
+    options["method"] = method
     return float(_core.callback_math("root_find", json.dumps(options), f)["values"][0])
+
+
+def root_find_system(
+    f: Callable[[Sequence[float]], Sequence[float]],
+    jacobian: Callable[[Sequence[float]], Sequence[Sequence[float]]],
+    first_guess: Sequence[float],
+    tolerance: float | None = None,
+    max_iterations: int | None = None,
+) -> np.ndarray:
+    """Solve a system of nonlinear equations.
+
+    Solves ``F(x) = 0`` for a vector-valued ``F`` with the ported Numerics multivariate
+    Newton-Raphson method, iterating ``x_(n+1) = x_n - J(x_n)^-1 F(x_n)``.
+
+    Parameters
+    ----------
+    f : callable
+        The system of equations: a function taking a sequence of numbers and returning a
+        sequence of numbers of the same length.
+    jacobian : callable
+        The Jacobian of ``f``: a function taking the same sequence and returning the square
+        matrix of partial derivatives (a sequence of rows, or a 2-D array), one ROW per equation.
+    first_guess : array_like
+        The starting vector; its length fixes the dimension of the system.
+    tolerance : float, optional
+        The convergence tolerance, applied to both the step size and the residual. Left unset,
+        the ported solver's own default (1e-8) applies.
+    max_iterations : int, optional
+        The iteration cap; the search raises if it is reached. Left unset, the ported solver's own
+        default (1000) applies.
+
+    Returns
+    -------
+    numpy.ndarray
+        The root, the length of ``first_guess``.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> f = lambda v: [3 * v[0] + v[1] - 9, v[0] + 2 * v[1] - 8]
+    >>> j = lambda v: [[3, 1], [1, 2]]
+    >>> ch.root_find_system(f, j, first_guess=[0, 0]).round(6)
+    array([2., 3.])
+    """
+    _check_fn(f)
+    _check_fn(jacobian)
+    guess = np.asarray(first_guess, dtype=float).ravel()
+    if guess.size == 0 or not np.all(np.isfinite(guess)):
+        raise ValueError("`first_guess` must be a non-empty sequence of finite numbers")
+    options: dict[str, object] = {"first_guess": guess.tolist()}
+    if tolerance is not None:
+        if float(tolerance) <= 0:
+            raise ValueError("`tolerance` must be a single positive number")
+        options["tolerance"] = float(tolerance)
+    if max_iterations is not None:
+        if int(max_iterations) < 1:
+            raise ValueError("`max_iterations` must be a single positive integer")
+        options["max_iterations"] = int(max_iterations)
+    res = _core.callback_math2("root_find_system", json.dumps(options), f, jacobian)
+    return np.asarray(res["values"], dtype=float)
 
 
 def quadrature(

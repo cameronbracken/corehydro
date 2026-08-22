@@ -1756,8 +1756,25 @@ def _run_optimizer_case(case):
 def _callback_fixture_function(name):
     if name == "Root_Quadratic":
         return lambda x: x ** 2 - 2.0
+    # P2 "math extras": TestFunctions.Quadratic_Deriv, the newton catalog's counterpart of
+    # Root_Quadratic.
+    if name == "RootD_Quadratic":
+        return lambda x: 2.0 * x
     if name == "Root_Cubic":
         return lambda x: x ** 3 - x - 1.0
+    # TestFunctions.Trigonometric, root ~1.12191713 on [0, pi].
+    if name == "Root_Trigonometric":
+        return lambda x: 2.0 * math.sin(x) - 3.0 * math.cos(x) - 0.5
+    # TestFunctions.Trigonometric_Deriv.
+    if name == "RootD_Trigonometric":
+        return lambda x: 2.0 * math.cos(x) + 3.0 * math.sin(x)
+    # Test_NewtonRaphson.Test_Multi_LinearSystem's system, F([x;y]) = [3x + y - 9, x + 2y - 8],
+    # whose unique root is [2, 3].
+    if name == "Sys_Linear_F":
+        return lambda v: [3.0 * v[0] + v[1] - 9.0, v[0] + 2.0 * v[1] - 8.0]
+    # The (constant) Jacobian of Sys_Linear_F, a sequence of rows (already row-major): [[3, 1], [1, 2]].
+    if name == "Sys_Linear_J":
+        return lambda v: [[3.0, 1.0], [1.0, 2.0]]
     if name == "Diff_FX":
         return lambda x: x ** 3
     if name == "Diff_FXY":
@@ -2133,7 +2150,18 @@ def _run_callback_case(case):
     # callback_gmm and callback_bootstrap.
     options_json = json.dumps(construct.get("options", {}))
     fn = _callback_fixture_function(construct["callback"])
-    if construct["group"] == "math":
+    if construct["group"] == "math" and construct["method"] in (
+        "root_find_newton",
+        "root_find_system",
+    ):
+        # P2 "math extras": these two math methods need a SECOND callback (the analytic
+        # derivative `df`, or the Jacobian reusing gmm's `jacobian` key), which callback_math has
+        # no argument for -- callback_math2 is the two-callback entry point, mirroring
+        # callback_gmm's own optional second/third delegates below.
+        second_key = "df" if construct["method"] == "root_find_newton" else "jacobian"
+        g = _callback_fixture_function(construct[second_key])
+        r = _core.callback_math2(construct["method"], options_json, fn, g)
+    elif construct["group"] == "math":
         r = _core.callback_math(construct["method"], options_json, fn)
     elif construct["group"] == "rng":
         r = _core.rng_probe(options_json, fn)

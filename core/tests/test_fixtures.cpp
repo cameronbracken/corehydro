@@ -1721,9 +1721,11 @@ static void run_one_callback_case(const std::string& where_prefix, const json& c
     // resolved out of the same catalog (each group's `callback` key names its own required
     // delegate: the resample, or the moment conditions). An absent key means that delegate is
     // not supplied, which is what "no jackknife", "the ported numerical Jacobian" and "no
-    // penalty" mean.
+    // penalty" mean. "df" (P2 "math extras") is math/root_find_newton's second callback, the
+    // analytic derivative alongside `callback`'s own f; "jacobian" doubles as math/root_find_system's
+    // J, reusing the same key gmm's jacobian already uses since both resolve to `cbs.vector_matrix`.
     for (const char* key :
-         {"fit", "fit_with_covariance", "statistic", "jackknife", "jacobian", "penalty"})
+         {"fit", "fit_with_covariance", "statistic", "jackknife", "jacobian", "penalty", "df"})
         if (construct.contains(key)) fixture_catalog::callback_set(construct[key].get<std::string>(), cbs);
     json options = construct.contains("options") ? construct["options"] : json::object();
     tbx::CallbackResult r =

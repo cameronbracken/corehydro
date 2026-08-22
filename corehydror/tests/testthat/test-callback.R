@@ -4,6 +4,46 @@ test_that("root_find solves a user-written R function", {
   expect_error(root_find(function(x) x^2 + 1, lower = 0, upper = 2), "not bracketed")
 })
 
+test_that("root_find solves with bisection, secant, and newton (P2 math extras)", {
+  quad <- function(x) x^2 - 2
+  quad_deriv <- function(x) 2 * x
+  expect_equal(root_find(quad, lower = 0, upper = 4, method = "bisection", first_guess = 1),
+               sqrt(2), tolerance = 1e-5)
+  cubic <- function(x) x^3 - x - 1
+  expect_equal(root_find(cubic, lower = -1, upper = 5, method = "secant"), 1.32472,
+               tolerance = 1e-5)
+  # The basic (unbracketed) variant.
+  expect_equal(root_find(quad, method = "newton", df = quad_deriv, first_guess = 1), sqrt(2),
+               tolerance = 1e-5)
+  # Both lower and upper present selects the robust (bracket-aware) variant.
+  trig <- function(x) 2 * sin(x) - 3 * cos(x) - 0.5
+  trig_deriv <- function(x) 2 * cos(x) + 3 * sin(x)
+  expect_equal(root_find(trig, method = "newton", df = trig_deriv, first_guess = 0.5,
+                         lower = 0, upper = pi),
+               1.12191713, tolerance = 1e-5)
+
+  # Argument validation.
+  expect_error(root_find(quad, lower = 0, upper = 4, method = "bisection"), "first_guess")
+  expect_error(root_find(quad, method = "newton", first_guess = 1), "df")
+  expect_error(root_find(quad, method = "newton", df = quad_deriv), "first_guess")
+  expect_error(root_find(quad, method = "secant"), "lower.*upper")
+  expect_error(root_find(quad, lower = 0, method = "brent", upper = NULL), "lower.*upper")
+})
+
+test_that("root_find_system solves a linear system of equations", {
+  # Test_NewtonRaphson.Test_Multi_LinearSystem: F([x;y]) = [3x + y - 9, x + 2y - 8], root [2, 3].
+  f <- function(v) c(3 * v[1] + v[2] - 9, v[1] + 2 * v[2] - 8)
+  j <- function(v) matrix(c(3, 1, 1, 2), nrow = 2, byrow = TRUE)
+  root <- root_find_system(f, j, first_guess = c(0, 0))
+  expect_equal(root, c(2, 3), tolerance = 1e-5)
+
+  # An error inside either callback reaches the caller unchanged, the same guard contract every
+  # other callback method carries.
+  boom <- function(v) stop("my own error")
+  expect_error(root_find_system(boom, j, first_guess = c(0, 0)), "my own error")
+  expect_error(root_find_system(f, boom, first_guess = c(0, 0)), "my own error")
+})
+
 test_that("derivative differentiates a user-written R function", {
   # f(x) = x^3, f'(2) = 12
   expect_equal(derivative(function(x) x^3, 2), 12, tolerance = 1e-6)

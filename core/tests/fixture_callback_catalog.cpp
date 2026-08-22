@@ -58,8 +58,29 @@ tbx::Objective optimizer_objective(const std::string& name) {
 void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
     if (name == "Root_Quadratic") {
         cbs.scalar = [](double x) { return x * x - 2.0; };
+    } else if (name == "RootD_Quadratic") {
+        // P2 "math extras": the analytic derivative of Root_Quadratic
+        // (TestFunctions.Quadratic_Deriv), the newton catalog's counterpart of Root_Quadratic.
+        cbs.scalar_deriv = [](double x) { return 2.0 * x; };
     } else if (name == "Root_Cubic") {
         cbs.scalar = [](double x) { return x * x * x - x - 1.0; };
+    } else if (name == "Root_Trigonometric") {
+        // TestFunctions.Trigonometric: 2 sin(x) - 3 cos(x) - 0.5, root ~1.12191713 on [0, pi].
+        cbs.scalar = [](double x) { return 2.0 * std::sin(x) - 3.0 * std::cos(x) - 0.5; };
+    } else if (name == "RootD_Trigonometric") {
+        // TestFunctions.Trigonometric_Deriv: 2 cos(x) + 3 sin(x).
+        cbs.scalar_deriv = [](double x) { return 2.0 * std::cos(x) + 3.0 * std::sin(x); };
+    } else if (name == "Sys_Linear_F") {
+        // Test_NewtonRaphson.Test_Multi_LinearSystem's system: F([x;y]) = [3x + y - 9, x + 2y - 8],
+        // whose unique root is [2, 3].
+        cbs.vector_vector = [](const std::vector<double>& v) {
+            return std::vector<double>{3.0 * v[0] + v[1] - 9.0, v[0] + 2.0 * v[1] - 8.0};
+        };
+    } else if (name == "Sys_Linear_J") {
+        // The (constant) Jacobian of Sys_Linear_F, row-major 2 x 2: [[3, 1], [1, 2]].
+        cbs.vector_matrix = [](const std::vector<double>&) {
+            return std::make_pair(std::vector<double>{3.0, 1.0, 1.0, 2.0}, std::vector<int>{2, 2});
+        };
     } else if (name == "Diff_FX") {
         cbs.scalar = [](double x) { return std::pow(x, 3.0); };
     } else if (name == "Diff_FXY") {

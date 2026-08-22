@@ -279,6 +279,7 @@ quartodoc:
         NumericalDerivative routines over a user-written Python function.
       contents:
         - root_find
+        - root_find_system
         - quadrature
         - QuadratureResult
         - derivative

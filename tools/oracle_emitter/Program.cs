@@ -854,7 +854,15 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
 static Func<double, double>? CallbackScalarFunction(string name) => name switch
 {
     "Root_Quadratic" => x => Math.Pow(x, 2) - 2,
+    // P2 "math extras": TestFunctions.Quadratic_Deriv, the newton catalog's counterpart of
+    // Root_Quadratic. Same Func<double, double> shape as every other member of this switch, so it
+    // lives here rather than in a derivative-only catalog of its own.
+    "RootD_Quadratic" => x => 2d * x,
     "Root_Cubic" => x => x * x * x - x - 1d,
+    // TestFunctions.Trigonometric, root ~1.12191713 on [0, pi].
+    "Root_Trigonometric" => x => 2d * Math.Sin(x) - 3d * Math.Cos(x) - 0.5,
+    // TestFunctions.Trigonometric_Deriv.
+    "RootD_Trigonometric" => x => 2d * Math.Cos(x) + 3d * Math.Sin(x),
     "Diff_FX" => x => Math.Pow(x, 3.0),
     "Quad_FX3" => x => Math.Pow(x, 3d),
     "Quad_Cosine" => x => Math.Cos(x),
@@ -875,6 +883,22 @@ static Func<double[], double>? CallbackVectorFunction(string name) => name switc
     "Diff_FXY" => p => Math.Pow(p[0], 2) * Math.Pow(p[1], 3),
     "Diff_FXYZ" => p => Math.Pow(p[0], 3.0) + Math.Pow(p[1], 4.0) + Math.Pow(p[2], 5.0),
     "Diff_FH" => p => Math.Pow(p[0], 3.0) - 2 * p[0] * p[1] - Math.Pow(p[1], 6),
+    _ => null
+};
+
+// P2 "math extras", the math/root_find_system catalog: Test_NewtonRaphson.Test_Multi_LinearSystem's
+// system, F([x;y]) = [3x + y - 9, x + 2y - 8] with the constant Jacobian [[3, 1], [1, 2]], whose
+// unique root is [2, 3]. `double[,]`, not `Matrix`, so this catalog's shape matches
+// CallbackJacobianFunction's (the gmm group's) rather than adding a third jacobian shape.
+static Func<double[], double[]>? CallbackSystemFunction(string name) => name switch
+{
+    "Sys_Linear_F" => v => new[] { 3.0 * v[0] + v[1] - 9.0, v[0] + 2.0 * v[1] - 8.0 },
+    _ => null
+};
+
+static Func<double[], double[,]>? CallbackSystemJacobianFunction(string name) => name switch
+{
+    "Sys_Linear_J" => _ => new double[,] { { 3.0, 1.0 }, { 1.0, 2.0 } },
     _ => null
 };
 
@@ -5563,6 +5587,11 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             double Opt(string key, double dflt) =>
                 options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
                     ? ParseNum(v) : dflt;
+            // P2 "math extras": root_find_newton's bracket presence check (BOTH lower and upper
+            // present selects the robust variant, not a method sub-key) needs to distinguish
+            // "absent" from "present with a default-looking value", which Opt's own dflt cannot.
+            bool Has(string key) =>
+                options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
             double[] OptVector(string key)
             {
                 if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty(key, out var v))
@@ -5700,12 +5729,70 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             }
             else if (method == "root_find")
             {
+                // P2 "math extras": `options.method` picks the ported root finder, absent meaning
+                // "brent" -- preserving every fixture written before this key existed, exactly as
+                // callback/math.hpp's own root_find arm does.
                 var f = CallbackScalarFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
-                values = [Numerics.Mathematics.RootFinding.Brent.Solve(
-                    f, Opt("lower", 0d), Opt("upper", 0d), Opt("tolerance", 1E-8),
-                    (int)Opt("max_iterations", 1000))];
+                string rootMethod = options.ValueKind == JsonValueKind.Object &&
+                                    options.TryGetProperty("method", out var rmEl)
+                    ? rmEl.GetString()! : "brent";
+                double tol = Opt("tolerance", 1E-8);
+                int maxIter = (int)Opt("max_iterations", 1000);
+                double rootValue = rootMethod switch
+                {
+                    "brent" => Numerics.Mathematics.RootFinding.Brent.Solve(
+                        f, Opt("lower", 0d), Opt("upper", 0d), tol, maxIter),
+                    "bisection" => Numerics.Mathematics.RootFinding.Bisection.Solve(
+                        f, Opt("first_guess", 0d), Opt("lower", 0d), Opt("upper", 0d), tol, maxIter),
+                    "secant" => Numerics.Mathematics.RootFinding.Secant.Solve(
+                        f, Opt("lower", 0d), Opt("upper", 0d), tol, maxIter),
+                    _ => throw new Exception($"math/root_find: unknown method '{rootMethod}'")
+                };
+                values = [rootValue];
                 dims = [];
+            }
+            else if (method == "root_find_newton")
+            {
+                // The second callback, `df`, resolved out of the same catalog as `callback` --
+                // math/root_find_newton's own second required delegate, mirroring the gmm group's
+                // `jacobian` key.
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                string dfName = construct.GetProperty("df").GetString()!;
+                var df = CallbackScalarFunction(dfName)
+                    ?? throw new Exception($"callback '{dfName}' is not a scalar function");
+                double firstGuess = Has("first_guess")
+                    ? Opt("first_guess", 0d)
+                    : throw new Exception("math/root_find_newton requires the option 'first_guess'");
+                double tol = Opt("tolerance", 1E-8);
+                int maxIter = (int)Opt("max_iterations", 1000);
+                // Both present -- not a method sub-key -- selects the robust (bracketed) variant,
+                // matching the ported class's own two static methods. See callback/math.hpp.
+                double rootValue = Has("lower") && Has("upper")
+                    ? Numerics.Mathematics.RootFinding.NewtonRaphson.RobustSolve(
+                        f, df, firstGuess, Opt("lower", 0d), Opt("upper", 0d), tol, maxIter)
+                    : Numerics.Mathematics.RootFinding.NewtonRaphson.Solve(
+                        f, df, firstGuess, tol, maxIter);
+                values = [rootValue];
+                dims = [];
+            }
+            else if (method == "root_find_system")
+            {
+                var F = CallbackSystemFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a system function");
+                string jName = construct.GetProperty("jacobian").GetString()!;
+                var Jraw = CallbackSystemJacobianFunction(jName)
+                    ?? throw new Exception($"callback '{jName}' is not a system jacobian function");
+                double[] firstGuess = OptVector("first_guess");
+                double tol = Opt("tolerance", 1E-8);
+                int maxIter = (int)Opt("max_iterations", 1000);
+                Vector FVec(Vector v) => new Vector(F(v.ToArray()));
+                Matrix JMat(Vector v) => new Matrix(Jraw(v.ToArray()));
+                Vector rootVector = Numerics.Mathematics.RootFinding.NewtonRaphson.Solve(
+                    FVec, JMat, new Vector(firstGuess), tol, maxIter);
+                values = rootVector.ToArray();
+                dims = [values.Length];
             }
             else if (method == "derivative")
             {
