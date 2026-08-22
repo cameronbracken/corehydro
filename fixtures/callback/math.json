@@ -1,7 +1,7 @@
 {
   "kind": "callback",
-  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs, Integration/Test_AdaptiveGaussKronrod.cs, Integration/Test_SimpsonsRule.cs, Integration/Test_TrapezoidalRule.cs, Integration/Test_AdaptiveSimpsonsRule.cs, Integration/Test_AdaptiveGaussLobatto.cs, Integration/Test_Integration.cs, Integration/Test_AdaptiveSimpsonsRule2D.cs}",
-  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python lambda, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. NOTE the catalog names here are NOT the `optimizer`-kind catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), not the unrelated TestFunctions.FXYZ the optimizer fixtures use. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal, transcribed verbatim, EXCEPT the assertions whose `source` opens with EMITTER-READ: no upstream test reads AdaptiveGaussKronrod's FunctionEvaluations, StandardError or Status, so those are read off the REAL C# library through tools/oracle_emitter instead. Neither kind is ever a value computed by this repo's own C++. `Quad_Peak` is likewise a corehydro addition rather than an upstream integrand: every Integrands.cs function the upstream tests integrate converges on the first whole-interval evaluation at 21 function evaluations, so without it the subdividing branch of the recursion has no oracle at all.",
+  "source": "Numerics/Mathematics/{Root Finding/Test_Brent.cs, Differentiation/Test_Differentiation.cs, Integration/Test_AdaptiveGaussKronrod.cs, Integration/Test_SimpsonsRule.cs, Integration/Test_TrapezoidalRule.cs, Integration/Test_AdaptiveSimpsonsRule.cs, Integration/Test_AdaptiveGaussLobatto.cs, Integration/Test_Integration.cs, Integration/Test_AdaptiveSimpsonsRule2D.cs, Integration/Test_MonteCarlo.cs, Integration/Test_Miser.cs, Integration/Test_Vegas.cs, Integration/Integrands.cs}",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python lambda, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. NOTE the catalog names here are NOT the `optimizer`-kind catalog's: `Diff_FXYZ` is Test_Differentiation.FXYZ (x^3 + y^4 + z^5), not the unrelated TestFunctions.FXYZ the optimizer fixtures use. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal, transcribed verbatim, EXCEPT the assertions whose `source` opens with EMITTER-READ: no upstream test reads AdaptiveGaussKronrod's FunctionEvaluations, StandardError or Status, so those are read off the REAL C# library through tools/oracle_emitter instead. Neither kind is ever a value computed by this repo's own C++. `Quad_Peak` is likewise a corehydro addition rather than an upstream integrand: every Integrands.cs function the upstream tests integrate converges on the first whole-interval evaluation at 21 function evaluations, so without it the subdividing branch of the recursion has no oracle at all. `quadrature_nd_pi`/`quadrature_miser_gsl`/`quadrature_vegas_sum_normals` (P2 \"math extras\", Task 6) are ALL EMITTER-READ: the upstream Test_MonteCarlo/Test_Miser/Test_Vegas methods are loose true-value checks (1e-2 to 1e-3 relative), so the pinned values here are the SEEDED C# result at the option settings each case's `options` carries -- chosen small so the gate stays fast -- not the upstream literal.",
   "callbacks": {
     "Root_Quadratic": "f(x) = x^2 - 2  [Mathematics/Root Finding/TestFunctions.Quadratic]",
     "RootD_Quadratic": "f'(x) = 2x  [Mathematics/Root Finding/TestFunctions.Quadratic_Deriv]",
@@ -21,7 +21,10 @@
     "Quad_FXXX": "f(x) = 0.5 + 24x + 3x^2 + 8x^3  [Mathematics/Integration/Integrands.FXXX]",
     "Quad_Peak": "f(x) = 1 / (1 + 1e4 * x^2)  [corehydro addition, NOT an upstream integrand -- see quadrature_peak_subdivides]",
     "Quad2D_XPlusY": "f(x, y) = x + y  [Mathematics/Integration/Test_AdaptiveSimpsonsRule2D.Test_XPlusY]",
-    "Quad2D_PI2D": "f(x, y) = (x^2 + y^2 < 1) ? 1 : 0  [Mathematics/Integration/Integrands.PI2D, driven by Test_AdaptiveSimpsonsRule2D.Test_PI]"
+    "Quad2D_PI2D": "f(x, y) = (x^2 + y^2 < 1) ? 1 : 0  [Mathematics/Integration/Integrands.PI2D, driven by Test_AdaptiveSimpsonsRule2D.Test_PI]",
+    "Nd_PI": "f(x) = (x[0]^2 + x[1]^2 < 1) ? 1 : 0, ALWAYS 2-dimensional  [Mathematics/Integration/Integrands.PI, driven by Test_MonteCarlo/Test_Miser.Test_PI]",
+    "Nd_GSL": "f(x) = (1 / pi^3) / (1 - cos(x[0]) cos(x[1]) cos(x[2])), 3-dimensional  [Mathematics/Integration/Integrands.GSL, driven by Test_MonteCarlo/Test_Miser.Test_GSL]",
+    "NdW_SumOfNormals3": "f(x, weight) = sum_i mu20[i] + sigma20[i] * Normal.StandardZ(x[i]) for i in 0..2, weight ignored  [Mathematics/Integration/Integrands.SumOfNormals, driven by Test_Vegas.Test_SumOfThreeNormals's own weight-ignoring wrapper]"
   },
   "cases": [
     {
@@ -408,6 +411,52 @@
       "assertions": [
         { "method": "value", "args": [0], "expected": 3.14, "mode": "abs", "tol": 0.00314, "source": "Test_AdaptiveSimpsonsRule2D.Test_PI (trueResult = 3.14, delta 1E-3 * trueResult)" },
         { "method": "status", "expected": "Success", "source": "EMITTER-READ, no upstream test literal: Status read off the driven C# AdaptiveSimpsonsRule2D after Integrate() -- the indicator function subdivides heavily but still converges within the default MaxFunctionEvaluations" }
+      ]
+    },
+    {
+      "name": "quadrature_nd_pi",
+      "construct": {
+        "group": "math",
+        "method": "quadrature_nd",
+        "callback": "Nd_PI",
+        "options": { "min": [-1.0, -1.0], "max": [1.0, 1.0], "seed": 12345, "min_iterations": 50, "max_iterations": 2000, "relative_tolerance": 0.01 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 3.206, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MonteCarloIntegration.Result, seed 12345, min_iterations 50, max_iterations 2000, relative_tolerance 0.01 -- a small, fast run so the gate stays quick; NOT the upstream Test_MonteCarlo.Test_PI literal (that test uses different iteration/tolerance settings)" },
+        { "method": "value", "args": [1], "expected": 2000, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MonteCarloIntegration.FunctionEvaluations at the same settings -- the run never satisfied relative_tolerance 0.01 inside 2000 iterations, so it ran the full budget" },
+        { "method": "value", "args": [2], "expected": 0.03567607041141163, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MonteCarloIntegration.StandardError at the same settings" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ: MonteCarloIntegration.Status after Integrate() -- Success because FunctionEvaluations (2000) is below the untouched MaxFunctionEvaluations default (1e7), even though the run exhausted max_iterations without converging; that field, not max_iterations, is what MonteCarloIntegration checks to choose the reported status (see callback/math.hpp's file header)" }
+      ]
+    },
+    {
+      "name": "quadrature_miser_gsl",
+      "construct": {
+        "group": "math",
+        "method": "quadrature_nd",
+        "callback": "Nd_GSL",
+        "options": { "method": "miser", "min": [0.0, 0.0, 0.0], "max": [3.141592653589793, 3.141592653589793, 3.141592653589793], "seed": 12345, "max_function_evaluations": 2000 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.425427126579912, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: Miser.Result, seed 12345, max_function_evaluations 2000 (Miser's own real throttle, fed straight to its recursion as npts) -- a small, fast run so the gate stays quick; NOT the upstream Test_Miser.Test_GSL literal (that test uses the ported class's own defaults)" },
+        { "method": "value", "args": [1], "expected": 2000, "mode": "abs", "tol": 0, "source": "EMITTER-READ: Miser.FunctionEvaluations at the same settings" },
+        { "method": "value", "args": [2], "expected": 0.08760513221699731, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: Miser.StandardError at the same settings" },
+        { "method": "status", "expected": "None", "source": "EMITTER-READ, upstream Miser.Integrate() quirk verified against the real C# source (Numerics/Mathematics/Integration/Miser.cs): unlike MonteCarloIntegration/Vegas/AdaptiveGaussKronrod, Miser's happy path never assigns Status -- it stays IntegrationStatus.None (ClearResults()'s value) after a successful run, and is only ever written on the catch(Exception) branch (Failure). Faithfully ported, not a port bug" }
+      ]
+    },
+    {
+      "name": "quadrature_vegas_sum_normals",
+      "construct": {
+        "group": "math",
+        "method": "quadrature_vegas",
+        "callback": "NdW_SumOfNormals3",
+        "options": { "min": [1e-16, 1e-16, 1e-16], "max": [0.9999999999999999, 0.9999999999999999, 0.9999999999999999], "independent_evaluations": 3, "function_calls": 2000 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 57.01985120535583, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: Vegas.Result, the default Sobol-sampled run (use_sobol defaults true, so `seed` would be inert -- omitted), independent_evaluations 3, function_calls 2000 -- a small, fast run so the gate stays quick; NOT the upstream Test_Vegas.Test_SumOfThreeNormals literal (that test uses the ported class's own defaults, 1000 x 10000)" },
+        { "method": "value", "args": [1], "expected": 4000, "mode": "abs", "tol": 0, "source": "EMITTER-READ: Vegas.FunctionEvaluations at the same settings" },
+        { "method": "value", "args": [2], "expected": 0.05012701277983261, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: Vegas.StandardError at the same settings" },
+        { "method": "value", "args": [3], "expected": 0.0011714379070326686, "mode": "rel", "tol": 1e-6, "source": "EMITTER-READ: Vegas.ChiSquared at the same settings. Looser than every other tolerance in this file (measured drift ~1.1e-7 relative, not sub-ulp): chi_squared is `(sum_chi_squared_ - sum_weighted_results_ * result_) / (it + 1)`, a subtraction of two close large quantities that AMPLIFIES the ~1-ulp difference between clang/gcc's default fused-multiply-add contraction (core/CMakeLists.txt's -ffp-contract=off is deliberately scoped to the fixture_callback_catalog.cpp TU alone, NOT the shared core Vegas/Miser/MonteCarloIntegration classes, so R, Python and this C++ runner all compile and AGREE with each other on the fused arithmetic, but not with .NET's never-fused one) and .NET's own never-fused arithmetic; isolated single-file recompiles of vegas.hpp confirm removing contraction there reproduces the C# value to the bit, and restoring it reproduces this file's own pinned value to the bit -- a measured toolchain effect, not a stream/order bug" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ: Vegas.Status after Integrate()" }
       ]
     }
   ]

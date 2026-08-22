@@ -17,6 +17,8 @@
 #include <utility>
 #include <vector>
 
+#include "corehydro/numerics/distributions/normal.hpp"
+#include "corehydro/numerics/tools.hpp"
 #include "optimization_test_functions.hpp"
 
 namespace tbx = corehydro::numerics::support;
@@ -485,6 +487,40 @@ void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
             for (int k : rng->integers(2, 0, 100)) out.push_back(static_cast<double>(k));
             out.push_back(rng->uniform(1).at(0));
             return out;
+        };
+    } else if (name == "Nd_PI") {
+        // The math/quadrature_nd catalog (fixtures/callback/math.json), P2 "math extras": upstream's
+        // Test_Numerics/Mathematics/Integration/Integrands.cs `PI(double[] vals)`, the indicator of
+        // the unit disc read off the first two components -- always 2-dimensional regardless of how
+        // many dimensions the case's own `min`/`max` carry, exactly as the C# function is.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return (p[0] * p[0] + p[1] * p[1] < 1.0) ? 1.0 : 0.0;
+        };
+    } else if (name == "Nd_GSL") {
+        // Integrands.cs `GSL(double[] x)`: the GNU Scientific Library 3-dimensional test integrand,
+        // A / (1 - cos(x0) cos(x1) cos(x2)) with A = 1 / pi^3.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double a = 1.0 / (corehydro::numerics::kPi * corehydro::numerics::kPi *
+                                    corehydro::numerics::kPi);
+            return a / (1.0 - std::cos(p[0]) * std::cos(p[1]) * std::cos(p[2]));
+        };
+    } else if (name == "NdW_SumOfNormals3") {
+        // Integrands.cs `SumOfNormals(double[] p)`, the 3-dimensional case (upstream's
+        // Test_Vegas.Test_SumOfThreeNormals wraps it `(x, y) => Integrands.SumOfNormals(x)`,
+        // ignoring the weight -- transcribed here the same way). `p[i]` is a probability in
+        // (0, 1); `Normal::standard_z` is the ALREADY-PORTED, oracle-validated inverse standard
+        // Normal CDF (upstream's `Normal.StandardZ`, itself a rational-polynomial approximation --
+        // NOT arithmetic a fixture catalog could transcribe faithfully by hand), reused here rather
+        // than reimplemented, exactly as core/tests/test_integration_random.cpp's own
+        // `integrand_sum_of_normals` (Task 5) already does. `mu20`/`sigma20` sliced to the first
+        // three entries.
+        cbs.vector_weight = [](const std::vector<double>& p, double /*weight*/) {
+            static const double mu[] = {10.0, 30.0, 17.0};
+            static const double sigma[] = {2.0, 15.0, 5.0};
+            double acc = 0.0;
+            for (std::size_t i = 0; i < p.size(); ++i)
+                acc += mu[i] + sigma[i] * corehydro::numerics::distributions::Normal::standard_z(p[i]);
+            return acc;
         };
     } else if (name == "Rng_Warmup1000") {
         cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {

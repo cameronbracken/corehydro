@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from corehydropy import GeneralizedExtremeValue, gev_fit
+from corehydropy import Distribution, GeneralizedExtremeValue, gev_fit
 from corehydropy import _core
 
 _MOMENTS = ("mean", "median", "mode", "sd", "skewness", "kurtosis", "minimum", "maximum")
@@ -1915,7 +1915,48 @@ def _callback_fixture_function(name):
         )
     if name == "Rng_Warmup1000":
         return _rng_warmup_1000
+    # The math/quadrature_nd catalog (fixtures/callback/math.json), P2 "math extras": upstream's
+    # Test_Numerics/Mathematics/Integration/Integrands.cs `PI(double[] vals)`, the indicator of the
+    # unit disc read off the first two components -- always 2-dimensional regardless of how many
+    # dimensions the case's own `min`/`max` carry, exactly as the C# function is.
+    if name == "Nd_PI":
+        return lambda x: 1.0 if x[0] * x[0] + x[1] * x[1] < 1.0 else 0.0
+    # Integrands.cs `GSL(double[] x)`: the GNU Scientific Library 3-dimensional test integrand,
+    # A / (1 - cos(x0) cos(x1) cos(x2)) with A = 1 / pi^3.
+    if name == "Nd_GSL":
+        return _nd_gsl
+    # Integrands.cs `SumOfNormals(double[] p)`, the 3-dimensional case (upstream's
+    # Test_Vegas.Test_SumOfThreeNormals wraps it `(x, y) => Integrands.SumOfNormals(x)`, ignoring
+    # the weight -- transcribed here the same way). `p[i]` is a probability in (0, 1);
+    # ``Distribution("Normal", [0, 1]).quantile()`` is the package's OWN public entry point to
+    # the already-ported, oracle-validated inverse standard Normal CDF (upstream's
+    # `Normal.StandardZ`, itself a rational-polynomial approximation -- NOT arithmetic a fixture
+    # catalog could transcribe faithfully by hand), reused here rather than reimplemented, so the
+    # resulting z values are bit-identical to core/tests/test_integration_random.cpp's own
+    # `integrand_sum_of_normals` (Task 5) and to R's twin above. `mu20`/`sigma20` sliced to the
+    # first three entries.
+    if name == "NdW_SumOfNormals3":
+        return _ndw_sum_of_normals3
     raise KeyError(f"unknown callback fixture callback: {name}")
+
+
+def _nd_gsl(x):
+    a = 1.0 / (math.pi**3)
+    return a / (1.0 - math.cos(x[0]) * math.cos(x[1]) * math.cos(x[2]))
+
+
+_ND_STANDARD_NORMAL = Distribution("Normal", [0.0, 1.0])
+
+
+def _ndw_sum_of_normals3(x, w):
+    del w
+    mu = (10.0, 30.0, 17.0)
+    sigma = (2.0, 15.0, 5.0)
+    z = _ND_STANDARD_NORMAL.quantile(list(x))
+    acc = 0.0
+    for i in range(len(x)):
+        acc += mu[i] + sigma[i] * float(z[i])
+    return acc
 
 
 def _mcmc_gaussian_kernel(p):
@@ -2155,7 +2196,17 @@ def _run_callback_case(case):
     construct = case["construct"]
     # Every group has its own Python entry point: callback_math, rng_probe, callback_mcmc,
     # callback_gmm and callback_bootstrap.
-    options_json = json.dumps(construct.get("options", {}))
+    options_dict = dict(construct.get("options", {}))
+    # math/quadrature_nd and math/quadrature_vegas (P2 "math extras") read a Sobol
+    # direction-numbers path exactly as the "sampling"/"sobol" toolbox arm above -- path
+    # resolution is a wrapper concern (see callback/math.hpp's SOBOL PATH note), so this harness
+    # injects its own resolved path rather than the fixture's own `options` carrying one.
+    if construct["group"] == "math" and construct["method"] in (
+        "quadrature_nd",
+        "quadrature_vegas",
+    ):
+        options_dict["sobol_path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+    options_json = json.dumps(options_dict)
     fn = _callback_fixture_function(construct["callback"])
     if construct["group"] == "math" and construct["method"] in (
         "root_find_newton",
@@ -2172,6 +2223,11 @@ def _run_callback_case(case):
         # P2 "math extras": the (x, y) half of the math group, callback_math_xy -- see
         # callback_math2 above for why a differing arity gets its own Python entry point.
         r = _core.callback_math_xy(construct["method"], options_json, fn)
+    elif construct["group"] == "math" and construct["method"] == "quadrature_vegas":
+        # P2 "math extras": the (x, weight) half of the math group, callback_math_vw -- see
+        # callback_math_xy above for why a differing callback shape gets its own Python entry
+        # point.
+        r = _core.callback_math_vw(construct["method"], options_json, fn)
     elif construct["group"] == "math":
         r = _core.callback_math(construct["method"], options_json, fn)
     elif construct["group"] == "rng":

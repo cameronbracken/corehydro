@@ -40,6 +40,10 @@ ch_callback_math_xy_ <- function(method, options_json, f) {
   .Call(`_corehydror_ch_callback_math_xy_`, method, options_json, f)
 }
 
+ch_callback_math_vw_ <- function(method, options_json, f) {
+  .Call(`_corehydror_ch_callback_math_vw_`, method, options_json, f)
+}
+
 ch_callback_mcmc_ <- function(options_json, f, proposal, gradient) {
   .Call(`_corehydror_ch_callback_mcmc_`, options_json, f, proposal, gradient)
 }

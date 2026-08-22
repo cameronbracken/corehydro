@@ -883,6 +883,34 @@ static Func<double[], double>? CallbackVectorFunction(string name) => name switc
     "Diff_FXY" => p => Math.Pow(p[0], 2) * Math.Pow(p[1], 3),
     "Diff_FXYZ" => p => Math.Pow(p[0], 3.0) + Math.Pow(p[1], 4.0) + Math.Pow(p[2], 5.0),
     "Diff_FH" => p => Math.Pow(p[0], 3.0) - 2 * p[0] * p[1] - Math.Pow(p[1], 6),
+    // The math/quadrature_nd catalog (fixtures/callback/math.json), P2 "math extras": upstream's
+    // Test_Numerics/Mathematics/Integration/Integrands.cs `PI(double[] vals)`, the indicator of
+    // the unit disc read off the first two components -- always 2-dimensional regardless of how
+    // many dimensions the case's own `min`/`max` carry, exactly as the C# function is.
+    "Nd_PI" => p => (p[0] * p[0] + p[1] * p[1] < 1d) ? 1d : 0d,
+    // Integrands.cs `GSL(double[] x)`: the GNU Scientific Library 3-dimensional test integrand,
+    // A / (1 - cos(x0) cos(x1) cos(x2)) with A = 1 / pi^3.
+    "Nd_GSL" => p => (1d / (Math.PI * Math.PI * Math.PI)) /
+                     (1d - Math.Cos(p[0]) * Math.Cos(p[1]) * Math.Cos(p[2])),
+    _ => null
+};
+
+// The math/quadrature_vegas catalog (P2 "math extras"): upstream's own Vegas integrand shape,
+// f(x, weight) -> y. `NdW_SumOfNormals3` is Integrands.cs `SumOfNormals(double[] p)` (the
+// 3-dimensional case), wrapped weight-ignoring exactly as Test_Vegas.cs's own
+// `(x, y) => Integrands.SumOfNormals(x)` wraps it -- transcribed identically in all four runners
+// (see core/tests/fixture_callback_catalog.cpp's twin) so the R/Python/C++ closures reproduce this
+// REAL C# `Normal.StandardZ` bit for bit.
+static Func<double[], double, double>? CallbackVectorWeightFunction(string name) => name switch
+{
+    "NdW_SumOfNormals3" => (p, w) =>
+    {
+        double[] mu = [10d, 30d, 17d];
+        double[] sigma = [2d, 15d, 5d];
+        double acc = 0d;
+        for (int i = 0; i < p.Length; i++) acc += mu[i] + sigma[i] * Normal.StandardZ(p[i]);
+        return acc;
+    },
     _ => null
 };
 
@@ -5957,6 +5985,104 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 values = [asr2d.Result, asr2d.FunctionEvaluations, asr2d.StandardError];
                 dims = [];
                 statusName = asr2d.Status.ToString();
+            }
+            else if (method == "quadrature_nd")
+            {
+                // P2 "math extras": drives the real C# MonteCarloIntegration (the default
+                // `options.method`) or Miser, mirroring callback/math.hpp's own quadrature_nd arm
+                // -- including its "seed present -> new MersenneTwister(seed)" idiom and its
+                // extra min_iterations/max_iterations/relative_tolerance options for
+                // "monte_carlo" (that class's OWN real throttle; see the header note on that
+                // header for why max_function_evaluations alone is not). No Sobol path is passed
+                // to either ctor: unlike this port's SobolSequence, C#'s reads its direction
+                // numbers from an embedded resource, exactly as the "sampling"/"sobol" toolbox arm
+                // above already relies on.
+                var fnd = CallbackVectorFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a vector function");
+                double[] ndMin = OptVector("min");
+                double[] ndMax = OptVector("max");
+                if (ndMax.Length != ndMin.Length)
+                    throw new Exception("math/quadrature_nd: 'min' and 'max' must be the same length");
+                int ndDims = ndMin.Length;
+                string ndMethod = options.ValueKind == JsonValueKind.Object &&
+                                  options.TryGetProperty("method", out var ndmEl)
+                    ? ndmEl.GetString()! : "monte_carlo";
+                bool ndUseSobol = !options.ValueKind.Equals(JsonValueKind.Object) ||
+                                  !options.TryGetProperty("use_sobol", out var ndusEl) ||
+                                  ndusEl.GetBoolean();
+                if (ndMethod == "monte_carlo")
+                {
+                    var mc = new Numerics.Mathematics.Integration.MonteCarloIntegration(
+                        fnd, ndDims, ndMin, ndMax);
+                    if (Has("seed")) mc.Random = new MersenneTwister((int)Opt("seed", 0d));
+                    mc.UseSobolSequence = ndUseSobol;
+                    if (Has("min_iterations")) mc.MinIterations = (int)Opt("min_iterations", 0d);
+                    if (Has("max_iterations")) mc.MaxIterations = (int)Opt("max_iterations", 0d);
+                    if (Has("relative_tolerance")) mc.RelativeTolerance = Opt("relative_tolerance", 0d);
+                    if (Has("max_function_evaluations"))
+                        mc.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    mc.Integrate();
+                    values = [mc.Result, mc.FunctionEvaluations, mc.StandardError];
+                    dims = [];
+                    statusName = mc.Status.ToString();
+                }
+                else if (ndMethod == "miser")
+                {
+                    var miser = new Numerics.Mathematics.Integration.Miser(fnd, ndDims, ndMin, ndMax);
+                    if (Has("seed")) miser.Random = new MersenneTwister((int)Opt("seed", 0d));
+                    miser.UseSobolSequence = ndUseSobol;
+                    if (Has("max_function_evaluations"))
+                        miser.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    if (Has("fraction")) miser.Fraction = Opt("fraction", 0d);
+                    if (Has("min_subregion_points"))
+                        miser.MinimumNumberOfSubregionPoints = (int)Opt("min_subregion_points", 0d);
+                    if (Has("min_bisections"))
+                        miser.MinimumNumberOfBisections = (int)Opt("min_bisections", 0d);
+                    if (Has("dither")) miser.Dither = Opt("dither", 0d);
+                    miser.Integrate();
+                    values = [miser.Result, miser.FunctionEvaluations, miser.StandardError];
+                    dims = [];
+                    statusName = miser.Status.ToString();
+                }
+                else
+                {
+                    throw new Exception($"math/quadrature_nd: unknown method '{ndMethod}'");
+                }
+            }
+            else if (method == "quadrature_vegas")
+            {
+                // P2 "math extras": drives the real C# Vegas, mirroring callback/math.hpp's own
+                // quadrature_vegas arm. `target_probability`, if present, calls
+                // ConfigureForRareEvents LAST, after every other option, exactly as the ported
+                // method itself documents.
+                var fw = CallbackVectorWeightFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an (x, weight) function");
+                double[] vMin = OptVector("min");
+                double[] vMax = OptVector("max");
+                if (vMax.Length != vMin.Length)
+                    throw new Exception("math/quadrature_vegas: 'min' and 'max' must be the same length");
+                int vDims = vMin.Length;
+                var vegas = new Numerics.Mathematics.Integration.Vegas(fw, vDims, vMin, vMax);
+                if (Has("seed")) vegas.Random = new MersenneTwister((int)Opt("seed", 0d));
+                vegas.UseSobolSequence = !options.ValueKind.Equals(JsonValueKind.Object) ||
+                                         !options.TryGetProperty("use_sobol", out var vusEl) ||
+                                         vusEl.GetBoolean();
+                if (Has("independent_evaluations"))
+                    vegas.IndependentEvaluations = (int)Opt("independent_evaluations", 0d);
+                if (Has("function_calls")) vegas.FunctionCalls = (int)Opt("function_calls", 0d);
+                if (Has("alpha")) vegas.Alpha = Opt("alpha", 0d);
+                if (Has("number_of_bins")) vegas.NumberOfBins = (int)Opt("number_of_bins", 0d);
+                if (Has("tail_focus_parameter"))
+                    vegas.TailFocusParameter = Opt("tail_focus_parameter", 0d);
+                if (Has("initialize")) vegas.Initialize = (int)Opt("initialize", 0d);
+                if (Has("check_convergence"))
+                    vegas.CheckConvergence = options.GetProperty("check_convergence").GetBoolean();
+                if (Has("target_probability"))
+                    vegas.ConfigureForRareEvents(Opt("target_probability", 0d));
+                vegas.Integrate();
+                values = [vegas.Result, vegas.FunctionEvaluations, vegas.StandardError, vegas.ChiSquared];
+                dims = [];
+                statusName = vegas.Status.ToString();
             }
             else
             {

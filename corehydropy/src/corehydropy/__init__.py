@@ -63,6 +63,7 @@ from .callback import (
     mcmc_posterior,
     quadrature,
     quadrature_2d,
+    quadrature_nd,
     root_find,
     root_find_system,
 )
@@ -199,6 +200,7 @@ __all__ = [
     "root_find_system",
     "quadrature",
     "quadrature_2d",
+    "quadrature_nd",
     "QuadratureResult",
     "derivative",
     "gradient",

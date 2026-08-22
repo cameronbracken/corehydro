@@ -13,6 +13,7 @@ guard's own sentinel can never replace it.
 from __future__ import annotations
 
 import json
+from importlib.resources import files
 from typing import Callable, Sequence
 
 import numpy as np
@@ -25,6 +26,7 @@ __all__ = [
     "root_find_system",
     "quadrature",
     "quadrature_2d",
+    "quadrature_nd",
     "QuadratureResult",
     "derivative",
     "gradient",
@@ -71,11 +73,17 @@ class QuadratureResult(float):
         "math extras": ``"simpsons"``, ``"trapezoidal"``, ``"gauss_lobatto"``) has no such
         estimate at all; ``None`` for the same five fixed-rule methods
         ``function_evaluations`` is.
+    chi_squared : float or None
+        The Chi-Squared statistic, an approximate diagnostic for a run's own internal consistency
+        across its independent evaluations. Only :func:`quadrature_nd` with ``method="vegas"``
+        (P2 "math extras") sets this; every other caller of ``QuadratureResult`` leaves it
+        ``None``.
     """
 
     status: str
     function_evaluations: int | None
     standard_error: float | None
+    chi_squared: float | None
 
     def __new__(
         cls,
@@ -83,6 +91,7 @@ class QuadratureResult(float):
         status: str,
         function_evaluations: int | None,
         standard_error: float | None,
+        chi_squared: float | None = None,
     ) -> "QuadratureResult":
         self = super().__new__(cls, value)
         self.status = status
@@ -90,6 +99,7 @@ class QuadratureResult(float):
             None if function_evaluations is None else int(function_evaluations)
         )
         self.standard_error = None if standard_error is None else float(standard_error)
+        self.chi_squared = None if chi_squared is None else float(chi_squared)
         return self
 
     # A float subclass whose __new__ takes more than the value cannot be reconstructed by the
@@ -98,14 +108,21 @@ class QuadratureResult(float):
     # required positional arguments" -- and OptimResult, the other object this surface returns,
     # is picklable. Returning the full argument tuple restores both round trips.
     def __getnewargs__(self) -> tuple:
-        return (float(self), self.status, self.function_evaluations, self.standard_error)
+        return (
+            float(self),
+            self.status,
+            self.function_evaluations,
+            self.standard_error,
+            self.chi_squared,
+        )
 
     def __repr__(self) -> str:
-        # The bare float repr would hide the two fields the R twin prints as attributes.
+        # The bare float repr would hide the fields the R twin prints as attributes.
+        chi_squared = f", chi_squared={self.chi_squared!r}" if self.chi_squared is not None else ""
         return (
             f"{float(self)!r} (status={self.status!r}, "
             f"function_evaluations={self.function_evaluations}, "
-            f"standard_error={self.standard_error!r})"
+            f"standard_error={self.standard_error!r}{chi_squared})"
         )
 
 
@@ -556,6 +573,245 @@ def quadrature_2d(
             raise ValueError("`max_depth` must be a single non-negative integer")
         options["max_depth"] = int(max_depth)
     res = _core.callback_math_xy("quadrature_2d", json.dumps(options), f)
+    return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
+
+
+_QUADRATURE_ND_METHODS = ("monte_carlo", "miser", "vegas")
+_QUADRATURE_ND_MC_ONLY = ("min_iterations", "max_iterations", "relative_tolerance")
+_QUADRATURE_ND_MISER_ONLY = ("fraction", "min_subregion_points", "min_bisections", "dither")
+_QUADRATURE_ND_VEGAS_ONLY = (
+    "independent_evaluations",
+    "function_calls",
+    "alpha",
+    "number_of_bins",
+    "tail_focus_parameter",
+    "initialize",
+    "check_convergence",
+    "target_probability",
+)
+
+
+def quadrature_nd(
+    f: Callable[..., float],
+    min: Sequence[float],
+    max: Sequence[float],
+    method: str = "monte_carlo",
+    seed: int | None = None,
+    use_sobol: bool = True,
+    max_function_evaluations: int | None = None,
+    min_iterations: int | None = None,
+    max_iterations: int | None = None,
+    relative_tolerance: float | None = None,
+    fraction: float | None = None,
+    min_subregion_points: int | None = None,
+    min_bisections: int | None = None,
+    dither: float | None = None,
+    independent_evaluations: int | None = None,
+    function_calls: int | None = None,
+    alpha: float | None = None,
+    number_of_bins: int | None = None,
+    tail_focus_parameter: float | None = None,
+    initialize: int | None = None,
+    check_convergence: bool | None = None,
+    target_probability: float | None = None,
+) -> QuadratureResult:
+    """Integrate a user-written function over a multidimensional box.
+
+    Computes the definite integral of ``f`` over the hyper-rectangle ``[min, max]`` (P2 "math
+    extras") with one of three ported stochastic multidimensional integrators: plain Monte Carlo
+    (``method="monte_carlo"``, the default), Miser (recursive stratified-sampling Monte Carlo,
+    Press et al. "Numerical Recipes" Sec. 7.9), or Vegas (Lepage's adaptive importance sampling,
+    Sec. 7.8, with an optional Power Transform for rare tail-event sampling). ``min``/``max`` give
+    both the per-dimension bounds and, via their length, the number of dimensions.
+
+    ``method="vegas"`` takes ``f(x, weight)`` -- ``x`` the sample point and ``weight`` the
+    importance weight Vegas has already computed for it -- rather than ``f(x)``, matching the
+    upstream C# Vegas constructor's own integrand shape; a weight-ignoring wrapper (``lambda x, w:
+    g(x)``) reproduces an ``f(x)``-only integrand under Vegas, exactly as the upstream unit tests
+    wrap theirs.
+
+    The SAMPLE STREAM -- which points ``f`` is called at -- reproduces bit-for-bit against the
+    same run in ``corehydror``, EXCEPT that ``seed`` has no effect on ``method="monte_carlo"`` or
+    a Sobol-sampled run of ``"miser"``/``"vegas"`` (the default, ``use_sobol=True``): Miser and
+    Vegas draw their sample points from a Sobol low-discrepancy sequence rather than the Mersenne
+    Twister ``seed`` seeds, and ``MonteCarloIntegration``'s own ``UseSobolSequence`` flag is a
+    documented DEAD property upstream -- declared but never consulted by ``Integrate()`` -- so a
+    ``"monte_carlo"`` run always draws from the generator ``seed`` seeds. ``use_sobol=False``
+    reroutes Miser/Vegas through that same seeded generator instead. AN HONEST LIMIT, measured
+    rather than assumed: the AGGREGATED numbers this function returns are not always bit-identical
+    between R and Python the way the sample stream is. ``MonteCarloIntegration``/``Miser``/
+    ``Vegas`` are ported CORE code, so -- unlike the callback surface's own catalog tests, which
+    the C++ side compiles with ``-ffp-contract=off`` for exactly this reason -- they compile with
+    whatever fused-multiply-add behavior each package's own build flags happen to produce (R's
+    ``-O2`` and corehydropy's CMake default are not guaranteed to agree). ``integral`` itself
+    reproduces to within a handful of ULP in every case measured; ``standard_error`` and (for
+    ``method="vegas"``) ``chi_squared``, both built from a near-cancelling subtraction
+    (``avg2 - avg*avg``-shaped for Monte Carlo/Miser, ``sum_chi_squared - sum_weighted_results *
+    result`` for Vegas), amplify that ULP-level difference and can disagree well past it. This is
+    a property of the classes' own arithmetic, not a bug in either binding, and it is the same
+    reason ``fixtures/callback/callback_cross_language.json``'s own ``quadrature_nd``/
+    ``quadrature_vegas`` digest asserts only ``function_evaluations`` and ``status`` -- see that
+    file's reference note for the measurements.
+
+    Parameters
+    ----------
+    f : callable
+        A function taking a sequence of numbers and returning one number (``method="monte_carlo"``
+        /``"miser"``), or a function taking a sequence of numbers and a number (the sample weight)
+        and returning one number (``method="vegas"``).
+    min, max : sequence of float
+        Sequences of the same length giving the per-dimension lower and upper bounds; their
+        common length is the number of dimensions. Every ``max`` entry must be above the matching
+        ``min`` entry.
+    method : str
+        One of ``"monte_carlo"`` (the default), ``"miser"``, or ``"vegas"``.
+    seed : int, optional
+        A seed for the class's random number generator. Left unset, the ported class's own
+        clock-seeded default applies -- see the note above on when that still reproduces.
+    use_sobol : bool
+        Whether to draw sample points from a Sobol low-discrepancy sequence rather than the
+        (possibly seeded) generator. Default ``True``. Only ``"miser"`` and ``"vegas"`` read this.
+    max_function_evaluations : int, optional
+        The cap on evaluations of ``f``. Left unset, the ported class's own default applies.
+        Applies to ``"monte_carlo"`` and ``"miser"`` alone -- ``"miser"``'s own recursion is
+        bounded directly by it, where ``"monte_carlo"``'s loop is bounded by ``max_iterations``
+        instead (see below); supplying it for ``method="vegas"`` raises ``ValueError``.
+    min_iterations, max_iterations, relative_tolerance : optional
+        ``method="monte_carlo"`` alone: the floor on iterations before the convergence check is
+        consulted, the ceiling on iterations (``"monte_carlo"``'s real throttle, since
+        ``max_function_evaluations`` is checked only after the loop ends to choose the reported
+        status), and the relative-error convergence threshold. Left unset, the ported class's own
+        defaults apply. Supplying any for another ``method`` raises ``ValueError``.
+    fraction, min_subregion_points, min_bisections, dither : optional
+        ``method="miser"`` alone: the fraction of remaining evaluations spent exploring variance
+        at each stage, the minimum points per terminal subregion, the minimum evaluations before a
+        subregion is bisected further, and the dither applied when the integrand's active region
+        falls on a subdivision boundary. Left unset, the ported class's own defaults apply.
+        Supplying any for another ``method`` raises ``ValueError``.
+    independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter,
+    initialize, check_convergence, target_probability : optional
+        ``method="vegas"`` alone. ``independent_evaluations`` and ``function_calls`` bound the run
+        (their product is the maximum total evaluations); ``alpha`` is the grid-refinement damping
+        exponent; ``number_of_bins`` the stratification bin count; ``tail_focus_parameter`` the
+        Power Transform exponent (1.0, the default, is standard uniform sampling); ``initialize``
+        selects a cold start (0, the default), inheriting the grid alone (1), or inheriting the
+        grid and its answers (2); ``check_convergence`` whether to exit early on convergence.
+        ``target_probability``, if supplied, calls the ported ``configure_for_rare_events()``
+        helper -- applied AFTER every other option, so it may override
+        ``number_of_bins``/``alpha``/``tail_focus_parameter``, exactly as the C# helper does. Left
+        unset, the ported class's own defaults apply. Supplying any for another ``method`` raises
+        ``ValueError``.
+
+    Returns
+    -------
+    QuadratureResult
+        The integral, carrying ``status``, ``function_evaluations``, and ``standard_error``, and,
+        for ``method="vegas"`` alone, ``chi_squared``. An upstream quirk, verified against the
+        real C# source rather than assumed: ``method="miser"`` always reports ``status`` ``"None"``
+        on success -- unlike ``"monte_carlo"`` and ``"vegas"``, the ported ``Miser::integrate()``
+        (faithfully mirroring C#'s ``Miser.Integrate()``) never assigns a success status, only ever
+        writing ``"Failure"`` from its catch block.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> round(ch.quadrature_nd(lambda x: 1.0 if x[0]**2 + x[1]**2 < 1 else 0.0,
+    ...                        [-1, -1], [1, 1], seed=12345), 1)
+    3.1
+    """
+    if method not in _QUADRATURE_ND_METHODS:
+        raise ValueError(f"`method` must be one of {_QUADRATURE_ND_METHODS}")
+    _check_fn(f)
+    min_arr = np.asarray(min, dtype=float).ravel()
+    max_arr = np.asarray(max, dtype=float).ravel()
+    if min_arr.size < 1 or min_arr.size != max_arr.size:
+        raise ValueError("`min` and `max` must be sequences of the same positive length")
+    if not np.all(np.isfinite(min_arr)) or not np.all(np.isfinite(max_arr)):
+        raise ValueError("`min` and `max` must be finite")
+    if np.any(max_arr <= min_arr):
+        raise ValueError("every `max` entry must be above the matching `min` entry")
+    dimension = int(min_arr.size)
+
+    options: dict[str, object] = {"min": min_arr.tolist(), "max": max_arr.tolist()}
+    if method != "monte_carlo":
+        options["method"] = method
+    if seed is not None:
+        options["seed"] = int(seed)
+    options["use_sobol"] = bool(use_sobol)
+    # Miser and Vegas unconditionally construct a SobolSequence over `dimension`, regardless of
+    # `use_sobol` (see numerics/support/callback/math.hpp's SOBOL PATH note), so the path is
+    # resolved and supplied whenever `dimension > 1` and `method` is one of the two, exactly as
+    # sobol_sequence() above resolves its own.
+    if method in ("miser", "vegas") and dimension > 1:
+        options["sobol_path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+
+    def _scope(supplied: dict[str, object], allowed_method: str, label: str) -> None:
+        given = [k for k, v in supplied.items() if v is not None]
+        if given and method != allowed_method:
+            raise ValueError(f"{', '.join(given)!r} only appl{'y' if len(given) > 1 else 'ies'} to method={label!r}")
+
+    _scope(
+        {"min_iterations": min_iterations, "max_iterations": max_iterations,
+         "relative_tolerance": relative_tolerance},
+        "monte_carlo", "monte_carlo",
+    )
+    _scope(
+        {"fraction": fraction, "min_subregion_points": min_subregion_points,
+         "min_bisections": min_bisections, "dither": dither},
+        "miser", "miser",
+    )
+    _scope(
+        {"independent_evaluations": independent_evaluations, "function_calls": function_calls,
+         "alpha": alpha, "number_of_bins": number_of_bins,
+         "tail_focus_parameter": tail_focus_parameter, "initialize": initialize,
+         "check_convergence": check_convergence, "target_probability": target_probability},
+        "vegas", "vegas",
+    )
+    if max_function_evaluations is not None and method == "vegas":
+        raise ValueError(
+            "`max_function_evaluations` only applies to method=\"monte_carlo\" or \"miser\", not "
+            '"vegas" -- use `function_calls`/`independent_evaluations`'
+        )
+
+    if max_function_evaluations is not None:
+        options["max_function_evaluations"] = int(max_function_evaluations)
+    if min_iterations is not None:
+        options["min_iterations"] = int(min_iterations)
+    if max_iterations is not None:
+        options["max_iterations"] = int(max_iterations)
+    if relative_tolerance is not None:
+        options["relative_tolerance"] = float(relative_tolerance)
+    if fraction is not None:
+        options["fraction"] = float(fraction)
+    if min_subregion_points is not None:
+        options["min_subregion_points"] = int(min_subregion_points)
+    if min_bisections is not None:
+        options["min_bisections"] = int(min_bisections)
+    if dither is not None:
+        options["dither"] = float(dither)
+    if independent_evaluations is not None:
+        options["independent_evaluations"] = int(independent_evaluations)
+    if function_calls is not None:
+        options["function_calls"] = int(function_calls)
+    if alpha is not None:
+        options["alpha"] = float(alpha)
+    if number_of_bins is not None:
+        options["number_of_bins"] = int(number_of_bins)
+    if tail_focus_parameter is not None:
+        options["tail_focus_parameter"] = float(tail_focus_parameter)
+    if initialize is not None:
+        options["initialize"] = int(initialize)
+    if check_convergence is not None:
+        options["check_convergence"] = bool(check_convergence)
+    if target_probability is not None:
+        options["target_probability"] = float(target_probability)
+
+    if method == "vegas":
+        res = _core.callback_math_vw("quadrature_vegas", json.dumps(options), f)
+        return QuadratureResult(
+            res["values"][0], res["status"], res["values"][1], res["values"][2], res["values"][3]
+        )
+    res = _core.callback_math("quadrature_nd", json.dumps(options), f)
     return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
 
 

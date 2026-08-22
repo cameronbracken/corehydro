@@ -1848,6 +1848,52 @@ always drives AdaptiveSimpsonsRule2D and always returns the result triple + stat
 `fixtures/callback/math.json` are its two catalog entries, both real upstream integrands
 (`Test_AdaptiveSimpsonsRule2D.Test_XPlusY`/`Test_PI`, the latter Integrands.PI2D).
 
+P2 "math extras" (Task 6) added `math/quadrature_nd` and `math/quadrature_vegas`, over the three
+ported stochastic multidimensional integrators (`numerics/math/integration/`):
+MonteCarloIntegration, Miser, and Vegas. `quadrature_nd` drives the first two over `callback` (the
+same `vector_scalar` shape `gradient`/`hessian` already use), `options.method` one of
+`"monte_carlo"` (the default) or `"miser"`; `min`/`max` are required vectors whose common length is
+the dimensionality, `seed` PRESENT seeds the class's `random` member the way the emitter's `new
+MersenneTwister(seed)` does, and `use_sobol` (default true) maps to `use_sobol_sequence` -- though
+MonteCarloIntegration's own flag is a documented DEAD property upstream, consulted by neither
+Integrate() nor this arm. Because MonteCarloIntegration's own loop is bounded by `max_iterations`
+rather than `max_function_evaluations` (the latter is checked only AFTER the loop, to choose the
+reported status, not to end it early -- faithfully ported, not a bug), `"monte_carlo"` alone also
+accepts `min_iterations`/`max_iterations`/`relative_tolerance`, none of which the upstream RMC
+delegate options grammar carries; `"miser"` alone accepts `fraction`/`min_subregion_points`/
+`min_bisections`/`dither`, mapping to the ported class's own members. `quadrature_vegas` drives
+Vegas over a NEW `CallbackSet` member, `vector_weight` (`f(x, weight) -> y`, upstream's own Vegas
+integrand shape -- its own method rather than a `quadrature_nd` arm because of that different
+callback shape), taking the same `min`/`max`/`seed`/`use_sobol` plus Vegas's own
+`independent_evaluations`/`function_calls`/`alpha`/`number_of_bins`/`tail_focus_parameter`/
+`initialize`/`check_convergence`, and `target_probability` (PRESENT calls the ported
+`configure_for_rare_events()` helper, applied LAST so it may override the bin/alpha/tail-focus
+options the same way the C# method itself does). `quadrature_nd` returns the familiar
+`{integral, function_evaluations, standard_error}` triple + status; `quadrature_vegas` returns a
+fourth value, `chi_squared`, since Vegas alone reports one. An upstream quirk worth knowing before
+reading a `"status"` assertion here: unlike MonteCarloIntegration/Vegas/AdaptiveGaussKronrod,
+Miser's own `Integrate()` never assigns a success status -- it stays `"None"` (`ClearResults()`'s
+value), written only on the catch-block `"Failure"` path -- verified against the real C# source,
+not assumed. `Nd_PI`/`Nd_GSL` (real upstream integrands, `Integrands.PI`/`GSL`) and
+`NdW_SumOfNormals3` (`Integrands.SumOfNormals`, the weight-ignoring wrapper
+`Test_Vegas.Test_SumOfThreeNormals` itself uses) are the three catalog entries in
+`fixtures/callback/math.json`; the last calls each runner's OWN already-ported, oracle-validated
+Normal quantile (`Normal::standard_z`/`dist_quantile()`/`Distribution.quantile()`/
+`Normal.StandardZ`) rather than reimplementing that rational-polynomial approximation as arithmetic
+by hand. Also worth knowing before pinning a value here: MonteCarloIntegration/Miser/Vegas are
+CORE code, not fixture-catalog code, so -- unlike the callback catalogs, which core/CMakeLists.txt
+deliberately compiles with `-ffp-contract=off` -- they compile with default (fused-multiply-add
+capable) semantics everywhere, INCLUDING in R and Python; a formula with a near-cancelling
+subtraction (`avg2 - avg*avg` for MonteCarloIntegration's own standard error; the analogous term in
+Miser; `sum_chi_squared_ - sum_weighted_results_ * result_` for Vegas's chi_squared) can therefore
+differ from the never-fused C# value by more than the last bit even though R, Python and this
+repo's own C++ runner all agree with EACH OTHER. `fixtures/callback/math.json`'s three pinned cases
+use a measured, non-zero `"rel"` tolerance on those fields for exactly that reason (as small as
+1e-12 where the drift is sub-ulp, as loose as 1e-6 for Vegas's `chi_squared`, whose subtraction
+amplifies the drift to a measured ~1.1e-7 relative); `fixtures/callback/callback_cross_language.json`'s
+own digest case, being zero-tolerance across all four runners, only pins `function_evaluations`
+and `status` for exactly the same reason.
+
 The `"rng"` group has one method, `probe`, and one job: prove that a draw taken INSIDE a
 host-language callback comes off the core's seeded stream rather than off R's or Python's own
 generator. Its `options` carry exactly one of `seed` (a number, the C# `MersenneTwister(int)`

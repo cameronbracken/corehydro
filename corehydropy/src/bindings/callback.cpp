@@ -187,6 +187,23 @@ std::function<std::vector<double>(const std::vector<double>&)> as_vector_vector_
     };
 }
 
+// Converts a Python callable of two arguments into the (x, weight) -> z signature
+// math/quadrature_vegas takes (P2 "math extras"), upstream's own Vegas integrand shape -- `x` the
+// sample point (a sequence of numbers) and `weight` the importance weight Vegas has already
+// computed for it. Mirrors as_scalar_xy_fn's cast and error wording, with `x` marshaled as a
+// std::vector<double> the way as_vector_scalar_fn's argument is.
+std::function<double(const std::vector<double>&, double)> as_vector_weight_fn(py::function f) {
+    return [f](const std::vector<double>& x, double weight) -> double {
+        py::object out = f(x, weight);
+        try {
+            return out.cast<double>();
+        } catch (const py::cast_error&) {
+            throw std::runtime_error("the function must return a single number; got " +
+                                     std::string(py::str(out)));
+        }
+    };
+}
+
 std::function<double(const std::vector<double>&)> as_vector_scalar_fn(py::function f) {
     return [f](const std::vector<double>& p) -> double {
         py::object out = f(p);
@@ -568,6 +585,23 @@ void register_callback(py::module_& m) {
                 cbs.scalar_xy = as_scalar_xy_fn(f);
             } else {
                 throw std::invalid_argument("unknown xy-callback math method: " + method);
+            }
+            return pack(sup::run_callback("math", method, options_json, cbs));
+        },
+        py::arg("method"), py::arg("options_json"), py::arg("f"));
+
+    // The (x, weight) half of the math group (P2 "math extras"): "quadrature_vegas" alone, split
+    // from "callback_math" for the same reason "callback_math_xy" is -- the callback shape differs
+    // from every other math method's. `f` marshals through as_vector_weight_fn into
+    // `cbs.vector_weight`.
+    m.def(
+        "callback_math_vw",
+        [](const std::string& method, const std::string& options_json, py::function f) {
+            sup::CallbackSet cbs;
+            if (method == "quadrature_vegas") {
+                cbs.vector_weight = as_vector_weight_fn(f);
+            } else {
+                throw std::invalid_argument("unknown vector-weight-callback math method: " + method);
             }
             return pack(sup::run_callback("math", method, options_json, cbs));
         },

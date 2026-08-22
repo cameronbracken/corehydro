@@ -1728,9 +1728,15 @@ static void run_one_callback_case(const std::string& where_prefix, const json& c
          {"fit", "fit_with_covariance", "statistic", "jackknife", "jacobian", "penalty", "df"})
         if (construct.contains(key)) fixture_catalog::callback_set(construct[key].get<std::string>(), cbs);
     json options = construct.contains("options") ? construct["options"] : json::object();
-    tbx::CallbackResult r =
-        tbx::run_callback(construct["group"].get<std::string>(),
-                          construct["method"].get<std::string>(), options.dump(), cbs);
+    std::string group = construct["group"].get<std::string>();
+    std::string method = construct["method"].get<std::string>();
+    // math/quadrature_nd and math/quadrature_vegas (P2 "math extras") read a Sobol direction-numbers
+    // path exactly as the "sampling"/"sobol" toolbox arm does above -- path resolution is a wrapper
+    // concern (see callback/math.hpp's SOBOL PATH note), so this harness injects the same
+    // g_sobol_path it resolves for that arm rather than the fixture's own `options` carrying one.
+    if (group == "math" && (method == "quadrature_nd" || method == "quadrature_vegas"))
+        options["sobol_path"] = g_sobol_path;
+    tbx::CallbackResult r = tbx::run_callback(group, method, options.dump(), cbs);
     for (const auto& as : assertions) {
         std::string method = as["method"].get<std::string>();
         std::string where = where_prefix + "/" + method;

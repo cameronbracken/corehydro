@@ -409,6 +409,219 @@ quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NU
             standard_error = res$values[[3]])
 }
 
+#' Integrate a user-written function over a multidimensional box
+#'
+#' Computes the definite integral of `f` over the hyper-rectangle `[min, max]` (P2 "math extras")
+#' with one of three ported stochastic multidimensional integrators: plain Monte Carlo (`method =
+#' "monte_carlo"`, the default), Miser (recursive stratified-sampling Monte Carlo, Press et al.
+#' "Numerical Recipes" Sec. 7.9), or Vegas (Lepage's adaptive importance sampling, Sec. 7.8, with
+#' an optional Power Transform for rare tail-event sampling). `min`/`max` give both the
+#' per-dimension bounds and, via their length, the number of dimensions.
+#'
+#' `method = "vegas"` takes `f(x, weight)` -- `x` the sample point and `weight` the importance
+#' weight Vegas has already computed for it -- rather than `f(x)`, matching the upstream C# Vegas
+#' constructor's own integrand shape; a weight-ignoring wrapper (`function(x, w) g(x)`) reproduces
+#' an `f(x)`-only integrand under Vegas, exactly as the upstream unit tests wrap theirs.
+#'
+#' The SAMPLE STREAM -- which points `f` is called at -- reproduces bit-for-bit against the same
+#' run in `corehydropy`, EXCEPT that `seed` has no effect on `method = "monte_carlo"` or a
+#' Sobol-sampled run of `"miser"`/`"vegas"` (the default, `use_sobol = TRUE`): Miser and Vegas draw
+#' their sample points from a Sobol low-discrepancy sequence rather than the Mersenne Twister
+#' `seed` seeds, and `MonteCarloIntegration`'s own `UseSobolSequence` flag is a documented DEAD
+#' property upstream -- declared but never consulted by `Integrate()` -- so a `"monte_carlo"` run
+#' always draws from the generator `seed` seeds. `use_sobol = FALSE` reroutes Miser/Vegas through
+#' that same seeded generator instead. An HONEST LIMIT, measured rather than assumed: the
+#' AGGREGATED numbers this function returns are not always bit-identical between R and Python
+#' the way the sample stream is. `MonteCarloIntegration`/`Miser`/`Vegas` are ported CORE code, so
+#' -- unlike the callback surface's own catalog tests, which the C++ side compiles with
+#' `-ffp-contract=off` for exactly this reason -- they compile with whatever fused-multiply-add
+#' behavior each package's own build flags happen to produce (R's `-O2` and corehydropy's CMake
+#' default are not guaranteed to agree). `integral` itself reproduces to within a handful of ULP in
+#' every case measured; `standard_error` and (for `"vegas"`) `chi_squared`, both built from a
+#' near-cancelling subtraction (`avg2 - avg*avg`-shaped for Monte Carlo/Miser,
+#' `sum_chi_squared - sum_weighted_results * result` for Vegas), amplify that ULP-level difference
+#' and can disagree well past it. This is a property of the classes' own arithmetic, not a bug in
+#' either binding, and it is the same reason `fixtures/callback/callback_cross_language.json`'s own
+#' `quadrature_nd`/`quadrature_vegas` digest asserts only `function_evaluations` and `status` --
+#' see that file's reference note for the measurements.
+#'
+#' @param f a function taking a numeric vector and returning one number (`method =
+#'   "monte_carlo"`/`"miser"`), or a function taking a numeric vector and a number (the sample
+#'   weight) and returning one number (`method = "vegas"`).
+#' @param min,max numeric vectors of the same length giving the per-dimension lower and upper
+#'   bounds; their common length is the number of dimensions. Every `max` entry must be above the
+#'   matching `min` entry.
+#' @param method one of `"monte_carlo"` (the default), `"miser"`, or `"vegas"`.
+#' @param seed an integer seed for the class's random number generator. `NULL`, the default,
+#'   leaves the ported class's own clock-seeded default in force -- so a `NULL` `"miser"`/`"vegas"`
+#'   run under Sobol sampling is still reproducible (the Sobol sequence is deterministic), but a
+#'   `NULL` `"monte_carlo"` run, or a `"miser"`/`"vegas"` run with `use_sobol = FALSE`, is not. See
+#'   the Details.
+#' @param use_sobol whether to draw sample points from a Sobol low-discrepancy sequence rather
+#'   than the (possibly seeded) generator. Default `TRUE`. Only `"miser"` and `"vegas"` read this;
+#'   see the Details on why `"monte_carlo"` does not.
+#' @param max_function_evaluations the cap on evaluations of `f`. `NULL`, the default, leaves the
+#'   ported class's own default in force. Applies to `"monte_carlo"` and `"miser"` alone --
+#'   `"miser"`'s own recursion is bounded directly by it, where `"monte_carlo"`'s loop is bounded
+#'   by `max_iterations` instead (see below); supplying it for `method = "vegas"` raises an error.
+#' @param min_iterations,max_iterations,relative_tolerance `method = "monte_carlo"` alone: the
+#'   floor on iterations before the convergence check is consulted, the ceiling on iterations
+#'   (`"monte_carlo"`'s real throttle, since `max_function_evaluations` is checked only after the
+#'   loop ends to choose the reported status), and the relative-error convergence threshold. `NULL`,
+#'   the default, leaves the ported class's own defaults in force. Supplying any for another
+#'   `method` raises an error.
+#' @param fraction,min_subregion_points,min_bisections,dither `method = "miser"` alone: the
+#'   fraction of remaining evaluations spent exploring variance at each stage, the minimum points
+#'   per terminal subregion, the minimum evaluations before a subregion is bisected further, and
+#'   the dither applied when the integrand's active region falls on a subdivision boundary. `NULL`,
+#'   the default, leaves the ported class's own defaults in force. Supplying any for another
+#'   `method` raises an error.
+#' @param independent_evaluations,function_calls,alpha,number_of_bins,tail_focus_parameter,
+#'   initialize,check_convergence,target_probability `method = "vegas"` alone. `independent_evaluations`
+#'   and `function_calls` bound the run (their product is the maximum total evaluations);
+#'   `alpha` is the grid-refinement damping exponent; `number_of_bins` the stratification bin
+#'   count; `tail_focus_parameter` the Power Transform exponent (1.0, the default, is standard
+#'   uniform sampling); `initialize` selects a cold start (0, the default), inheriting the grid
+#'   alone (1), or inheriting the grid and its answers (2); `check_convergence` whether to exit
+#'   early on convergence. `target_probability`, if supplied, calls the ported
+#'   `configure_for_rare_events()` helper -- applied AFTER every other option, so it may override
+#'   `number_of_bins`/`alpha`/`tail_focus_parameter`, exactly as the C# helper does. `NULL`, the
+#'   default, leaves the ported class's own defaults in force. Supplying any for another `method`
+#'   raises an error.
+#' @return the integral, a single number, carrying `status` (`"Success"`,
+#'   `"MaximumFunctionEvaluationsReached"`, `"Failure"`, or `"None"`), `function_evaluations`, and
+#'   `standard_error` as attributes -- and, for `method = "vegas"` alone, `chi_squared`, the
+#'   Chi-Squared statistic (an approximate diagnostic for the run's own internal consistency across
+#'   its independent evaluations). An upstream quirk, verified against the real C# source rather
+#'   than assumed: `method = "miser"` always reports `status` `"None"` on success -- unlike
+#'   `"monte_carlo"` and `"vegas"`, the ported `Miser::integrate()` (faithfully mirroring C#'s
+#'   `Miser.Integrate()`) never assigns a success status, only ever writing `"Failure"` from its
+#'   catch block.
+#' @examples
+#' quadrature_nd(function(x) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
+#'               seed = 12345)
+#' quadrature_nd(function(x, w) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
+#'               method = "vegas")
+#' @export
+quadrature_nd <- function(f, min, max,
+                          method = c("monte_carlo", "miser", "vegas"),
+                          seed = NULL, use_sobol = TRUE,
+                          max_function_evaluations = NULL,
+                          min_iterations = NULL, max_iterations = NULL,
+                          relative_tolerance = NULL,
+                          fraction = NULL, min_subregion_points = NULL,
+                          min_bisections = NULL, dither = NULL,
+                          independent_evaluations = NULL, function_calls = NULL,
+                          alpha = NULL, number_of_bins = NULL,
+                          tail_focus_parameter = NULL, initialize = NULL,
+                          check_convergence = NULL, target_probability = NULL) {
+  method <- match.arg(method)
+  callback_check_fn(f)
+  if (!is.numeric(min) || !is.numeric(max) || length(min) < 1L || length(min) != length(max)) {
+    stop("`min` and `max` must be numeric vectors of the same positive length", call. = FALSE)
+  }
+  if (any(!is.finite(min)) || any(!is.finite(max))) {
+    stop("`min` and `max` must be finite", call. = FALSE)
+  }
+  if (any(max <= min)) {
+    stop("every `max` entry must be above the matching `min` entry", call. = FALSE)
+  }
+  dimension <- length(min)
+  opts <- list(min = as.double(min), max = as.double(max))
+  if (method != "monte_carlo") {
+    opts$method <- method
+  }
+  if (!is.null(seed)) {
+    if (!is.numeric(seed) || length(seed) != 1L) {
+      stop("`seed` must be a single integer", call. = FALSE)
+    }
+    opts$seed <- as.integer(seed)
+  }
+  if (!is.logical(use_sobol) || length(use_sobol) != 1L || is.na(use_sobol)) {
+    stop("`use_sobol` must be a single logical value", call. = FALSE)
+  }
+  opts$use_sobol <- use_sobol
+  # Miser and Vegas unconditionally construct a SobolSequence over `dimension`, regardless of
+  # `use_sobol` (see numerics/support/callback/math.hpp's SOBOL PATH note), so the path is
+  # resolved and supplied whenever `dimension > 1` and `method` is one of the two, exactly as
+  # sobol_sequence() above resolves its own.
+  if (method %in% c("miser", "vegas") && dimension > 1L) {
+    path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+    if (!nzchar(path)) {
+      stop("direction-numbers file not found in corehydror inst/extdata", call. = FALSE)
+    }
+    opts$sobol_path <- path
+  }
+
+  mc_only <- c("min_iterations", "max_iterations", "relative_tolerance")
+  miser_only <- c("fraction", "min_subregion_points", "min_bisections", "dither")
+  vegas_only <- c("independent_evaluations", "function_calls", "alpha", "number_of_bins",
+                  "tail_focus_parameter", "initialize", "check_convergence", "target_probability")
+  supplied <- function(...) {
+    vals <- list(...)
+    names(vals)[!vapply(vals, is.null, logical(1))]
+  }
+  check_scope <- function(names_supplied, allowed_methods, group_label) {
+    if (length(names_supplied) && !method %in% allowed_methods) {
+      stop("`", paste(names_supplied, collapse = "`, `"), "` only appl", if (length(names_supplied) > 1) "y" else "ies",
+           " to method ", group_label, call. = FALSE)
+    }
+  }
+  check_scope(supplied(min_iterations = min_iterations, max_iterations = max_iterations,
+                       relative_tolerance = relative_tolerance),
+              "monte_carlo", '"monte_carlo"')
+  check_scope(supplied(fraction = fraction, min_subregion_points = min_subregion_points,
+                       min_bisections = min_bisections, dither = dither),
+              "miser", '"miser"')
+  check_scope(supplied(independent_evaluations = independent_evaluations,
+                       function_calls = function_calls, alpha = alpha,
+                       number_of_bins = number_of_bins,
+                       tail_focus_parameter = tail_focus_parameter, initialize = initialize,
+                       check_convergence = check_convergence,
+                       target_probability = target_probability),
+              "vegas", '"vegas"')
+  if (!is.null(max_function_evaluations) && method == "vegas") {
+    stop("`max_function_evaluations` only applies to method = \"monte_carlo\" or \"miser\", not ",
+         "\"vegas\" -- use `function_calls`/`independent_evaluations`", call. = FALSE)
+  }
+
+  if (!is.null(max_function_evaluations)) opts$max_function_evaluations <- as.integer(max_function_evaluations)
+  if (!is.null(min_iterations)) opts$min_iterations <- as.integer(min_iterations)
+  if (!is.null(max_iterations)) opts$max_iterations <- as.integer(max_iterations)
+  if (!is.null(relative_tolerance)) opts$relative_tolerance <- as.double(relative_tolerance)
+  if (!is.null(fraction)) opts$fraction <- as.double(fraction)
+  if (!is.null(min_subregion_points)) opts$min_subregion_points <- as.integer(min_subregion_points)
+  if (!is.null(min_bisections)) opts$min_bisections <- as.integer(min_bisections)
+  if (!is.null(dither)) opts$dither <- as.double(dither)
+  if (!is.null(independent_evaluations)) opts$independent_evaluations <- as.integer(independent_evaluations)
+  if (!is.null(function_calls)) opts$function_calls <- as.integer(function_calls)
+  if (!is.null(alpha)) opts$alpha <- as.double(alpha)
+  if (!is.null(number_of_bins)) opts$number_of_bins <- as.integer(number_of_bins)
+  if (!is.null(tail_focus_parameter)) opts$tail_focus_parameter <- as.double(tail_focus_parameter)
+  if (!is.null(initialize)) opts$initialize <- as.integer(initialize)
+  if (!is.null(check_convergence)) {
+    if (!is.logical(check_convergence) || length(check_convergence) != 1L || is.na(check_convergence)) {
+      stop("`check_convergence` must be a single logical value", call. = FALSE)
+    }
+    opts$check_convergence <- check_convergence
+  }
+  if (!is.null(target_probability)) opts$target_probability <- as.double(target_probability)
+
+  if (method == "vegas") {
+    res <- ch_callback_math_vw_("quadrature_vegas", to_spec_json(opts), f)
+    return(structure(res$values[[1]],
+                     status = res$status,
+                     function_evaluations = as.integer(res$values[[2]]),
+                     standard_error = res$values[[3]],
+                     chi_squared = res$values[[4]]))
+  }
+  res <- ch_callback_math_("quadrature_nd", to_spec_json(opts), f)
+  structure(res$values[[1]],
+            status = res$status,
+            function_evaluations = as.integer(res$values[[2]]),
+            standard_error = res$values[[3]])
+}
+
 #' Differentiate a user-written function
 #'
 #' `derivative()` takes the first derivative of a single-variable function by central difference;

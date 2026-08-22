@@ -21,6 +21,15 @@
 //   quadrature_2d: {"min_x": 0.0, "max_x": 1.0, "min_y": 0.0, "max_y": 1.0,
 //                   "absolute_tolerance": 1e-8, "relative_tolerance": 1e-8,
 //                   "min_depth": 0, "max_depth": 100}
+//   quadrature_nd: {"method": "monte_carlo", "min": [0.0, 0.0], "max": [1.0, 1.0], "seed": 12345,
+//                   "use_sobol": true, "sobol_path": "...", "max_function_evaluations": 100000,
+//                   "max_iterations": 2000, "min_iterations": 100, "relative_tolerance": 1e-3,
+//                   "fraction": 0.1, "min_subregion_points": 15, "min_bisections": 60,
+//                   "dither": 0.0}
+//   quadrature_vegas: {"min": [0.0, 0.0], "max": [1.0, 1.0], "seed": 12345, "use_sobol": true,
+//                      "sobol_path": "...", "independent_evaluations": 5, "function_calls": 2000,
+//                      "alpha": 1.5, "number_of_bins": 50, "tail_focus_parameter": 1.0,
+//                      "initialize": 0, "check_convergence": true, "target_probability": 1e-5}
 //
 // `quadrature`'s `method` (P2 "math extras") is OPTIONAL and one of "gauss_kronrod" (the
 // default, preserving every fixture that predates this key), "simpsons", "trapezoidal",
@@ -43,6 +52,60 @@
 // counterpart of why root_find_newton is its own method rather than a root_find option. It always
 // drives AdaptiveSimpsonsRule2D and always returns the result triple + status, exactly as
 // quadrature's Integrator-class arms do.
+//
+// `quadrature_nd` (P2 "math extras") drives the two ported stochastic multidimensional
+// integrators, MonteCarloIntegration (the default `method`) and Miser, over `cbs.vector_scalar`
+// (the same shape `gradient`/`hessian` already take) -- `min`/`max` give the per-dimension bounds
+// AND, via their length, the dimensionality, so no separate `dimensions` key exists. `seed`
+// PRESENT seeds the class's `random` member the same way the C# oracle emitter constructs `new
+// MersenneTwister(seed)`; ABSENT leaves the default-constructed (clock-seeded) generator in
+// force, matching the ported class's own field initializer. `sobol_path` is a corehydro addition
+// (see the file's SOBOL PATH note below) -- required whenever `min`/`max` carry more than one
+// dimension, because Miser's ctor unconditionally constructs a SobolSequence over it regardless
+// of `use_sobol`; MonteCarloIntegration never reads it (`use_sobol_sequence` is a documented dead
+// property on that class alone -- see monte_carlo_integration.hpp's file header). Two of
+// MonteCarloIntegration's own Integrator-base fields are exposed here even though they carry no
+// C# test-oracle-grammar counterpart in RMC's own delegate options, because MonteCarloIntegration
+// checks its OWN early-exit only against `relative_tolerance` inside a loop bounded by
+// `max_iterations` (`max_function_evaluations` is checked only AFTER the loop, to choose the
+// reported status, not to end it early -- a faithfully-ported C# characteristic, not a bug here):
+// without a way to shrink `max_iterations` or loosen `relative_tolerance`, a `method =
+// "monte_carlo"` run with the ported defaults (1e7 iterations, 1e-8 relative tolerance) would
+// call the host-language callback up to ten million times before returning, which is far too slow
+// for an R or Python closure. `min_iterations`/`max_iterations`/`relative_tolerance` are therefore
+// accepted for `method = "monte_carlo"` alongside `max_function_evaluations` (which the C# oracle
+// emitter DOES honor by construction, setting the same Integrator field). Miser's own
+// `max_function_evaluations` IS the real throttle for that method (it is `npts`, the sample-point
+// budget its private `miser()` recursion is handed directly), plus its own four members
+// (`fraction`, `min_subregion_points` -> `minimum_number_of_subregion_points`, `min_bisections` ->
+// `minimum_number_of_bisections`, `dither`). Result is always the triple
+// {integral, function_evaluations, standard_error} + the driven class's own IntegrationStatus,
+// exactly as `quadrature`'s Integrator-class arms report.
+//
+// `quadrature_vegas` (P2 "math extras") drives the ported Vegas class over `cbs.vector_weight`
+// (f(x, weight) -> y, upstream's own Vegas integrand shape) -- its OWN method rather than a
+// `quadrature_nd` arm, because Vegas needs the weight argument no other integrator here does. The
+// same `min`/`max`/`seed`/`use_sobol`/`sobol_path` rules as `quadrature_nd` apply, plus Vegas's
+// own members: `independent_evaluations`, `function_calls` (the two knobs whose PRODUCT bounds
+// total evaluations per run -- Vegas, unlike MonteCarloIntegration, checks `max_function_evaluations`
+// as a real per-call stopping condition, so no extra throttle is needed here), `alpha`,
+// `number_of_bins` (routed through `set_number_of_bins()`, which re-initializes the class's
+// parameter arrays exactly as the C# property setter does), `tail_focus_parameter`, `initialize`,
+// `check_convergence`. `target_probability`, PRESENT, calls `configure_for_rare_events()` --
+// applied LAST, after every other option, so it can override `number_of_bins`/`alpha` the same way
+// the ported method itself does when a caller supplies both. Result is
+// {integral, function_evaluations, standard_error, chi_squared} + status -- the one arm on this
+// surface reporting a chi-squared, since Vegas is the one integrator here that has one.
+//
+// SOBOL PATH, a corehydro addition with no C# counterpart (see miser.hpp's and vegas.hpp's own
+// file headers): C#'s `SobolSequence` reads its direction numbers from a compiled resource: this
+// port's instead takes a filesystem path, resolved by the WRAPPER exactly as
+// numerics/support/toolbox/sampling.hpp's own `sobol` arm documents (R: `system.file()` against
+// `inst/extdata`; Python: `importlib.resources` against corehydropy's own `data/` directory; the
+// C++ fixture runner and the dotnet oracle emitter resolve their own copies the same way
+// test_fixtures.cpp's `g_sobol_path` already does for the `sampling` toolbox group). This header
+// only ever reads `sobol_path` as a plain string option and hands it straight to the Miser/Vegas
+// constructor's own trailing `sobol_path` argument.
 //
 // `root_find`'s `method` is OPTIONAL and one of "brent" (the default, preserving every fixture
 // that predates this key), "bisection", or "secant". `lower`/`upper` are required by all three;
@@ -112,14 +175,18 @@
 #include "corehydro/numerics/math/integration/adaptive_simpsons_rule.hpp"
 #include "corehydro/numerics/math/integration/adaptive_simpsons_rule_2d.hpp"
 #include "corehydro/numerics/math/integration/integration.hpp"
+#include "corehydro/numerics/math/integration/miser.hpp"
+#include "corehydro/numerics/math/integration/monte_carlo_integration.hpp"
 #include "corehydro/numerics/math/integration/simpsons_rule.hpp"
 #include "corehydro/numerics/math/integration/trapezoidal_rule.hpp"
+#include "corehydro/numerics/math/integration/vegas.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
 #include "corehydro/numerics/math/rootfinding/bisection.hpp"
 #include "corehydro/numerics/math/rootfinding/brent.hpp"
 #include "corehydro/numerics/math/rootfinding/newton_raphson.hpp"
 #include "corehydro/numerics/math/rootfinding/secant.hpp"
+#include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/support/callback/common.hpp"
 #include "corehydro/numerics/support/callback_guard.hpp"
 
@@ -129,6 +196,7 @@ namespace rootfinding = corehydro::numerics::math::rootfinding;
 namespace differentiation = corehydro::numerics::math::differentiation;
 namespace integration = corehydro::numerics::math::integration;
 namespace linalg = corehydro::numerics::math::linalg;
+namespace bfsampling = corehydro::numerics::sampling;
 
 inline CallbackResult run_math(const std::string& method, const JsonValue& o,
                                const CallbackSet& cbs) {
@@ -517,6 +585,129 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
                     integ.standard_error()};
         r.names = {"integral", "function_evaluations", "standard_error"};
         r.status = integration::status_name(integ.status());
+        return r;
+    }
+
+    if (method == "quadrature_nd") {
+        if (!cbs.vector_scalar)
+            throw std::invalid_argument("math/quadrature_nd requires a vector function 'f(x)'");
+        GuardedCall<double, const std::vector<double>&> g(
+            cbs.vector_scalar, std::numeric_limits<double>::quiet_NaN());
+        auto fx = [&g](const std::vector<double>& x) { return g(x); };
+        std::vector<double> min_v = require_vector(o, "min", "math/quadrature_nd");
+        std::vector<double> max_v = require_vector(o, "max", "math/quadrature_nd");
+        if (min_v.size() != max_v.size())
+            throw std::invalid_argument("math/quadrature_nd: 'min' and 'max' must be the same length");
+        int dimensions = static_cast<int>(min_v.size());
+        // Absent means "monte_carlo", preserving the same "first arm listed is the default" rule
+        // `quadrature`'s own `method` option follows. See the file header for the full grammar.
+        std::string qmethod = o.value_or("method", "monte_carlo");
+        bool use_sobol = o.value_or("use_sobol", true);
+        std::string sobol_path = o.value_or("sobol_path", "");
+
+        double integral = 0.0, standard_error = 0.0;
+        int function_evaluations = 0;
+        integration::IntegrationStatus status = integration::IntegrationStatus::None;
+        try {
+            if (qmethod == "monte_carlo") {
+                integration::MonteCarloIntegration mc(fx, dimensions, min_v, max_v);
+                if (o.contains("seed"))
+                    mc.random = bfsampling::MersenneTwister(
+                        static_cast<std::uint32_t>(o.at("seed").as_int()));
+                mc.use_sobol_sequence = use_sobol;
+                // See the file header: these three are the real throttle on this class's own
+                // loop, `max_function_evaluations` alone is not.
+                if (o.contains("min_iterations")) mc.min_iterations = o.at("min_iterations").as_int();
+                if (o.contains("max_iterations")) mc.max_iterations = o.at("max_iterations").as_int();
+                if (o.contains("relative_tolerance"))
+                    mc.relative_tolerance = o.at("relative_tolerance").as_double();
+                if (o.contains("max_function_evaluations"))
+                    mc.max_function_evaluations = o.at("max_function_evaluations").as_int();
+                mc.integrate();
+                integral = mc.result();
+                standard_error = mc.standard_error();
+                function_evaluations = mc.function_evaluations();
+                status = mc.status();
+            } else if (qmethod == "miser") {
+                integration::Miser miser(fx, dimensions, min_v, max_v, sobol_path);
+                if (o.contains("seed"))
+                    miser.random = bfsampling::MersenneTwister(
+                        static_cast<std::uint32_t>(o.at("seed").as_int()));
+                miser.use_sobol_sequence = use_sobol;
+                if (o.contains("max_function_evaluations"))
+                    miser.max_function_evaluations = o.at("max_function_evaluations").as_int();
+                if (o.contains("fraction")) miser.fraction = o.at("fraction").as_double();
+                if (o.contains("min_subregion_points"))
+                    miser.minimum_number_of_subregion_points = o.at("min_subregion_points").as_int();
+                if (o.contains("min_bisections"))
+                    miser.minimum_number_of_bisections = o.at("min_bisections").as_int();
+                if (o.contains("dither")) miser.dither = o.at("dither").as_double();
+                miser.integrate();
+                integral = miser.result();
+                standard_error = miser.standard_error();
+                function_evaluations = miser.function_evaluations();
+                status = miser.status();
+            } else {
+                throw std::invalid_argument("math/quadrature_nd: unknown 'method' '" + qmethod +
+                                            "'; expected 'monte_carlo' or 'miser'");
+            }
+        } catch (...) {
+            g.rethrow_if_aborted();
+            throw;
+        }
+        g.rethrow_if_aborted();
+        r.values = {integral, static_cast<double>(function_evaluations), standard_error};
+        r.names = {"integral", "function_evaluations", "standard_error"};
+        r.status = integration::status_name(status);
+        return r;
+    }
+
+    if (method == "quadrature_vegas") {
+        if (!cbs.vector_weight)
+            throw std::invalid_argument(
+                "math/quadrature_vegas requires a vector-weight function 'f(x, weight)'");
+        GuardedCall<double, const std::vector<double>&, double> g(
+            cbs.vector_weight, std::numeric_limits<double>::quiet_NaN());
+        auto fxw = [&g](const std::vector<double>& x, double w) { return g(x, w); };
+        std::vector<double> min_v = require_vector(o, "min", "math/quadrature_vegas");
+        std::vector<double> max_v = require_vector(o, "max", "math/quadrature_vegas");
+        if (min_v.size() != max_v.size())
+            throw std::invalid_argument(
+                "math/quadrature_vegas: 'min' and 'max' must be the same length");
+        int dimensions = static_cast<int>(min_v.size());
+        std::string sobol_path = o.value_or("sobol_path", "");
+
+        integration::Vegas vegas(fxw, dimensions, min_v, max_v, sobol_path);
+        if (o.contains("seed"))
+            vegas.random =
+                bfsampling::MersenneTwister(static_cast<std::uint32_t>(o.at("seed").as_int()));
+        vegas.use_sobol_sequence = o.value_or("use_sobol", true);
+        if (o.contains("independent_evaluations"))
+            vegas.independent_evaluations = o.at("independent_evaluations").as_int();
+        if (o.contains("function_calls")) vegas.function_calls = o.at("function_calls").as_int();
+        if (o.contains("alpha")) vegas.alpha = o.at("alpha").as_double();
+        if (o.contains("number_of_bins")) vegas.set_number_of_bins(o.at("number_of_bins").as_int());
+        if (o.contains("tail_focus_parameter"))
+            vegas.tail_focus_parameter = o.at("tail_focus_parameter").as_double();
+        if (o.contains("initialize")) vegas.initialize = o.at("initialize").as_int();
+        if (o.contains("check_convergence"))
+            vegas.check_convergence = o.at("check_convergence").as_bool();
+        // PRESENT -> configure_for_rare_events, applied LAST so it can override number_of_bins/
+        // alpha the same way the ported method itself does. See the file header.
+        if (o.contains("target_probability"))
+            vegas.configure_for_rare_events(o.at("target_probability").as_double());
+
+        try {
+            vegas.integrate();
+        } catch (...) {
+            g.rethrow_if_aborted();
+            throw;
+        }
+        g.rethrow_if_aborted();
+        r.values = {vegas.result(), static_cast<double>(vegas.function_evaluations()),
+                    vegas.standard_error(), vegas.chi_squared()};
+        r.names = {"integral", "function_evaluations", "standard_error", "chi_squared"};
+        r.status = integration::status_name(vegas.status());
         return r;
     }
 

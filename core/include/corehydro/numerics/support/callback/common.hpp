@@ -73,6 +73,13 @@ struct CallbackSet {
     std::function<double(const std::vector<double>&)> vector_scalar;
     // f(theta) -> vector. Gradient callback, GMM moment conditions, bootstrap statistic.
     std::function<std::vector<double>(const std::vector<double>&)> vector_vector;
+    // f(x, weight) -> y. The Vegas integrand (math/quadrature_vegas, P2 "math extras"), upstream's
+    // Vegas ctor's `Func<double[], double, double>` -- the sample point and the importance
+    // weight Vegas has already computed for it, exactly as the C# lambdas in Test_Vegas.cs wrap a
+    // weight-ignoring integrand: `(x, y) => Integrands.SumOfNormals(x)`. Its own member rather
+    // than a reuse of `vector_scalar`, because the arity differs; see callback/math.hpp's
+    // quadrature_vegas arm.
+    std::function<double(const std::vector<double>&, double)> vector_weight;
     // f(theta, rng) -> vector. Gibbs proposal.
     std::function<std::vector<double>(const std::vector<double>&,
                                       corehydro::numerics::sampling::MersenneTwister&)>

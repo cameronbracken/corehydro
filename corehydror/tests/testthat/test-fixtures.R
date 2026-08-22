@@ -803,6 +803,35 @@ callback_fixture_function <- function(name) {
       rng_uniform(rng, 1000)  # discarded, as upstream's own test discards 1000 GenRandInt32
       rng_uniform(rng, 10)
     },
+    # The math/quadrature_nd catalog (fixtures/callback/math.json), P2 "math extras": upstream's
+    # Test_Numerics/Mathematics/Integration/Integrands.cs `PI(double[] vals)`, the indicator of the
+    # unit disc read off the first two components -- always 2-dimensional regardless of how many
+    # dimensions the case's own `min`/`max` carry, exactly as the C# function is.
+    Nd_PI = function(x) if (x[1]^2 + x[2]^2 < 1) 1 else 0,
+    # Integrands.cs `GSL(double[] x)`: the GNU Scientific Library 3-dimensional test integrand,
+    # A / (1 - cos(x0) cos(x1) cos(x2)) with A = 1 / pi^3.
+    Nd_GSL = function(x) {
+      a <- 1 / pi^3
+      a / (1 - cos(x[1]) * cos(x[2]) * cos(x[3]))
+    },
+    # Integrands.cs `SumOfNormals(double[] p)`, the 3-dimensional case (upstream's
+    # Test_Vegas.Test_SumOfThreeNormals wraps it `(x, y) => Integrands.SumOfNormals(x)`, ignoring
+    # the weight -- transcribed here the same way). `p[i]` is a probability in (0, 1);
+    # `dist_quantile()` on a standard Normal is the package's OWN public entry point to the
+    # already-ported, oracle-validated inverse standard Normal CDF (upstream's `Normal.StandardZ`,
+    # itself a rational-polynomial approximation -- NOT arithmetic a fixture catalog could
+    # transcribe faithfully by hand), reused here rather than reimplemented, so the resulting z
+    # values are bit-identical to core/tests/test_integration_random.cpp's own
+    # `integrand_sum_of_normals` (Task 5) and to Python's twin below. `mu20`/`sigma20` sliced to
+    # the first three entries.
+    NdW_SumOfNormals3 = function(x, w) {
+      mu <- c(10, 30, 17)
+      sigma <- c(2, 15, 5)
+      z <- dist_quantile(distribution("Normal", c(0, 1)), x)
+      acc <- 0
+      for (i in seq_along(x)) acc <- acc + mu[i] + sigma[i] * z[i]
+      acc
+    },
     stop(sprintf("unknown callback fixture callback: %s", name))
   )
 }
@@ -2047,6 +2076,17 @@ test_that("oracle fixtures validate", {
       }
       for (case in blocks) {
         construct <- case$construct
+        # math/quadrature_nd and math/quadrature_vegas (P2 "math extras") read a Sobol
+        # direction-numbers path exactly as the "sampling"/"sobol" toolbox arm above -- path
+        # resolution is a wrapper concern (see callback/math.hpp's SOBOL PATH note), so this
+        # harness injects its own resolved path rather than the fixture's own `options` carrying
+        # one.
+        if (identical(construct$group, "math") &&
+              construct$method %in% c("quadrature_nd", "quadrature_vegas")) {
+          if (is.null(construct$options)) construct$options <- list()
+          construct$options$sobol_path <-
+            system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+        }
         # Every group has its own R entry point: ch_callback_math_, ch_rng_probe_,
         # ch_callback_mcmc_, ch_callback_gmm_ and ch_callback_bootstrap_.
         opts <- callback_options_json(ns, construct$options)
@@ -2065,6 +2105,12 @@ test_that("oracle fixtures validate", {
           # P2 "math extras": the (x, y) half of the math group, ch_callback_math_xy_ -- see
           # ch_callback_math2_ above for why a differing arity gets its own R entry point.
           ns$ch_callback_math_xy_(construct$method, opts, fn)
+        } else if (identical(construct$group, "math") &&
+                     identical(construct$method, "quadrature_vegas")) {
+          # P2 "math extras": the (x, weight) half of the math group, ch_callback_math_vw_ -- see
+          # ch_callback_math_xy_ above for why a differing callback shape gets its own R entry
+          # point.
+          ns$ch_callback_math_vw_(construct$method, opts, fn)
         } else if (identical(construct$group, "math")) {
           ns$ch_callback_math_(construct$method, opts, fn)
         } else if (identical(construct$group, "rng")) {

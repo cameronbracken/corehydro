@@ -282,6 +282,7 @@ quartodoc:
         - root_find_system
         - quadrature
         - quadrature_2d
+        - quadrature_nd
         - QuadratureResult
         - derivative
         - gradient
