@@ -108,6 +108,7 @@ set(BF_TESTS
   test_linear_moments_overflow
   test_generalized_normal_jacobian
   test_root_finding_extras
+  test_integration_extras
 )
 
 # Sobol test takes the direction-number file as its sole argument.
