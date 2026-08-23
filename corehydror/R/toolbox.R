@@ -1082,7 +1082,8 @@ check_node_indices <- function(x, what) {
 #'   Defaults to `0:(length(from) - 1)`. These labels are what the `edge_index` result column
 #'   reports, and they need not be distinct.
 #' @param node_count an optional node count. Defaults to `max(from, to) + 1`; supply a larger
-#'   value to include isolated nodes carrying no edge, which then report `cost = Inf`.
+#'   value to include isolated nodes carrying no edge, which then report `cost = Inf`. A value
+#'   below `max(from, to) + 1` is an error: the graph would not fit the routing table it asks for.
 #' @return a data frame with one row per node, in node-index order, and columns `next_node`,
 #'   `edge_index` (both integer) and `cost` (numeric).
 #' @examples
@@ -1113,6 +1114,17 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
       stop("`node_count` must be a single positive number", call. = FALSE)
     }
     n_nodes <- as.double(node_count)
+    # A `node_count` below `max(from, to) + 1` cannot describe the edge list. The ported solver
+    # raises the C# IndexOutOfRangeException message from inside itself when it reaches the
+    # offending index, which is both late and unhelpful here, so reject it up front and name the
+    # argument. This is deliberately STRICTER than the C# solver, whose bounds check is lazy: it
+    # accepts a too-small count as long as no out-of-range index is ever reached (see
+    # dijkstra.hpp note 9). That input is a graph the caller cannot have meant.
+    if (n_nodes < max(from, to) + 1) {
+      stop(sprintf(paste0("`node_count` must be at least %d, the number of nodes `from` and `to` ",
+                          "describe; got %d"),
+                   as.integer(max(from, to) + 1), as.integer(n_nodes)), call. = FALSE)
+    }
     opts$node_count <- n_nodes
   }
   if (any(destinations >= n_nodes)) {

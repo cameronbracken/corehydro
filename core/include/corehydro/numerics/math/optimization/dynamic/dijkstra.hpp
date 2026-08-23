@@ -53,6 +53,31 @@
 // 8. The heap is constructed with a hard-coded capacity of 10000 in C#, independent of the node
 //    count. Transcribed as written -- a graph with more than 10000 nodes reachable in one pass
 //    would throw "Heap is full." there exactly as it does here.
+//
+// 9. A `node_count` SMALLER than the graph needs is a CHECKED error, not undefined behavior. C#
+//    allocates every array at `nNodes` and then indexes them by node index without checking --
+//    `edgesToNodes[edge.ToIndex]`, `resultTable[destinationIndex, ...]`,
+//    `nodeWeightToDestination[from]` -- so the CLR raises IndexOutOfRangeException ("Index was
+//    outside the bounds of the array."). `std::vector::operator[]` would be undefined behavior
+//    instead, which is a silent wrong answer at best, so `detail::checked_node_index` guards
+//    every one of those sites and throws std::out_of_range carrying the C# message.
+//
+//    The guard is IN PLACE, at each indexing site, and deliberately NOT hoisted into one up-front
+//    sweep of the edge list, because C#'s throw is LAZY: an out-of-range index on an edge the
+//    search never relaxes never throws. MEASURED against the real Numerics library at 2a0357a
+//    (probe: /tmp/getpath_probe):
+//      Solve({(0,1),(1,5)}, 0, nodeCount: 2)      THREW System.IndexOutOfRangeException
+//      Solve({(0,1),(1,5)}, new[]{0}, 2)          THREW System.IndexOutOfRangeException
+//      Solve({(5,1),(0,1)}, 1, nodeCount: 2)      THREW System.IndexOutOfRangeException
+//      Solve({(0,1)},       5, nodeCount: 2)      THREW System.IndexOutOfRangeException
+//      Solve({(0,1),(7,0)}, 1, nodeCount: 2)      THREW System.IndexOutOfRangeException
+//      Solve({(0,1),(7,1)}, 0, nodeCount: 2)      RETURNED [(0,-1,0), (-1,-1,Inf)]
+//    The last line is the lazy case: node 1 is never reached from destination 0, so the edge
+//    carrying the out-of-range FromIndex 7 is never relaxed and C# returns a table. An up-front
+//    sweep would reject it, which is why there is not one here. The R and Python `shortest_path()`
+//    wrappers ARE stricter (they reject any `node_count` below `max(from, to) + 1` up front, so
+//    the user gets a message naming the argument rather than this one from inside the solver);
+//    that asymmetry is deliberate and documented on both of them.
 #pragma once
 #include <array>
 #include <cmath>
@@ -101,6 +126,16 @@ using ResultTable = std::vector<std::array<float, 3>>;
 
 namespace detail {
 
+// Stands in for the CLR's own bounds check on every `nNodes`-sized array C# indexes by a node
+// index; see note 9 for the measured C# behavior this reproduces, including why it is called at
+// each indexing site rather than once up front.
+inline std::size_t checked_node_index(int index, int n_nodes) {
+    if (index < 0 || index >= n_nodes) {
+        throw std::out_of_range("Index was outside the bounds of the array.");
+    }
+    return static_cast<std::size_t>(index);
+}
+
 // C# `edges.Max(o => Math.Max(o.FromIndex, o.ToIndex)) + 1`; see note 7.
 inline int node_count_from_edges(const std::vector<Edge>& edges) {
     if (edges.empty()) throw std::runtime_error("Sequence contains no elements.");
@@ -117,9 +152,10 @@ inline int node_count_from_edges(const std::vector<Edge>& edges) {
 // both overloads (which write it out identically).
 inline std::vector<std::vector<Edge>> build_edges_to_nodes(const std::vector<Edge>& edges,
                                                            int n_nodes) {
-    std::vector<std::vector<Edge>> edges_to_nodes(static_cast<std::size_t>(n_nodes));
+    std::vector<std::vector<Edge>> edges_to_nodes(
+        static_cast<std::size_t>(n_nodes > 0 ? n_nodes : 0));
     for (const auto& edge : edges) {
-        edges_to_nodes[static_cast<std::size_t>(edge.to_index)].push_back(edge);
+        edges_to_nodes[checked_node_index(edge.to_index, n_nodes)].push_back(edge);
     }
     return edges_to_nodes;
 }
@@ -129,7 +165,9 @@ inline std::vector<std::vector<Edge>> build_edges_to_nodes(const std::vector<Edg
 // May be a useful call in LifeSim -> GetPath(). Follows the logic that is implemented in the
 // Solve method.
 inline bool path_exists(const ResultTable& result_table, int node_index) {
-    const float cost = result_table[static_cast<std::size_t>(node_index)][COST];
+    const float cost =
+        result_table[detail::checked_node_index(node_index,
+                                                static_cast<int>(result_table.size()))][COST];
     // C# `!float.IsPositiveInfinity(...)`.
     return !(std::isinf(cost) && cost > 0.0f);
 }
@@ -156,11 +194,12 @@ inline ResultTable solve(const std::vector<Edge>& edges, int destination_index,
     }
 
     // Prepare results table with destination defined.
-    ResultTable result_table(static_cast<std::size_t>(n_nodes));
+    const std::size_t table_rows = static_cast<std::size_t>(n_nodes > 0 ? n_nodes : 0);
+    ResultTable result_table(table_rows);
     // 0 - Node hasn't been scanned yet, 1 - Node has been solved for, 2 - Node has been scanned
     // into heap but not solved for.
-    std::vector<int> node_state(static_cast<std::size_t>(n_nodes), 0);
-    std::vector<float> node_weight_to_destination(static_cast<std::size_t>(n_nodes));
+    std::vector<int> node_state(table_rows, 0);
+    std::vector<float> node_weight_to_destination(table_rows);
 
     // Initialize all nodes are unreachable
     for (int i = 0; i < n_nodes; i++) {
@@ -174,14 +213,15 @@ inline ResultTable solve(const std::vector<Edge>& edges, int destination_index,
 
     BinaryHeap<Edge> heap(10000);
 
-    auto& destination_row = result_table[static_cast<std::size_t>(destination_index)];
+    const std::size_t destination = detail::checked_node_index(destination_index, n_nodes);
+    auto& destination_row = result_table[destination];
     destination_row[NEXT_NODE] = static_cast<float>(destination_index);  // Tail
     destination_row[EDGE_INDEX] = -1;                                    // edge index
     destination_row[COST] = 0;                                           // Cumulative Weight
-    node_weight_to_destination[static_cast<std::size_t>(destination_index)] = 0;
+    node_weight_to_destination[destination] = 0;
     heap.add(BinaryHeap<Edge>::Node(0, destination_index,
                                     Edge(destination_index, destination_index, 0, -1)));
-    node_state[static_cast<std::size_t>(destination_index)] = 2;
+    node_state[destination] = 2;
 
     while (heap.count() > 0) {
         auto node = heap.remove_min();
@@ -197,18 +237,21 @@ inline ResultTable solve(const std::vector<Edge>& edges, int destination_index,
             int to = edge.to_index;
             float new_cost = cost + edge.weight;
 
-            if (new_cost < node_weight_to_destination[static_cast<std::size_t>(from)]) {
-                node_weight_to_destination[static_cast<std::size_t>(from)] = new_cost;
+            // C# reads `nodeWeightToDestination[from]` here unchecked; see note 9. This is the
+            // site whose lazy throw the up-front alternative would get wrong.
+            const std::size_t from_node = detail::checked_node_index(from, n_nodes);
+            if (new_cost < node_weight_to_destination[from_node]) {
+                node_weight_to_destination[from_node] = new_cost;
                 auto new_node = BinaryHeap<Edge>::Node(new_cost, from, edge);
 
-                if (node_state[static_cast<std::size_t>(from)] != 2) {
+                if (node_state[from_node] != 2) {
                     heap.add(new_node);
-                    node_state[static_cast<std::size_t>(from)] = 2;
+                    node_state[from_node] = 2;
                 } else {
                     heap.decrease_key(new_node);
                 }
 
-                auto& row = result_table[static_cast<std::size_t>(from)];
+                auto& row = result_table[from_node];
                 row[NEXT_NODE] = static_cast<float>(to);
                 row[EDGE_INDEX] = static_cast<float>(edge.index);
                 row[COST] = new_cost;
@@ -239,7 +282,7 @@ inline ResultTable solve(const std::vector<Edge>& edges,
         resolved = &local_edges_from_nodes;
     }
 
-    ResultTable result_table(static_cast<std::size_t>(n_nodes));
+    ResultTable result_table(static_cast<std::size_t>(n_nodes > 0 ? n_nodes : 0));
     for (int i = 0; i < n_nodes; i++) {
         auto& row = result_table[static_cast<std::size_t>(i)];
         row[NEXT_NODE] = -1;

@@ -50,7 +50,8 @@ and \code{"nelder_mead"}.}
 \item{method}{one of \code{"de"} (differential evolution, the default), \code{"particle_swarm"}, \code{"sce"}
 (shuffled complex evolution), \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}, \code{"bfgs"},
 \code{"powell"}, \code{"adam"}, \code{"gradient_descent"}, \code{"nelder_mead"}, \code{"brent"}, \code{"golden_section"},
-or \code{"augmented_lagrange"} (the one constrained method).}
+or \code{"augmented_lagrange"} (the one constrained method, and the one method
+\code{optim_maximize()} rejects -- see Details).}
 
 \item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"particle_swarm"},
 \code{"sce"}, \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}); an error for any other method.}
@@ -102,6 +103,14 @@ constraints were given.
 Runs one of the fourteen ported Numerics optimizers over an R function. The optimizer's random
 number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 in corehydropy.
+}
+\details{
+\code{optim_maximize()} accepts every method except \code{"augmented_lagrange"}, which can only minimize:
+the upstream C# class always drives its inner optimizer through \code{Minimize()} over an augmented
+Lagrangian built from the raw objective, so a maximize request would flip the reported sign
+without flipping the search direction and hand back the constrained minimum. Negate the
+objective and call \code{optim_minimize()} instead -- minimizing \code{-f} subject to the same
+constraints is exactly maximizing \code{f}.
 }
 \examples{
 rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2

@@ -610,6 +610,9 @@ void get_path_returns_null_when_the_start_node_has_no_incoming_edges() {
 //
 //   (b) `Dijkstra.PathExists`, which no upstream test calls at all.
 //
+//   (c) a `node_count` too small for the graph, added by the branch review that caught the port
+//       answering it with an out-of-bounds write. See that function's own comment.
+//
 // The 36 values below are the verbatim G17 output of a scratch dotnet console app
 // (/tmp/netprobe, referencing upstream/Numerics/Numerics/Numerics.csproj at 2a0357a) running
 // this exact graph through the real `Dijkstra.Solve(edges, 10, 12)`. The port reproduces all 36
@@ -665,6 +668,55 @@ void path_exists_reads_the_cost_column() {
     CHECK_TRUE(!dijkstra::path_exists(result, 3));
 }
 
+// A `node_count` too small for the graph. Added after a branch review found that the port
+// answered it with an out-of-bounds WRITE (AddressSanitizer: heap-buffer-overflow in
+// build_edges_to_nodes) where C# raises IndexOutOfRangeException -- a silent wrong table in R and
+// a crash in Python. Every expectation below is the verbatim behavior of the real Numerics
+// library at 2a0357a, measured with a scratch dotnet console app (/tmp/getpath_probe) and
+// transcribed here; see dijkstra.hpp note 9 for the full probe transcript.
+//
+// The last two cases are the ones that decide HOW the guard is written: C#'s throw is LAZY (it
+// is the CLR bounds-checking an indexing expression, not a validation pass), so an out-of-range
+// index on an edge the search never relaxes must still RETURN a table. An up-front sweep of the
+// edge list would pass every other case here and fail that one.
+void a_node_count_below_the_graph_throws_like_csharp() {
+    const std::vector<Edge> to_out_of_range = {Edge(0, 1, 1, 0), Edge(1, 5, 1, 1)};
+    CHECK_THROWS_MSG(dijkstra::solve(to_out_of_range, 0, 2),
+                     "Index was outside the bounds of the array.");
+    const std::vector<int> destinations = {0};
+    CHECK_THROWS_MSG(dijkstra::solve(to_out_of_range, destinations, 2),
+                     "Index was outside the bounds of the array.");
+
+    // FromIndex out of range, on an edge the search DOES relax.
+    const std::vector<Edge> from_out_of_range = {Edge(5, 1, 1, 0), Edge(0, 1, 1, 1)};
+    CHECK_THROWS_MSG(dijkstra::solve(from_out_of_range, 1, 2),
+                     "Index was outside the bounds of the array.");
+    const std::vector<Edge> from_out_of_range2 = {Edge(0, 1, 1, 0), Edge(7, 0, 1, 1)};
+    CHECK_THROWS_MSG(dijkstra::solve(from_out_of_range2, 1, 2),
+                     "Index was outside the bounds of the array.");
+
+    // A destination past the end of the table.
+    const std::vector<Edge> one_edge = {Edge(0, 1, 1, 0)};
+    CHECK_THROWS_MSG(dijkstra::solve(one_edge, 5, 2),
+                     "Index was outside the bounds of the array.");
+    // ... and PathExists, which C# indexes the same way.
+    auto table = dijkstra::solve(one_edge, 1, 2);
+    CHECK_THROWS_MSG(dijkstra::path_exists(table, 2),
+                     "Index was outside the bounds of the array.");
+
+    // THE LAZY CASE. Node 1 is never reached from destination 0, so the edge carrying the
+    // out-of-range FromIndex 7 is never relaxed and C# returns this exact table.
+    const std::vector<Edge> never_relaxed = {Edge(0, 1, 1, 0), Edge(7, 1, 1, 1)};
+    auto lazy = dijkstra::solve(never_relaxed, 0, 2);
+    CHECK_EQ(std::size_t(2), lazy.size());
+    CHECK_EQ(0.f, lazy[0][dijkstra::NEXT_NODE]);
+    CHECK_EQ(-1.f, lazy[0][dijkstra::EDGE_INDEX]);
+    CHECK_EQ(0.f, lazy[0][dijkstra::COST]);
+    CHECK_EQ(-1.f, lazy[1][dijkstra::NEXT_NODE]);
+    CHECK_EQ(-1.f, lazy[1][dijkstra::EDGE_INDEX]);
+    CHECK_TRUE(std::isinf(lazy[1][dijkstra::COST]) && lazy[1][dijkstra::COST] > 0.f);
+}
+
 }  // namespace
 
 int main() {
@@ -699,5 +751,6 @@ int main() {
     // Supplement (P3 Task 8): single precision, and the untested PathExists
     fractional_weights_reproduce_csharp_single_precision();
     path_exists_reads_the_cost_column();
+    a_node_count_below_the_graph_throws_like_csharp();
     return chtest::summary("test_network_optimization");
 }

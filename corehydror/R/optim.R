@@ -14,6 +14,13 @@
 #' number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 #' in corehydropy.
 #'
+#' `optim_maximize()` accepts every method except `"augmented_lagrange"`, which can only minimize:
+#' the upstream C# class always drives its inner optimizer through `Minimize()` over an augmented
+#' Lagrangian built from the raw objective, so a maximize request would flip the reported sign
+#' without flipping the search direction and hand back the constrained minimum. Negate the
+#' objective and call `optim_minimize()` instead -- minimizing `-f` subject to the same
+#' constraints is exactly maximizing `f`.
+#'
 #' @param objective a function taking a numeric parameter vector and returning a single number.
 #' @param lower,upper numeric vectors of parameter bounds, the same length as the parameter
 #'   vector. Required for every method, including `"de"`, `"brent"` and `"golden_section"`, which
@@ -25,7 +32,8 @@
 #' @param method one of `"de"` (differential evolution, the default), `"particle_swarm"`, `"sce"`
 #'   (shuffled complex evolution), `"simulated_annealing"`, `"multi_start"`, `"mlsl"`, `"bfgs"`,
 #'   `"powell"`, `"adam"`, `"gradient_descent"`, `"nelder_mead"`, `"brent"`, `"golden_section"`,
-#'   or `"augmented_lagrange"` (the one constrained method).
+#'   or `"augmented_lagrange"` (the one constrained method, and the one method
+#'   `optim_maximize()` rejects -- see Details).
 #' @param gradient optional function taking the parameter vector and returning one partial
 #'   derivative per parameter. Accepted only by `"adam"` and `"gradient_descent"`, an error for
 #'   every other method. Omitted, both methods differentiate the objective numerically, exactly as
@@ -194,8 +202,14 @@ kOptimMethods <- list(
   # The one constrained method. `needs_initial` is TRUE because its default inner optimizer is
   # BFGS over the top-level `initial`/`lower`/`upper`, and an `inner` spec that omits a vector
   # falls back to the same ones.
+  # `minimize_only` because upstream `AugmentedLagrange$Optimize()` always drives its inner
+  # optimizer through `Minimize()`, over an augmented Lagrangian built from the RAW objective --
+  # so a maximize request flips the outer bookkeeping but not the search direction, and the verb
+  # would return the constrained MINIMUM labelled "Success". The ported class mirrors that
+  # exactly; the guard is here, on the public verb, rather than in the port.
   augmented_lagrange  = list(controls = kOptimBaseControls, needs_initial = TRUE,
-                             stochastic = FALSE, gradient = FALSE, constrained = TRUE)
+                             stochastic = FALSE, gradient = FALSE, constrained = TRUE,
+                             minimize_only = TRUE)
 )
 kOptimMethodNames <- names(kOptimMethods)
 kOptimControl <- unique(unlist(lapply(kOptimMethods, `[[`, "controls"), use.names = FALSE))
@@ -206,6 +220,10 @@ kOptimGradientMethods <- kOptimMethodNames[vapply(kOptimMethods, `[[`, logical(1
 # field means FALSE) so the two arguments can never drift from the method list above.
 kOptimConstraintMethods <- kOptimMethodNames[vapply(
   kOptimMethods, function(m) isTRUE(m$constrained), logical(1))]
+# The methods that can only minimize, off the same table (an absent `minimize_only` field means
+# FALSE). See the `augmented_lagrange` row for why it is on that one.
+kOptimMinimizeOnlyMethods <- kOptimMethodNames[vapply(
+  kOptimMethods, function(m) isTRUE(m$minimize_only), logical(1))]
 # The three ConstraintType members, in the short spelling optimizer_runner.hpp's spec grammar
 # takes: "eq" for ==, "le" for <=, "ge" for >=.
 kOptimConstraintTypes <- c("eq", "le", "ge")
@@ -238,6 +256,13 @@ optim_run <- function(objective, lower, upper, initial, method, seed, control, m
                       gradient = NULL, constraints = NULL, inner = NULL) {
   if (!is.function(objective)) {
     stop("`objective` must be a function taking a numeric vector and returning one number",
+         call. = FALSE)
+  }
+  if (isTRUE(maximize) && method %in% kOptimMinimizeOnlyMethods) {
+    stop(sprintf(paste0("method \"%s\" cannot maximize: upstream AugmentedLagrange always drives ",
+                        "its inner optimizer through Minimize() over the raw objective plus ",
+                        "penalty, so a maximize request would return the constrained MINIMUM. ",
+                        "Negate your objective and call optim_minimize() instead."), method),
          call. = FALSE)
   }
   if (!is.null(gradient) && !is.function(gradient)) {

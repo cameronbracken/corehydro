@@ -28,6 +28,17 @@
 //    `evaluate(current_values, cancel)` calls in `optimize()` do. That asymmetry is
 //    load-bearing for the fitness the C# tests assert; do not route it through `evaluate()`.
 //
+//    ONE CONSEQUENCE OF THAT ASYMMETRY, mirrored rather than corrected: because the augmented
+//    Lagrangian is built from the RAW objective and `optimize()` drives the inner optimizer
+//    through `minimize()` unconditionally, this class CANNOT MAXIMIZE. Under `maximize()` the
+//    outer bookkeeping flips sign while the search direction does not, so the run reports Success
+//    and returns the constrained MINIMUM. Measured through the shipped packages: maximizing
+//    -(x - 3)^2 subject to x <= 1 over [-10, 10] (true optimum x = 1, value -4) returns
+//    x = -10.00011, value -169.0029, Success -- the same answer minimize() gives. The public
+//    `optim_maximize()` verb in both packages therefore REFUSES `method = "augmented_lagrange"`
+//    by name; the class itself is left exactly as upstream wrote it. See
+//    docs/upstream-csharp-issues.md.
+//
 // 3. The three multiplier vectors are sized by COUNTING the constraints of each type in the
 //    constructor, and are then walked by three separate running indices inside both loops --
 //    that is what makes a mixed-constraint problem index correctly (see the C# test

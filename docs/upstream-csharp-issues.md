@@ -2258,6 +2258,82 @@ J-statistic) are unchanged and still correct as written.
   which is what the sibling call sites in the same method already do. Then fix the two follow-on
   defects above, and give the method a test — it has none.
 
+## ROBUSTNESS — `Dijkstra.Solve` bounds-checks its node indices only by accident, so a too-small `nodeCount` is an IndexOutOfRangeException (and was undefined behavior in the port)
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Dijkstra.cs` @ 2a0357a, both `Solve`
+  overloads. Port side: `core/include/corehydro/numerics/math/optimization/dynamic/dijkstra.hpp`.
+- **What:** every array the solver allocates is sized `nNodes`, and every one of them is then
+  indexed by a node index read straight off an `Edge` — `edgesToNodes[edge.ToIndex]`,
+  `resultTable[destinationIndex, …]`, `nodeWeightToDestination[from]` — with nothing checking that
+  the index fits. In C# the CLR checks it, so a `nodeCount` smaller than the graph is an
+  `IndexOutOfRangeException`. That is a defensible outcome and the port must reproduce it, but the
+  C# check is LAZY, not a validation pass: an out-of-range index on an edge the search never
+  relaxes never throws at all.
+- **Evidence (measured against the real Numerics library at 2a0357a; probe `/tmp/getpath_probe`):**
+
+  ```
+  Solve({(0,1),(1,5)}, 0, nodeCount: 2)   THREW System.IndexOutOfRangeException: Index was outside the bounds of the array.
+  Solve({(0,1),(1,5)}, new[]{0}, 2)       THREW System.IndexOutOfRangeException
+  Solve({(5,1),(0,1)}, 1, nodeCount: 2)   THREW System.IndexOutOfRangeException
+  Solve({(0,1)},       5, nodeCount: 2)   THREW System.IndexOutOfRangeException
+  Solve({(0,1),(7,0)}, 1, nodeCount: 2)   THREW System.IndexOutOfRangeException
+  Solve({(0,1),(7,1)}, 0, nodeCount: 2)   RETURNED [(0,-1,0), (-1,-1,Inf)]
+  ```
+
+- **Port defect this exposed (FIXED here):** the port transcribed those indexing expressions as
+  `std::vector::operator[]`, which is undefined behavior rather than a checked throw, so the same
+  calls wrote past the end of the cache. Reproduced three ways before the fix: AddressSanitizer
+  reported `heap-buffer-overflow … in dijkstra::detail::build_edges_to_nodes` at
+  `dijkstra.hpp:122`; `shortest_path(from = c(0,1), to = c(5,2), weight = c(1,1), destinations = 0,
+  node_count = 2)` returned a quietly corrupt routing table in R; and the same call fatally
+  terminated the Python interpreter. No fixture, ctest or package test supplied a `node_count`
+  below `max(from, to) + 1`, which is why every suite was green.
+- **Port handling:** `dijkstra::detail::checked_node_index` now guards each of the sites C# indexes
+  by a node index and throws `std::out_of_range` carrying the C# message. The guard is deliberately
+  in place at each site rather than hoisted into one up-front sweep, so the lazy case above still
+  returns its table (measured both ways; an up-front variant aborts that assertion). See
+  `dijkstra.hpp` note 9 and `a_node_count_below_the_graph_throws_like_csharp` in
+  `core/tests/test_network_optimization.cpp`, which pins all six measurements. The R and Python
+  `shortest_path()` wrappers are STRICTER than the solver on purpose: they reject any `node_count`
+  below `max(from, to) + 1` up front, so the user gets a message naming the argument instead of a
+  bounds message from inside the solver, at the cost of also rejecting the lazy case — a graph a
+  caller cannot have meant.
+- **Suggested C# fix:** validate `nodeCount` against `edges.Max(o => Math.Max(o.FromIndex,
+  o.ToIndex)) + 1` at the top of both overloads and throw `ArgumentOutOfRangeException(nameof(
+  nodeCount), …)`, so the caller learns which argument is wrong.
+
+## BUG — `AugmentedLagrange` cannot maximize: `Optimize()` always drives the inner optimizer through `Minimize()`
+
+- **Where:** `Numerics/Mathematics/Optimization/Constrained/AugmentedLagrange.cs` @ 2a0357a,
+  `Optimize()` (both `this.Optimizer.Minimize()` call sites) and `augmentedLagrangianFunction`.
+- **What:** the constructor replaces the inner optimizer's objective with
+  `augmentedLagrangianFunction`, which opens `double phi = _primaryObjectiveFunction(x);` — the RAW
+  objective, called directly, never through the base's `Evaluate` and so never through
+  `FunctionScale`. `Optimize()` then calls `this.Optimizer.Minimize()` unconditionally. Under
+  `Maximize()` the outer object's own bookkeeping flips sign, but the search does not: the inner
+  optimizer still MINIMIZES the objective plus penalty. The run reports `Success` and returns the
+  constrained MINIMUM.
+- **Evidence (measured through the shipped packages before the guard):** maximizing
+  `f(x) = -(x - 3)^2` subject to `x <= 1` over `[-10, 10]` — true optimum `x = 1`, value `-4` —
+  returned `x = -10.00011`, value `-169.0029`, status `Success`, byte for byte the same answer as
+  the matching `optim_minimize` call. Two-parameter constructs behave the same way: maximizing
+  `-((x-1)^2 + (y-3)^2)` on `[0,10]^2` under the inactive constraint `x + y <= 20` (true maximum 0
+  at `(1,3)`) returns `(10.000110, 9.999878)`, value `-130.0003`, status `Success`, and maximizing
+  `-((x-5)^2 + (y-7)^2)` under `x + y == 4` (true maximum `-8` at `(2,2)`) returns
+  `(4.00001, -0.00001)`, value `-50.0001`, status `Success`.
+- **Port handling:** the ported class mirrors it exactly (see
+  `core/include/corehydro/numerics/math/optimization/augmented_lagrange.hpp` note 2 and the
+  `optimizer_runner.hpp` grammar block), because a fixture case must be able to pin upstream
+  behavior. The guard lives on the two PUBLIC verbs instead:
+  `optim_maximize(method = "augmented_lagrange")` is rejected by name in both packages
+  (`kOptimMinimizeOnlyMethods` in `corehydror/R/optim.R`, `_MINIMIZE_ONLY_METHODS` in
+  `corehydropy/src/corehydropy/optim.py`), and the error names the upstream reason and the
+  workaround. The workaround is exact rather than approximate: minimizing `-f` under the same
+  constraints IS maximizing `f`, and both packages' tests run it and check the answer.
+- **Suggested C# fix:** have `augmentedLagrangianFunction` obtain `phi` through the base's
+  `Evaluate` (so `FunctionScale` applies), or call `this.Optimizer.Maximize()` when the outer run
+  is a maximization. Either way the class needs a maximizing test; all six existing ones minimize.
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a

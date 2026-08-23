@@ -456,6 +456,30 @@ test_that("augmented Lagrange requires at least one constraint", {
   )
 })
 
+# optim_maximize() used to accept this method and return the constrained MINIMUM labelled
+# "Success": upstream AugmentedLagrange.Optimize() always calls the inner optimizer's Minimize()
+# over an augmented Lagrangian built from the RAW objective, so the outer sign flip never reaches
+# the search. The port still mirrors that; the public verb refuses the request.
+test_that("optim_maximize rejects augmented Lagrange and the documented workaround is right", {
+  peak <- function(p) -(p[1] - 3)^2                     # true constrained max at x = 1: -4
+  con <- optim_constraint(function(p) p[1], value = 1, type = "le")
+  expect_error(
+    optim_maximize(peak, initial = 0, lower = -10, upper = 10,
+                   method = "augmented_lagrange", constraints = list(con)),
+    "cannot maximize"
+  )
+  # Every other method still maximizes.
+  expect_s3_class(
+    optim_maximize(function(p) -(p[1] - 3)^2, lower = -10, upper = 10, method = "de", seed = 1),
+    "corehydro_optim"
+  )
+  # The workaround the error names: minimize -f under the same constraint.
+  fit <- optim_minimize(function(p) (p[1] - 3)^2, initial = 0, lower = -10, upper = 10,
+                        method = "augmented_lagrange", constraints = list(con))
+  expect_equal(fit$parameters[[1]], 1, tolerance = 1e-3)
+  expect_equal(-fit$value, -4, tolerance = 1e-3)
+})
+
 test_that("optim_constraint validates its own arguments", {
   expect_error(optim_constraint(1, value = 1), "function")
   expect_error(optim_constraint(haimes_secondary, value = 1, type = "lt"), "'arg'")

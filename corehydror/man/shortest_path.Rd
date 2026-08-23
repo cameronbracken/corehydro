@@ -27,7 +27,8 @@ Defaults to \code{0:(length(from) - 1)}. These labels are what the \code{edge_in
 reports, and they need not be distinct.}
 
 \item{node_count}{an optional node count. Defaults to \code{max(from, to) + 1}; supply a larger
-value to include isolated nodes carrying no edge, which then report \code{cost = Inf}.}
+value to include isolated nodes carrying no edge, which then report \code{cost = Inf}. A value
+below \code{max(from, to) + 1} is an error: the graph would not fit the routing table it asks for.}
 }
 \value{
 a data frame with one row per node, in node-index order, and columns \code{next_node},

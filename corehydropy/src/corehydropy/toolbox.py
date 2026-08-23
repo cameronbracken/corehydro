@@ -1730,7 +1730,8 @@ def shortest_path(
         they need not be distinct.
     node_count : int, optional
         Defaults to ``max(frm, to) + 1``; supply a larger value to include isolated nodes
-        carrying no edge, which then report ``cost = inf``.
+        carrying no edge, which then report ``cost = inf``. A value below ``max(frm, to) + 1``
+        is an error: the graph would not fit the routing table it asks for.
 
     Returns
     -------
@@ -1777,6 +1778,18 @@ def shortest_path(
     if node_count is not None:
         if float(node_count) < 1:
             raise ValueError("`node_count` must be a single positive number")
+        # A `node_count` below `max(frm, to) + 1` cannot describe the edge list. The ported
+        # solver raises the C# IndexOutOfRangeException message from inside itself when it
+        # reaches the offending index, which is both late and unhelpful here, so reject it up
+        # front and name the argument. This is deliberately STRICTER than the C# solver, whose
+        # bounds check is lazy: it accepts a too-small count as long as no out-of-range index is
+        # ever reached (see dijkstra.hpp note 9). That input is a graph the caller cannot have
+        # meant.
+        if float(node_count) < n_nodes:
+            raise ValueError(
+                f"`node_count` must be at least {int(n_nodes)}, the number of nodes `frm` and "
+                f"`to` describe; got {int(node_count)}"
+            )
         n_nodes = float(node_count)
         options["node_count"] = n_nodes
     if bool(np.any(dest >= n_nodes)):

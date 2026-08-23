@@ -453,7 +453,12 @@ inline std::unique_ptr<opt::Optimizer> make_optimizer(const OptimizerBuild& b,
 // back to the top-level one, and an absent "inner" means BFGS over the top-level vectors, the
 // shape every upstream C# test uses. NOTE that AugmentedLagrange::optimize() always drives the
 // INNER optimizer through minimize(), whatever the outer request -- upstream behavior, mirrored,
-// not corrected.
+// not corrected. It is also, MEASURED, a wrong answer reported as Success: the augmented
+// Lagrangian is built from the RAW objective, so `"maximize": true` flips the outer bookkeeping
+// and not the search direction, and the run returns the constrained MINIMUM. This runner keeps
+// mirroring it (a fixture case must be able to pin upstream behavior), and the guard lives on the
+// two PUBLIC verbs instead: R/optim.R's kOptimMinimizeOnlyMethods and optim.py's
+// _MINIMIZE_ONLY_METHODS both reject `optim_maximize(method = "augmented_lagrange")` by name.
 // Argument-shape validation beyond what the ported constructors
 // already do (missing bounds/initial, mismatched lengths) is deliberately NOT duplicated here --
 // see the file header on this being a thin dispatcher, and R/toolbox: optim_run()/

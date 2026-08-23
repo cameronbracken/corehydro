@@ -805,3 +805,27 @@ test_that("shortest_path() validates its arguments", {
   expect_error(shortest_path(numeric(0), numeric(0), numeric(0), destinations = 0), "at least one")
   expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 7), "out of range")
 })
+
+# A `node_count` too small for the graph used to reach the solver, which answered it with an
+# out-of-bounds write: a quietly wrong routing table here and a crash in corehydropy. C# raises
+# IndexOutOfRangeException for the same call (measured; see dijkstra.hpp note 9), so the solver
+# now throws too, and the wrapper rejects it up front with a message naming the argument.
+test_that("shortest_path() rejects a node_count too small for the graph", {
+  expect_error(
+    shortest_path(from = c(0, 1), to = c(5, 2), weight = c(1, 1), destinations = 0,
+                  node_count = 2),
+    "`node_count` must be at least 6"
+  )
+  expect_error(
+    shortest_path(from = c(0, 1), to = c(1, 2), weight = c(1, 1), destinations = 0,
+                  node_count = 0),
+    "must be a single positive number"
+  )
+  # The boundary itself is fine, and so is anything above it.
+  expect_equal(
+    nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 3)), 3L
+  )
+  expect_equal(
+    nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 5)), 5L
+  )
+})

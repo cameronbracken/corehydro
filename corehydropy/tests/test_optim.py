@@ -434,6 +434,28 @@ def test_augmented_lagrange_requires_at_least_one_constraint(constraints):
                        method="augmented_lagrange", constraints=constraints)
 
 
+# optim_maximize() used to accept this method and return the constrained MINIMUM labelled
+# "Success": upstream AugmentedLagrange.Optimize() always calls the inner optimizer's Minimize()
+# over an augmented Lagrangian built from the RAW objective, so the outer sign flip never reaches
+# the search. The port still mirrors that; the public verb refuses the request.
+def test_optim_maximize_rejects_augmented_lagrange():
+    def peak(p):                                    # true constrained max at x = 1: -4
+        return -((p[0] - 3) ** 2)
+
+    con = [Constraint(lambda p: p[0], value=1.0, type="le")]
+    with pytest.raises(ValueError, match="cannot maximize"):
+        optim_maximize(peak, initial=[0.0], lower=[-10.0], upper=[10.0],
+                       method="augmented_lagrange", constraints=con)
+    # Every other method still maximizes.
+    assert optim_maximize(peak, lower=[-10.0], upper=[10.0], method="de",
+                          seed=1).status == "Success"
+    # The workaround the error names: minimize -f under the same constraint.
+    fit = optim_minimize(lambda p: (p[0] - 3) ** 2, initial=[0.0], lower=[-10.0], upper=[10.0],
+                         method="augmented_lagrange", constraints=con)
+    assert fit.parameters[0] == pytest.approx(1.0, abs=1e-3)
+    assert -fit.value == pytest.approx(-4.0, abs=1e-3)
+
+
 def test_constraint_validates_its_own_arguments():
     with pytest.raises(TypeError, match="callable"):
         Constraint(1, value=1.0)

@@ -879,3 +879,21 @@ def test_shortest_path_validates_its_arguments():
         shortest_path([], [], [], destinations=0)
     with pytest.raises(ValueError, match="out of range"):
         shortest_path([0, 1], [1, 2], [1, 1], destinations=7)
+
+
+# A `node_count` too small for the graph used to reach the solver, which answered it with an
+# out-of-bounds write: a crash here and a quietly wrong routing table in corehydror. C# raises
+# IndexOutOfRangeException for the same call (measured; see dijkstra.hpp note 9), so the solver
+# now throws too, and the wrapper rejects it up front with a message naming the argument.
+def test_shortest_path_rejects_a_node_count_too_small_for_the_graph():
+    with pytest.raises(ValueError, match=r"`node_count` must be at least 6"):
+        shortest_path([0, 1], [5, 2], [1.0, 1.0], destinations=0, node_count=2)
+    with pytest.raises(ValueError, match="must be a single positive number"):
+        shortest_path([0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=0)
+    # The boundary itself is fine, and so is anything above it.
+    assert shortest_path(
+        [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=3
+    ).shape == (3, 3)
+    assert shortest_path(
+        [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=5
+    ).shape == (5, 3)
