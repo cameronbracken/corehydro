@@ -193,9 +193,9 @@ settings, and against the real C# library; `fixtures/callback/callback_cross_lan
 at zero tolerance for exactly that reason. Miser and Vegas are not so lucky: both compute a
 `standard_error` shaped like `avg2 - avg*avg`, and Vegas's own `chi_squared` compounds a second such
 subtraction, and clang/gcc's default fused-multiply-add contraction does not agree with .NET's
-never-fused arithmetic on the last bit of either. Measured directly against the real C# library
-(`fixtures/callback/math.json`'s `quadrature_miser_gsl` case): Miser's own `Result` misses the C#
-value by 1 ULP under this package's shipped build. Measured directly R against Python at the
+never-fused arithmetic on the last bit of either. Measured against the real C# library when the port
+landed (`fixtures/callback/math.json`'s `quadrature_miser_gsl` case): Miser's own `Result` misses
+the C# value by 1 ULP under this package's shipped build. Measured directly R against Python at the
 settings `fixtures/callback/callback_cross_language.json` itself uses for its Vegas sub-block
 (`NdW_SumOfNormals3`, `independent_evaluations = 2`, `function_calls = 300`): `Result` differs by 2
 ULP language to language, not just in `standard_error`/`chi_squared`. It is a property of the
@@ -341,7 +341,7 @@ stopifnot(
   near(spline_q[5], interpolate(stage, discharge, 1, method = "cubic_spline")),
 
   # The callback_cross_language.json construct: EMITTER-READ from the real C# library.
-  near(as.numeric(monte_carlo), 3.4285714285714284),
+  identical(as.numeric(monte_carlo), 3.4285714285714284),
   attr(monte_carlo, "function_evaluations") == 21L,
   attr(monte_carlo, "status") == "Success",
   attr(miser, "function_evaluations") == 300L,
