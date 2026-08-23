@@ -40,7 +40,7 @@ list ch_toolbox_run_(std::string group, std::string method, list data, std::stri
     return pack(tb::run_toolbox(group, method, vecs, options_json));
 }
 
-// Runs one of the six ported optimizers (R/optim.R) against an R objective function. `objective`
+// Runs one of the eleven ported optimizers (R/optim.R) against an R objective function. `objective`
 // is called with a single numeric vector argument and must return a single number -- `as_doubles`
 // below accepts either a double or an integer return (an all-integer objective like
 // `function(p) sum(p > 0)` is common); a non-numeric or wrong-length return raises inside that

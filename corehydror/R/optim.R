@@ -1,5 +1,6 @@
-# The general-purpose optimizer surface over the six ported Numerics optimizers (DE, BFGS,
-# Powell, MLSL, Nelder-Mead, Brent). Unlike every other verb in toolbox.R/gof.R (which pass
+# The general-purpose optimizer surface over the eleven ported Numerics optimizers (DE, particle
+# swarm, shuffled complex evolution, simulated annealing, multi-start, MLSL, BFGS, Powell,
+# Nelder-Mead, Brent, golden section). Unlike every other verb in toolbox.R/gof.R (which pass
 # serializable data through the shared run_toolbox dispatcher), an optimizer takes a live R
 # function, so this goes through its own runner (core/include/corehydro/numerics/support/
 # optimizer_runner.hpp) and its own glue (ch_optim_run_ in src/toolbox.cpp), rather than
@@ -7,42 +8,51 @@
 
 #' Minimize or maximize a user-written objective
 #'
-#' Runs one of the six ported Numerics optimizers over an R function. The optimizer's random
+#' Runs one of the eleven ported Numerics optimizers over an R function. The optimizer's random
 #' number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 #' in corehydropy.
 #'
 #' @param objective a function taking a numeric parameter vector and returning a single number.
 #' @param lower,upper numeric vectors of parameter bounds, the same length as the parameter
-#'   vector. Required for every method, including `"de"` and `"brent"`, which take no `initial`.
+#'   vector. Required for every method, including `"de"`, `"brent"` and `"golden_section"`, which
+#'   take no `initial`. `"brent"` and `"golden_section"` are one-dimensional: pass a single bound
+#'   each.
 #' @param initial optional numeric vector of starting values, the same length as `lower`/`upper`.
-#'   Required for `"bfgs"`, `"powell"`, `"mlsl"` and `"nelder_mead"`.
-#' @param method one of `"de"` (differential evolution, the default), `"bfgs"`, `"powell"`,
-#'   `"mlsl"`, `"nelder_mead"`, or `"brent"`.
-#' @param seed optional integer seed for the stochastic methods (`"de"`, `"mlsl"`); an error for
-#'   any other method.
-#' @param control a named list of optimizer settings: `max_iterations`,
-#'   `max_function_evaluations`, `absolute_tolerance`, `relative_tolerance`, `population_size`
-#'   (`"de"` only), `compute_hessian`, and `report_failure` (default `TRUE`, which surfaces a
-#'   configuration failure as an R error rather than returning a failed status quietly).
-#'   `max_function_evaluations`, `report_failure`, and `compute_hessian` apply only to `"de"`,
-#'   `"bfgs"`, `"powell"`, and `"mlsl"` (the four methods that derive from the ported `Optimizer`
-#'   base); `"nelder_mead"` and `"brent"` accept only `max_iterations`, `absolute_tolerance`, and
-#'   `relative_tolerance`, and never compute a Hessian. `compute_hessian` DEFAULTS TO `TRUE` for
-#'   those four methods (matching the ported C# `Optimizer` base), so a successful `"de"`/`"bfgs"`/
-#'   `"powell"`/`"mlsl"` run returns a Hessian, computed by extra objective evaluations, unless the
+#'   Required for `"bfgs"`, `"powell"`, `"mlsl"`, `"multi_start"` and `"nelder_mead"`.
+#' @param method one of `"de"` (differential evolution, the default), `"particle_swarm"`, `"sce"`
+#'   (shuffled complex evolution), `"simulated_annealing"`, `"multi_start"`, `"mlsl"`, `"bfgs"`,
+#'   `"powell"`, `"nelder_mead"`, `"brent"`, or `"golden_section"`.
+#' @param seed optional integer seed for the stochastic methods (`"de"`, `"particle_swarm"`,
+#'   `"sce"`, `"simulated_annealing"`, `"multi_start"`, `"mlsl"`); an error for any other method.
+#' @param control a named list of optimizer settings. Every method accepts `max_iterations`,
+#'   `absolute_tolerance` and `relative_tolerance`. Every method except `"nelder_mead"` and
+#'   `"brent"` (the two classes that do not derive from the ported `Optimizer` base) additionally
+#'   accepts `max_function_evaluations`, `report_failure` (default `TRUE`, which surfaces a
+#'   configuration failure as an R error rather than returning a failed status quietly) and
+#'   `compute_hessian`. The method-specific settings are `population_size` (`"de"`,
+#'   `"particle_swarm"`); `complexes`, `cce_iterations` and `tolerance_steps` (`"sce"`);
+#'   `initial_temperature`, `min_temperature`, `cooling_rate`, `update_cycles`,
+#'   `temperature_cycles` and `tolerance_steps` (`"simulated_annealing"`); `local_method`
+#'   (`"multi_start"`, `"mlsl"`, one of `"bfgs"`, `"nelder_mead"`, `"powell"`); and
+#'   `local_absolute_tolerance`, `local_relative_tolerance`, `polish` (`"multi_start"`). Passing a
+#'   setting a method does not read is an error rather than a silent no-op. `compute_hessian`
+#'   DEFAULTS TO `TRUE` for the `Optimizer`-base methods (matching the ported C# `Optimizer` base),
+#'   so a successful run returns a Hessian, computed by extra objective evaluations, unless the
 #'   caller passes `control = list(compute_hessian = FALSE)` to skip it.
 #' @return a `corehydro_optim` list with `parameters`, `value` (the objective's own value at the
 #'   optimum, in its own sign convention -- not negated for `optim_maximize()`), `iterations`,
-#'   `function_evaluations`, `status`, and `hessian` (populated by default for `"de"`/`"bfgs"`/
-#'   `"powell"`/`"mlsl"`; always `NULL` for `"nelder_mead"`/`"brent"`, or when `compute_hessian`
-#'   was turned off).
+#'   `function_evaluations`, `status`, and `hessian` (populated by default for every
+#'   `Optimizer`-base method; always `NULL` for `"nelder_mead"`/`"brent"`, or when
+#'   `compute_hessian` was turned off).
 #' @examples
 #' rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
 #' fit <- optim_minimize(rosenbrock, lower = c(-5, -5), upper = c(5, 5), seed = 42)
 #' round(fit$parameters, 3)
 #' @export
 optim_minimize <- function(objective, lower = NULL, upper = NULL, initial = NULL,
-                           method = c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent"),
+                           method = c("de", "particle_swarm", "sce", "simulated_annealing",
+                                      "multi_start", "mlsl", "bfgs", "powell", "nelder_mead",
+                                      "brent", "golden_section"),
                            seed = NULL, control = list()) {
   optim_run(objective, lower, upper, initial, match.arg(method), seed, control,
             maximize = FALSE)
@@ -51,26 +61,66 @@ optim_minimize <- function(objective, lower = NULL, upper = NULL, initial = NULL
 #' @rdname optim_minimize
 #' @export
 optim_maximize <- function(objective, lower = NULL, upper = NULL, initial = NULL,
-                           method = c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent"),
+                           method = c("de", "particle_swarm", "sce", "simulated_annealing",
+                                      "multi_start", "mlsl", "bfgs", "powell", "nelder_mead",
+                                      "brent", "golden_section"),
                            seed = NULL, control = list()) {
   optim_run(objective, lower, upper, initial, match.arg(method), seed, control,
             maximize = TRUE)
 }
 
-kOptimControl <- c("max_iterations", "max_function_evaluations", "absolute_tolerance",
-                   "relative_tolerance", "population_size", "compute_hessian", "report_failure")
-# Every method needs `lower`/`upper` (even "de" and "brent", which take no `initial`).
-# "bfgs", "powell", "mlsl" and "nelder_mead" additionally need an initial guess -- all three of
-# `initial`/`lower`/`upper` are then required to be the same length, which the underlying C++
-# constructors validate once the request reaches them (NelderMead's ctor does not validate this
-# itself -- see optimizer_runner.hpp's "nelder_mead" arm -- so the length check below is load-
-# bearing, not just a friendlier error, for that one method).
-kOptimNeedsInitial <- c("bfgs", "powell", "mlsl", "nelder_mead")
-# The four methods deriving from the ported Optimizer base (see optimizer_runner.hpp); only these
-# accept max_function_evaluations/report_failure/compute_hessian, and only "de"/"mlsl" are
-# stochastic (accept `seed`).
-kOptimBaseMethods <- c("de", "bfgs", "powell", "mlsl")
-kOptimStochasticMethods <- c("de", "mlsl")
+# The three tolerance/iteration knobs every one of the eleven optimizer classes exposes, plus the
+# three only the classes deriving from the ported `Optimizer` base take. "nelder_mead" and "brent"
+# are the two standalone classes (see optimizer_runner.hpp's file header); "golden_section" IS an
+# `Optimizer` subclass, so it takes the full base set.
+kOptimScalarControls <- c("max_iterations", "absolute_tolerance", "relative_tolerance")
+kOptimBaseControls <- c(kOptimScalarControls, "max_function_evaluations", "report_failure",
+                        "compute_hessian")
+# Per-method: which control names it accepts, whether it needs `initial`, and whether it is
+# stochastic (accepts `seed`). Every validation message below reads off this one table so the R
+# and Python surfaces cannot drift. Every method needs `lower`/`upper` (even "de", "brent" and
+# "golden_section", which take no `initial`); a method with `needs_initial` additionally needs an
+# initial guess -- all three of `initial`/`lower`/`upper` are then required to be the same length,
+# which the underlying C++ constructors validate once the request reaches them (NelderMead's ctor
+# does not validate this itself -- see optimizer_runner.hpp's "nelder_mead" arm -- so the length
+# check below is load-bearing, not just a friendlier error, for that one method).
+kOptimMethods <- list(
+  de                  = list(controls = c(kOptimBaseControls, "population_size"),
+                             needs_initial = FALSE, stochastic = TRUE),
+  particle_swarm      = list(controls = c(kOptimBaseControls, "population_size"),
+                             needs_initial = FALSE, stochastic = TRUE),
+  sce                 = list(controls = c(kOptimBaseControls, "complexes", "cce_iterations",
+                                          "tolerance_steps"),
+                             needs_initial = FALSE, stochastic = TRUE),
+  simulated_annealing = list(controls = c(kOptimBaseControls, "initial_temperature",
+                                          "min_temperature", "cooling_rate", "update_cycles",
+                                          "temperature_cycles", "tolerance_steps"),
+                             needs_initial = FALSE, stochastic = TRUE),
+  multi_start         = list(controls = c(kOptimBaseControls, "local_method",
+                                          "local_absolute_tolerance", "local_relative_tolerance",
+                                          "polish"),
+                             needs_initial = TRUE, stochastic = TRUE),
+  mlsl                = list(controls = c(kOptimBaseControls, "local_method"),
+                             needs_initial = TRUE, stochastic = TRUE),
+  bfgs                = list(controls = kOptimBaseControls, needs_initial = TRUE,
+                             stochastic = FALSE),
+  powell              = list(controls = kOptimBaseControls, needs_initial = TRUE,
+                             stochastic = FALSE),
+  nelder_mead         = list(controls = kOptimScalarControls, needs_initial = TRUE,
+                             stochastic = FALSE),
+  brent               = list(controls = kOptimScalarControls, needs_initial = FALSE,
+                             stochastic = FALSE),
+  golden_section      = list(controls = kOptimBaseControls, needs_initial = FALSE,
+                             stochastic = FALSE)
+)
+kOptimMethodNames <- names(kOptimMethods)
+kOptimControl <- unique(unlist(lapply(kOptimMethods, `[[`, "controls"), use.names = FALSE))
+kOptimNeedsInitial <- kOptimMethodNames[vapply(kOptimMethods, `[[`, logical(1), "needs_initial")]
+kOptimStochasticMethods <- kOptimMethodNames[vapply(kOptimMethods, `[[`, logical(1), "stochastic")]
+# The three local methods MLSL and MultiStart actually construct. ADAM and GradientDescent are
+# LocalMethod members upstream but throw "Unsupported local method" inside both classes (see
+# optimization/support/local_method.hpp), so they are not offered here.
+kOptimLocalMethods <- c("bfgs", "nelder_mead", "powell")
 
 # Internal: validate everything R-side, then make one call. Both verbs share this so their
 # messages and defaults can never drift apart.
@@ -107,23 +157,27 @@ optim_run <- function(objective, lower, upper, initial, method, seed, control, m
                  paste(unknown, collapse = ", "), paste(kOptimControl, collapse = ", ")),
          call. = FALSE)
   }
-  if (!method %in% kOptimBaseMethods) {
-    base_only <- intersect(names(control), c("max_function_evaluations", "report_failure",
-                                             "compute_hessian"))
-    if (length(base_only) > 0L) {
-      stop(sprintf("control name(s) %s only apply to method(s) %s; got method \"%s\"",
-                   paste(base_only, collapse = ", "), paste(kOptimBaseMethods, collapse = ", "),
-                   method), call. = FALSE)
+  # A control name this method's C++ arm never reads would silently look like it did something,
+  # so reject it and name the methods that do read it.
+  wrong_method <- setdiff(names(control), kOptimMethods[[method]]$controls)
+  if (length(wrong_method) > 0L) {
+    accepts <- kOptimMethodNames[vapply(kOptimMethods,
+                                        function(m) any(wrong_method %in% m$controls),
+                                        logical(1))]
+    stop(sprintf("control name(s) %s only apply to method(s) %s; got method \"%s\"",
+                 paste(wrong_method, collapse = ", "), paste(accepts, collapse = ", "), method),
+         call. = FALSE)
+  }
+  if ("local_method" %in% names(control)) {
+    lm <- control$local_method
+    if (length(lm) != 1L || !is.character(lm) || !lm %in% kOptimLocalMethods) {
+      stop(sprintf("`local_method` must be one of %s; got %s",
+                   paste(sprintf('"%s"', kOptimLocalMethods), collapse = ", "),
+                   paste(format(lm), collapse = ", ")), call. = FALSE)
     }
   }
-  # `population_size` is only ever applied in the "de" arm of the C++ runner (every other method
-  # silently ignores it); reject it here rather than let it look like it did something.
-  if (method != "de" && "population_size" %in% names(control)) {
-    stop(sprintf("control name \"population_size\" only applies to method \"de\"; got method \"%s\"",
-                 method), call. = FALSE)
-  }
-  # `initial` is only read by the "bfgs"/"powell"/"mlsl"/"nelder_mead" arms; "de" and "brent"
-  # never look at it, so a caller-supplied `initial` for either would silently do nothing.
+  # `initial` is only read by the arms of the methods that need it; the others never look at it,
+  # so a caller-supplied `initial` for one of those would silently do nothing.
   if (!is.null(initial) && !method %in% kOptimNeedsInitial) {
     stop(sprintf("`initial` only applies to method(s) %s; got method \"%s\"",
                  paste(kOptimNeedsInitial, collapse = ", "), method), call. = FALSE)

@@ -1720,7 +1720,7 @@ def _optimizer_fixture_objective(name):
     if name == "FXYZ":
         return lambda p: (4 * p[0] - 0.5) ** 2 + (3 * p[1] - 0.6) ** 2 + (2 * p[2] - 0.7) ** 2
     if name == "DeJong":
-        return lambda p: sum(v ** 2 for v in p)
+        return _dejong
     if name == "Booth":
         return lambda p: (p[0] + 2 * p[1] - 7) ** 2 + (2 * p[0] + p[1] - 5) ** 2
     if name == "McCormick":
@@ -1729,7 +1729,30 @@ def _optimizer_fixture_objective(name):
         )
     if name == "FX":
         return lambda p: (p[0] + 3.0) * (p[0] - 1.0) ** 2
+    if name == "Rosenbrock":
+        return _rosenbrock
+    if name == "Eggholder":
+        return lambda p: (
+            -(p[1] + 47.0) * math.sin(math.sqrt(abs((p[0] / 2.0) + (p[1] + 47.0))))
+            - p[0] * math.sin(math.sqrt(abs(p[0] - (p[1] + 47.0))))
+        )
     raise KeyError(f"unknown optimizer fixture objective: {name}")
+
+
+# The two accumulating objectives, spelled out as explicit loops rather than sum()/numpy calls so
+# all four catalogs evaluate the same arithmetic in the same order.
+def _dejong(p):
+    total = 0.0
+    for v in p:
+        total += v ** 2
+    return total
+
+
+def _rosenbrock(p):
+    total = 0.0
+    for i in range(len(p) - 1):
+        total += 100 * (p[i + 1] - p[i] * p[i]) ** 2 + (1 - p[i]) ** 2
+    return total
 
 
 def _run_optimizer_case(case):
@@ -1741,6 +1764,10 @@ def _run_optimizer_case(case):
             _check(r["value"], a)
         elif a["method"] == "parameter":
             _check(r["parameters"][a["args"][0]], a)
+        elif a["method"] == "iterations":
+            _check(float(r["iterations"]), a)
+        elif a["method"] == "function_evaluations":
+            _check(float(r["function_evaluations"]), a)
         elif a["method"] == "status":
             assert r["status"] == a["expected"]
         else:
@@ -2322,22 +2349,34 @@ def _run_callback_cross_language_case(case):
 # guarantee. Reuses _optimizer_spec_json/_optimizer_fixture_objective and
 # _core.toolbox_run/_toolbox_select verbatim -- see _run_optimizer_case/_run_toolbox_case above.
 def _run_toolbox_cross_language_case(case):
-    opt = case["optimizer"]
-    construct = dict(opt["construct"])
-    objective_name = construct.pop("objective", "DeJong")
-    r = _core.optim_run(_optimizer_spec_json(construct), _optimizer_fixture_objective(objective_name))
-    for a in opt["assertions"]:
-        if a["method"] == "value":
-            _check(r["value"], a)
-        elif a["method"] == "parameter":
-            _check(r["parameters"][a["args"][0]], a)
-        elif a["method"] == "status":
-            assert r["status"] == a["expected"]
-        else:
-            raise KeyError(f"unknown toolbox_cross_language optimizer assertion method: {a['method']}")
+    # Every sub-block is OPTIONAL: the first case nests all three, while the seeded per-method
+    # digest cases added by the optimizer phase carry an "optimizer" block alone. Mirrors the same
+    # presence check in the other three runners.
+    opt = case.get("optimizer")
+    if opt is not None:
+        construct = dict(opt["construct"])
+        objective_name = construct.pop("objective", "DeJong")
+        r = _core.optim_run(_optimizer_spec_json(construct),
+                            _optimizer_fixture_objective(objective_name))
+        for a in opt["assertions"]:
+            if a["method"] == "value":
+                _check(r["value"], a)
+            elif a["method"] == "parameter":
+                _check(r["parameters"][a["args"][0]], a)
+            elif a["method"] == "iterations":
+                _check(float(r["iterations"]), a)
+            elif a["method"] == "function_evaluations":
+                _check(float(r["function_evaluations"]), a)
+            elif a["method"] == "status":
+                assert r["status"] == a["expected"]
+            else:
+                raise KeyError(
+                    f"unknown toolbox_cross_language optimizer assertion method: {a['method']}")
 
     for sub in ("sobol", "stratify"):
-        block = case[sub]
+        block = case.get(sub)
+        if block is None:
+            continue
         options_dict = dict(block.get("options", {}))
         if sub == "sobol":
             options_dict["path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")

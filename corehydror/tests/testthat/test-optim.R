@@ -1,14 +1,18 @@
 test_that("an error inside the objective reaches the caller intact, for every method", {
   # The guard (GuardedObjective + optimizer_runner.hpp's per-method rethrow) is the whole point of
-  # this task, so this case is parametrized over ALL SIX methods -- a hole in just one of them
+  # this task, so this case is parametrized over ALL ELEVEN methods -- a hole in just one of them
   # (bfgs/mlsl were bypassed by an internal gradient-probe exception before the fix) would not have
   # shown up if only "de" were exercised here.
   boom <- function(p) stop("boom in the objective")
-  needs_initial <- c("bfgs", "powell", "mlsl", "nelder_mead")
-  stochastic <- c("de", "mlsl")
-  for (m in c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent")) {
+  needs_initial <- c("bfgs", "powell", "mlsl", "multi_start", "nelder_mead")
+  stochastic <- c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl")
+  one_dim <- c("brent", "golden_section")
+  for (m in c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+              "bfgs", "powell", "nelder_mead", "brent", "golden_section")) {
     expect_error(
-      optim_minimize(boom, lower = c(-1, -1), upper = c(1, 1),
+      optim_minimize(boom,
+                     lower = if (m %in% one_dim) -1 else c(-1, -1),
+                     upper = if (m %in% one_dim) 1 else c(1, 1),
                      initial = if (m %in% needs_initial) c(0, 0) else NULL,
                      method = m, seed = if (m %in% stochastic) 1 else NULL),
       "boom in the objective", info = m
@@ -22,9 +26,10 @@ test_that("the guard survives under report_failure = FALSE too, for every base m
   # way (only "nelder_mead"/"brent" reject a report_failure control, since they don't derive from
   # the Optimizer base).
   boom <- function(p) stop("boom in the objective")
-  needs_initial <- c("bfgs", "powell", "mlsl")
-  stochastic <- c("de", "mlsl")
-  for (m in c("de", "bfgs", "powell", "mlsl")) {
+  needs_initial <- c("bfgs", "powell", "mlsl", "multi_start")
+  stochastic <- c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl")
+  for (m in c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+              "bfgs", "powell", "golden_section")) {
     expect_error(
       optim_minimize(boom, lower = c(-1, -1), upper = c(1, 1),
                      initial = if (m %in% needs_initial) c(0, 0) else NULL,
@@ -164,6 +169,87 @@ test_that("compute_hessian = FALSE opts out of the Hessian", {
   fit <- optim_minimize(function(p) sum(p^2), lower = c(-2, -2), upper = c(2, 2), seed = 5,
                         control = list(compute_hessian = FALSE))
   expect_null(fit$hessian)
+})
+
+# The Booth function, minimum 0 at (1, 3). Written out rather than vectorized so the Python twin
+# in corehydropy/tests/test_optim.py evaluates the identical arithmetic.
+booth <- function(p) (p[1] + 2 * p[2] - 7)^2 + (2 * p[1] + p[2] - 5)^2
+
+test_that("the new global methods find the Booth optimum", {
+  for (m in c("particle_swarm", "sce", "simulated_annealing", "multi_start")) {
+    fit <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                          initial = if (m == "multi_start") c(0, 0) else NULL,
+                          method = m, seed = 12345)
+    expect_equal(fit$parameters, c(1, 3), tolerance = 1e-3, info = m)
+  }
+})
+
+test_that("golden_section finds a one dimensional minimum", {
+  fit <- optim_minimize(function(p) (p[1] - 2)^2, lower = 0, upper = 5, method = "golden_section")
+  expect_equal(fit$parameters, 2, tolerance = 1e-4)
+})
+
+test_that("multi_start accepts a local_method and rejects an unknown one", {
+  fit <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "multi_start", seed = 12345,
+                        control = list(local_method = "powell"))
+  expect_equal(fit$parameters, c(1, 3), tolerance = 1e-3)
+  expect_error(
+    optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "multi_start", seed = 1, control = list(local_method = "adam")),
+    "local_method"
+  )
+})
+
+test_that("multi_start's max_iterations is not overwritten by its constructor", {
+  # MultiStart sets MaxIterations to 100 in its CONSTRUCTOR rather than as a field default, so a
+  # runner arm that applied the controls before construction would silently ignore this.
+  fit <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "multi_start", seed = 12345,
+                        control = list(max_iterations = 15))
+  expect_identical(fit$iterations, 15L)
+})
+
+test_that("a control reaches each new class", {
+  # One control value per new class actually changing the run -- the counterpart of the "de"
+  # max_function_evaluations check below, which is the only other test here that proves a control
+  # is read at all.
+  capped <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                           method = "simulated_annealing", seed = 12345,
+                           control = list(max_iterations = 12))
+  expect_lt(capped$function_evaluations, 5000)  # a default 10,000-iteration run costs ~800,000
+
+  small <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                          method = "particle_swarm", seed = 12345,
+                          control = list(population_size = 10))
+  default <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                            method = "particle_swarm", seed = 12345)
+  expect_false(identical(small$function_evaluations, default$function_evaluations))
+
+  tight <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10), method = "sce",
+                          seed = 12345, control = list(complexes = 2))
+  loose <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10), method = "sce",
+                          seed = 12345)
+  expect_false(identical(tight$function_evaluations, loose$function_evaluations))
+
+  # local_method is the one control shared by two methods, and both of its non-default values have
+  # to reach the class: a run polished by Powell costs a different number of evaluations than the
+  # same run polished by BFGS.
+  bfgs <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                         method = "multi_start", seed = 12345,
+                         control = list(local_method = "bfgs"))
+  powell <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                           method = "multi_start", seed = 12345,
+                           control = list(local_method = "powell"))
+  expect_false(identical(bfgs$function_evaluations, powell$function_evaluations))
+})
+
+test_that("a control belonging to another method names the method", {
+  expect_error(
+    optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10), method = "de", seed = 1,
+                   control = list(cooling_rate = 0.9)),
+    'got method "de"'
+  )
 })
 
 test_that("a control value actually reaches the optimizer: max_function_evaluations caps the count", {

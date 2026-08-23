@@ -18,7 +18,7 @@
 // `optim_minimize()`/`optim_maximize()` call always supplies the objective directly, in R or
 // Python, never by name.
 //
-// Two of the six ported optimizers -- NelderMead and BrentSearch -- deliberately do NOT derive
+// Two of the eleven ported optimizers -- NelderMead and BrentSearch -- deliberately do NOT derive
 // from the Optimizer base (see optimizer.hpp's file header); this runner handles that difference
 // explicitly rather than forcing a common base onto them. Their maximize()/minimize() have no
 // OptimizationStatus, no function_evaluations()/iterations() accessor, and (NelderMead only) no
@@ -37,9 +37,15 @@
 #include "corehydro/numerics/math/optimization/bfgs.hpp"
 #include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/math/optimization/differential_evolution.hpp"
+#include "corehydro/numerics/math/optimization/golden_section.hpp"
 #include "corehydro/numerics/math/optimization/mlsl.hpp"
+#include "corehydro/numerics/math/optimization/multi_start.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
+#include "corehydro/numerics/math/optimization/particle_swarm.hpp"
 #include "corehydro/numerics/math/optimization/powell.hpp"
+#include "corehydro/numerics/math/optimization/shuffled_complex_evolution.hpp"
+#include "corehydro/numerics/math/optimization/simulated_annealing.hpp"
+#include "corehydro/numerics/math/optimization/support/local_method.hpp"
 #include "corehydro/numerics/math/optimization/support/optimization_status.hpp"
 #include "corehydro/numerics/math/optimization/support/optimizer.hpp"
 #include "corehydro/numerics/support/callback_guard.hpp"
@@ -58,7 +64,7 @@ using corehydro::models::spec::JsonValue;
 using Objective = std::function<double(const std::vector<double>&)>;
 
 // Flat result surface every binding and every fixture assertion reads. `hessian`/`hessian_dims`
-// are empty unless the method both supports a Hessian (the four Optimizer-base methods only --
+// are empty unless the method both supports a Hessian (the nine Optimizer-base methods only --
 // NelderMead and BrentSearch never compute one, see the file header) and the spec's
 // `control.compute_hessian` requested it.
 struct OptimResult {
@@ -90,7 +96,7 @@ struct OptimResult {
 // a hugely negative one is worst (-inf). Either way the optimizer treats the aborted point as
 // unconditionally rejected. `call_count()` is the real (non-short-circuited) call count into the
 // host objective -- the only function-evaluation count available for NelderMead/BrentSearch (see
-// the file header); redundant with, but not necessarily identical to, the four Optimizer-base
+// the file header); redundant with, but not necessarily identical to, the nine Optimizer-base
 // classes' own function_evaluations() (incremented only inside Optimizer::evaluate(), so -- like
 // that counter -- it does NOT include the post-success Hessian-differentiation probes, which call
 // the objective function directly and bypass evaluate() entirely).
@@ -113,7 +119,7 @@ inline std::vector<double> spec_vector(const JsonValue& spec, const char* key) {
     return spec.at(key).as_double_vector();
 }
 
-// Applies the three tolerance/iteration knobs every one of the six optimizer classes exposes
+// Applies the three tolerance/iteration knobs every one of the eleven optimizer classes exposes
 // (max_iterations, absolute_tolerance, relative_tolerance), only when the spec's control object
 // carries the key -- an absent key leaves the ported class's own default untouched.
 template <typename TOpt>
@@ -125,7 +131,20 @@ void apply_common_controls(TOpt& o, const JsonValue& control) {
         o.relative_tolerance = control.at("relative_tolerance").as_double();
 }
 
-// Applies the extra knobs only the four real Optimizer subclasses (DE/BFGS/Powell/MLSL) expose:
+// Parses the LocalMethod control shared by "mlsl" and "multi_start". Only the three methods the
+// two classes actually construct are accepted (ADAM/GradientDescent throw "Unsupported local
+// method" inside both -- see local_method.hpp), so rejecting them here names the option rather
+// than surfacing the inner class's message.
+inline opt::LocalMethod parse_local_method(const std::string& s) {
+    if (s == "bfgs") return opt::LocalMethod::BFGS;
+    if (s == "nelder_mead") return opt::LocalMethod::NelderMead;
+    if (s == "powell") return opt::LocalMethod::Powell;
+    throw std::runtime_error("unknown local_method: " + s +
+                             " (expected \"bfgs\", \"nelder_mead\" or \"powell\")");
+}
+
+// Applies the extra knobs only the real Optimizer subclasses (DE/ParticleSwarm/SCE/
+// SimulatedAnnealing/MultiStart/MLSL/BFGS/Powell/GoldenSection) expose:
 // max_function_evaluations, report_failure, compute_hessian. NelderMead/BrentSearch have none of
 // these (see the file header), so they never call this helper.
 template <typename TOpt>
@@ -136,8 +155,8 @@ void apply_optimizer_controls(TOpt& o, const JsonValue& control) {
     if (control.contains("compute_hessian")) o.compute_hessian = control.at("compute_hessian").as_bool();
 }
 
-// Fills the common block from any of the four real Optimizer subclasses (DE/BFGS/Powell/MLSL),
-// which share the full public accessor surface (best_parameter_set/iterations/
+// Fills the common block from any real Optimizer subclass, all of which share the full public
+// accessor surface (best_parameter_set/iterations/
 // function_evaluations/status/hessian). `value` un-applies the internal function_scale sign
 // convention (see optimizer.hpp: fitness = function_scale * raw objective, function_scale = -1
 // under maximize()) so it always reports the same sign the user's own objective returns --
@@ -165,23 +184,35 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 
 }  // namespace detail
 
-// Runs the optimizer named by `spec_json["method"]` (one of "de", "bfgs", "powell", "mlsl",
-// "nelder_mead", "brent") against `objective`, and returns a flat OptimResult. Spec grammar:
+// Runs the optimizer named by `spec_json["method"]` (one of "de", "particle_swarm", "sce",
+// "simulated_annealing", "multi_start", "mlsl", "bfgs", "powell", "nelder_mead", "brent",
+// "golden_section") against `objective`, and returns a flat OptimResult. Spec grammar:
 //
-//   {"method": "de|bfgs|powell|mlsl|nelder_mead|brent",
+//   {"method": "de|particle_swarm|sce|simulated_annealing|multi_start|mlsl|bfgs|powell|
+//               nelder_mead|brent|golden_section",
 //    "lower": [...], "upper": [...], "initial": [...],
 //    "maximize": false, "seed": 12345,
 //    "control": {"max_iterations": 1000, "max_function_evaluations": 100000,
 //                "absolute_tolerance": 1e-8, "relative_tolerance": 1e-8,
 //                "report_failure": true, "compute_hessian": false,
-//                "population_size": 30}}
+//                "population_size": 30, "complexes": 5, "cce_iterations": 5,
+//                "tolerance_steps": 20, "initial_temperature": 10, "min_temperature": 0.1,
+//                "cooling_rate": 0.95, "update_cycles": 4, "temperature_cycles": 10,
+//                "local_method": "bfgs", "local_absolute_tolerance": 1e-8,
+//                "local_relative_tolerance": 1e-8, "polish": true}}
 //
-// "de"/"brent" need "lower"/"upper" only; "bfgs"/"powell"/"mlsl"/"nelder_mead" additionally need
-// "initial" (all three are then required to be the same length -- the underlying ctors validate
-// this; see each optimizer's own header). "seed" only applies to the two stochastic methods
-// ("de", "mlsl": both default their own prng_seed to 12345 when omitted, matching the ported
-// class field default). Every "control" key is applied only when present; an absent key leaves
-// the ported class's own default. Argument-shape validation beyond what the ported constructors
+// "de"/"particle_swarm"/"sce"/"simulated_annealing"/"brent"/"golden_section" need "lower"/"upper"
+// only; "bfgs"/"powell"/"mlsl"/"multi_start"/"nelder_mead" additionally need "initial" (all three
+// are then required to be the same length -- the underlying ctors validate this; see each
+// optimizer's own header). "brent" and "golden_section" are one-dimensional and read only the
+// first bound of each. "seed" only applies to the six stochastic methods ("de", "particle_swarm",
+// "sce", "simulated_annealing", "multi_start", "mlsl": all six default their own prng_seed to
+// 12345 when omitted, matching the ported class field default). Every "control" key is applied
+// only when present; an absent key leaves the ported class's own default -- which for
+// "multi_start" includes max_iterations, set to 100 by ITS CONSTRUCTOR rather than by a field
+// initializer, so the control application below must (and does) come after construction. Each
+// method reads only the control keys of its own class; the R and Python surfaces reject the rest
+// by name rather than letting them look like they did something (see R/optim.R's kOptimMethods). Argument-shape validation beyond what the ported constructors
 // already do (missing bounds/initial, mismatched lengths) is deliberately NOT duplicated here --
 // see the file header on this being a thin dispatcher, and R/toolbox: optim_run()/
 // corehydropy.optim for the complete, symmetric, user-facing validation.
@@ -238,6 +269,103 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
         }
         guarded.rethrow_if_aborted();
         detail::fill_optimizer_result(result, de, maximize);
+    } else if (method == "particle_swarm") {
+        int D = static_cast<int>(lower.size());
+        opt::ParticleSwarm ps(adapted, D, lower, upper);
+        if (spec.contains("seed")) ps.prng_seed = spec.at("seed").as_int();
+        if (has_control) {
+            detail::apply_common_controls(ps, control);
+            detail::apply_optimizer_controls(ps, control);
+            if (control.contains("population_size"))
+                ps.population_size = control.at("population_size").as_int();
+        }
+        try {
+            if (maximize) ps.maximize(); else ps.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
+        detail::fill_optimizer_result(result, ps, maximize);
+    } else if (method == "sce") {
+        int D = static_cast<int>(lower.size());
+        opt::ShuffledComplexEvolution sce(adapted, D, lower, upper);
+        if (spec.contains("seed")) sce.prng_seed = spec.at("seed").as_int();
+        if (has_control) {
+            detail::apply_common_controls(sce, control);
+            detail::apply_optimizer_controls(sce, control);
+            if (control.contains("complexes")) sce.complexes = control.at("complexes").as_int();
+            // cce_iterations is a FIELD defaulting to 0 that the ctor sets to 2D + 1, so an absent
+            // key leaves the C# default in place exactly as every other control key does.
+            if (control.contains("cce_iterations"))
+                sce.cce_iterations = control.at("cce_iterations").as_int();
+            if (control.contains("tolerance_steps"))
+                sce.tolerance_steps = control.at("tolerance_steps").as_int();
+        }
+        try {
+            if (maximize) sce.maximize(); else sce.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
+        detail::fill_optimizer_result(result, sce, maximize);
+    } else if (method == "simulated_annealing") {
+        int D = static_cast<int>(lower.size());
+        opt::SimulatedAnnealing sa(adapted, D, lower, upper);
+        if (spec.contains("seed")) sa.prng_seed = spec.at("seed").as_int();
+        if (has_control) {
+            detail::apply_common_controls(sa, control);
+            detail::apply_optimizer_controls(sa, control);
+            if (control.contains("initial_temperature"))
+                sa.initial_temperature = control.at("initial_temperature").as_double();
+            if (control.contains("min_temperature"))
+                sa.min_temperature = control.at("min_temperature").as_double();
+            if (control.contains("cooling_rate"))
+                sa.cooling_rate = control.at("cooling_rate").as_double();
+            if (control.contains("update_cycles"))
+                sa.update_cycles = control.at("update_cycles").as_int();
+            if (control.contains("temperature_cycles"))
+                sa.temperature_cycles = control.at("temperature_cycles").as_int();
+            // SimulatedAnnealing declares and validates tolerance_steps and then never reads it
+            // (see simulated_annealing.hpp's hazard 1); applied anyway so the class's own
+            // validation still sees what the caller asked for.
+            if (control.contains("tolerance_steps"))
+                sa.tolerance_steps = control.at("tolerance_steps").as_int();
+        }
+        try {
+            if (maximize) sa.maximize(); else sa.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
+        detail::fill_optimizer_result(result, sa, maximize);
+    } else if (method == "multi_start") {
+        int D = static_cast<int>(initial.size());
+        opt::MultiStart ms(adapted, D, initial, lower, upper);
+        if (spec.contains("seed")) ms.prng_seed = spec.at("seed").as_int();
+        if (has_control) {
+            // MultiStart's ctor sets max_iterations to 100 itself, so this must stay AFTER
+            // construction or a caller-supplied max_iterations would be silently overwritten.
+            detail::apply_common_controls(ms, control);
+            detail::apply_optimizer_controls(ms, control);
+            if (control.contains("local_method"))
+                ms.method = detail::parse_local_method(control.at("local_method").as_string());
+            if (control.contains("local_absolute_tolerance"))
+                ms.local_absolute_tolerance = control.at("local_absolute_tolerance").as_double();
+            if (control.contains("local_relative_tolerance"))
+                ms.local_relative_tolerance = control.at("local_relative_tolerance").as_double();
+            if (control.contains("polish")) ms.polish = control.at("polish").as_bool();
+        }
+        try {
+            if (maximize) ms.maximize(); else ms.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
+        detail::fill_optimizer_result(result, ms, maximize);
     } else if (method == "bfgs") {
         int D = static_cast<int>(initial.size());
         opt::BFGS bfgs(adapted, D, initial, lower, upper);
@@ -275,6 +403,8 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
         if (has_control) {
             detail::apply_common_controls(mlsl, control);
             detail::apply_optimizer_controls(mlsl, control);
+            if (control.contains("local_method"))
+                mlsl.method = detail::parse_local_method(control.at("local_method").as_string());
         }
         try {
             if (maximize) mlsl.maximize(); else mlsl.minimize();
@@ -343,6 +473,27 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
         result.value = maximize ? -brent.best_fitness() : brent.best_fitness();
         result.function_evaluations = guarded.call_count();
         result.status = "Success";
+    } else if (method == "golden_section") {
+        if (lower.empty() || upper.empty())
+            throw std::runtime_error("optimizer 'golden_section' needs 'lower' and 'upper' bounds");
+        // The 1-D objective is built exactly as the "brent" arm's is, but GoldenSection IS an
+        // Optimizer subclass (unlike BrentSearch -- see the file header), so it carries the full
+        // best_parameter_set/iterations/function_evaluations/status/hessian surface and goes
+        // through fill_optimizer_result like every other Optimizer-base method.
+        opt::GoldenSection gs(
+            [&guarded](double x) { return guarded(std::vector<double>{x}); }, lower[0], upper[0]);
+        if (has_control) {
+            detail::apply_common_controls(gs, control);
+            detail::apply_optimizer_controls(gs, control);
+        }
+        try {
+            if (maximize) gs.maximize(); else gs.minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
+        detail::fill_optimizer_result(result, gs, maximize);
     } else {
         throw std::runtime_error("unknown optimizer method: " + method);
     }

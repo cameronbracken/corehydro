@@ -2090,6 +2090,51 @@ J-statistic) are unchanged and still correct as written.
   ((double)i - 1)` — or hoist `double di = i` at the top of the loop, matching what `N` already
   is. `long` would push the failure out to about 2.1 million points rather than removing it.
 
+## FIDELITY (not a port defect) — a seeded ParticleSwarm or ShuffledComplexEvolution run takes a different search path under a compiler that emits fused multiply-add
+
+- **Where:** `Numerics/Mathematics/Optimization/Global/ParticleSwarm.cs` and
+  `ShuffledComplexEvolution.cs` @ 2a0357a, against
+  `core/include/corehydro/numerics/math/optimization/particle_swarm.hpp` and
+  `shuffled_complex_evolution.hpp`. Surfaced writing the seeded cross-language digest cases in
+  `fixtures/toolbox/toolbox_cross_language.json` for the optimizer phase's user-facing surface
+  (`optim_minimize(method = "particle_swarm" | "sce")`).
+- **What (measured, same machine, same seed 12345, same objective):** with the ported core
+  compiled `-ffp-contract=off`, the C++ runner is bit-identical to the real C# library on every
+  construct tried — ParticleSwarm on Booth `3073` iterations / `92220` evaluations / fitness
+  `3.1554436208840472E-30`, on Eggholder `2413` / `72420` / `-959.64066272085097` at
+  `(512, 404.23180505405406)`; ShuffledComplexEvolution on Booth `54` / `4786` /
+  `1.7264378682942888E-25`, on 5-D DeJong `57` / `9483` / `1.6274114682612478E-20`. With
+  contraction left at the compiler default (which is what the shipped R and Python packages get,
+  and what `test_fixtures` compiles the core with), the same runs give ParticleSwarm/Booth `3855`
+  / `115680` / `0`, ParticleSwarm/Eggholder the same `2413` / `72420` / `-959.64066272085097` but
+  `y = 404.23180501084073`, SCE/Booth `51` / `4232` / `9.2296725910858381e-29`, and SCE/DeJong the
+  same `57` / `9483` but `1.6274155980703362e-20`. Every one of those still lands on the textbook
+  optimum well inside the upstream MSTest deltas, so `fixtures/toolbox/optimizers.json` reproduces
+  in all four runners.
+- **Cause:** both algorithms branch on comparisons between accumulated sums (`if (fitness <
+  particle.BestFitness)`, the SCE sub-complex sort and its reflection/contraction acceptance
+  tests). clang and gcc contract `a*b + c` into a single fused multiply-add by default; .NET never
+  does. One contracted expression is enough to flip an accept/reject, and from there every later
+  PRNG draw is spent on a different point. This is the same arithmetic-contraction class already
+  documented for `test_fixtures`'s callback catalog (see `core/CMakeLists.txt` and
+  `fixtures/callback/callback_cross_language.json`), not an algorithmic divergence: the ported code
+  reproduces C# exactly the moment contraction is off. `SimulatedAnnealing` and `MultiStart`, the
+  other two global optimizers exposed in the same phase, are NOT affected — both reproduce C#
+  bit-for-bit either way (measured on Booth and FXYZ respectively, down to the evaluation count).
+- **Port handling:** `optimizers.json` pins the ACCURACY of all four methods at the upstream MSTest
+  literals and tolerances, which reproduce in C++, R, Python and C# alike. The cross-language digest
+  cases pin, at zero tolerance, only the quantities measured to survive both paths: everything for
+  SimulatedAnnealing and MultiStart; the iteration count, evaluation count, converged value and the
+  on-bound parameter for ParticleSwarm/Eggholder; the iteration and evaluation counts for
+  SCE/DeJong. The unpinned quantities are simply **not asserted** — there is **NO `oracle_skip` and
+  NO loosened tolerance** — following the D6/X12 precedent. The fixture's own `reference` string
+  carries the same measurement.
+- **Suggested action:** none for correctness; a seeded run is exactly reproducible within one build,
+  and both packages remain bit-identical to each other. Making a seeded ParticleSwarm or SCE run
+  reproduce the C# stream on every platform would mean compiling those two headers without
+  contraction in the shipped packages, which neither an R `Makevars` nor a portable pragma can
+  promise across the three CI compilers, so it is deliberately not attempted.
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a

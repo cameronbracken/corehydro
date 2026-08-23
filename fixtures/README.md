@@ -1786,10 +1786,13 @@ sigma/confidence/input.
 
 ### `optimizer`
 
-The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a
-NAMED built-in objective (one of `FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`, the same formulas
-`core/tests/optimization_test_functions.hpp` and each fixture runner's own native closure
-implement) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
+The eleven ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
+annealing, multi-start, MLSL, BFGS, Powell, Nelder-Mead, Brent, golden section), run against a
+NAMED built-in objective (one of `FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`/`Rosenbrock`/`Eggholder`,
+the same formulas `core/tests/optimization_test_functions.hpp` and each fixture runner's own native
+closure implement -- the two accumulating ones, `DeJong` and `Rosenbrock`, spell their sum out as an
+explicit loop in all four catalogs rather than calling `sum()`/`Sum()`, which would accumulate in a
+different precision in R) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
 `toolbox` group, reached through its own runner (`numerics/support/optimizer_runner.hpp`) and its
 own glue (`ch_optim_run_` / `_core.optim_run`). `construct` is passed straight through as the
 runner's spec JSON, minus the `objective` key (not part of the runner's own grammar). Processed by
@@ -1821,7 +1824,18 @@ literals this way).
 
 Assertion `method` is `"value"` (the objective's own value at the optimum, in its own sign
 convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
-or `"status"` (the exact `OptimizationStatus` name).
+`"iterations"`, `"function_evaluations"` (both integer counts, so `"mode": "equal"`), or
+`"status"` (the exact `OptimizationStatus` name).
+
+`construct.control` is optional and passes straight through as the runner's `control` object; each
+method reads only the keys its own class exposes (`population_size` for `"de"`/`"particle_swarm"`;
+`complexes`/`cce_iterations`/`tolerance_steps` for `"sce"`;
+`initial_temperature`/`min_temperature`/`cooling_rate`/`update_cycles`/`temperature_cycles`/
+`tolerance_steps` for `"simulated_annealing"`; `local_method` for `"multi_start"`/`"mlsl"`; and
+`local_absolute_tolerance`/`local_relative_tolerance`/`polish` for `"multi_start"`, beside the
+`max_iterations`/`absolute_tolerance`/`relative_tolerance`/`max_function_evaluations`/
+`report_failure`/`compute_hessian` set the `Optimizer` base carries). An absent key leaves the
+ported class's own default.
 
 ### `callback`
 
@@ -2115,11 +2129,16 @@ contracted lambda computes a different function from the one the fixture names.
 ### `toolbox_cross_language`
 
 One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose
-kind: its single case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
+kind: its first case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
 case's `construct`/`assertions`) alongside `"sobol"` and `"stratify"` sub-blocks (each shaped
 exactly like a `toolbox`-kind group-`"sampling"` case's `options`/`assertions`), so that ONE
 fixture drives a seeded stochastic optimizer run and two deterministic sequence generators through
-all four runners together. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
+all four runners together. Every sub-block is OPTIONAL: the four cases the optimizer phase added
+(one per stochastic method newly reachable from `optim_minimize()`) carry an `"optimizer"` block
+alone, and each pins only the quantities MEASURED to reproduce in all four harnesses -- see the
+fixture's own `reference` field, and the matching `FIDELITY` entry in
+`docs/upstream-csharp-issues.md`, for why a seeded ParticleSwarm or SCE run pins its iteration and
+evaluation counts but not every converged digit. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
 `short_exact`-digest precedent: proving R and Python agree bit for bit, this time across the
 toolbox/optimizer surface rather than a Bayesian MCMC chain. Every value is dumped from the REAL
 C# `DifferentialEvolution`/`SobolSequence`/`Stratify` via `tools/oracle_emitter --dump` and

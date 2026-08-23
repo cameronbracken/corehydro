@@ -827,11 +827,28 @@ static double NumericalDerivativeNormalLoglik(double[] x)
 static double OptimizerTestFX(double x) => (x + 3d) * Math.Pow(x - 1d, 2d);
 static double OptimizerTestFXYZ(double[] p) =>
     Math.Pow(4d * p[0] - 0.5d, 2d) + Math.Pow(3d * p[1] - 0.6d, 2d) + Math.Pow(2d * p[2] - 0.7d, 2d);
-static double OptimizerTestDeJong(double[] p) => p.Sum(v => v * v);
+// The two accumulating objectives spell their sum out as an explicit loop rather than calling
+// LINQ's Sum(), matching the C++/R/Python catalogs' own loops term for term.
+static double OptimizerTestDeJong(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i < p.Length; i++) F += Math.Pow(p[i], 2);
+    return F;
+}
 static double OptimizerTestBooth(double[] p) =>
     Math.Pow(p[0] + 2d * p[1] - 7d, 2d) + Math.Pow(2d * p[0] + p[1] - 5d, 2d);
 static double OptimizerTestMcCormick(double[] p) =>
     Math.Sin(p[0] + p[1]) + Math.Pow(p[0] - p[1], 2d) - 1.5d * p[0] + 2.5d * p[1] + 1d;
+static double OptimizerTestRosenbrock(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i + 1 < p.Length; i++)
+        F += 100 * Math.Pow(p[i + 1] - p[i] * p[i], 2) + Math.Pow(1 - p[i], 2);
+    return F;
+}
+static double OptimizerTestEggholder(double[] p) =>
+    -(p[1] + 47d) * Math.Sin(Math.Sqrt(Math.Abs((p[0] / 2d) + (p[1] + 47d))))
+    - p[0] * Math.Sin(Math.Sqrt(Math.Abs(p[0] - (p[1] + 47d))));
 static Func<double[], double> OptimizerTestFunction(string name) => name switch
 {
     "FXYZ" => OptimizerTestFXYZ,
@@ -839,8 +856,116 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
     "Booth" => OptimizerTestBooth,
     "McCormick" => OptimizerTestMcCormick,
     "FX" => p => OptimizerTestFX(p[0]),
+    "Rosenbrock" => OptimizerTestRosenbrock,
+    "Eggholder" => OptimizerTestEggholder,
     _ => throw new Exception($"unknown optimizer fixture objective: {name}")
 };
+
+// Builds and configures the REAL C# optimizer an `optimizer`-kind construct names, mirroring
+// optimizer_runner.hpp's run_optimizer arm for arm: the same eleven method names, the seed applied
+// to whichever of the six stochastic classes was built, and every `control` key applied only when
+// present and only by the class that reads it (an absent key leaves the C# class default). Shared
+// by the "optimizer" and "toolbox_cross_language" branches below, which had carried two copies of
+// the construction switch before this phase added five methods and the control block to it.
+// MultiStart sets MaxIterations in its CONSTRUCTOR, so the control block must stay after
+// construction exactly as the C++ runner's does.
+static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
+{
+    string method = construct.GetProperty("method").GetString()!;
+    string objectiveName = construct.TryGetProperty("objective", out var objEl)
+        ? objEl.GetString()! : "DeJong";
+    Func<double[], double> objective = OptimizerTestFunction(objectiveName);
+    double[] lower = construct.TryGetProperty("lower", out var lowerEl)
+        ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    double[] upper = construct.TryGetProperty("upper", out var upperEl)
+        ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    double[] initial = construct.TryGetProperty("initial", out var initialEl)
+        ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+
+    Optimizer optimizer = method switch
+    {
+        "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
+        "particle_swarm" => new ParticleSwarm(objective, lower.Length, lower, upper),
+        "sce" => new ShuffledComplexEvolution(objective, lower.Length, lower, upper),
+        "simulated_annealing" => new SimulatedAnnealing(objective, lower.Length, lower, upper),
+        "multi_start" => new MultiStart(objective, initial.Length, initial, lower, upper),
+        "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
+        "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+        "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
+        "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
+        "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
+        "golden_section" => new GoldenSection(x => objective([x]), lower[0], upper[0]),
+        _ => throw new Exception($"unknown optimizer method: {method}")
+    };
+    if (seed.HasValue)
+    {
+        if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is ParticleSwarm psOptimizer) psOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is ShuffledComplexEvolution sceOptimizer) sceOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is SimulatedAnnealing saOptimizer) saOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is MultiStart msOptimizer) msOptimizer.PRNGSeed = seed.Value;
+    }
+    if (construct.TryGetProperty("control", out var controlEl))
+    {
+        foreach (var knob in controlEl.EnumerateObject())
+        {
+            switch (knob.Name)
+            {
+                case "max_iterations": optimizer.MaxIterations = knob.Value.GetInt32(); break;
+                case "absolute_tolerance": optimizer.AbsoluteTolerance = ParseNum(knob.Value); break;
+                case "relative_tolerance": optimizer.RelativeTolerance = ParseNum(knob.Value); break;
+                case "max_function_evaluations":
+                    optimizer.MaxFunctionEvaluations = knob.Value.GetInt32(); break;
+                case "report_failure": optimizer.ReportFailure = knob.Value.GetBoolean(); break;
+                case "compute_hessian": optimizer.ComputeHessian = knob.Value.GetBoolean(); break;
+                case "population_size":
+                    if (optimizer is DifferentialEvolution dePop) dePop.PopulationSize = knob.Value.GetInt32();
+                    else ((ParticleSwarm)optimizer).PopulationSize = knob.Value.GetInt32();
+                    break;
+                case "complexes":
+                    ((ShuffledComplexEvolution)optimizer).Complexes = knob.Value.GetInt32(); break;
+                case "cce_iterations":
+                    ((ShuffledComplexEvolution)optimizer).CCEIterations = knob.Value.GetInt32(); break;
+                case "tolerance_steps":
+                    if (optimizer is ShuffledComplexEvolution sceTol) sceTol.ToleranceSteps = knob.Value.GetInt32();
+                    else ((SimulatedAnnealing)optimizer).ToleranceSteps = knob.Value.GetInt32();
+                    break;
+                case "initial_temperature":
+                    ((SimulatedAnnealing)optimizer).InitialTemperature = ParseNum(knob.Value); break;
+                case "min_temperature":
+                    ((SimulatedAnnealing)optimizer).MinTemperature = ParseNum(knob.Value); break;
+                case "cooling_rate":
+                    ((SimulatedAnnealing)optimizer).CoolingRate = ParseNum(knob.Value); break;
+                case "update_cycles":
+                    ((SimulatedAnnealing)optimizer).UpdateCycles = knob.Value.GetInt32(); break;
+                case "temperature_cycles":
+                    ((SimulatedAnnealing)optimizer).TemperatureCycles = knob.Value.GetInt32(); break;
+                case "local_method":
+                    {
+                        LocalMethod lm = knob.Value.GetString() switch
+                        {
+                            "bfgs" => LocalMethod.BFGS,
+                            "nelder_mead" => LocalMethod.NelderMead,
+                            "powell" => LocalMethod.Powell,
+                            _ => throw new Exception($"unknown local_method: {knob.Value.GetString()}")
+                        };
+                        if (optimizer is MLSL mlslLm) mlslLm.Method = lm;
+                        else ((MultiStart)optimizer).Method = lm;
+                        break;
+                    }
+                case "local_absolute_tolerance":
+                    ((MultiStart)optimizer).LocalAbsoluteTolerance = ParseNum(knob.Value); break;
+                case "local_relative_tolerance":
+                    ((MultiStart)optimizer).LocalRelativeTolerance = ParseNum(knob.Value); break;
+                case "polish": ((MultiStart)optimizer).Polish = knob.Value.GetBoolean(); break;
+                default: throw new Exception($"unknown optimizer control: {knob.Name}");
+            }
+        }
+    }
+    return optimizer;
+}
 
 // The callback surface, Task 1: the Test_Brent/Test_Differentiation formulas
 // fixtures/callback/math.json names by string, inlined here for the same reason as the optimizer
@@ -5729,34 +5854,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         {
             string caseName = c.GetProperty("name").GetString()!;
             var construct = c.GetProperty("construct");
-            string method = construct.GetProperty("method").GetString()!;
-            string objectiveName = construct.TryGetProperty("objective", out var objEl)
-                ? objEl.GetString()! : "DeJong";
-            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
-            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
-                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] upper = construct.TryGetProperty("upper", out var upperEl)
-                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] initial = construct.TryGetProperty("initial", out var initialEl)
-                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
             bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
-            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
-
-            Optimizer optimizer = method switch
-            {
-                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
-                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
-                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
-                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
-                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
-                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
-                _ => throw new Exception($"unknown optimizer method: {method}")
-            };
-            if (seed.HasValue)
-            {
-                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
-                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
-            }
+            Optimizer optimizer = BuildOptimizerFromConstruct(construct);
 
             if (maximize) optimizer.Maximize(); else optimizer.Minimize();
             double[] parameters = optimizer.BestParameterSet.Values;
@@ -5778,6 +5877,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 {
                     "value" => value,
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    "iterations" => optimizer.Iterations,
+                    "function_evaluations" => optimizer.FunctionEvaluations,
                     _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
                 };
                 if (Compare(actual, asrt)) pass++;
@@ -6403,36 +6504,14 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             string caseName = c.GetProperty("name").GetString()!;
 
             // --- optimizer sub-block (mirrors the "optimizer" kind branch above) -----------
-            var optBlock = c.GetProperty("optimizer");
+            // Every sub-block is OPTIONAL: the first case nests all three, while the seeded
+            // per-method digest cases added by the optimizer phase carry an "optimizer" block
+            // alone. Mirrors the same presence check in the other three runners.
+            if (c.TryGetProperty("optimizer", out var optBlock))
+            {
             var construct = optBlock.GetProperty("construct");
-            string method = construct.GetProperty("method").GetString()!;
-            string objectiveName = construct.TryGetProperty("objective", out var objEl)
-                ? objEl.GetString()! : "DeJong";
-            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
-            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
-                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] upper = construct.TryGetProperty("upper", out var upperEl)
-                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] initial = construct.TryGetProperty("initial", out var initialEl)
-                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
             bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
-            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
-
-            Optimizer optimizer = method switch
-            {
-                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
-                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
-                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
-                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
-                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
-                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
-                _ => throw new Exception($"unknown optimizer method: {method}")
-            };
-            if (seed.HasValue)
-            {
-                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
-                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
-            }
+            Optimizer optimizer = BuildOptimizerFromConstruct(construct);
             if (maximize) optimizer.Maximize(); else optimizer.Minimize();
             double[] parameters = optimizer.BestParameterSet.Values;
             double optValue = maximize ? -optimizer.BestParameterSet.Fitness : optimizer.BestParameterSet.Fitness;
@@ -6450,6 +6529,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     {
                         "value" => (object)optValue,
                         "parameter" => (object)parameters[asrt.GetProperty("args")[0].GetInt32()],
+                        "iterations" => (object)optimizer.Iterations,
+                        "function_evaluations" => (object)optimizer.FunctionEvaluations,
                         "status" => (object)status,
                         _ => throw new Exception(
                             $"unknown toolbox_cross_language optimizer assertion method: {am}")
@@ -6467,11 +6548,14 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 {
                     "value" => optValue,
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    "iterations" => optimizer.Iterations,
+                    "function_evaluations" => optimizer.FunctionEvaluations,
                     _ => throw new Exception(
                         $"unknown toolbox_cross_language optimizer assertion method: {am}")
                 };
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
             }
 
             // --- sobol / stratify sub-blocks, both routed through the same ToolboxDispatch the
@@ -6479,7 +6563,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             // only) ------------------------------------------------------------------------
             foreach (var (subKey, methodName) in new[] { ("sobol", "sobol"), ("stratify", "stratify") })
             {
-                var block = c.GetProperty(subKey);
+                if (!c.TryGetProperty(subKey, out var block)) continue;
                 JsonElement options = block.TryGetProperty("options", out var oEl) ? oEl : default;
                 var data = new List<double[]>();
                 foreach (var asrt in block.GetProperty("assertions").EnumerateArray())

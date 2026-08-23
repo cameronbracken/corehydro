@@ -1678,6 +1678,10 @@ static void run_optimizer_kind(const json& spec) {
             } else if (method == "parameter") {
                 std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
                 check_value(r.parameters.at(i), as, where);
+            } else if (method == "iterations") {
+                check_value(static_cast<double>(r.iterations), as, where);
+            } else if (method == "function_evaluations") {
+                check_value(static_cast<double>(r.function_evaluations), as, where);
             } else if (method == "status") {
                 if (r.status == as["expected"].get<std::string>())
                     chtest::report_pass();
@@ -1812,8 +1816,10 @@ static void run_toolbox_cross_language_kind(const json& spec) {
     for (const auto& c : spec["cases"]) {
         std::string name = c["name"].get<std::string>();
 
-        // optimizer sub-block
-        {
+        // optimizer sub-block. Every sub-block is OPTIONAL: the first case nests all three, while
+        // the seeded per-method digest cases added by the optimizer phase carry an "optimizer"
+        // block alone. Mirrors the same presence check in the other three runners.
+        if (c.contains("optimizer")) {
             json construct = c["optimizer"]["construct"];
             std::string objective_name = construct.value("objective", "DeJong");
             construct.erase("objective");
@@ -1827,6 +1833,10 @@ static void run_toolbox_cross_language_kind(const json& spec) {
                 } else if (method == "parameter") {
                     std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
                     check_value(r.parameters.at(i), as, where);
+                } else if (method == "iterations") {
+                    check_value(static_cast<double>(r.iterations), as, where);
+                } else if (method == "function_evaluations") {
+                    check_value(static_cast<double>(r.function_evaluations), as, where);
                 } else if (method == "status") {
                     if (r.status == as["expected"].get<std::string>())
                         chtest::report_pass();
@@ -1842,6 +1852,7 @@ static void run_toolbox_cross_language_kind(const json& spec) {
         }
         // sobol / stratify sub-blocks: group "sampling", no positional data, options only.
         for (const char* sub : {"sobol", "stratify"}) {
+            if (!c.contains(sub)) continue;
             json options = c[sub].value("options", json::object());
             if (std::string(sub) == "sobol") options["path"] = g_sobol_path;
             std::string options_str = options.dump();

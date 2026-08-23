@@ -441,13 +441,29 @@ optimizer_spec_json <- function(ns, construct) {
 # NATIVE R closures reproducing the same formulas as core/tests/optimization_test_functions.hpp,
 # so every optimizer fixture case exercises the real R callback path
 # (corehydro::numerics::support::GuardedObjective exists to protect exactly this call).
+# NOTE the accumulating objectives spell their sum out as an explicit loop rather than calling
+# `sum()`: R's `sum()` accumulates in long double where the C++/Python/C# catalogs accumulate in
+# double, which on an x87 platform would make the four runners evaluate different arithmetic.
 optimizer_fixture_objective <- function(name) {
   switch(name,
     FXYZ = function(p) (4 * p[1] - 0.5)^2 + (3 * p[2] - 0.6)^2 + (2 * p[3] - 0.7)^2,
-    DeJong = function(p) sum(p^2),
+    DeJong = function(p) {
+      s <- 0
+      for (i in seq_along(p)) s <- s + p[i]^2
+      s
+    },
     Booth = function(p) (p[1] + 2 * p[2] - 7)^2 + (2 * p[1] + p[2] - 5)^2,
     McCormick = function(p) sin(p[1] + p[2]) + (p[1] - p[2])^2 - 1.5 * p[1] + 2.5 * p[2] + 1,
     FX = function(p) (p[1] + 3) * (p[1] - 1)^2,
+    Rosenbrock = function(p) {
+      s <- 0
+      for (i in seq_len(length(p) - 1L)) s <- s + 100 * (p[i + 1] - p[i] * p[i])^2 + (1 - p[i])^2
+      s
+    },
+    Eggholder = function(p) {
+      -(p[2] + 47) * sin(sqrt(abs((p[1] / 2) + (p[2] + 47)))) -
+        p[1] * sin(sqrt(abs(p[1] - (p[2] + 47))))
+    },
     stop(sprintf("unknown optimizer fixture objective: %s", name))
   )
 }
@@ -2049,6 +2065,10 @@ test_that("oracle fixtures validate", {
             check_assertion(r$value, a)
           } else if (identical(a$method, "parameter")) {
             check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "iterations")) {
+            check_assertion(as.double(r$iterations), a)
+          } else if (identical(a$method, "function_evaluations")) {
+            check_assertion(as.double(r$function_evaluations), a)
           } else if (identical(a$method, "status")) {
             expect_identical(r$status, a$expected)
           } else {
@@ -2199,7 +2219,11 @@ test_that("oracle fixtures validate", {
       # verbatim -- see the "optimizer" and "toolbox" blocks above.
       ns <- asNamespace("corehydror")
       for (case in spec$cases) {
+        # Every sub-block is OPTIONAL: the first case nests all three, while the seeded per-method
+        # digest cases added by the optimizer phase carry an "optimizer" block alone. Mirrors the
+        # same presence check in the other three runners.
         opt <- case$optimizer
+        if (!is.null(opt)) {
         construct <- opt$construct
         objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
         construct$objective <- NULL
@@ -2210,14 +2234,20 @@ test_that("oracle fixtures validate", {
             check_assertion(r$value, a)
           } else if (identical(a$method, "parameter")) {
             check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "iterations")) {
+            check_assertion(as.double(r$iterations), a)
+          } else if (identical(a$method, "function_evaluations")) {
+            check_assertion(as.double(r$function_evaluations), a)
           } else if (identical(a$method, "status")) {
             expect_identical(r$status, a$expected)
           } else {
             stop(sprintf("unknown toolbox_cross_language optimizer assertion method: %s", a$method))
           }
         }
+        }
         for (sub in c("sobol", "stratify")) {
           block <- case[[sub]]
+          if (is.null(block)) next
           opts_list <- if (is.null(block$options)) list() else block$options
           if (identical(sub, "sobol")) {
             opts_list$path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")

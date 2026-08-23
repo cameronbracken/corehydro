@@ -41,6 +41,8 @@ tbx::Objective optimizer_objective(const std::string& name) {
     if (name == "DeJong") return tbx::Objective(test_functions::de_jong);
     if (name == "Booth") return tbx::Objective(test_functions::booth);
     if (name == "McCormick") return tbx::Objective(test_functions::mccormick);
+    if (name == "Rosenbrock") return tbx::Objective(test_functions::rosenbrock);
+    if (name == "Eggholder") return tbx::Objective(test_functions::eggholder);
     if (name == "FX")
         return tbx::Objective(
             [](const std::vector<double>& v) { return test_functions::fx(v[0]); });

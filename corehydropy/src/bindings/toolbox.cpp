@@ -46,7 +46,7 @@ void register_toolbox(py::module_& m) {
         },
         py::arg("group"), py::arg("method"), py::arg("data"), py::arg("options_json"));
 
-    // Runs one of the six ported optimizers (corehydropy.optim) against a Python objective
+    // Runs one of the eleven ported optimizers (corehydropy.optim) against a Python objective
     // function. `objective` is called with a single 1D array argument and must return a single
     // number -- a non-scalar return raises the same "single number" std::runtime_error the R glue
     // raises, inside the py::cast<double> conversion below. That raise (a plain C++ exception, not

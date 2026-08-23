@@ -4,21 +4,24 @@ import pytest
 from corehydropy import optim_maximize, optim_minimize
 
 
-_NEEDS_INITIAL = ("bfgs", "powell", "mlsl", "nelder_mead")
-_STOCHASTIC = ("de", "mlsl")
-_ALL_METHODS = ("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent")
+_NEEDS_INITIAL = ("bfgs", "powell", "mlsl", "multi_start", "nelder_mead")
+_STOCHASTIC = ("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl")
+_ALL_METHODS = ("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+                "bfgs", "powell", "nelder_mead", "brent", "golden_section")
 
 
 @pytest.mark.parametrize("method", _ALL_METHODS)
 def test_error_inside_objective_reaches_the_caller_intact(method):
     # The guard (GuardedObjective + optimizer_runner.hpp's per-method rethrow) is the whole point
-    # of this task, so this case is parametrized over ALL SIX methods -- a hole in just one of
+    # of this task, so this case is parametrized over ALL ELEVEN methods -- a hole in just one of
     # them (bfgs/mlsl were bypassed by an internal gradient-probe exception before the fix) would
     # not have shown up if only "de" were exercised here.
     def f(p):
         raise ValueError("boom in the objective")
 
     kwargs = {"lower": [-1, -1], "upper": [1, 1], "method": method}
+    if method in ("brent", "golden_section"):
+        kwargs["lower"], kwargs["upper"] = [-1], [1]
     if method in _NEEDS_INITIAL:
         kwargs["initial"] = [0, 0]
     if method in _STOCHASTIC:
@@ -27,7 +30,8 @@ def test_error_inside_objective_reaches_the_caller_intact(method):
         optim_minimize(f, **kwargs)
 
 
-@pytest.mark.parametrize("method", ["de", "bfgs", "powell", "mlsl"])
+@pytest.mark.parametrize("method", ["de", "particle_swarm", "sce", "simulated_annealing",
+                                    "multi_start", "mlsl", "bfgs", "powell", "golden_section"])
 def test_guard_survives_report_failure_false_for_every_base_method(method):
     # `control={"report_failure": False}` changes whether the ported Optimizer base itself
     # rethrows internally, but the guard must still surface the ORIGINAL objective exception
@@ -170,6 +174,80 @@ def test_nelder_mead_and_brent_never_carry_a_hessian_even_when_requested():
     assert fit.hessian is None
     fitb = optim_minimize(lambda p: p[0] ** 2, lower=[-1], upper=[1], method="brent")
     assert fitb.hessian is None
+
+
+def _booth(p):
+    # The Booth function, minimum 0 at (1, 3). Written out rather than vectorized so the R twin
+    # in corehydror/tests/testthat/test-optim.R evaluates the identical arithmetic.
+    return (p[0] + 2.0 * p[1] - 7.0) ** 2 + (2.0 * p[0] + p[1] - 5.0) ** 2
+
+
+@pytest.mark.parametrize("method", ["particle_swarm", "sce", "simulated_annealing", "multi_start"])
+def test_the_new_global_methods_find_the_booth_optimum(method):
+    kwargs = {"lower": [-10, -10], "upper": [10, 10], "method": method, "seed": 12345}
+    if method == "multi_start":
+        kwargs["initial"] = [0, 0]
+    fit = optim_minimize(_booth, **kwargs)
+    np.testing.assert_allclose(fit.parameters, [1.0, 3.0], atol=1e-3)
+
+
+def test_golden_section_finds_a_one_dimensional_minimum():
+    fit = optim_minimize(lambda p: (p[0] - 2.0) ** 2, lower=[0], upper=[5],
+                         method="golden_section")
+    np.testing.assert_allclose(fit.parameters, [2.0], atol=1e-4)
+
+
+def test_multi_start_accepts_a_local_method_and_rejects_an_unknown_one():
+    fit = optim_minimize(_booth, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                         method="multi_start", seed=12345, control={"local_method": "powell"})
+    np.testing.assert_allclose(fit.parameters, [1.0, 3.0], atol=1e-3)
+    with pytest.raises(ValueError, match="local_method"):
+        optim_minimize(_booth, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                       method="multi_start", seed=1, control={"local_method": "adam"})
+
+
+def test_multi_start_max_iterations_is_not_overwritten_by_its_constructor():
+    # MultiStart sets MaxIterations to 100 in its CONSTRUCTOR rather than as a field default, so a
+    # runner arm that applied the controls before construction would silently ignore this.
+    fit = optim_minimize(_booth, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                         method="multi_start", seed=12345, control={"max_iterations": 15})
+    assert fit.iterations == 15
+
+
+def test_a_control_reaches_each_new_class():
+    # One control value per new class actually changing the run -- the counterpart of the "de"
+    # max_function_evaluations check below, which is the only other test here that proves a
+    # control is read at all.
+    capped = optim_minimize(_booth, lower=[-10, -10], upper=[10, 10],
+                            method="simulated_annealing", seed=12345,
+                            control={"max_iterations": 12})
+    assert capped.function_evaluations < 5000  # a default 10,000-iteration run costs ~800,000
+
+    small = optim_minimize(_booth, lower=[-10, -10], upper=[10, 10], method="particle_swarm",
+                           seed=12345, control={"population_size": 10})
+    default = optim_minimize(_booth, lower=[-10, -10], upper=[10, 10], method="particle_swarm",
+                             seed=12345)
+    assert small.function_evaluations != default.function_evaluations
+
+    tight = optim_minimize(_booth, lower=[-10, -10], upper=[10, 10], method="sce", seed=12345,
+                           control={"complexes": 2})
+    loose = optim_minimize(_booth, lower=[-10, -10], upper=[10, 10], method="sce", seed=12345)
+    assert tight.function_evaluations != loose.function_evaluations
+
+    # local_method is the one control shared by two methods, and both of its non-default values
+    # have to reach the class: a run polished by Powell costs a different number of evaluations
+    # than the same run polished by BFGS.
+    bfgs = optim_minimize(_booth, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                          method="multi_start", seed=12345, control={"local_method": "bfgs"})
+    powell = optim_minimize(_booth, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                            method="multi_start", seed=12345, control={"local_method": "powell"})
+    assert bfgs.function_evaluations != powell.function_evaluations
+
+
+def test_a_control_belonging_to_another_method_names_the_method():
+    with pytest.raises(ValueError, match="got method 'de'"):
+        optim_minimize(_booth, lower=[-10, -10], upper=[10, 10], method="de", seed=1,
+                       control={"cooling_rate": 0.9})
 
 
 def test_max_function_evaluations_caps_the_reported_count():

@@ -10,7 +10,8 @@ optim_minimize(
   lower = NULL,
   upper = NULL,
   initial = NULL,
-  method = c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent"),
+  method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+    "bfgs", "powell", "nelder_mead", "brent", "golden_section"),
   seed = NULL,
   control = list()
 )
@@ -20,7 +21,8 @@ optim_maximize(
   lower = NULL,
   upper = NULL,
   initial = NULL,
-  method = c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent"),
+  method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+    "bfgs", "powell", "nelder_mead", "brent", "golden_section"),
   seed = NULL,
   control = list()
 )
@@ -29,38 +31,45 @@ optim_maximize(
 \item{objective}{a function taking a numeric parameter vector and returning a single number.}
 
 \item{lower, upper}{numeric vectors of parameter bounds, the same length as the parameter
-vector. Required for every method, including \code{"de"} and \code{"brent"}, which take no \code{initial}.}
+vector. Required for every method, including \code{"de"}, \code{"brent"} and \code{"golden_section"}, which
+take no \code{initial}. \code{"brent"} and \code{"golden_section"} are one-dimensional: pass a single bound
+each.}
 
 \item{initial}{optional numeric vector of starting values, the same length as \code{lower}/\code{upper}.
-Required for \code{"bfgs"}, \code{"powell"}, \code{"mlsl"} and \code{"nelder_mead"}.}
+Required for \code{"bfgs"}, \code{"powell"}, \code{"mlsl"}, \code{"multi_start"} and \code{"nelder_mead"}.}
 
-\item{method}{one of \code{"de"} (differential evolution, the default), \code{"bfgs"}, \code{"powell"},
-\code{"mlsl"}, \code{"nelder_mead"}, or \code{"brent"}.}
+\item{method}{one of \code{"de"} (differential evolution, the default), \code{"particle_swarm"}, \code{"sce"}
+(shuffled complex evolution), \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}, \code{"bfgs"},
+\code{"powell"}, \code{"nelder_mead"}, \code{"brent"}, or \code{"golden_section"}.}
 
-\item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"mlsl"}); an error for
-any other method.}
+\item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"particle_swarm"},
+\code{"sce"}, \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}); an error for any other method.}
 
-\item{control}{a named list of optimizer settings: \code{max_iterations},
-\code{max_function_evaluations}, \code{absolute_tolerance}, \code{relative_tolerance}, \code{population_size}
-(\code{"de"} only), \code{compute_hessian}, and \code{report_failure} (default \code{TRUE}, which surfaces a
-configuration failure as an R error rather than returning a failed status quietly).
-\code{max_function_evaluations}, \code{report_failure}, and \code{compute_hessian} apply only to \code{"de"},
-\code{"bfgs"}, \code{"powell"}, and \code{"mlsl"} (the four methods that derive from the ported \code{Optimizer}
-base); \code{"nelder_mead"} and \code{"brent"} accept only \code{max_iterations}, \code{absolute_tolerance}, and
-\code{relative_tolerance}, and never compute a Hessian. \code{compute_hessian} DEFAULTS TO \code{TRUE} for
-those four methods (matching the ported C# \code{Optimizer} base), so a successful \code{"de"}/\code{"bfgs"}/
-\code{"powell"}/\code{"mlsl"} run returns a Hessian, computed by extra objective evaluations, unless the
+\item{control}{a named list of optimizer settings. Every method accepts \code{max_iterations},
+\code{absolute_tolerance} and \code{relative_tolerance}. Every method except \code{"nelder_mead"} and
+\code{"brent"} (the two classes that do not derive from the ported \code{Optimizer} base) additionally
+accepts \code{max_function_evaluations}, \code{report_failure} (default \code{TRUE}, which surfaces a
+configuration failure as an R error rather than returning a failed status quietly) and
+\code{compute_hessian}. The method-specific settings are \code{population_size} (\code{"de"},
+\code{"particle_swarm"}); \code{complexes}, \code{cce_iterations} and \code{tolerance_steps} (\code{"sce"});
+\code{initial_temperature}, \code{min_temperature}, \code{cooling_rate}, \code{update_cycles},
+\code{temperature_cycles} and \code{tolerance_steps} (\code{"simulated_annealing"}); \code{local_method}
+(\code{"multi_start"}, \code{"mlsl"}, one of \code{"bfgs"}, \code{"nelder_mead"}, \code{"powell"}); and
+\code{local_absolute_tolerance}, \code{local_relative_tolerance}, \code{polish} (\code{"multi_start"}). Passing a
+setting a method does not read is an error rather than a silent no-op. \code{compute_hessian}
+DEFAULTS TO \code{TRUE} for the \code{Optimizer}-base methods (matching the ported C# \code{Optimizer} base),
+so a successful run returns a Hessian, computed by extra objective evaluations, unless the
 caller passes \code{control = list(compute_hessian = FALSE)} to skip it.}
 }
 \value{
 a \code{corehydro_optim} list with \code{parameters}, \code{value} (the objective's own value at the
 optimum, in its own sign convention -- not negated for \code{optim_maximize()}), \code{iterations},
-\code{function_evaluations}, \code{status}, and \code{hessian} (populated by default for \code{"de"}/\code{"bfgs"}/
-\code{"powell"}/\code{"mlsl"}; always \code{NULL} for \code{"nelder_mead"}/\code{"brent"}, or when \code{compute_hessian}
-was turned off).
+\code{function_evaluations}, \code{status}, and \code{hessian} (populated by default for every
+\code{Optimizer}-base method; always \code{NULL} for \code{"nelder_mead"}/\code{"brent"}, or when
+\code{compute_hessian} was turned off).
 }
 \description{
-Runs one of the six ported Numerics optimizers over an R function. The optimizer's random
+Runs one of the eleven ported Numerics optimizers over an R function. The optimizer's random
 number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 in corehydropy.
 }

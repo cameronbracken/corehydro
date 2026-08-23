@@ -1,6 +1,6 @@
 {
   "kind": "optimizer",
-  "source": "Numerics/Mathematics/Optimization/{Global/Test_DifferentialEvolution.cs, Local/Test_BFGS.cs, Local/Test_Powell.cs, Global/Test_MLSL.cs, Local/Test_NelderMead.cs, Local/Test_BrentSearch.cs}",
+  "source": "Numerics/Mathematics/Optimization/{Global/Test_DifferentialEvolution.cs, Global/Test_ParticleSwarm.cs, Global/Test_ShuffledComplexEvolution.cs, Global/Test_SimulatedAnnealing.cs, Global/Test_MultiStart.cs, Global/Test_MLSL.cs, Local/Test_BFGS.cs, Local/Test_Powell.cs, Local/Test_NelderMead.cs, Local/Test_BrentSearch.cs, Local/Test_GoldenSection.cs}",
   "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_optimizer (core/include/corehydro/numerics/support/optimizer_runner.hpp) against the built-in objectives named by `construct.objective`, mapping onto the same TestFunctions.cs formulas the upstream MSTest classes call (FXYZ/DeJong/Booth/McCormick/FX -- see core/tests/optimization_test_functions.hpp). `parameter` assertions read `OptimResult.parameters[args[0]]`; `value` reads `OptimResult.value` (the raw objective at the optimum, in its own sign convention -- see optimizer_runner.hpp's fill_optimizer_result). Every case's tolerance matches the upstream MSTest `Assert.AreEqual(actual, expected, delta)` literal exactly. Every expected value is the upstream test file's own literal, transcribed verbatim -- never a value computed by this repo's own C++.",
   "cases": [
     {
@@ -144,6 +144,142 @@
         { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" },
         { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" },
         { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" }
+      ]
+    },
+    {
+      "name": "particle_swarm_fxyz",
+      "construct": {
+        "method": "particle_swarm", "objective": "FXYZ",
+        "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "particle_swarm_eggholder",
+      "construct": {
+        "method": "particle_swarm", "objective": "Eggholder",
+        "lower": [-512, -512], "upper": [512, 512],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": -959.6407, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_Eggholder" },
+        { "method": "parameter", "args": [0], "expected": 512.0, "mode": "abs", "tol": 1e-3, "source": "Test_ParticleSwarm.Test_Eggholder" },
+        { "method": "parameter", "args": [1], "expected": 404.2319, "mode": "abs", "tol": 1e-3, "source": "Test_ParticleSwarm.Test_Eggholder" }
+      ]
+    },
+    {
+      "name": "sce_dejong",
+      "construct": {
+        "method": "sce", "objective": "DeJong",
+        "lower": [-5.12, -5.12, -5.12, -5.12, -5.12], "upper": [5.12, 5.12, 5.12, 5.12, 5.12],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_DeJong" },
+        { "method": "parameter", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_DeJong" },
+        { "method": "parameter", "args": [4], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_DeJong" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "sce_booth",
+      "construct": {
+        "method": "sce", "objective": "Booth",
+        "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_Booth" }
+      ]
+    },
+    {
+      "name": "simulated_annealing_booth",
+      "construct": {
+        "method": "simulated_annealing", "objective": "Booth",
+        "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-2, "source": "Test_SimulatedAnnealing.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-2, "source": "Test_SimulatedAnnealing.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-2, "source": "Test_SimulatedAnnealing.Test_Booth" },
+        { "method": "status", "expected": "MaximumIterationsReached", "source": "Numerics/Mathematics/Optimization/Global/SimulatedAnnealing.cs -- the class never converges early (no CheckConvergence call anywhere in Optimize), so a completed run always ends on the iteration cap" }
+      ]
+    },
+    {
+      "name": "multi_start_fxyz",
+      "construct": {
+        "method": "multi_start", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "status", "expected": "MaximumIterationsReached", "source": "Numerics/Mathematics/Optimization/Global/MultiStart.cs -- the restart loop runs to MaxIterations (100, set in the ctor) rather than converging early" }
+      ]
+    },
+    {
+      "name": "multi_start_rosenbrock",
+      "construct": {
+        "method": "multi_start", "objective": "Rosenbrock",
+        "initial": [0, 0, 0, 0, 0],
+        "lower": [-2.048, -2.048, -2.048, -2.048, -2.048],
+        "upper": [2.048, 2.048, 2.048, 2.048, 2.048],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Rosenbrock" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Rosenbrock" },
+        { "method": "parameter", "args": [4], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Rosenbrock" }
+      ]
+    },
+    {
+      "name": "multi_start_booth_powell",
+      "construct": {
+        "method": "multi_start", "objective": "Booth",
+        "initial": [0, 0], "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345,
+        "control": { "local_method": "powell" }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Booth (the C# test runs the default BFGS local method; this case drives the same construct through LocalMethod.Powell, which converges on the same Booth optimum -- the dotnet gate reproduces it against the real C# MultiStart)" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Booth" }
+      ]
+    },
+    {
+      "name": "golden_section_fx_minimize",
+      "construct": {
+        "method": "golden_section", "objective": "FX",
+        "lower": [-3], "upper": [3]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Minimize" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Minimize" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "golden_section_fx_maximize",
+      "construct": {
+        "method": "golden_section", "objective": "FX",
+        "lower": [-3], "upper": [3], "maximize": true
+      },
+      "assertions": [
+        { "method": "value", "expected": 9.4815, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Maximize" },
+        { "method": "parameter", "args": [0], "expected": -1.6667, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Maximize" }
       ]
     },
     {
