@@ -12,6 +12,11 @@
 // A clearly-marked SUPPLEMENT at the bottom (not from either C# file) covers the two things the
 // 17 transcriptions leave unguarded: the single-precision arithmetic, and `Dijkstra.PathExists`.
 //
+// Between the two sits a NETWORK block (P3 Task 9), also supplement-class: `Network.cs` has no
+// upstream test class either, and the shipped C# `Network` cannot even be constructed, so its
+// oracles were measured off a minimally patched copy of the C# class compiled against the real
+// Numerics assembly. That block's own comment explains the patch and carries the probe transcript.
+//
 // EXACT float EQUALITY, on purpose. The C# tests assert `Assert.AreEqual(3f, result[2, 2])` with
 // no delta -- MSTest's generic overload compares floats exactly -- and
 // `float.IsPositiveInfinity(...)`. The port asserts the same way (CHECK_EQ on `float`,
@@ -31,10 +36,12 @@
 #include "check.hpp"
 #include "corehydro/numerics/math/optimization/dynamic/binary_heap.hpp"
 #include "corehydro/numerics/math/optimization/dynamic/dijkstra.hpp"
+#include "corehydro/numerics/math/optimization/dynamic/network.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 
 using corehydro::numerics::math::optimization::BinaryHeap;
 using corehydro::numerics::math::optimization::Edge;
+using corehydro::numerics::math::optimization::Network;
 using corehydro::numerics::sampling::MersenneTwister;
 namespace dijkstra = corehydro::numerics::math::optimization::dijkstra;
 
@@ -412,6 +419,182 @@ void triangle_path() {
     CHECK_EQ(2.f, result[2][dijkstra::NEXT_NODE]);
 }
 
+// ========================= Network (NO upstream test class) =========================
+// `Network.cs` has no test class anywhere in Test_Numerics -- DijkstraTesting.cs's class is
+// `ShortestPathTesting` and all eight of its methods call `Dijkstra.Solve` directly. So
+// everything below is SUPPLEMENT-CLASS coverage: no C# test literal exists for any of it, and
+// every expected value was READ OFF the real C# library rather than derived (see below).
+//
+// Getting an oracle at all took a detour, because the shipped C# `Network` CANNOT BE
+// CONSTRUCTED -- its constructor sizes both edge-list arrays to `max` (the largest node index)
+// rather than `max + 1`, so the very edge that attains that index runs off the end. MEASURED
+// against upstream/Numerics @ 2a0357a:
+//
+//   $ cd /tmp/getpath_probe && dotnet run -c Release
+//   === ctor(one edge 0->0)
+//     THREW System.IndexOutOfRangeException: Index was outside the bounds of the array.
+//     STACK at Numerics.Mathematics.Optimization.Network..ctor(Edge[] edges, Int32[]
+//            destinationIndices) in .../Dynamic/Network.cs:line 41
+//
+// The port therefore carries ONE documented, measured divergence -- the `max + 1` sizing and the
+// `_nodeCount` the commented-out ctor block shows was intended -- and the oracles below come from
+// a copy of Network.cs patched with exactly that one change, compiled against the real Numerics
+// assembly (/tmp/getpath_probe/PatchedNetwork.cs). See network.hpp's transcription notes and
+// docs/upstream-csharp-issues.md for the full write-up. Nothing else in the class is changed, so
+// every number below is the real C# algorithm's output.
+
+// DijkstraTesting.SimpleNetworkRouting's 10-node bidirectional grid, the graph all the Network
+// oracles below were measured on.
+//   0 - 1 - 2 - 3 - 4
+//   |   | \ |   |   |
+//   5 - 6 - 7 - 8 - 9
+std::vector<Edge> routing_grid() {
+    return {Edge(0, 5, 1, 0),  Edge(0, 1, 30, 1), Edge(1, 0, 30, 1), Edge(1, 2, 1, 2),
+            Edge(1, 6, 15, 3), Edge(1, 7, 2, 4),  Edge(2, 1, 1, 2),  Edge(2, 3, 5, 5),
+            Edge(2, 7, 5, 6),  Edge(3, 2, 5, 5),  Edge(3, 8, 2, 7),  Edge(3, 4, 1, 8),
+            Edge(4, 3, 1, 8),  Edge(4, 9, 30, 9), Edge(5, 0, 1, 0),  Edge(5, 6, 3, 10),
+            Edge(6, 5, 3, 10), Edge(6, 1, 15, 3), Edge(6, 7, 1, 11), Edge(7, 6, 1, 11),
+            Edge(7, 1, 2, 4),  Edge(7, 2, 5, 6),  Edge(7, 8, 1, 12), Edge(8, 7, 1, 12),
+            Edge(8, 3, 2, 7),  Edge(8, 9, 2, 13), Edge(9, 8, 2, 13), Edge(9, 4, 30, 9)};
+}
+
+void check_table(const dijkstra::ResultTable& actual, const float (&expected)[10][3]) {
+    for (std::size_t i = 0; i < 10; ++i) {
+        CHECK_EQ(expected[i][0], actual[i][dijkstra::NEXT_NODE]);
+        CHECK_EQ(expected[i][1], actual[i][dijkstra::EDGE_INDEX]);
+        CHECK_EQ(expected[i][2], actual[i][dijkstra::COST]);
+    }
+}
+
+// The ctor's caching, and the one divergence. C# reports `IncomingEdges.Length == 9` only in the
+// counterfactual where the indexing did not throw first; the patched C# reports 10, which is what
+// the port produces.
+void network_constructor_caches_both_directions() {
+    Network network(routing_grid(), std::vector<int>{9});
+
+    CHECK_EQ(std::size_t{10}, network.incoming_edges().size());
+    CHECK_EQ(std::size_t{10}, network.outgoing_edges().size());
+    CHECK_EQ(std::size_t{1}, network.destination_indices().size());
+    CHECK_EQ(9, network.destination_indices()[0]);
+
+    // Node 0 is entered from 1 and 5, and leaves to 5 and 1 (see the ASCII grid above).
+    CHECK_EQ(std::size_t{2}, network.incoming_edges()[0].size());
+    CHECK_EQ(1, network.incoming_edges()[0][0].from_index);
+    CHECK_EQ(5, network.incoming_edges()[0][1].from_index);
+    CHECK_EQ(std::size_t{2}, network.outgoing_edges()[0].size());
+    CHECK_EQ(5, network.outgoing_edges()[0][0].to_index);
+    CHECK_EQ(1, network.outgoing_edges()[0][1].to_index);
+
+    // Every edge lands in exactly one incoming and one outgoing bucket.
+    std::size_t incoming_total = 0, outgoing_total = 0;
+    for (const auto& bucket : network.incoming_edges()) incoming_total += bucket.size();
+    for (const auto& bucket : network.outgoing_edges()) outgoing_total += bucket.size();
+    CHECK_EQ(std::size_t{28}, incoming_total);
+    CHECK_EQ(std::size_t{28}, outgoing_total);
+}
+
+// C# `Network(edges, ...)` on an empty edge array hits LINQ `Max` on an empty sequence:
+//   === ctor(no edges)
+//     THREW System.InvalidOperationException: Sequence contains no elements
+void network_constructor_rejects_an_empty_edge_set() {
+    CHECK_THROWS_MSG(Network(std::vector<Edge>{}, std::vector<int>{0}),
+                     "Sequence contains no elements.");
+}
+
+// Both index overloads are thin forwarders to `Dijkstra.Solve` over the cached incoming edges.
+// The 30 values are the patched C#'s verbatim output; the run also confirmed
+// `Solve(9) == Dijkstra.Solve(grid, 9)` element for element ("identical to free Dijkstra.Solve:
+// True"), which is the whole point of the class.
+void network_solve_single_destination_matches_csharp() {
+    Network network(routing_grid(), std::vector<int>{9});
+    const float expected[10][3] = {{5, 0, 8},  {7, 4, 5},  {1, 2, 6},  {8, 7, 4}, {3, 8, 5},
+                                   {6, 10, 7}, {7, 11, 4}, {8, 12, 3}, {9, 13, 2}, {9, -1, 0}};
+    check_table(network.solve(9), expected);
+
+    // ... and it is the same table the free function produces.
+    auto free_table = dijkstra::solve(routing_grid(), 9);
+    check_table(free_table, expected);
+}
+
+void network_solve_multiple_destinations_matches_csharp() {
+    Network network(routing_grid(), std::vector<int>{0, 9});
+    const float expected[10][3] = {{0, -1, 0}, {7, 4, 5},  {1, 2, 6},  {8, 7, 4}, {3, 8, 5},
+                                   {0, 0, 1},  {5, 10, 4}, {8, 12, 3}, {9, 13, 2}, {9, -1, 0}};
+    check_table(network.solve(std::vector<int>{0, 9}), expected);
+}
+
+// UPSTREAM DEFECT, reproduced on purpose (network.hpp note 5): `Solve(float[] edgeWeights)`
+// builds a re-weighted edge array and then hands `Dijkstra.Solve` the STALE `_incomingEdges`
+// cache, whose length already matches nNodes -- so the solver never looks at the re-weighted
+// array and the custom weights are silently ignored. MEASURED in the patched C#: feeding
+// all-ones weights to this 30-and-15-weighted grid returns the ORIGINAL table, not the
+// unit-weight one.
+void network_solve_with_weights_ignores_its_own_argument() {
+    auto grid = routing_grid();
+    Network network(grid, std::vector<int>{9});
+
+    std::vector<float> ones(grid.size(), 1.0f);
+    const float unchanged[10][3] = {{5, 0, 8},  {7, 4, 5},  {1, 2, 6},  {8, 7, 4}, {3, 8, 5},
+                                    {6, 10, 7}, {7, 11, 4}, {8, 12, 3}, {9, 13, 2}, {9, -1, 0}};
+    check_table(network.solve(ones), unchanged);
+
+    // What an honest custom-weight solve would have returned, for contrast (also measured in C#,
+    // by calling the free `Dijkstra.Solve` on a genuinely re-weighted edge array).
+    std::vector<Edge> unit_edges;
+    for (const auto& edge : grid) {
+        unit_edges.push_back(Edge(edge.from_index, edge.to_index, 1.0f, edge.index));
+    }
+    const float honest[10][3] = {{1, 1, 4},  {7, 4, 3},  {3, 5, 3},  {4, 8, 2}, {9, 9, 1},
+                                 {6, 10, 4}, {7, 11, 3}, {8, 12, 2}, {9, 13, 1}, {9, -1, 0}};
+    check_table(dijkstra::solve(unit_edges, std::vector<int>{9}), honest);
+}
+
+// UPSTREAM DEFECT (network.hpp note 6). `Array.BinarySearch(int[] edgesToRemove, Edge edge)`
+// binds the `(Array, object)` overload, which boxes the Edge and asks an Int32 to compare itself
+// against it. MEASURED, both in isolation and through the patched `GetPath`:
+//   === Array.BinarySearch(int[]{0,1,2}, (object)Edge)
+//     THREW System.InvalidOperationException: Failed to compare two elements in the array.
+//     INNER System.ArgumentException: Object must be of type Int32.
+// so ANY call carrying a non-empty removal list dies on the first edge it examines.
+void get_path_throws_on_a_non_empty_removal_list() {
+    Network network(routing_grid(), std::vector<int>{9});
+    CHECK_THROWS_MSG(network.get_path(std::vector<int>{0}, 0),
+                     "Failed to compare two elements in the array.");
+    CHECK_THROWS_MSG(network.get_path(std::vector<int>{0}, 0, network.solve(9)),
+                     "Failed to compare two elements in the array.");
+}
+
+// The complement: a ZERO-LENGTH binary search never invokes the comparer, so an empty removal
+// list is the one input that gets past the throw. MEASURED: `Array.BinarySearch(int[0],
+// (object)Edge)` returns -1, and the two patched-C# GetPath overloads then return, respectively,
+// null and an EMPTY list -- never a path. Taken together with the case above, that is the
+// complete observable behavior of both overloads: throw, null, or empty.
+void get_path_with_an_empty_removal_list_never_returns_a_path() {
+    Network network(routing_grid(), std::vector<int>{9});
+
+    // === GetPath(empty, 0)  ->  returned null
+    CHECK_TRUE(!network.get_path(std::vector<int>{}, 0).has_value());
+    // === GetPath(empty, 9)  ->  returned null
+    CHECK_TRUE(!network.get_path(std::vector<int>{}, 9).has_value());
+
+    // === GetPath(empty, 0, table)  ->  returned []
+    auto with_table = network.get_path(std::vector<int>{}, 0, dijkstra::solve(routing_grid(), 9));
+    CHECK_TRUE(with_table.has_value());
+    CHECK_EQ(std::size_t{0}, with_table->size());
+}
+
+// A start node with no incoming edges cannot load the heap at all, so the removal list is never
+// consulted and both overloads short-circuit before the defect above.
+//   === GetPath(new[]{0}, isolated node) on a padded graph  ->  returned null
+void get_path_returns_null_when_the_start_node_has_no_incoming_edges() {
+    auto edges = routing_grid();
+    edges.push_back(Edge(10, 0, 1, 14));  // node 10 emits an edge and receives none
+    Network network(edges, std::vector<int>{9});
+
+    CHECK_TRUE(!network.get_path(std::vector<int>{0}, 10).has_value());
+    CHECK_TRUE(!network.get_path(std::vector<int>{}, 10).has_value());
+}
+
 // ============================== SUPPLEMENT ==============================
 // NOT from either C# test file. Two things the 17 transcriptions above leave completely
 // unguarded, both measured against the REAL Numerics library at 2a0357a rather than derived:
@@ -504,6 +687,15 @@ int main() {
     disconnected_component();
     disconnected_component2();
     triangle_path();
+    // Network (P3 Task 9) -- no upstream test class; oracles measured off the real C# library
+    network_constructor_caches_both_directions();
+    network_constructor_rejects_an_empty_edge_set();
+    network_solve_single_destination_matches_csharp();
+    network_solve_multiple_destinations_matches_csharp();
+    network_solve_with_weights_ignores_its_own_argument();
+    get_path_throws_on_a_non_empty_removal_list();
+    get_path_with_an_empty_removal_list_never_returns_a_path();
+    get_path_returns_null_when_the_start_node_has_no_incoming_edges();
     // Supplement (P3 Task 8): single precision, and the untested PathExists
     fractional_weights_reproduce_csharp_single_precision();
     path_exists_reads_the_cost_column();

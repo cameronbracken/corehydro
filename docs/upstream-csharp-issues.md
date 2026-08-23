@@ -2135,6 +2135,124 @@ J-statistic) are unchanged and still correct as written.
   contraction in the shipped packages, which neither an R `Makevars` nor a portable pragma can
   promise across the three CI compilers, so it is deliberately not attempted.
 
+## BUG — `Network` cannot be constructed at all: the constructor sizes both edge caches one element short, and never sets `_nodeCount`
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Network.cs` @ 2a0357a, the constructor
+  (lines 41-69), against `core/include/corehydro/numerics/math/optimization/dynamic/network.hpp`.
+  Surfaced porting the dynamic-programming trio (BinaryHeap / Dijkstra / Network) in the optimizer
+  phase.
+- **What:** the constructor computes `max = Math.Max(edges.Max(x => x.FromIndex), edges.Max(x =>
+  x.ToIndex))` and then allocates `_incomingEdges = new List<Edge>[max]` and `_outgoingEdges = new
+  List<Edge>[max]`. `max` is by construction an index that some edge actually uses, so the build
+  loop immediately below indexes at `max` and runs off the end of one array or the other. There is
+  no graph that escapes it, including an empty one (LINQ `Max` throws on an empty sequence
+  instead). Separately, `_nodeCount` is assigned `0` on the constructor's fourth line and never
+  raised — the two lines that would have raised it, and the `//_nodeCount += 1;` that would have
+  turned it into a count, are inside the commented-out `RoadSegment` block just above — so every
+  `Solve` overload forwards a node count of `0` to `Dijkstra.Solve`, which is not the `-1` sentinel
+  and would rebuild a zero-length cache and throw in its turn.
+- **Evidence (measured against the real library, not reasoned):** a throwaway console app
+  referencing `upstream/Numerics/Numerics/Numerics.csproj` at 2a0357a (`/tmp/getpath_probe`,
+  `dotnet run -c Release`):
+
+  ```
+  === ctor(one edge 0->0)
+    THREW System.IndexOutOfRangeException: Index was outside the bounds of the array.
+    STACK at Numerics.Mathematics.Optimization.Network..ctor(Edge[] edges, Int32[]
+           destinationIndices) in .../Mathematics/Optimization/Dynamic/Network.cs:line 41
+  === ctor(one edge 0->1)
+    THREW System.IndexOutOfRangeException: Index was outside the bounds of the array.
+  === ctor(no edges)
+    THREW System.InvalidOperationException: Sequence contains no elements
+  === Dijkstra.Solve(edges, 1, nodeCount: 0)
+    THREW System.IndexOutOfRangeException ... in .../Dynamic/Dijkstra.cs:line 123
+  ```
+
+  Padding the graph with an isolated highest node does not help, because the padding node becomes
+  the new `max`. Consistent with the class being unreachable, `Test_Numerics` has no `Network` test
+  class at all: `DijkstraTesting.cs` declares `ShortestPathTesting` and all eight of its methods
+  call `Dijkstra.Solve` directly.
+- **Port handling (INTENTIONAL C++ DIVERGENCE, the only one in this file):** the port allocates
+  `max + 1` and sets `node_count_ = max + 1`. A class whose every construction throws has no
+  behavior to be faithful to, and the commented-out block upstream states the intended sizing
+  outright (`if (_edges[i].ToIndex > _nodeCount) { _nodeCount = _edges[i].ToIndex; }` … `//// Add
+  one to the count for the index offset. //_nodeCount += 1;`). Nothing else in the class is
+  changed. The divergence is independently checkable rather than assumed: with it,
+  `network.solve(d)` returns exactly what `dijkstra::solve(edges, d)` returns, and that free
+  function DOES run in C#. The ctest oracles in `core/tests/test_network_optimization.cpp` were
+  measured off a copy of `Network.cs` carrying this one patch and nothing else, compiled against
+  the real Numerics assembly (`/tmp/getpath_probe/PatchedNetwork.cs`); the patched
+  `Solve(9)` on the `SimpleNetworkRouting` grid printed `identical to free Dijkstra.Solve: True`
+  element for element. The divergence is recorded in `network.hpp`'s transcription note 1.
+- **Suggested C# fix:** `_nodeCount = max + 1;` and `new List<Edge>[_nodeCount]` for both caches.
+  No oracle value moves, because no C# caller can be relying on the current behavior.
+
+## BUG — `Network.Solve(float[] edgeWeights)` silently ignores the custom weights it was given
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Network.cs` @ 2a0357a,
+  `Solve(float[] edgeWeights)`.
+- **What:** the overload builds a re-weighted copy of the edge array and then calls
+  `Dijkstra.Solve(edges, _destinationIndices, _nodeCount, _incomingEdges)` — passing the STALE
+  cached incoming-edge lists, which still hold the ORIGINAL weights. `Dijkstra.Solve` uses a
+  supplied cache whenever `edgesFromNodes.Length == nNodes`, and it reads the weights only out of
+  that cache, so the re-weighted array is never looked at. The method is a no-op with respect to
+  its own argument.
+- **Evidence (measured on the patched Network above, so the first defect does not mask this one):**
+  feeding all-ones weights to the `SimpleNetworkRouting` grid (whose real weights run 1 to 30)
+  returns the ORIGINAL cost column `8, 5, 6, 4, 5, 7, 4, 3, 2, 0`, identical to `Solve(new[]{9})`,
+  where an honest unit-weight solve of the same graph gives `4, 3, 3, 2, 1, 4, 3, 2, 1, 0`.
+- **Port handling:** mirrored faithfully. The port's `dijkstra::solve` applies the same
+  cache-length test, so the behavior falls out of a straight transcription; the header (note 5)
+  says so in capitals and `test_network_optimization.cpp` pins both tables side by side so a
+  future "cleanup" fails loudly. The overload is NOT exposed as a working custom-weight solve in
+  the R/Python toolbox surface.
+- **Suggested C# fix:** pass `null` for the cache (letting the solver rebuild it from the
+  re-weighted edges), or rebuild the cache from `edges` inside the overload.
+
+## BUG — `Network.GetPath` cannot return a path: it binary-searches an `int[]` for an `Edge`
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Network.cs` @ 2a0357a, both `GetPath`
+  overloads. This is the defect the optimizer phase's plan flagged for investigation; the
+  investigation confirmed it and found it is not the only problem with the method.
+- **What:** both overloads filter candidate edges with `Array.BinarySearch(edgesToRemove, edge)`,
+  where `edgesToRemove` is `int[]` and `edge` is an `Edge` struct. There is no
+  `BinarySearch<T>(T[], T)` match, so it binds `Array.BinarySearch(Array array, object value)`,
+  which boxes the `Edge` and asks an `Int32` to compare itself against it.
+- **Evidence (measured):**
+
+  ```
+  === Array.BinarySearch(int[]{0,1,2}, (object)Edge)
+    THREW System.InvalidOperationException: Failed to compare two elements in the array.
+    INNER System.ArgumentException: Object must be of type Int32.
+  === GetPath(new[]{0}, 0)         THREW System.InvalidOperationException: Failed to compare ...
+  === GetPath(new[]{0}, 0, table)  THREW System.InvalidOperationException: Failed to compare ...
+  === GetPath(empty, 0)            returned null
+  === GetPath(empty, 9)            returned null
+  === GetPath(empty, 0, table)     returned []
+  === Array.BinarySearch(int[0], (object)Edge)  returned -1
+  ```
+
+  So any call carrying a non-empty removal list — which is every call the method exists to serve —
+  dies on the first edge it examines. A zero-length binary search never invokes the comparer, so an
+  empty removal list is the one input that gets through, and then the outer `do { … } while
+  (heap.Count == 0)` (which loops only while the heap is EMPTY, i.e. runs one pass and exits, or
+  re-enters and throws `"Heap is empty."`) leaves `foundPath` false. The complete set of observable
+  outcomes for both overloads is therefore: **throw, null, or an empty list. Never a path.** Two
+  further defects sit behind that one and are unreachable because of it: the `while (heap.Count ==
+  0)` loop condition itself, and the second overload's path-reconstruction walk, which steps
+  `tempNode = (int)existingResultsTable[tempNode, 2]` — the COST column — where its sibling
+  overload correctly steps `[…, 0]`, the NEXT_NODE column.
+- **Port handling:** transcribed structurally so upstream diffs still map, with the offending
+  expression ported as `detail::binary_search_edge`, which reproduces the measured behavior (`-1`
+  for an empty list, the .NET exception message otherwise) rather than pretending the line does
+  something it does not. All three observable outcomes are pinned in
+  `core/tests/test_network_optimization.cpp` against the patched-C# measurements. The method is
+  **SEVERED from the R/Python surface** (see `upstream/CLAUDE.md`) — the toolbox `network` group
+  exposes the `Solve` overloads only.
+- **Suggested C# fix:** compare the edge INDEX, `Array.BinarySearch(edgesToRemove, edge.Index)`,
+  which is what the sibling call sites in the same method already do. Then fix the two follow-on
+  defects above, and give the method a test — it has none.
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a

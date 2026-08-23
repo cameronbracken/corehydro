@@ -202,3 +202,17 @@ changed-upstream file whose pin was deliberately not moved.
   `Numerics.Data` "Paired Data" subsystem), which this repo has not ported. Deferred to Phase P4
   alongside that subsystem rather than ported against a stand-in container; see
   `core/include/corehydro/numerics/functions/i_univariate_function.hpp`'s file header.
+- **`Numerics/Mathematics/Optimization/Dynamic/Network.cs`'s two `GetPath` overloads** — the
+  alternate-route search. Ported structurally into
+  `core/include/corehydro/numerics/math/optimization/dynamic/network.hpp` so upstream diffs keep
+  mapping, but severed from the R/Python surface: MEASURED against the real library, the method
+  cannot return a path. Its edge filter is `Array.BinarySearch(int[] edgesToRemove, Edge edge)`,
+  which binds the `(Array, object)` overload and throws `InvalidOperationException: Failed to
+  compare two elements in the array.` for any non-empty removal list, and the one input that gets
+  past it (an empty list, where a zero-length search never invokes the comparer) then falls out of
+  a `do { ... } while (heap.Count == 0)` loop with `foundPath` still false. Throw, null, or an
+  empty list -- never a path. No upstream test reaches it. The toolbox `network` group exposes the
+  `Solve` overloads only. Full write-up, with the probe transcript, in
+  `docs/upstream-csharp-issues.md`; the same investigation recorded two further defects in that
+  file, one of which (`Network`'s constructor sizing both edge caches one element short, so every
+  construction throws) is the port's one intentional divergence in that header.
