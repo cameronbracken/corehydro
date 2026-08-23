@@ -62,7 +62,7 @@ static analyses::UncertaintyMethod parse_uncertainty_method(const std::string& s
 }
 
 // The C# type name for a fitted candidate (mirrors the factory's forward name->type table for the
-// 14 FittingAnalysis candidates). No reverse map exists in the core; this small local helper keeps
+// 15 FittingAnalysis candidates). No reverse map exists in the core; this small local helper keeps
 // the binding self-contained and matches corehydror's analysis.cpp type_name.
 static std::string type_name(UDT type) {
     switch (type) {
@@ -70,6 +70,7 @@ static std::string type_name(UDT type) {
         case UDT::GammaDistribution: return "GammaDistribution";
         case UDT::GeneralizedExtremeValue: return "GeneralizedExtremeValue";
         case UDT::GeneralizedLogistic: return "GeneralizedLogistic";
+        case UDT::GeneralizedNormal: return "GeneralizedNormal";
         case UDT::GeneralizedPareto: return "GeneralizedPareto";
         case UDT::Gumbel: return "Gumbel";
         case UDT::KappaFour: return "KappaFour";
@@ -285,7 +286,7 @@ void register_analysis(py::module_& m) {
         py::arg("output_length"), py::arg("credible_level"), py::arg("seed"),
         py::arg("exceedance_probabilities"), py::arg("thinning_interval") = -1);
 
-    // FittingAnalysis (A6): fit the 14 ported candidates by MLE, return the per-candidate GoF table.
+    // FittingAnalysis (A6): fit the 15 candidates by MLE, return the per-candidate GoF table.
     m.def(
         "analysis_fit_distributions",
         [](const std::vector<double>& dataset) {

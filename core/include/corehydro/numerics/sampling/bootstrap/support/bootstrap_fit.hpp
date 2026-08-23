@@ -2,11 +2,9 @@
 //
 // Stores a fitted parameter vector and the covariance matrix associated with that fit. Used
 // by the covariance-aware pivotal bootstrap workflow (`Bootstrap<TData>`'s second
-// constructor, `RunPivotalBootstrap`, `TransformPivotalBootstrap`) -- see bootstrap.hpp's
-// file header: the pivotal run methods themselves are NOT ported in this task (P3.10 scopes
-// the regular, non-pivotal paths only; pivotal support is ported in P3.11). This support type
-// is small and self-contained, so it is ported here in full ahead of that follow-up task --
-// `bootstrap.hpp` does not reference it yet.
+// constructor, `RunPivotalBootstrap`, `TransformPivotalBootstrap`) -- the pivotal workflow is
+// now ported in full; see `bootstrap.hpp`'s file header for the documentation of record. This
+// type is consumed by it.
 //
 // Namespace note: see bootstrap_results.hpp's header -- C# `BootstrapFit` lives in the flat
 // `Numerics.Sampling` namespace despite sitting in a `Sampling/Bootstrap/Support/` folder;

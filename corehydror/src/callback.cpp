@@ -252,6 +252,18 @@ std::function<std::vector<double>(const std::vector<double>&, int)> as_jackknife
     };
 }
 
+// f(data) -> list(parameters = <numeric vector>, covariance = <numeric matrix>). Upstream's
+// `Func<TData, BootstrapFit> FitWithCovarianceFunction`, the delegate the PIVOTAL run type fits
+// through. Declared here beside the other bootstrap delegates and defined below row_major_matrix(),
+// which it shares with the gmm moment function -- an R matrix is column-major and every matrix
+// crossing this boundary is flattened row-major by that one helper.
+//
+// NA/NaN PASSES THROUGH BOTH HALVES, unlike the gmm weighting matrix, and the file's own rule says
+// why: `IsValidFit` tests the parameters AND the covariance for finiteness itself and reads a
+// non-finite one as a failed replicate to retry. Refusing it here would steal that behaviour.
+std::function<sup::FitWithCovarianceReturn(const std::vector<double>&)> as_fit_with_covariance_fn(
+    function f);
+
 // f(x) -> numbers, the shape both the fit (data -> parameters) and the statistic (parameters ->
 // statistics) take. NA passes through: see the note above.
 std::function<std::vector<double>(const std::vector<double>&)> as_numbers_fn(function f) {
@@ -304,7 +316,14 @@ sexp list_element(sexp lst, const char* want) {
 // is symmetric and would survive either way. A length-1 numeric with no `dim` is accepted as the
 // 1 x 1 matrix a one-moment-condition model has -- corehydropy accepts a bare number for the same
 // case. Anything else is refused naming the element it came from.
-std::pair<std::vector<double>, std::vector<int>> row_major_matrix(sexp value, const std::string& what) {
+//
+// `allow_na` is the one axis callers differ on, and it is drawn by what the value MEANS to the
+// ported class rather than by taste: the gmm weighting matrix and jacobian are tested for
+// finiteness by NOTHING downstream (so an NA reaches the fitted standard errors in silence and is
+// refused here), while the pivotal bootstrap's covariance is tested by `IsValidFit`, which reads a
+// non-finite one as a failed replicate to retry (so refusing it here would steal that behaviour).
+std::pair<std::vector<double>, std::vector<int>> row_major_matrix(sexp value, const std::string& what,
+                                                                  bool allow_na = false) {
     doubles v = as_doubles(value);
     sexp dim = Rf_getAttrib(value, R_DimSymbol);
     int rows, cols;
@@ -323,7 +342,7 @@ std::pair<std::vector<double>, std::vector<int>> row_major_matrix(sexp value, co
     for (int i = 0; i < rows; ++i)
         for (int j = 0; j < cols; ++j) {
             double x = v[static_cast<R_xlen_t>(j) * rows + i];  // column-major in, row-major out
-            if (ISNAN(x))
+            if (ISNAN(x) && !allow_na)
                 throw std::runtime_error(what +
                                          " returned NA or NaN rather than a number; nothing in the "
                                          "estimator checks it, so it would reach the fitted "
@@ -331,6 +350,40 @@ std::pair<std::vector<double>, std::vector<int>> row_major_matrix(sexp value, co
             flat[static_cast<std::size_t>(i) * cols + j] = x;
         }
     return {flat, std::vector<int>{rows, cols}};
+}
+
+// The definition of the bootstrap delegate declared above: `list_element` and `row_major_matrix`
+// both live here, between the two groups, so this one sits with them rather than with the other
+// bootstrap wrappers. The two element names are checked BY NAME for the same reason the moment
+// function's are: returning the wrong thing is the mistake this shape invites, and a bare vector
+// would otherwise be read as parameters with no covariance at all.
+const char* kFitCovarianceShape =
+    "the fit_with_covariance function must return a list with elements 'parameters' (the fitted "
+    "values) and 'covariance' (their covariance matrix)";
+
+std::function<sup::FitWithCovarianceReturn(const std::vector<double>&)> as_fit_with_covariance_fn(
+    function f) {
+    return [f](const std::vector<double>& data) mutable {
+        writable::doubles d(static_cast<R_xlen_t>(data.size()));
+        for (std::size_t i = 0; i < data.size(); ++i) d[static_cast<R_xlen_t>(i)] = data[i];
+
+        sexp out = f(d);
+        if (TYPEOF(out) != VECSXP) throw std::runtime_error(kFitCovarianceShape);
+        sexp parameters = list_element(out, "parameters");
+        sexp covariance = list_element(out, "covariance");
+        if (Rf_isNull(parameters) || Rf_isNull(covariance))
+            throw std::runtime_error(kFitCovarianceShape);
+
+        sup::FitWithCovarianceReturn result;
+        doubles p = as_doubles(parameters);
+        result.parameters.assign(p.begin(), p.end());  // NA passes: see the note above
+        auto cov = row_major_matrix(
+            covariance, "the fit_with_covariance function's 'covariance'", /*allow_na=*/true);
+        result.covariance = cov.first;
+        result.rows = cov.second[0];
+        result.cols = cov.second[1];
+        return result;
+    };
 }
 
 // f(parameters) -> list(g = <numeric vector>, s = <numeric matrix>). Upstream's
@@ -420,23 +473,28 @@ list ch_callback_mcmc_(std::string options_json, function f, sexp proposal, sexp
     return pack(sup::run_callback("mcmc", "sample", options_json, cbs));
 }
 
-// Runs the callback runner's "bootstrap" group against the four delegates upstream's
-// `Bootstrap<TData>` takes as public properties: `resample(data, parameters, rng)`, `fit(data)`,
-// `statistic(parameters)` and, for the BCa method alone, `jackknife(data, index)`. `jackknife` may
-// be NULL; every other argument is required. The flat result is the layout documented in
+// Runs the callback runner's "bootstrap" group against the delegates upstream's `Bootstrap<TData>`
+// takes as public properties: `resample(data, parameters, rng)`, `fit(data)`,
+// `statistic(parameters)`, `jackknife(data, index)` for the BCa method alone, and
+// `fit_with_covariance(data)` for the pivotal run type alone. `resample` and `statistic` are always
+// required; which of `fit` and `fit_with_covariance` is required is decided by the options' own
+// `run_type`, in the core, once for all four runners -- so both arrive as sexp and either may be
+// NULL here. The flat result is the layout documented in
 // numerics/support/callback/bootstrap.hpp; R/callback.R's bootstrap_custom() reads it back by name.
 //
 // The resample delegate is handed a handle on the replicate's own generator, so a seeded run stays
 // reproducible and agrees with the identical run in Python. INTERRUPTS behave exactly as this
 // file's header describes for the samplers, and for the same reason.
 [[cpp11::register]]
-list ch_callback_bootstrap_(std::string options_json, function resample, function fit,
-                            function statistic, sexp jackknife) {
+list ch_callback_bootstrap_(std::string options_json, function resample, sexp fit,
+                            function statistic, sexp jackknife, sexp fit_with_covariance) {
     sup::CallbackSet cbs;
     cbs.data_rng = as_resample_fn(resample);
-    cbs.data_vector = as_numbers_fn(fit);
+    if (!Rf_isNull(fit)) cbs.data_vector = as_numbers_fn(function(fit));
     cbs.vector_vector = as_numbers_fn(statistic);
     if (!Rf_isNull(jackknife)) cbs.data_index = as_jackknife_fn(function(jackknife));
+    if (!Rf_isNull(fit_with_covariance))
+        cbs.data_covariance = as_fit_with_covariance_fn(function(fit_with_covariance));
     return pack(sup::run_callback("bootstrap", "run", options_json, cbs));
 }
 

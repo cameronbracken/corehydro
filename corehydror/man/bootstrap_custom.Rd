@@ -7,7 +7,7 @@
 bootstrap_custom(
   data,
   resample,
-  fit,
+  fit = NULL,
   statistic,
   jackknife = NULL,
   replicates = 1000,
@@ -16,13 +16,25 @@ bootstrap_custom(
   seed = 12345,
   parameters = NULL,
   inner_replicates = NULL,
-  max_retries = NULL
+  max_retries = NULL,
+  run_type = "regular",
+  fit_with_covariance = NULL,
+  original_covariance = NULL,
+  pivotal_links = NULL,
+  pivotal_invalid_draw_policy = "drop",
+  regularize_pivotal_covariances = TRUE,
+  pivotal_z_limit = NULL,
+  add_pivotal_jitter = FALSE,
+  pivotal_jitter_scale = 0.01
 )
 }
 \arguments{
 \item{data}{the original sample: a non-empty numeric vector.}
 
-\item{resample, fit, statistic}{the three required functions, with the signatures above.}
+\item{resample, statistic}{the two always-required functions, with the signatures above.}
+
+\item{fit}{the fitting function, required by \code{run_type = "regular"} and unused -- and so
+refused -- by \code{run_type = "pivotal"}, which fits through \code{fit_with_covariance} instead.}
 
 \item{jackknife}{the leave-one-out function, required by \code{ci_method = "BCa"} and unused by every
 other method. \code{NULL} by default.}
@@ -49,13 +61,47 @@ method. \code{NULL} leaves the ported default (300) in force.}
 is counted in \code{failed_replicates}. \code{NULL} leaves the ported default (\code{MaxRetries}, 20) in
 force. Each retry is another crossing into R, so lowering it caps the worst case rather than
 changing the typical one.}
+
+\item{run_type}{\code{"regular"} (the default) or \code{"pivotal"}; see the section above.}
+
+\item{fit_with_covariance}{the covariance-aware fitting function \code{run_type = "pivotal"} fits
+through, with the signature above. Required by that run type and refused by the other.}
+
+\item{original_covariance}{the parent fit's covariance matrix, one row and one column per
+parameter. \code{NULL}, the default, takes it from \code{fit_with_covariance(data)}. Pivotal only.}
+
+\item{pivotal_links}{one entry per parameter, each a link function name (\code{"Identity"}, \code{"Log"},
+\code{"Logit"}, \code{"Probit"}, \code{"ComplementaryLogLog"}, \code{"YeoJohnson"} or \code{"FisherZ"}) or \code{NULL} for
+the identity, given as a list. The standardization happens in link space, so \code{"Log"} on a
+scale parameter keeps every reinflated draw positive. \code{NULL}, the default, is the identity
+throughout. Pivotal only.}
+
+\item{pivotal_invalid_draw_policy}{what to do with a draw the transform could not produce (a
+non-finite standardized vector, or one outside \code{pivotal_z_limit}): \code{"drop"} (the default,
+leaving it out of the ensemble), \code{"use_raw"} (keeping the untransformed fit) or \code{"use_parent"}
+(substituting the original fit). Pivotal only.}
+
+\item{regularize_pivotal_covariances}{whether each link-space covariance is made symmetric
+positive definite before it is factored. \code{TRUE} by default, as upstream. Pivotal only.}
+
+\item{pivotal_z_limit}{an absolute limit on every component of the standardized vector, beyond
+which the draw is invalid and the policy above applies. \code{NULL}, the default, is no limit.
+Pivotal only.}
+
+\item{add_pivotal_jitter, pivotal_jitter_scale}{whether to add Gaussian jitter to the
+standardized vector before the limit is checked, and its base standard deviation (the applied
+scale is this divided by the square root of the parameter count). \code{FALSE} and \code{0.01} by
+default, as upstream. Pivotal only.}
 }
 \value{
 A list with, per statistic, \code{estimate} (the statistic of \code{parameters}, not a bootstrap
 average), \code{lower}, \code{upper}, \code{standard_error}, \code{mean} (the mean over valid replicates, so
 \code{mean - estimate} is the bias estimate) and \code{valid_count}; the same first three for the fitted
 parameters as \code{parameter_estimate}, \code{parameter_lower} and \code{parameter_upper}; and
-\code{replicates}, \code{failed_replicates}, \code{alpha} and \code{ci_method}.
+\code{replicates}, \code{failed_replicates}, \code{alpha}, \code{ci_method} and \code{run_type}. A pivotal run adds
+\code{pivotal_diagnostics} (a list of the six replicate counts) and the raw block: \code{raw_estimate},
+\code{raw_lower}, \code{raw_upper}, \code{raw_standard_error}, \code{raw_mean}, \code{raw_valid_count},
+\code{raw_parameter_estimate}, \code{raw_parameter_lower} and \code{raw_parameter_upper}.
 }
 \description{
 Runs the ported Numerics bootstrap against resampling, fitting and statistic functions you
@@ -86,7 +132,31 @@ it is \code{data[-0]}, which R evaluates to \code{numeric(0)}, the EMPTY vector,
 by name; at every later index it is the right LENGTH but drops the wrong observation (one
 off), which nothing can catch. Only the \code{"BCa"} method uses it; every other method ignores
 it.}
+\item{\code{fit_with_covariance(data)}}{Returns \code{list(parameters = , covariance = )}: the parameter
+vector fitted to \code{data} and its covariance matrix, one row and one column per parameter.
+Only \code{run_type = "pivotal"} uses it, and that run type uses it INSTEAD of \code{fit}.}
 }
+}
+
+\section{The pivotal run type}{
+
+\code{run_type = "pivotal"} is upstream's other bootstrap mode. Rather than treating each resampled
+fit as a draw from the sampling distribution, it standardizes the fit against the original one
+through the resample's OWN covariance and reinflates it through the original's, so a replicate
+fitted on an unusually flat likelihood contributes an appropriately smaller step. It therefore
+needs a covariance with every fit, which is what \code{fit_with_covariance} supplies in place of
+\code{fit}.
+
+The original fit is the parent every draw is compared against. Left alone it is
+\code{fit_with_covariance(data)}; \code{parameters} replaces its parameter vector and \code{original_covariance}
+its covariance, either independently of the other.
+
+The result gains \code{pivotal_diagnostics} -- the six replicate counts the run kept, from
+\code{requested_replicates} down to \code{retained_pivotal_replicates} -- and a second interval block,
+\code{raw_lower}/\code{raw_upper} and companions, which is the plain percentile interval of the RAW
+covariance-aware fits before the transform. Comparing the two is the point of reporting both.
+Only \code{ci_method = "Percentile"} exists after a pivotal run, and asking for another is refused
+before the first replicate rather than after all of them.
 }
 
 \section{How many times your functions are called}{
@@ -96,7 +166,10 @@ to learn how many values it returns and one \code{fit} call when \code{parameter
 failed replicate is retried up to \code{max_retries} times (20 by default), and \code{"BCa"} adds one
 \code{jackknife} + \code{fit} + \code{statistic} per observation. \code{"BootstrapT"} is the expensive one: it
 multiplies the resample and fit counts by \code{inner_replicates}, so the ported defaults (10,000 x
-300) would be three million crossings back into R. Start small.
+300) would be three million crossings back into R. Start small. A pivotal run calls
+\code{fit_with_covariance} in place of \code{fit}, once per replicate plus once up front for the parent
+fit, and \code{statistic} once per retained draw plus once per raw fit -- so about twice as often as
+a regular run of the same length.
 }
 
 \section{Reproducing a run in Python}{
@@ -129,6 +202,31 @@ res <- bootstrap_custom(
   replicates = 500, seed = 12345
 )
 c(res$lower, res$estimate, res$upper)
+
+# The pivotal run type. It fits through `fit_with_covariance` instead of `fit`: a Normal
+# location-scale MLE here, whose covariance is diag(s2 / n, s2 / 2n) in closed form. The
+# "Log" link standardizes the scale parameter in log space, keeping every draw positive.
+fit_with_cov <- function(data) {
+  n <- length(data)
+  mu <- sum(data) / n
+  s2 <- sum((data - mu)^2) / n
+  list(parameters = c(mu, sqrt(s2)),
+       covariance = matrix(c(s2 / n, 0, 0, s2 / (2 * n)), nrow = 2L, ncol = 2L))
+}
+piv <- bootstrap_custom(
+  data = x,
+  resample = function(data, parameters, rng) {
+    data[rng_integers(rng, length(data), 0, length(data)) + 1L]
+  },
+  statistic = function(parameters) parameters,
+  fit_with_covariance = fit_with_cov,
+  run_type = "pivotal",
+  pivotal_links = list(NULL, "Log"),
+  replicates = 200, seed = 12345
+)
+# Two interval blocks: the pivotal ensemble, and the raw fits it was built from.
+rbind(pivotal = c(piv$lower[1], piv$upper[1]), raw = c(piv$raw_lower[1], piv$raw_upper[1]))
+unlist(piv$pivotal_diagnostics)
 }
 }
 \seealso{

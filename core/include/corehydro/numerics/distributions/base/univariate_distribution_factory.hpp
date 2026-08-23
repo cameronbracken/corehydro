@@ -13,11 +13,11 @@
 // UserDefined -- "requires external components") and `ArgumentOutOfRangeException` for
 // anything undefined. This port's switch already had explicit cases for every ported type
 // (never had the C# bug), EXCEPT KernelDensity -- added below, matching the new C# case list.
-// GeneralizedNormal is in the C# switch but is not ported here (no C++ class), so it still
-// falls through `default:` and throws, same as CompetingRisks/Mixture/UserDefined/undefined --
-// this port's `default:` throw doesn't distinguish "legitimately unsupported" from "not yet
-// ported," unlike C#'s two distinct exception types, since the header comment above already
-// treats every unhandled case identically (gaps surface immediately, by design).
+// The only types still reaching `default:` are the three C# calls NotSupportedException on
+// (CompetingRisks/Mixture/UserDefined) plus any undefined enum value; this port's single
+// `default:` throw doesn't distinguish "legitimately unsupported" from "not yet ported,"
+// unlike C#'s two distinct exception types, since the header comment above already treats
+// every unhandled case identically (gaps surface immediately, by design).
 //
 // `try_create_distribution` adapts C#'s new `bool TryCreateDistribution(type, out dist)` to
 // this factory's existing return-a-unique_ptr idiom: nullptr on any failure (unsupported,
@@ -42,6 +42,7 @@
 #include "corehydro/numerics/distributions/generalized_beta.hpp"
 #include "corehydro/numerics/distributions/generalized_extreme_value.hpp"
 #include "corehydro/numerics/distributions/generalized_logistic.hpp"
+#include "corehydro/numerics/distributions/generalized_normal.hpp"
 #include "corehydro/numerics/distributions/generalized_pareto.hpp"
 #include "corehydro/numerics/distributions/geometric.hpp"
 #include "corehydro/numerics/distributions/chi_squared.hpp"
@@ -96,6 +97,8 @@ inline std::unique_ptr<UnivariateDistributionBase> create_distribution(
             return std::make_unique<GeneralizedExtremeValue>();
         case UnivariateDistributionType::GeneralizedLogistic:
             return std::make_unique<GeneralizedLogistic>();
+        case UnivariateDistributionType::GeneralizedNormal:
+            return std::make_unique<GeneralizedNormal>();
         case UnivariateDistributionType::GeneralizedPareto:
             return std::make_unique<GeneralizedPareto>();
         case UnivariateDistributionType::Geometric:
@@ -187,6 +190,8 @@ inline std::unique_ptr<UnivariateDistributionBase> create_distribution(const std
         return create_distribution(UnivariateDistributionType::GeneralizedExtremeValue);
     if (name == "GeneralizedLogistic")
         return create_distribution(UnivariateDistributionType::GeneralizedLogistic);
+    if (name == "GeneralizedNormal")
+        return create_distribution(UnivariateDistributionType::GeneralizedNormal);
     if (name == "GeneralizedPareto")
         return create_distribution(UnivariateDistributionType::GeneralizedPareto);
     if (name == "Geometric") return create_distribution(UnivariateDistributionType::Geometric);
@@ -241,6 +246,7 @@ inline std::vector<std::string> distribution_names() {
         "GeneralizedBeta",
         "GeneralizedExtremeValue",
         "GeneralizedLogistic",
+        "GeneralizedNormal",
         "GeneralizedPareto",
         "Geometric",
         "ChiSquared",

@@ -1,0 +1,155 @@
+{
+  "target": "GeneralizedNormal",
+  "kind": "univariate_distribution",
+  "source": "Numerics/Test_Numerics/Distributions/Univariate/Test_GeneralizedNormal.cs",
+  "reference": "Hosking & Wallis, Regional Frequency Analysis (1997), appendix A.8; C# literals verified against the R lmom package",
+  "comment": "Most values below are literals lifted from the C# test file named in `source`. The C# test's Test_ParametersToString case has no C++ counterpart (ParametersToString / GetParameterPropertyNames / MinimumOfParameters / MaximumOfParameters are WPF-facing and unported across this whole distribution layer), and its Test_Moments and Test_GNO_PartialDerivatives cases assert only self-consistency (Mean/StandardDeviation/Skewness/Kurtosis against CentralMoments(1E-8); QuantileGradient against the same NumericalDerivative.Gradient call it makes internally) rather than any literal, so neither is carried as a literal here. The exceptions are curated cases marked by their own case-level `source` field (\"curated via oracle_emitter --dump\"): those values are pinned from the real C# library through the dotnet oracle gate. ParameterCovariance and QuantileVariance are deliberately absent: upstream throws NotImplementedException for both (GeneralizedNormal.cs 509 and 515) and the port mirrors the throw, so there is no value to reproduce.",
+  "datasets": {
+    "air_quality_wind": [7.4, 8, 12.6, 11.5, 14.3, 14.9, 8.6, 13.8, 20.1, 8.6, 6.9, 9.7, 9.2, 10.9, 13.2, 11.5, 12, 18.4, 11.5, 9.7, 9.7, 16.6, 9.7, 12, 16.6, 14.9, 8, 12, 14.9, 5.7, 7.4, 8.6, 9.7, 16.1, 9.2, 8.6, 14.3, 9.7, 6.9, 13.8, 11.5, 10.9, 9.2, 8, 13.8, 11.5, 14.9, 20.7, 9.2, 11.5, 10.3, 6.3, 1.7, 4.6, 6.3, 8, 8, 10.3, 11.5, 14.9, 8, 4.1, 9.2, 9.2, 10.9, 4.6, 10.9, 5.1, 6.3, 5.7, 7.4, 8.6, 14.3, 14.9, 14.9, 14.3, 6.9, 10.3, 6.3, 5.1, 11.5, 6.9, 9.7, 11.5, 8.6, 8, 8.6, 12, 7.4, 7.4, 7.4, 9.2, 6.9, 13.8, 7.4, 6.9, 7.4, 4.6, 4, 10.3, 8, 8.6, 11.5, 11.5, 11.5, 9.7, 11.5, 10.3, 6.3, 7.4, 10.9, 10.3, 15.5, 14.3, 12.6, 9.7, 3.4, 8, 5.7, 9.7, 2.3, 6.3, 6.3, 6.9, 5.1, 2.8, 4.6, 7.4, 15.5, 10.9, 10.3, 10.9, 9.7, 14.9, 15.5, 6.3, 10.9, 11.5, 6.9, 13.8, 10.3, 10.3, 8, 12.6, 9.2, 10.3, 10.3, 16.6, 6.9, 13.2, 14.3, 8, 11.5]
+  },
+  "cases": [
+    {
+      "name": "lmom_fit_air_quality_wind",
+      "comment": "Test_GNO_LMOM: method-of-L-moments fit to R's air-quality wind series, then the forward L-moment map off the fitted parameters. Tolerances are the C# test's own 0.0001 absolute.",
+      "construct": { "fit": { "dataset": "air_quality_wind", "method": "lmom" } },
+      "assertions": [
+        { "method": "param",         "args": [0], "expected": 9.7285364,  "mode": "abs", "tol": 0.0001 },
+        { "method": "param",         "args": [1], "expected": 3.4885029,  "mode": "abs", "tol": 0.0001 },
+        { "method": "param",         "args": [2], "expected": -0.1307169, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [0], "expected": 9.95751634, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [1], "expected": 1.98224114, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [2], "expected": 0.06380804, "mode": "abs", "tol": 0.0001 },
+        { "method": "linear_moment", "args": [3], "expected": 0.1258014,  "mode": "abs", "tol": 0.0001 }
+      ]
+    },
+    {
+      "name": "dist_lmom_fit_air_quality_wind",
+      "comment": "Test_GNO_Dist: PDF/CDF at 14.9 off the same L-moment fit, plus the CDF->InverseCDF round trip. C# asserts InverseCDF(gno.CDF(14.9)) == 14.9; here the quantile is evaluated at the CDF LITERAL (0.912294, good to 5e-7), so the same 0.0001 absolute tolerance the C# test uses covers the literal's own rounding (dx ~ dp/pdf ~ 1.3e-5).",
+      "construct": { "fit": { "dataset": "air_quality_wind", "method": "lmom" } },
+      "assertions": [
+        { "method": "pdf",      "args": [14.9],     "expected": 0.03825155, "mode": "abs", "tol": 0.0001 },
+        { "method": "cdf",      "args": [14.9],     "expected": 0.912294,   "mode": "abs", "tol": 0.0001 },
+        { "method": "quantile", "args": [0.912294], "expected": 14.9,       "mode": "abs", "tol": 0.0001 }
+      ]
+    },
+    {
+      "name": "cdf_xi97_alpha35_kappa_neg01",
+      "comment": "Test_GNO_CDF: GeneralizedNormal(9.7, 3.5, -0.1) verified against the R lmom package, at the C# test's own 1E-7 tolerance.",
+      "construct": { "params": [9.7, 3.5, -0.1] },
+      "assertions": [
+        { "method": "cdf", "args": [5.0],  "expected": 0.07465069, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [10.0], "expected": 0.53400804, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [12.0], "expected": 0.73775928, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [15.0], "expected": 0.92073519, "mode": "abs", "tol": 1e-07 },
+        { "method": "cdf", "args": [18.0], "expected": 0.98333335, "mode": "abs", "tol": 1e-07 }
+      ]
+    },
+    {
+      "name": "inverse_cdf_round_trip_xi97_alpha35_kappa_neg01",
+      "comment": "Second half of Test_GNO_CDF: InverseCDF(CDF(x)) == x. C# feeds back the freshly computed CDF; here the quantile is evaluated at the CDF literals above, which the C# test itself pins only to its own 1E-7 absolute tolerance. An error dp in the probability maps to dx = dp / pdf(x), and the loosest of the five points is x = 18, where pdf(18) = 0.009567: a 1E-7 pin therefore admits dx of order 1e-5, marginally above the asserted bound; the literals as written land 20x inside it. (The literals as written carry only their own 8-decimal 5e-9 rounding, so the round trip actually lands within ~5e-7; 1e-05 is the bound the pin justifies, not the observed error. The C# 1E-7 applies to the un-rounded round trip, not to this one.)",
+      "construct": { "params": [9.7, 3.5, -0.1] },
+      "assertions": [
+        { "method": "quantile", "args": [0.07465069], "expected": 5.0,  "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.53400804], "expected": 10.0, "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.73775928], "expected": 12.0, "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.92073519], "expected": 15.0, "mode": "abs", "tol": 1e-05 },
+        { "method": "quantile", "args": [0.98333335], "expected": 18.0, "mode": "abs", "tol": 1e-05 }
+      ]
+    },
+    {
+      "name": "construction_default",
+      "comment": "Test_Construction: the default constructor is SetParameters(100, 10, 0), which is exactly what this construct performs.",
+      "construct": { "params": [100.0, 10.0, 0.0] },
+      "assertions": [
+        { "method": "param",            "args": [0], "expected": 100.0, "mode": "equal" },
+        { "method": "param",            "args": [1], "expected": 10.0,  "mode": "equal" },
+        { "method": "param",            "args": [2], "expected": 0.0,   "mode": "equal" },
+        { "method": "parameters_valid", "args": [],  "expected": true,  "mode": "bool" },
+        { "method": "minimum",          "args": [],  "expected": "-inf", "mode": "equal" },
+        { "method": "maximum",          "args": [],  "expected": "inf",  "mode": "equal" }
+      ]
+    },
+    {
+      "name": "construction_negative_location",
+      "comment": "Test_Construction: GeneralizedNormal(-100, 1, 1). kappa=1 > NearZero, so the support is bounded above at xi + alpha/kappa = -99 and unbounded below.",
+      "construct": { "params": [-100.0, 1.0, 1.0] },
+      "assertions": [
+        { "method": "param",            "args": [0], "expected": -100.0, "mode": "equal" },
+        { "method": "param",            "args": [1], "expected": 1.0,    "mode": "equal" },
+        { "method": "param",            "args": [2], "expected": 1.0,    "mode": "equal" },
+        { "method": "parameters_valid", "args": [],  "expected": true,   "mode": "bool" },
+        { "method": "minimum",          "args": [],  "expected": "-inf", "mode": "equal" },
+        { "method": "maximum",          "args": [],  "expected": -99.0,  "mode": "equal" }
+      ]
+    },
+    {
+      "name": "invalid_infinity",
+      "comment": "Test_InvalidParameters: all three parameters positive infinity.",
+      "construct": { "params": ["inf", "inf", "inf"] },
+      "assertions": [
+        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
+      ]
+    },
+    {
+      "name": "invalid_nan",
+      "comment": "Test_InvalidParameters: all three parameters NaN.",
+      "construct": { "params": ["nan", "nan", "nan"] },
+      "assertions": [
+        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
+      ]
+    },
+    {
+      "name": "invalid_zero_scale",
+      "comment": "Test_InvalidParameters: GeneralizedNormal(100, 0, 1) -- the scale must be strictly positive.",
+      "construct": { "params": [100.0, 0.0, 1.0] },
+      "assertions": [
+        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
+      ]
+    },
+    {
+      "name": "product_moments_xi97_alpha35_kappa_neg01",
+      "source": "curated via oracle_emitter --dump",
+      "comment": "Test_Moments asserts only self-consistency against CentralMoments(1E-8), so it carries no literal. These are the four product moments plus Median and Mode off the real C# GeneralizedNormal(9.7, 3.5, -0.1), the same object the CDF case above pins. The first four come from the base class's fixed 1000-step CentralMoments quadrature -- identical stepping in both ports, so the residual is rounding noise, not quadrature error, and it measures 5e-16 / 1.1e-15 / 1.7e-14 / 4.9e-15 for mean / sd / skewness / kurtosis. They are asserted at 1e-9 relative, the tier the other quadrature-moment families use, leaving headroom for the platforms CI runs. Median is the closed-form InverseCDF(0.5) and Mode the bounded BrentSearch maximiser over [InverseCDF(0.001), InverseCDF(0.999)]; both reproduce bit-for-bit against C# on this platform but are asserted at the same conventional tiers (1e-12 relative, 1e-9 absolute) rather than at equality.",
+      "construct": { "params": [9.7, 3.5, -0.1] },
+      "assertions": [
+        { "method": "mean",     "args": [], "expected": 9.87543822290746,   "mode": "rel", "tol": 1e-9 },
+        { "method": "sd",       "args": [], "expected": 3.5263761609534616, "mode": "rel", "tol": 1e-9 },
+        { "method": "skewness", "args": [], "expected": 0.3017534468009728, "mode": "rel", "tol": 1e-9 },
+        { "method": "kurtosis", "args": [], "expected": 3.1623144473616542, "mode": "rel", "tol": 1e-9 },
+        { "method": "median",   "args": [], "expected": 9.7,                "mode": "rel", "tol": 1e-12 },
+        { "method": "mode",     "args": [], "expected": 9.351744161202223,  "mode": "abs", "tol": 1e-9 }
+      ]
+    },
+    {
+      "name": "seeded_random_draws",
+      "source": "curated via oracle_emitter --dump (GenerateRandomValues(sampleSize, seed))",
+      "comment": "Proves the inverse-CDF draw off the shared bit-exact Mersenne Twister reproduces the C# stream, and (through the R and Python fixture runners) that the same seed gives the same draw in both languages.",
+      "construct": { "params": [9.7, 3.5, -0.1] },
+      "assertions": [
+        { "method": "random_value", "args": [50, 123, 0],  "expected": 11.54704006287607,  "mode": "rel", "tol": 1e-11 },
+        { "method": "random_value", "args": [50, 123, 1],  "expected": 11.723467737943412, "mode": "rel", "tol": 1e-11 },
+        { "method": "random_value", "args": [50, 123, 2],  "expected": 7.778323392210013,  "mode": "rel", "tol": 1e-11 },
+        { "method": "random_value", "args": [50, 123, 49], "expected": 8.975966744096802,  "mode": "rel", "tol": 1e-11 },
+        { "method": "random_value", "args": [100, 42, 0],  "expected": 8.598230732061237,  "mode": "rel", "tol": 1e-11 },
+        { "method": "random_value", "args": [100, 42, 99], "expected": 3.7542486639351065, "mode": "rel", "tol": 1e-11 }
+      ]
+    },
+    {
+      "name": "quantile_gradient_xi97_alpha35_kappa_neg01",
+      "source": "curated via oracle_emitter --dump",
+      "comment": "The IStandardError surface. Test_GNO_PartialDerivatives asserts QuantileGradient against the same NumericalDerivative.Gradient call the method makes internally, so it carries no literal; these are the real C# gradients of InverseCDF(p) with respect to {xi, alpha, kappa} at three probabilities, dumped at full precision. args are [probability, index], the flattened convention the GEV slice already speaks (whose own gradient rows sit at a loose 0.01 only because they are hand-transcribed 5-significant-figure literals, not because the method is imprecise). Both ports run the identical central-difference step rule (rel_step 1e-5 on |theta_j| + 1) over identical inputs, so the truncation error is a property of the value being pinned, not of the comparison. What the tolerance has to cover is CANCELLATION: dividing by 2h amplifies the last bits of the two InverseCDF evaluations by 1/(2h), which is 4.5e4 for kappa and 1.1e4 for alpha. Measured C++-vs-C# residual on this platform: bit-identical at p = 0.5 and p = 0.99, and 1.6e-10 absolute (6.1e-11 relative, about 2 ulp of the underlying quantile) on the p = 0.1 kappa component. 1e-8 relative is the tier that follows -- several hundred ulp of quantile headroom for a platform whose exp / inverse-normal round differently -- and is still six orders tighter than the GEV gradient rows, while any structural gradient defect (wrong index, wrong step rule, wrong sign) misses by orders of magnitude. The p = 0.5 row is structural rather than incidental: StandardZ(0.5) is exactly 0, so InverseCDF(0.5) = xi identically in alpha and kappa, the gradient there is exactly (1, 0, 0), and the two zeros are asserted absolutely. ParameterCovariance and QuantileVariance are NOT pinned: upstream GeneralizedNormal.cs (509, 515) throws NotImplementedException for both, which the port mirrors, so there is no oracle to reproduce.",
+      "construct": { "params": [9.7, 3.5, -0.1] },
+      "assertions": [
+        { "method": "quantile_gradient", "args": [0.5, 0],  "expected": 1.0,                  "mode": "rel", "tol": 1e-8 },
+        { "method": "quantile_gradient", "args": [0.5, 1],  "expected": 0.0,                  "mode": "abs", "tol": 1e-12 },
+        { "method": "quantile_gradient", "args": [0.5, 2],  "expected": 0.0,                  "mode": "abs", "tol": 1e-12 },
+        { "method": "quantile_gradient", "args": [0.1, 0],  "expected": 1.0,                  "mode": "rel", "tol": 1e-8 },
+        { "method": "quantile_gradient", "args": [0.1, 1],  "expected": -1.2028312528400709,  "mode": "rel", "tol": 1e-8 },
+        { "method": "quantile_gradient", "args": [0.1, 2],  "expected": -2.640005018514796,   "mode": "rel", "tol": 1e-8 },
+        { "method": "quantile_gradient", "args": [0.99, 0], "expected": 1.0,                  "mode": "rel", "tol": 1e-8 },
+        { "method": "quantile_gradient", "args": [0.99, 1], "expected": 2.619205258878496,    "mode": "rel", "tol": 1e-8 },
+        { "method": "quantile_gradient", "args": [0.99, 2], "expected": -11.076130581279765,  "mode": "rel", "tol": 1e-8 }
+      ]
+    }
+  ]
+}

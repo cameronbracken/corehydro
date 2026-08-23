@@ -96,6 +96,7 @@ set(BF_TESTS
   test_composite_analysis
   test_coincident_frequency_analysis
   test_bootstrap_analysis
+  test_pivotal_bootstrap
   test_copula_clone
   test_multivariate_normal_api
   test_brent_search
@@ -105,6 +106,7 @@ set(BF_TESTS
   test_rng_handle
   test_parameter_constraint_sizes
   test_linear_moments_overflow
+  test_generalized_normal_jacobian
 )
 
 # Sobol test takes the direction-number file as its sole argument.

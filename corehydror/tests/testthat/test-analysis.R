@@ -33,10 +33,14 @@ test_that("univariate_analysis returns a Bayesian frequency curve", {
   expect_true(all(res$upper_ci >= res$mode_curve - 1e-6))
 })
 
-test_that("fit_distributions ranks the 14 ported candidates", {
+test_that("fit_distributions ranks the 15 candidates", {
   res <- fit_distributions(smoke_peaks())
-  expect_length(res$distribution, 14)
-  expect_length(res$aic, 14)
+  expect_length(res$distribution, 15)
+  expect_length(res$aic, 15)
+  # Candidates come back in the C# DistributionList order, so slot 5 (0-based index 4) is the
+  # GeneralizedNormal the 15-candidate set restored. A wrong type_name switch arm reports
+  # "Unknown" here while every count and metric still passes.
+  expect_equal(res$distribution[[5]], "GeneralizedNormal")
   expect_true(any(res$converged))
   ok <- res$converged
   expect_true(all(is.finite(res$aic[ok])))

@@ -84,3 +84,16 @@ to_spec_json <- function(x) {
   }
   paste0("[", paste(out, collapse = ","), "]")
 }
+
+# A matrix as the array OF ROWS every matrix on the spec surfaces takes (the C++ side reads a
+# covariance the same way whether it came from R, Python or a fixture). Written out explicitly
+# because R stores a matrix column-major and `is.numeric()` is TRUE for one, so handing a matrix
+# straight to to_spec_json() emits a flat, transposed array instead -- silently, and symmetrically
+# enough for a covariance to look right until it is not.
+spec_matrix <- function(x, what) {
+  if (is.numeric(x) && is.null(dim(x)) && length(x) == 1L) x <- matrix(x, 1L, 1L)
+  if (!is.matrix(x) || !is.numeric(x) || nrow(x) == 0L || ncol(x) == 0L) {
+    stop(sprintf("`%s` must be a numeric matrix", what), call. = FALSE)
+  }
+  spec_array(lapply(seq_len(nrow(x)), function(i) spec_array(as.double(x[i, ]))))
+}

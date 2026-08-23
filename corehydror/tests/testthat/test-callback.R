@@ -984,6 +984,260 @@ test_that("a resample or jackknife returning NA is refused, and a fit or statist
   expect_identical(failing$valid_count[[1]], 0L)
 })
 
+# --- bootstrap_custom, the pivotal run type ---------------------------------------------------
+#
+# The pivotal bootstrap fits through ONE delegate the other run type does not have: a
+# covariance-aware fit returning the parameters AND their covariance. The model here is the
+# two-parameter Normal location-scale MLE of the same eight observations, whose covariance is
+# analytic -- diag(s2 / n, s2 / (2n)) -- so the whole callback is arithmetic plus sqrt, and sqrt is
+# the one libm function IEEE 754 requires to be correctly rounded, so the identical call in Python
+# computes the identical numbers. The C#-pinned oracle for this same model lives in
+# fixtures/callback/bootstrap.json, and its cross-language twin at ZERO tolerance in
+# fixtures/callback/callback_cross_language.json.
+boot_fit_with_covariance <- function(data) {
+  n <- length(data)
+  acc <- 0
+  for (x in data) acc <- acc + x
+  mu <- acc / n
+  ss <- 0
+  for (x in data) ss <- ss + (x - mu) * (x - mu)
+  s2 <- ss / n
+  list(
+    parameters = c(mu, sqrt(s2)),
+    covariance = matrix(c(s2 / n, 0, 0, s2 / (2 * n)), nrow = 2L, ncol = 2L)
+  )
+}
+
+test_that("a seeded pivotal run reports its diagnostics and both interval blocks", {
+  res <- bootstrap_custom(
+    data = boot_data, resample = boot_resample, statistic = boot_statistic,
+    fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+    replicates = 200, seed = 12345
+  )
+  expect_identical(res$pivotal_diagnostics$requested_replicates, 200L)
+  expect_identical(res$pivotal_diagnostics$failed_raw_replicates, 0L)
+  expect_identical(res$pivotal_diagnostics$rejected_raw_replicates, 0L)
+  expect_identical(res$pivotal_diagnostics$accepted_raw_replicates, 200L)
+  expect_identical(res$pivotal_diagnostics$retained_pivotal_replicates, 200L)
+  expect_identical(
+    res$pivotal_diagnostics$retained_pivotal_replicates +
+      res$pivotal_diagnostics$invalid_pivotal_replicates,
+    res$pivotal_diagnostics$accepted_raw_replicates
+  )
+  expect_identical(res$run_type, "pivotal")
+
+  # Two interval blocks, not one: the pivotal ensemble and the raw covariance-aware fits it was
+  # built from (GetRawPivotalConfidenceIntervals). Both bracket the population estimate.
+  expect_length(res$estimate, 2L)
+  expect_true(res$lower[[1]] < res$estimate[[1]] && res$estimate[[1]] < res$upper[[1]])
+  expect_true(res$raw_lower[[1]] < res$estimate[[1]] && res$estimate[[1]] < res$raw_upper[[1]])
+  # And they are NOT the same interval: the transform reinflates each raw fit through the parent
+  # covariance, so the two blocks disagree even though they come from one run.
+  expect_false(isTRUE(all.equal(res$lower[[1]], res$raw_lower[[1]])))
+  expect_false(isTRUE(all.equal(res$upper[[2]], res$raw_upper[[2]])))
+})
+
+test_that("a seeded pivotal run repeats exactly and moves with the seed", {
+  run <- function(seed) {
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 100, seed = seed
+    )$lower[[1]]
+  }
+  expect_identical(run(12345), run(12345))
+  expect_false(identical(run(12345), run(999)))
+})
+
+test_that("the pivotal options reach the ported class", {
+  base <- function(...) {
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 100, seed = 12345, ...
+    )
+  }
+  plain <- base()
+
+  # A z limit small enough to reject draws: the Drop default then retains fewer than it accepted,
+  # and the two counts still add up.
+  limited <- base(pivotal_z_limit = 0.5)
+  expect_true(limited$pivotal_diagnostics$invalid_pivotal_replicates > 0L)
+  expect_identical(
+    limited$pivotal_diagnostics$retained_pivotal_replicates,
+    limited$pivotal_diagnostics$accepted_raw_replicates -
+      limited$pivotal_diagnostics$invalid_pivotal_replicates
+  )
+  # UseRaw keeps every draw instead of dropping the invalid ones, which is the one thing the
+  # policy can be observed to do.
+  kept <- base(pivotal_z_limit = 0.5, pivotal_invalid_draw_policy = "use_raw")
+  expect_identical(
+    kept$pivotal_diagnostics$retained_pivotal_replicates,
+    kept$pivotal_diagnostics$accepted_raw_replicates
+  )
+  expect_identical(
+    kept$pivotal_diagnostics$invalid_pivotal_replicates,
+    limited$pivotal_diagnostics$invalid_pivotal_replicates
+  )
+
+  # Jitter perturbs the standardized vector, so it must move the interval and nothing else.
+  jittered <- base(add_pivotal_jitter = TRUE, pivotal_jitter_scale = 0.5)
+  expect_false(isTRUE(all.equal(jittered$lower[[1]], plain$lower[[1]])))
+  # A named link is resolved core-side, so it must move the interval. NOTE the link is on the MEAN
+  # here, not on the scale, and that is not arbitrary: for this model's analytic covariance the log
+  # link on sigma is invariant. Identity gives a pivotal draw of a + (a / r)(a - r) = a^2 / r
+  # (because the covariance of sigma-hat is sigma^2 / 2n, so the ratio of the two Cholesky factors
+  # is a / r), and the log link gives exp(2 log a - log r) = a^2 / r as well -- the same number to
+  # about 1e-11. A test that linked sigma would therefore pass whether or not the link reached the
+  # core at all.
+  linked <- base(pivotal_links = list("Log", NULL))
+  expect_false(isTRUE(all.equal(linked$lower[[1]], plain$lower[[1]])))
+})
+
+test_that("an error raised inside fit_with_covariance reaches the caller", {
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = function(data) stop("my own covariance fit error"),
+      run_type = "pivotal", replicates = 20, seed = 12345
+    ),
+    "my own covariance fit error"
+  )
+})
+
+test_that("the pivotal run type refuses the arguments it cannot use", {
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic, run_type = "nope"),
+    "unknown run_type 'nope'; expected one of"
+  )
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic, run_type = "pivotal"),
+    "`fit_with_covariance` must be a function taking \\(data\\)"
+  )
+  # `fit` is not used by the pivotal run: refused rather than silently ignored.
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, fit = boot_fit, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345
+    ),
+    "`fit` is not used"
+  )
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                     fit_with_covariance = boot_fit_with_covariance),
+    "only used when `run_type` is \"pivotal\""
+  )
+  expect_error(
+    bootstrap_custom(boot_data, boot_resample, boot_fit, boot_statistic,
+                     pivotal_z_limit = 3),
+    "only used when `run_type` is \"pivotal\""
+  )
+  # And the other way round: the two arguments the pivotal run has no use for. Neither the BCa
+  # jackknife nor the studentized inner replicates can be reached from it, since it takes only a
+  # percentile interval.
+  for (unused in c("jackknife", "inner_replicates")) {
+    args <- list(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345
+    )
+    args[[unused]] <- if (identical(unused, "jackknife")) boot_jackknife else 20
+    expect_error(do.call(bootstrap_custom, args),
+                 sprintf("`%s` is not used when `run_type` is \"pivotal\"", unused))
+  }
+  # C# refuses anything but a percentile interval after a pivotal run; the refusal is made before
+  # the first replicate here rather than after all of them, exactly as the BCa one is.
+  calls <- 0L
+  counting_resample <- function(data, parameters, rng) {
+    calls <<- calls + 1L
+    boot_resample(data, parameters, rng)
+  }
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = counting_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 100, seed = 12345, ci_method = "BiasCorrected"
+    ),
+    "percentile"
+  )
+  expect_identical(calls, 0L)
+  # One link per parameter, checked before the run rather than inside it.
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345, pivotal_links = list("Log")
+    ),
+    "one link per parameter"
+  )
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345, pivotal_links = list("Nope", NULL)
+    ),
+    "unknown link type"
+  )
+  # A covariance-aware fit returning the wrong shape is named rather than left to fail every
+  # replicate in silence.
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = function(data) list(parameters = c(1, 2), covariance = matrix(1, 1, 1)),
+      run_type = "pivotal", replicates = 20, seed = 12345
+    ),
+    "covariance"
+  )
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = function(data) c(1, 2),
+      run_type = "pivotal", replicates = 20, seed = 12345
+    ),
+    "'parameters'"
+  )
+  # Both pivotal-only scalar options are refused by name when non-finite: a NaN jitter scale would
+  # otherwise silently empty the retained ensemble under the drop policy, and an infinite z-limit is
+  # refused even though it is technically "positive". Python mirrors both refusals exactly.
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345, pivotal_jitter_scale = NaN
+    ),
+    "`pivotal_jitter_scale` must be a single number"
+  )
+  expect_error(
+    bootstrap_custom(
+      data = boot_data, resample = boot_resample, statistic = boot_statistic,
+      fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+      replicates = 20, seed = 12345, pivotal_z_limit = Inf
+    ),
+    "`pivotal_z_limit` must be a single positive number"
+  )
+})
+
+test_that("an explicit original_covariance replaces the one the fit reports", {
+  # Supplying the parent covariance is the C# second constructor's own shape; a much wider one
+  # reinflates every draw further, so the pivotal interval has to widen with it.
+  narrow <- bootstrap_custom(
+    data = boot_data, resample = boot_resample, statistic = boot_statistic,
+    fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+    replicates = 100, seed = 12345
+  )
+  wide <- bootstrap_custom(
+    data = boot_data, resample = boot_resample, statistic = boot_statistic,
+    fit_with_covariance = boot_fit_with_covariance, run_type = "pivotal",
+    original_covariance = matrix(c(1, 0, 0, 1), nrow = 2L, ncol = 2L),
+    replicates = 100, seed = 12345
+  )
+  expect_true((wide$upper[[1]] - wide$lower[[1]]) > (narrow$upper[[1]] - narrow$lower[[1]]))
+  # The raw block is the same either way: it is the raw fits, which the parent covariance does
+  # not touch.
+  expect_equal(wide$raw_lower[[1]], narrow$raw_lower[[1]])
+})
+
 test_that("bootstrap_custom refuses arguments that are not what they claim", {
   expect_error(bootstrap_custom(numeric(0), boot_resample, boot_fit, boot_statistic),
                "`data` must be a non-empty numeric vector")

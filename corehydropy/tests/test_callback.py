@@ -1012,6 +1012,239 @@ def test_a_resample_or_jackknife_returning_nan_is_refused_and_a_fit_or_statistic
     assert failing["valid_count"][0] == 0
 
 
+# --- bootstrap_custom, the pivotal run type ----------------------------------------------------
+#
+# The pivotal bootstrap fits through ONE delegate the other run type does not have: a
+# covariance-aware fit returning the parameters AND their covariance. The model here is the
+# two-parameter Normal location-scale MLE of the same eight observations, whose covariance is
+# analytic -- diag(s2 / n, s2 / (2n)) -- so the whole callback is arithmetic plus sqrt, and sqrt is
+# the one libm function IEEE 754 requires to be correctly rounded, so the identical call in R
+# computes the identical numbers. The C#-pinned oracle for this same model lives in
+# fixtures/callback/bootstrap.json, and its cross-language twin at ZERO tolerance in
+# fixtures/callback/callback_cross_language.json.
+def _boot_fit_with_covariance(data):
+    n = float(len(data))
+    acc = 0.0
+    for x in data:
+        acc += x
+    mu = acc / n
+    ss = 0.0
+    for x in data:
+        ss += (x - mu) * (x - mu)
+    s2 = ss / n
+    return {
+        "parameters": [mu, math.sqrt(s2)],
+        "covariance": [[s2 / n, 0.0], [0.0, s2 / (2.0 * n)]],
+    }
+
+
+def test_a_seeded_pivotal_run_reports_its_diagnostics_and_both_interval_blocks():
+    res = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+        fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+        replicates=200, seed=12345,
+    )
+    diagnostics = res["pivotal_diagnostics"]
+    assert diagnostics["requested_replicates"] == 200
+    assert diagnostics["failed_raw_replicates"] == 0
+    assert diagnostics["rejected_raw_replicates"] == 0
+    assert diagnostics["accepted_raw_replicates"] == 200
+    assert diagnostics["retained_pivotal_replicates"] == 200
+    assert (
+        diagnostics["retained_pivotal_replicates"] + diagnostics["invalid_pivotal_replicates"]
+        == diagnostics["accepted_raw_replicates"]
+    )
+    assert res["run_type"] == "pivotal"
+
+    # Two interval blocks, not one: the pivotal ensemble and the raw covariance-aware fits it was
+    # built from (GetRawPivotalConfidenceIntervals). Both bracket the population estimate.
+    assert len(res["estimate"]) == 2
+    assert res["lower"][0] < res["estimate"][0] < res["upper"][0]
+    assert res["raw_lower"][0] < res["estimate"][0] < res["raw_upper"][0]
+    # And they are NOT the same interval: the transform reinflates each raw fit through the parent
+    # covariance, so the two blocks disagree even though they come from one run.
+    assert res["lower"][0] != res["raw_lower"][0]
+    assert res["upper"][1] != res["raw_upper"][1]
+
+
+def test_a_seeded_pivotal_run_repeats_exactly_and_moves_with_the_seed():
+    def run(seed):
+        return ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=100, seed=seed,
+        )["lower"][0]
+
+    assert run(12345) == run(12345)
+    assert run(12345) != run(999)
+
+
+def test_the_pivotal_options_reach_the_ported_class():
+    def base(**kwargs):
+        return ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=100, seed=12345, **kwargs,
+        )
+
+    plain = base()
+
+    # A z limit small enough to reject draws: the Drop default then retains fewer than it accepted,
+    # and the two counts still add up.
+    limited = base(pivotal_z_limit=0.5)
+    assert limited["pivotal_diagnostics"]["invalid_pivotal_replicates"] > 0
+    assert (
+        limited["pivotal_diagnostics"]["retained_pivotal_replicates"]
+        == limited["pivotal_diagnostics"]["accepted_raw_replicates"]
+        - limited["pivotal_diagnostics"]["invalid_pivotal_replicates"]
+    )
+    # UseRaw keeps every draw instead of dropping the invalid ones, which is the one thing the
+    # policy can be observed to do.
+    kept = base(pivotal_z_limit=0.5, pivotal_invalid_draw_policy="use_raw")
+    assert (
+        kept["pivotal_diagnostics"]["retained_pivotal_replicates"]
+        == kept["pivotal_diagnostics"]["accepted_raw_replicates"]
+    )
+    assert (
+        kept["pivotal_diagnostics"]["invalid_pivotal_replicates"]
+        == limited["pivotal_diagnostics"]["invalid_pivotal_replicates"]
+    )
+
+    # Jitter perturbs the standardized vector, so it must move the interval and nothing else.
+    jittered = base(add_pivotal_jitter=True, pivotal_jitter_scale=0.5)
+    assert jittered["lower"][0] != plain["lower"][0]
+    # A named link is resolved core-side, so it must move the interval. NOTE the link is on the MEAN
+    # here, not on the scale, and that is not arbitrary: for this model's analytic covariance the log
+    # link on sigma is invariant. Identity gives a pivotal draw of a + (a / r)(a - r) = a^2 / r
+    # (because the covariance of sigma-hat is sigma^2 / 2n, so the ratio of the two Cholesky factors
+    # is a / r), and the log link gives exp(2 log a - log r) = a^2 / r as well -- the same number to
+    # about 1e-11. A test that linked sigma would therefore pass whether or not the link reached the
+    # core at all.
+    linked = base(pivotal_links=["Log", None])
+    assert linked["lower"][0] != plain["lower"][0]
+
+
+def test_an_error_raised_inside_fit_with_covariance_reaches_the_caller():
+    with pytest.raises(ValueError, match="my own error"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boom, run_type="pivotal", replicates=20, seed=12345,
+        )
+
+
+def test_the_pivotal_run_type_refuses_the_arguments_it_cannot_use():
+    with pytest.raises(ValueError, match="unknown run_type"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            run_type="nope")
+    with pytest.raises(TypeError, match=r"`fit_with_covariance` must be a function taking \(data\)"):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            run_type="pivotal")
+    # `fit` is not used by the pivotal run: refused rather than silently ignored.
+    with pytest.raises(ValueError, match="`fit` is not used"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=20, seed=12345,
+        )
+    with pytest.raises(ValueError, match='only used when `run_type` is "pivotal"'):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            fit_with_covariance=_boot_fit_with_covariance)
+    with pytest.raises(ValueError, match='only used when `run_type` is "pivotal"'):
+        ch.bootstrap_custom(_BOOT_DATA, _boot_resample, _boot_fit, _boot_statistic,
+                            pivotal_z_limit=3.0)
+    # And the other way round: the two arguments the pivotal run has no use for. Neither the BCa
+    # jackknife nor the studentized inner replicates can be reached from it, since it takes only a
+    # percentile interval.
+    for unused in ({"jackknife": _boot_jackknife}, {"inner_replicates": 20}):
+        (name,) = unused
+        with pytest.raises(ValueError, match=f'`{name}` is not used when `run_type` is "pivotal"'):
+            ch.bootstrap_custom(
+                _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+                fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+                replicates=20, seed=12345, **unused,
+            )
+    # C# refuses anything but a percentile interval after a pivotal run; the refusal is made before
+    # the first replicate here rather than after all of them, exactly as the BCa one is.
+    calls = []
+
+    def counting_resample(data, parameters, rng):
+        calls.append(1)
+        return _boot_resample(data, parameters, rng)
+
+    with pytest.raises(ValueError, match="percentile"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, counting_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=100, seed=12345, ci_method="BiasCorrected",
+        )
+    assert calls == []
+    # One link per parameter, checked before the run rather than inside it.
+    with pytest.raises(ValueError, match="one link per parameter"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=20, seed=12345, pivotal_links=["Log"],
+        )
+    with pytest.raises(ValueError, match="unknown link type"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=20, seed=12345, pivotal_links=["Nope", None],
+        )
+    # A covariance-aware fit returning the wrong shape is named rather than left to fail every
+    # replicate in silence.
+    with pytest.raises(ValueError, match="covariance"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=lambda data: {"parameters": [1.0, 2.0], "covariance": [[1.0]]},
+            run_type="pivotal", replicates=20, seed=12345,
+        )
+    # And the one ambiguous return: two bare numbers are a fitted vector written without its
+    # covariance as often as they are a one-parameter fit, so they are refused rather than guessed
+    # at -- the same rule the moment condition function follows.
+    with pytest.raises(RuntimeError, match="'parameters'"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=lambda data: [1.0, 2.0],
+            run_type="pivotal", replicates=20, seed=12345,
+        )
+    # Both pivotal-only scalar options are refused by name when non-finite, matching R
+    # (corehydror/R/callback.R): a NaN jitter scale would otherwise pass through `float(...)`
+    # unchecked and silently empty the retained ensemble under the drop policy, and R refuses an
+    # infinite z-limit even though it is technically "positive".
+    with pytest.raises(ValueError, match="`pivotal_jitter_scale` must be a single finite number"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=20, seed=12345, pivotal_jitter_scale=float("nan"),
+        )
+    with pytest.raises(ValueError, match="`pivotal_z_limit` must be a single positive number"):
+        ch.bootstrap_custom(
+            _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+            fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+            replicates=20, seed=12345, pivotal_z_limit=float("inf"),
+        )
+
+
+def test_an_explicit_original_covariance_replaces_the_one_the_fit_reports():
+    # Supplying the parent covariance is the C# second constructor's own shape; a much wider one
+    # reinflates every draw further, so the pivotal interval has to widen with it.
+    narrow = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+        fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+        replicates=100, seed=12345,
+    )
+    wide = ch.bootstrap_custom(
+        _BOOT_DATA, _boot_resample, statistic=_boot_statistic,
+        fit_with_covariance=_boot_fit_with_covariance, run_type="pivotal",
+        original_covariance=[[1.0, 0.0], [0.0, 1.0]], replicates=100, seed=12345,
+    )
+    assert (wide["upper"][0] - wide["lower"][0]) > (narrow["upper"][0] - narrow["lower"][0])
+    # The raw block is the same either way: it is the raw fits, which the parent covariance does
+    # not touch.
+    assert wide["raw_lower"][0] == pytest.approx(narrow["raw_lower"][0], rel=1e-15)
+
+
 def test_bootstrap_custom_refuses_arguments_that_are_not_what_they_claim():
     with pytest.raises(ValueError, match="`data` must be a non-empty numeric vector"):
         ch.bootstrap_custom([], _boot_resample, _boot_fit, _boot_statistic)

@@ -14,7 +14,7 @@ A named list with equal-length vectors \code{distribution} (candidate name), \co
 \code{rmse}, and \code{converged} (logical, whether the fit succeeded) -- one entry per candidate.
 }
 \description{
-Fit each of the 14 candidate distributions to a sample by maximum likelihood and return their
+Fit each of the 15 candidate distributions to a sample by maximum likelihood and return their
 goodness-of-fit metrics. Ranking is left to the caller. Wraps the shared C++ \code{FittingAnalysis}.
 }
 \examples{

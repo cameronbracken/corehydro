@@ -36,6 +36,23 @@ struct MomentConditionReturn {
     int s_cols = 0;
 };
 
+// What a covariance-aware fit callback returns: upstream's `BootstrapFit` (the return type of
+// `Bootstrap<TData>.FitWithCovarianceFunction`, the delegate the PIVOTAL bootstrap fits through),
+// carried across the binding boundary in the plainest shape each host language can build.
+// `parameters` is the fitted vector, length p; `covariance` is their p x p covariance, FLATTENED
+// ROW-MAJOR with its own shape in `rows`/`cols`.
+//
+// The shape travels with the value for the reason MomentConditionReturn's does: the wrong shape is
+// the mistake this callback invites, and "your covariance is 2 x 3" is a different quality of
+// error from "your covariance has 6 entries". R hands back a COLUMN-major matrix and its glue
+// transposes; Python's nested sequence is already row-major.
+struct FitWithCovarianceReturn {
+    std::vector<double> parameters;
+    std::vector<double> covariance;
+    int rows = 0;
+    int cols = 0;
+};
+
 // Every callback a group may need. A caller fills only the members its group uses; the rest stay
 // empty and each group validates the ones it requires. One struct rather than a variant keeps the
 // four bindings' call sites uniform: build the set, name the group and method, call.
@@ -56,6 +73,9 @@ struct CallbackSet {
         data_rng;
     // f(data) -> theta. Bootstrap fit.
     std::function<std::vector<double>(const std::vector<double>&)> data_vector;
+    // f(data) -> (theta, covariance). Bootstrap covariance-aware fit, upstream's
+    // FitWithCovarianceFunction -- the delegate the pivotal run type fits through.
+    std::function<FitWithCovarianceReturn(const std::vector<double>&)> data_covariance;
     // f(data, index) -> data. Bootstrap jackknife.
     std::function<std::vector<double>(const std::vector<double>&, int)> data_index;
     // f(theta) -> matrix, row-major with dims. GMM jacobian, pointwise moment conditions.

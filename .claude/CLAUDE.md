@@ -45,7 +45,8 @@ own forks live elsewhere on disk under different names.)
 
 The univariate distribution layer lives under `core/include/corehydro/numerics/distributions/`:
 `base/` holds `UnivariateDistributionBase`, the type enum, the factory, and the `IEstimation` /
-`ILinearMomentEstimation` capability mixins; all 42 distributions derive from the base.
+`ILinearMomentEstimation` / `IStandardError` capability mixins; all 43 distributions derive from
+the base.
 `distributions/multivariate/` holds Dirichlet, Multinomial, BivariateEmpirical,
 MultivariateNormal (with the ported Genz MVNDST integrator), and MultivariateStudentT, plus the
 `MultivariateDistributionBase` and factory. `distributions/copulas/` holds all seven bivariate
@@ -336,7 +337,10 @@ no new per-distribution glue. Don't hardcode oracle values in test files. The do
 - **Portability (learned from CI):** never use `M_PI` (absent under strict `-std=c++17` on Linux
   and on MSVC) — use `corehydro::numerics::kPi`. Don't name a namespace alias `gamma` (clashes with
   glibc's libm `gamma()`) or `stat` (clashes with the MSVC/POSIX CRT `stat` symbol). Pass
-  `-Wall/-Wextra` only to non-MSVC compilers in CMake.
+  `-Wall/-Wextra` only to non-MSVC compilers in CMake. MSVC raises C3493 on the implicit use of a
+  `const` function-local inside a lambda with no default capture (clang/gcc treat it as a constant
+  expression); capturing it explicitly then trips clang's -Wunused-lambda-capture. Put the constant
+  at file scope as `constexpr`.
 - **Self-contained core:** no external C++ deps (port Numerics' own linear algebra / RNG). Keeps
   the CRAN dependency surface empty and preserves oracle fidelity. Don't add Eigen to the core.
 - **CRAN:** `corehydror` uses `License: file LICENSE` (R can't standardize the `0BSD` token).
@@ -744,3 +748,51 @@ packages' `print()`/`summary()` refuse to display it at zero degrees of freedom 
 finite. The version bump to **0.7.0** records it. Final numbers: **ctest 87/87; oracle gate 5426
 reproduced, 0 failed, 11 skipped; testthat 6144/0; pytest 1487**; `R CMD check --as-cran` holds at
 the same three NOTEs with no WARNING.
+
+The distribution-gaps phase (P1, branch `port-distribution-gaps`, August 2026) closed the two gaps
+the ten-phase port left open, and is the first step of the release arc laid out in
+`docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`. **GeneralizedNormal**
+(`numerics/distributions/generalized_normal.hpp`, the three-parameter log-normal) was the one
+univariate family that had a name in the type enum and nothing behind it, so the layer now carries
+**43** distributions rather than 42, every family in the enum constructs except the three C# itself
+marks unsupported by the factory (CompetingRisks/Mixture/UserDefined), and `fit_distributions()`
+ranks the **15** candidates the C# `FittingAnalysis` ranks rather than 14 (GeneralizedNormal enters
+the candidate list fifth, so the fixture, the emitter's `DistributionList` filter, both packages'
+count literals, and the re-indexed assertions all moved in one commit). The distribution is the
+first to declare the new **`IStandardError`** mixin
+(`numerics/distributions/base/i_standard_error.hpp`), whose dispatched methods reach both languages
+through the shared `dist_runner` generic dispatch, a generic path added beside -- not replacing --
+the bespoke GEV slice, which still carries GEV's own standard errors; of the trio only
+`quantile_gradient` is oracle-pinnable for this family (C# throws `NotImplementedException` for the
+other two), and `quantile_jacobian` is ctest-covered by an analytic identity rather than
+runner-dispatched. The **covariance-aware pivotal bootstrap**, severed at Phase 3 as that phase's
+severable final task, is ported in full: three support headers under
+`numerics/sampling/bootstrap/support/` (`pivotal_bootstrap_context.hpp`,
+`pivotal_bootstrap_diagnostics.hpp`, `pivotal_bootstrap_invalid_draw_policy.hpp`), the omitted
+run-type branches in `bootstrap.hpp`, and a `test_pivotal_bootstrap.cpp` transcribing all 18 C#
+test methods 1:1 (154 checks, including the 2500-replicate statistical-coverage test at the C#
+tolerances). It reaches users as `bootstrap_custom(run_type = "pivotal")` over nine new arguments
+carrying the same names and defaults in R and Python, with `pivotal_diagnostics` and the raw
+(non-pivotal) block returned beside the pivotal one. Three findings worth carrying forward. First,
+**only `quantile_gradient` of the standard-error trio is pinnable for this family**: C#
+`GeneralizedNormal.ParameterCovariance` and `QuantileVariance` both throw
+`NotImplementedException`, so the port mirrors the throw and there is no oracle to reproduce; the
+methods are declared anyway so a capability cast gets the same "not implemented" answer rather than
+a silently wrong number, and the gradient's own C# test compares the analytic gradient against the
+numerical derivative the method calls internally (a tautology, no literal to scrape), so its three
+pinned probabilities were curated from `verify_oracles.py --dump`. Second, **the pivotal `links`
+surface takes name strings, not callbacks** -- one of the seven `LinkFunctionType` names per
+parameter (or a null for identity), resolved core-side through `LinkFunctionFactory`, because the
+five BestFit-specific links are parameterized (a spec object, not a name) and a name keeps the
+emitter's resolution a one-line `Enum.Parse`. Third, the **`type_name` "Unknown" bug**: the R and
+Python analysis glue each carry a local distribution-name switch with an `"Unknown"` default and
+fourteen arms, and neither the port task nor the 15-candidate task touched it, so
+`fit_distributions()` printed the new candidate as `Unknown` while every count and metric passed --
+found only by writing the worked example, since the fixture pins that candidate's aic/bic/converged
+but not its name. Both packages now assert the name. Two worked example pairs landed (16, the
+15-candidate fitting surface; 17, the pivotal bootstrap), and `site/status.qmd` / `site/index.qmd` /
+`README.md` were brought to 43 families with the bootstrap row's "documented omission" retired. The
+version bump to **0.8.0** records it. Final numbers: **ctest 90/90 (test_fixtures 5579 checks);
+oracle gate 5568 reproduced, 0 failed, 11 skipped; testthat 6344/0; pytest 1520**; `R CMD check
+--as-cran` holds at the same three NOTEs with no WARNING. No `oracle_skip` and no loosened
+tolerance was added anywhere in the phase.

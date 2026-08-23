@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "corehydro/models/json_lite.hpp"
+#include "corehydro/numerics/distributions/base/i_standard_error.hpp"
 #include "corehydro/numerics/distributions/support/dist_spec.hpp"
 
 namespace corehydro::numerics::distributions::support {
@@ -72,7 +73,19 @@ inline double arg_at(const JsonValue& args, std::size_t i, const char* method) {
 //   log_likelihood                   args = the sample, values = 1
 //   parameters                       args = [],        values = the flat parameter vector
 //   parameters_valid                 args = [],        values = 1 (1.0 or 0.0)
+//   parameter_covariance             args = [sample_size],              values = p*p, row-major
+//   quantile_variance                args = [probability, sample_size], values = 1
+//   quantile_gradient                args = [probability],              values = p
 //   linear_moments                   always throws: no composite implements it upstream
+//
+// The three standard-error methods are the IStandardError surface, reached by capability cast
+// exactly as `fit`/`linear_moment` reach IEstimation/ILinearMomentEstimation elsewhere -- a
+// family that does not implement the mixin gets a throw naming it, not a NaN. They return the
+// whole matrix/vector for the same reason `parameters` and `random` do: the caller indexes.
+// The estimation method is fixed at MaximumLikelihood, which is the only one any implementer
+// reaches today (GeneralizedNormal, the sole IStandardError distribution in the port, throws
+// for every method on parameter_covariance/quantile_variance because C# does); if a family
+// that distinguishes the branches is ever bound here, the method joins the args.
 inline DistResult run_dist(const std::string& spec_json, const std::string& method,
                            const std::string& args_json) {
     JsonValue spec = models::spec::parse_json(spec_json);
@@ -119,6 +132,29 @@ inline DistResult run_dist(const std::string& spec_json, const std::string& meth
     }
     if (method == "parameters_valid") {
         r.values = {d->parameters_valid() ? 1.0 : 0.0};
+        return r;
+    }
+    if (method == "parameter_covariance" || method == "quantile_variance" ||
+        method == "quantile_gradient") {
+        const auto* se = dynamic_cast<const IStandardError*>(d.get());
+        if (se == nullptr)
+            throw std::runtime_error("'" + method + "' needs a distribution implementing "
+                                     "IStandardError; '" + spec_family(spec) + "' does not");
+        const auto mle = ParameterEstimationMethod::MaximumLikelihood;
+        if (method == "parameter_covariance") {
+            auto cov = se->parameter_covariance(
+                static_cast<int>(detail::arg_at(args, 0, "parameter_covariance")), mle);
+            for (const auto& row : cov)
+                for (double v : row) r.values.push_back(v);
+            return r;
+        }
+        if (method == "quantile_variance") {
+            r.values = {se->quantile_variance(
+                detail::arg_at(args, 0, "quantile_variance"),
+                static_cast<int>(detail::arg_at(args, 1, "quantile_variance")), mle)};
+            return r;
+        }
+        r.values = se->quantile_gradient(detail::arg_at(args, 0, "quantile_gradient"));
         return r;
     }
     if (method == "linear_moments")

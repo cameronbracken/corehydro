@@ -36,8 +36,8 @@ ch_callback_mcmc_ <- function(options_json, f, proposal, gradient) {
   .Call(`_corehydror_ch_callback_mcmc_`, options_json, f, proposal, gradient)
 }
 
-ch_callback_bootstrap_ <- function(options_json, resample, fit, statistic, jackknife) {
-  .Call(`_corehydror_ch_callback_bootstrap_`, options_json, resample, fit, statistic, jackknife)
+ch_callback_bootstrap_ <- function(options_json, resample, fit, statistic, jackknife, fit_with_covariance) {
+  .Call(`_corehydror_ch_callback_bootstrap_`, options_json, resample, fit, statistic, jackknife, fit_with_covariance)
 }
 
 ch_callback_gmm_ <- function(options_json, moment_conditions, jacobian, penalty) {

@@ -22,7 +22,7 @@ example uses the same core and prints the same numbers.
 - When to use each distribution.
 - Random sampling, including Latin hypercube sampling.
 
-The upstream notebook tours ten of the 42 univariate families in the library:
+The upstream notebook tours ten of the 43 univariate families in the library:
 Normal, Log-Normal, GEV, Gamma, Weibull, Uniform, Triangular, PERT, Poisson, and
 Binomial. This port keeps every family and condenses the long mathematical
 derivations; see the upstream notebook for the full detail.

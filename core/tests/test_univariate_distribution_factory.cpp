@@ -11,13 +11,14 @@
 // (every ported type already had an explicit case; T7 additionally added the missing
 // `KernelDensity` case -- see univariate_distribution_factory.hpp), so this test is adapted
 // rather than transcribed line-for-line: it partitions the FULL C++ enum into "ported" (every
-// type with a real class and factory case -- must succeed) and "unsupported-or-unported"
-// (CompetingRisks/Mixture/UserDefined, matching C#'s NotSupportedException trio, PLUS
-// GeneralizedNormal, which is in the C# switch but has no C++ class in this port -- see the
-// factory header's default: comment). Neither this port's `create_distribution` nor
-// `try_create_distribution` distinguishes those two throw reasons (both fall through the same
-// `default:` and throw std::invalid_argument / return nullptr), unlike C#'s two distinct
-// exception types -- this test only checks "succeeds" vs. "fails," not the failure reason.
+// type with a real class and factory case -- must succeed) and "unsupported"
+// (CompetingRisks/Mixture/UserDefined, exactly C#'s NotSupportedException trio). Those three
+// are now the ONLY defined types that fail: GeneralizedNormal used to sit in this set as the
+// port's one missing class and moved to the ported half when it landed. This port's
+// `create_distribution` / `try_create_distribution` do not distinguish an unsupported type
+// from an undefined one (both fall through the same `default:` and throw
+// std::invalid_argument / return nullptr), unlike C#'s two distinct exception types -- this
+// test only checks "succeeds" vs. "fails," not the failure reason.
 //
 // No fixture equivalent: `fixtures/README.md` has no "assert this throws" schema (same gap
 // noted in test_empirical_distribution.cpp), and factory completeness is a structural/
@@ -84,19 +85,17 @@ constexpr std::array<UnivariateDistributionType, 43> kAllTypes = {
     UnivariateDistributionType::Weibull,
 };
 
-// The three C# NotSupportedException composite/user types, plus GeneralizedNormal (in the C#
-// switch, but not ported here -- see the factory header).
-bool is_unsupported_or_unported(UnivariateDistributionType t) {
+// The three C# NotSupportedException composite/user types ("requires external components").
+bool is_unsupported(UnivariateDistributionType t) {
     return t == UnivariateDistributionType::CompetingRisks ||
            t == UnivariateDistributionType::Mixture ||
-           t == UnivariateDistributionType::UserDefined ||
-           t == UnivariateDistributionType::GeneralizedNormal;
+           t == UnivariateDistributionType::UserDefined;
 }
 
 // Mirrors Test_UnivariateDistributionFactory.EveryDefinedDistributionTypeIsHandledExplicitly.
 void test_every_defined_type_handled_explicitly() {
     for (UnivariateDistributionType type : kAllTypes) {
-        if (is_unsupported_or_unported(type)) {
+        if (is_unsupported(type)) {
             CHECK_THROWS(create_distribution(type));
             CHECK_TRUE(try_create_distribution(type) == nullptr);
         } else {

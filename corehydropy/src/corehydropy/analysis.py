@@ -153,7 +153,7 @@ def univariate_analysis(
 
 
 def fit_distributions(data) -> dict:
-    """Fit and rank the 14 candidate distributions by maximum likelihood.
+    """Fit and rank the 15 candidate distributions by maximum likelihood.
 
     Ranking is left to the caller.
 

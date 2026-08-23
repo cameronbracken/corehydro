@@ -262,6 +262,32 @@ void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
             const double slope = num / den;
             return std::vector<double>{ybar - slope * tbar, slope};
         };
+    } else if (name == "FitCov_NormalMLE") {
+        // The PIVOTAL member of the bootstrap catalog: upstream's `Func<TData, BootstrapFit>
+        // FitWithCovarianceFunction`, the delegate that run type fits through. The model is the
+        // two-parameter Normal location-scale MLE -- theta = (mu, sigma) with sigma the POPULATION
+        // standard deviation -- whose covariance is analytic, diag(s2 / n, s2 / (2n)), so the whole
+        // callback is arithmetic plus one sqrt. sqrt is the one libm function IEEE 754 requires to
+        // be correctly rounded, so unlike log or exp it is the same value in all four runners; the
+        // sums are explicit loops for the reason `Fit_Mean` above gives. `ss += (x - mu) * (x - mu)`
+        // is itself a contraction-bearing shape, so this zero-tolerance guarantee also depends on
+        // the catalog's own -ffp-contract=off scoping in core/CMakeLists.txt, the same scoping the
+        // Fit_LinearTrend note above documents.
+        cbs.data_covariance = [](const std::vector<double>& data) {
+            const double n = static_cast<double>(data.size());
+            double acc = 0.0;
+            for (double x : data) acc += x;
+            const double mu = acc / n;
+            double ss = 0.0;
+            for (double x : data) ss += (x - mu) * (x - mu);
+            const double s2 = ss / n;
+            tbx::FitWithCovarianceReturn out;
+            out.parameters = {mu, std::sqrt(s2)};
+            out.covariance = {s2 / n, 0.0, 0.0, s2 / (2.0 * n)};  // row-major, diagonal
+            out.rows = 2;
+            out.cols = 2;
+            return out;
+        };
     } else if (name == "Stat_Identity") {
         cbs.vector_vector = [](const std::vector<double>& p) { return p; };
     } else if (name == "Stat_MeanAndSquare") {
