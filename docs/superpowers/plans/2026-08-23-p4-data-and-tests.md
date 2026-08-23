@@ -640,11 +640,26 @@ git add -A && git commit -m "feat: un-gate the DataFrame hypothesis-test and sum
 - Consumes: Task 5.
 - Produces, in `corehydro::models::runner`:
   `inline numerics::support::ToolboxResult run_data_frame(const std::string& method, const
-  std::string& data_frame_json, const std::string& options_json)`. Returning the SAME
-  `ToolboxResult` struct the toolbox groups return is the point of the design: all three fixture
-  runners already have a `toolbox_select` helper handling `index` / `label` / `select` /
-  `"length"` / `"rows"` / `"columns"`, so the new kind's dispatch is a handful of lines per runner
-  and no new selection code exists anywhere. Methods:
+  std::vector<std::vector<double>>& data, const std::string& data_frame_json, const std::string&
+  options_json)`. Returning the SAME `ToolboxResult` struct the toolbox groups return is the point
+  of the design: all three fixture runners already have a `toolbox_select` helper handling `index`
+  / `label` / `select` / `"length"` / `"rows"` / `"columns"`, so the new kind's dispatch is a
+  handful of lines per runner and no new selection code exists anywhere.
+
+  **The two ways the frame arrives, and why there are two.** `models::spec::build_data_frame`
+  (`core/include/corehydro/models/model_spec.hpp:174`) parses `exact` as an ARRAY OF OBJECTS
+  (`{"index": i, "value": v, "is_low_outlier"?: bool}`), which is right for a censored or
+  thresholded frame and unbearable for a 69-value systematic record. So `run_data_frame` takes
+  BOTH and requires exactly one: when `data_frame_json` is empty, it builds the frame from
+  `data[0]` as the exact series with sequential indices `0..n-1`; when `data_frame_json` is
+  non-empty, `data` must be empty and the spec is passed to `build_data_frame` unchanged. The
+  plain-vector path is what every P4 fixture case and both user verbs use; the spec path exists so
+  a censored frame is still reachable. Doing the expansion HERE, in the one shared runner, is what
+  keeps the three fixture runners and the emitter from each growing their own copy of it -- and
+  it lets the fixture's `data` array carry dataset NAMES, resolved by each runner with the
+  dataset-resolution code the `toolbox` kind already has. Do not touch `build_data_frame`.
+
+  Methods:
   - the nine hypothesis facades, named exactly as the group in Task 3 names them, prefixed
     nothing: `jarque_bera`, `ljung_box`, `equal_variance_t`, `unequal_variance_t`, `f`,
     `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`. Options: `use_log10`
@@ -679,7 +694,9 @@ the schema; document it in `fixtures/README.md` as a new `### data_frame` sectio
   "cases": [
     {
       "name": "harricana_mann_kendall",
-      "data_frame": { "exact": "harricana" },     // the same grammar model_spec.hpp parses
+      "data": ["harricana"],        // dataset names or inline arrays, resolved exactly as the
+                                    // `toolbox` kind resolves its `data`; data[0] becomes the
+                                    // exact series with sequential indices
       "options": { "use_log10": false },
       "assertions": [
         { "method": "mann_kendall", "expected": 0.7757, "mode": "abs", "tol": 1e-4,
