@@ -119,6 +119,10 @@ void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
         // Test_AdaptiveSimpsonsRule2D.Test_PI, upstream's Integrands.PI2D: the indicator of the
         // unit disc, whose integral over [-1, 1] x [-1, 1] approximates pi.
         cbs.scalar_xy = [](double x, double y) { return (x * x + y * y < 1.0) ? 1.0 : 0.0; };
+    } else if (name == "Ode_TestFunction") {
+        // The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
+        // [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
+        cbs.scalar_xy = [](double t, double y) { return y - t * t + 1.0; };
     } else if (name == "Mcmc_GaussianKernel") {
         // The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only
         // and sum in an explicit loop rather than through any accumulate helper: a Markov chain

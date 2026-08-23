@@ -923,6 +923,9 @@ static Func<double, double, double>? CallbackScalarXyFunction(string name) => na
     // Integrands.PI2D: the indicator of the unit disc, whose integral over [-1, 1] x [-1, 1]
     // approximates pi.
     "Quad2D_PI2D" => (x, y) => (x * x + y * y < 1d) ? 1d : 0d,
+    // The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
+    // [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
+    "Ode_TestFunction" => (t, y) => y - t * t + 1d,
     _ => null
 };
 
@@ -6083,6 +6086,66 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 values = [vegas.Result, vegas.FunctionEvaluations, vegas.StandardError, vegas.ChiSquared];
                 dims = [];
                 statusName = vegas.Status.ToString();
+            }
+            else if (method == "ode_solve")
+            {
+                // P2 "math extras": drives the real C# RungeKutta over the same f(t, y) shape
+                // quadrature_2d's f(x, y) already uses, mirroring callback/math.hpp's own
+                // ode_solve arm -- including the "end_time PRESENT selects the array overload"
+                // rule for "rk4" rather than a method sub-key.
+                var fode = CallbackScalarXyFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an (x, y) function");
+                string odeMethod = options.ValueKind == JsonValueKind.Object &&
+                                   options.TryGetProperty("method", out var odemEl)
+                    ? odemEl.GetString()! : "rk4";
+                double odeInitial = Opt("initial_value", 0d);
+                double odeStart = Opt("start_time", 0d);
+                if (odeMethod == "rk2")
+                {
+                    int odeSteps = (int)Opt("time_steps", 0d);
+                    values = Numerics.Mathematics.ODESolvers.RungeKutta.SecondOrder(fode, odeInitial, odeStart,
+                                                    Opt("end_time", 0d), odeSteps);
+                    dims = [values.Length];
+                }
+                else if (odeMethod == "rk4")
+                {
+                    if (Has("end_time"))
+                    {
+                        int odeSteps = (int)Opt("time_steps", 0d);
+                        values = Numerics.Mathematics.ODESolvers.RungeKutta.FourthOrder(fode, odeInitial, odeStart,
+                                                        Opt("end_time", 0d), odeSteps);
+                        dims = [values.Length];
+                    }
+                    else
+                    {
+                        values = [Numerics.Mathematics.ODESolvers.RungeKutta.FourthOrder(fode, odeInitial, odeStart, Opt("dt", 0d))];
+                        dims = [];
+                        valueNames = ["value"];
+                    }
+                }
+                else if (odeMethod == "rkf" || odeMethod == "cash_karp")
+                {
+                    double odeDt = Opt("dt", 0d);
+                    double odeDtMin = Opt("dt_min", 0d);
+                    double odeValue = Has("tolerance")
+                        ? (odeMethod == "rkf"
+                              ? Numerics.Mathematics.ODESolvers.RungeKutta.Fehlberg(fode, odeInitial, odeStart, odeDt, odeDtMin,
+                                                    Opt("tolerance", 0d))
+                              : Numerics.Mathematics.ODESolvers.RungeKutta.CashKarp(fode, odeInitial, odeStart, odeDt, odeDtMin,
+                                                    Opt("tolerance", 0d)))
+                        : (odeMethod == "rkf"
+                              ? Numerics.Mathematics.ODESolvers.RungeKutta.Fehlberg(fode, odeInitial, odeStart, odeDt, odeDtMin)
+                              : Numerics.Mathematics.ODESolvers.RungeKutta.CashKarp(fode, odeInitial, odeStart, odeDt, odeDtMin));
+                    values = [odeValue];
+                    dims = [];
+                    valueNames = ["value"];
+                }
+                else
+                {
+                    throw new Exception($"math/ode_solve: unknown method '{odeMethod}'");
+                }
+                // Neither RungeKutta static has a status object; "Success" unconditionally,
+                // exactly as the C++ runner reports for it (see callback/math.hpp's file header).
             }
             else
             {

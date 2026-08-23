@@ -574,14 +574,16 @@ void register_callback(py::module_& m) {
         },
         py::arg("method"), py::arg("options_json"), py::arg("f"), py::arg("g"));
 
-    // The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" alone, split from
-    // "callback_math" above for the same reason "callback_math2" is -- the arity differs from
-    // every other math method's. `f` marshals through as_scalar_xy_fn into `cbs.scalar_xy`.
+    // The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" and "ode_solve",
+    // split from "callback_math" above for the same reason "callback_math2" is -- the arity
+    // differs from every other math method's. `f` marshals through as_scalar_xy_fn into
+    // `cbs.scalar_xy`; "ode_solve" reuses the same shape with `t` playing `x`'s role (see
+    // callback/math.hpp's ode_solve arm).
     m.def(
         "callback_math_xy",
         [](const std::string& method, const std::string& options_json, py::function f) {
             sup::CallbackSet cbs;
-            if (method == "quadrature_2d") {
+            if (method == "quadrature_2d" || method == "ode_solve") {
                 cbs.scalar_xy = as_scalar_xy_fn(f);
             } else {
                 throw std::invalid_argument("unknown xy-callback math method: " + method);

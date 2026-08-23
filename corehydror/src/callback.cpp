@@ -504,13 +504,15 @@ list ch_callback_math2_(std::string method, std::string options_json, function f
     return pack(sup::run_callback("math", method, options_json, cbs));
 }
 
-// The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" alone, split from
-// ch_callback_math_ above for the same reason ch_callback_math2_ is -- the arity differs from
-// every other math method's. `f` marshals through as_scalar_xy_fn into `cbs.scalar_xy`.
+// The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" and "ode_solve", split
+// from ch_callback_math_ above for the same reason ch_callback_math2_ is -- the arity differs
+// from every other math method's. `f` marshals through as_scalar_xy_fn into `cbs.scalar_xy`;
+// "ode_solve" reuses the same shape with `t` playing `x`'s role (see callback/math.hpp's
+// ode_solve arm).
 [[cpp11::register]]
 list ch_callback_math_xy_(std::string method, std::string options_json, function f) {
     sup::CallbackSet cbs;
-    if (method == "quadrature_2d") {
+    if (method == "quadrature_2d" || method == "ode_solve") {
         cbs.scalar_xy = as_scalar_xy_fn(f);
     } else {
         stop("unknown xy-callback math method: %s", method.c_str());

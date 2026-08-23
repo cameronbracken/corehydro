@@ -284,6 +284,7 @@ quartodoc:
         - quadrature_2d
         - quadrature_nd
         - QuadratureResult
+        - ode_solve
         - derivative
         - gradient
         - hessian

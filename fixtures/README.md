@@ -1848,6 +1848,27 @@ always drives AdaptiveSimpsonsRule2D and always returns the result triple + stat
 `fixtures/callback/math.json` are its two catalog entries, both real upstream integrands
 (`Test_AdaptiveSimpsonsRule2D.Test_XPlusY`/`Test_PI`, the latter Integrands.PI2D).
 
+P2 "math extras" also added `math/ode_solve`, over the ported RungeKutta family
+(`numerics/math/ode/runge_kutta.hpp`): `second_order`, `fourth_order` (plus its single-step
+overload `fourth_order_step`), `fehlberg`, and `cash_karp`. It reuses `quadrature_2d`'s
+`scalar_xy` callback shape, `f(t, y)` rather than `f(x, y)`, so it needed no new `CallbackSet`
+member. `options.method` is one of `"rk4"` (the default), `"rk2"`, `"rkf"`, or `"cash_karp"`.
+`"rk2"` always drives `second_order` and always needs `end_time`/`time_steps`, returning the
+solution array (`dims = {time_steps}`, NOT `time_steps + 1` -- the ported C# allocates
+`new double[timeSteps]`). `"rk4"` needs one of two shapes, distinguished by the PRESENCE of
+`end_time` rather than a method sub-key (the same rule `root_find_newton`'s bracket follows):
+present drives the array overload exactly as `"rk2"` does; absent drives the single-step
+overload over `dt` alone, returning one number (`values = {value}`, `names = {"value"}`).
+`"rkf"`/`"cash_karp"` always need `dt`/`dt_min` and optionally `tolerance` (absent leaves the
+ported routine's own default, 1E-3, in force), returning one number the same way `"rk4"`'s
+single-step form does. `fixtures/callback/ode.json` is the one file of this method, its five
+cases (`ode_rk2`, `ode_rk4`, `ode_rk4_single_step`, `ode_rkf`, `ode_cash_karp`) each transcribing
+one of Test_RungeKutta.cs's five `[TestMethod]`s over its one catalog entry, `Ode_TestFunction`
+(`f(t, y) = y - t^2 + 1`); the single-step/adaptive cases pin only the FIRST step of the upstream
+loop test (`t: 0 -> 0.5`), since a fixture case is one call into the runner rather than a scripted
+loop -- the ctest suite (`core/tests/test_runge_kutta.cpp`) carries the full 4-step loop each
+upstream test itself runs.
+
 P2 "math extras" (Task 6) added `math/quadrature_nd` and `math/quadrature_vegas`, over the three
 ported stochastic multidimensional integrators (`numerics/math/integration/`):
 MonteCarloIntegration, Miser, and Vegas. `quadrature_nd` drives the first two over `callback` (the

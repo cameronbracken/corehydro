@@ -110,6 +110,7 @@ set(BF_TESTS
   test_root_finding_extras
   test_integration_extras
   test_integration_random
+  test_runge_kutta
 )
 
 # Sobol test takes the direction-number file as its sole argument.

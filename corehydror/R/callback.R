@@ -409,6 +409,103 @@ quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NU
             standard_error = res$values[[3]])
 }
 
+#' Solve a user-written ordinary differential equation
+#'
+#' Solves `dy/dt = f(t, y)` forward from `start_time` with a ported Numerics Runge-Kutta method
+#' (P2 "math extras"): fixed-step second- or fourth-order Runge-Kutta over an equally-spaced grid
+#' (`method = "rk2"`/`"rk4"` with `end_time`/`time_steps`), the fourth-order method's single-step
+#' form (`method = "rk4"` with `dt` alone), or one of the two adaptive-step-size methods,
+#' Runge-Kutta-Fehlberg or Runge-Kutta-Cash-Karp (`method = "rkf"`/`"cash_karp"` with
+#' `dt`/`dt_min`).
+#'
+#' @param f a function taking two numbers (`t`, `y`) and returning `dy/dt`, one number.
+#' @param initial_value the value of `y` at `start_time`.
+#' @param start_time the time to start integrating from.
+#' @param end_time,time_steps the end time and the number of equally-spaced points between
+#'   `start_time` and `end_time` (inclusive of both ends). Required together for `method =
+#'   "rk2"`; for `method = "rk4"`, supplying them selects this array form over the single-step
+#'   form (see `dt` below) -- their PRESENCE, not a separate flag.
+#' @param dt the step size. For `method = "rk4"` without `end_time`/`time_steps`, the single step
+#'   to advance by (the ODE is solved once, at `start_time + dt`). For `method = "rkf"`/
+#'   `"cash_karp"`, the maximum internal step size, required together with `dt_min`.
+#' @param dt_min the minimum internal step size for `method = "rkf"`/`"cash_karp"`, required
+#'   together with `dt`.
+#' @param method one of `"rk4"` (the default), `"rk2"`, `"rkf"`, or `"cash_karp"`.
+#' @param tolerance the absolute error tolerance for `method = "rkf"`/`"cash_karp"` alone. `NULL`,
+#'   the default, leaves the ported routine's own default (1e-3) in force.
+#' @return for `method = "rk2"`, or `"rk4"` with `end_time`/`time_steps`: a numeric vector of
+#'   length `time_steps`, the solution at each grid point (`y[1]` is `initial_value`). For every
+#'   other case: a single number, the solution at `start_time + dt` (`"rk4"`'s single-step form)
+#'   or at `start_time + dt` under the adaptive step control (`"rkf"`/`"cash_karp"`).
+#' @examples
+#' # dy/dt = y, y(0) = 1: the exact solution is y(t) = exp(t).
+#' y <- ode_solve(function(t, y) y, initial_value = 1, start_time = 0, end_time = 1,
+#'                time_steps = 100)
+#' y[100]
+#' @export
+ode_solve <- function(f, initial_value, start_time, end_time = NULL, time_steps = NULL,
+                      dt = NULL, dt_min = NULL, method = c("rk4", "rk2", "rkf", "cash_karp"),
+                      tolerance = NULL) {
+  method <- match.arg(method)
+  if (!is.function(f)) {
+    stop("`f` must be a function taking two numbers (t, y) and returning a single number",
+         call. = FALSE)
+  }
+  check_number <- function(x, name) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      stop("`", name, "` must be a single finite number", call. = FALSE)
+    }
+  }
+  check_number(initial_value, "initial_value")
+  check_number(start_time, "start_time")
+  opts <- list(initial_value = as.double(initial_value), start_time = as.double(start_time))
+  if (method != "rk4") {
+    opts$method <- method
+  }
+
+  array_form <- method == "rk2" || (method == "rk4" && !is.null(end_time))
+  if (array_form) {
+    if (is.null(end_time) || is.null(time_steps)) {
+      stop("`end_time` and `time_steps` are both required for method = \"", method, "\"",
+           call. = FALSE)
+    }
+    check_number(end_time, "end_time")
+    if (!is.numeric(time_steps) || length(time_steps) != 1L || time_steps < 2) {
+      stop("`time_steps` must be a single integer of at least 2", call. = FALSE)
+    }
+    opts$end_time <- as.double(end_time)
+    opts$time_steps <- as.integer(time_steps)
+  } else if (method == "rk4") {
+    if (is.null(dt)) {
+      stop("`dt` is required for method = \"rk4\" when `end_time` is not supplied", call. = FALSE)
+    }
+    check_number(dt, "dt")
+    opts$dt <- as.double(dt)
+  } else {
+    # rkf / cash_karp
+    if (is.null(dt) || is.null(dt_min)) {
+      stop("`dt` and `dt_min` are both required for method = \"", method, "\"", call. = FALSE)
+    }
+    check_number(dt, "dt")
+    check_number(dt_min, "dt_min")
+    opts$dt <- as.double(dt)
+    opts$dt_min <- as.double(dt_min)
+    if (!is.null(tolerance)) {
+      if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
+        stop("`tolerance` must be a single positive number", call. = FALSE)
+      }
+      opts$tolerance <- as.double(tolerance)
+    }
+  }
+
+  res <- ch_callback_math_xy_("ode_solve", to_spec_json(opts), f)
+  if (array_form) {
+    unlist(res$values, use.names = FALSE)
+  } else {
+    res$values[[1]]
+  }
+}
+
 #' Integrate a user-written function over a multidimensional box
 #'
 #' Computes the definite integral of `f` over the hyper-rectangle `[min, max]` (P2 "math extras")

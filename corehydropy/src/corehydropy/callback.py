@@ -28,6 +28,7 @@ __all__ = [
     "quadrature_2d",
     "quadrature_nd",
     "QuadratureResult",
+    "ode_solve",
     "derivative",
     "gradient",
     "hessian",
@@ -574,6 +575,121 @@ def quadrature_2d(
         options["max_depth"] = int(max_depth)
     res = _core.callback_math_xy("quadrature_2d", json.dumps(options), f)
     return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
+
+
+_ODE_METHODS = ("rk4", "rk2", "rkf", "cash_karp")
+
+
+def ode_solve(
+    f: Callable[[float, float], float],
+    initial_value: float,
+    start_time: float,
+    end_time: float | None = None,
+    time_steps: int | None = None,
+    dt: float | None = None,
+    dt_min: float | None = None,
+    method: str = "rk4",
+    tolerance: float | None = None,
+) -> float | np.ndarray:
+    """Solve a user-written ordinary differential equation.
+
+    Solves ``dy/dt = f(t, y)`` forward from ``start_time`` with a ported Numerics Runge-Kutta
+    method (P2 "math extras"): fixed-step second- or fourth-order Runge-Kutta over an
+    equally-spaced grid (``method="rk2"``/``"rk4"`` with ``end_time``/``time_steps``), the
+    fourth-order method's single-step form (``method="rk4"`` with ``dt`` alone), or one of the
+    two adaptive-step-size methods, Runge-Kutta-Fehlberg or Runge-Kutta-Cash-Karp
+    (``method="rkf"``/``"cash_karp"`` with ``dt``/``dt_min``).
+
+    Parameters
+    ----------
+    f : callable
+        A function taking two numbers (``t``, ``y``) and returning ``dy/dt``, one number.
+    initial_value : float
+        The value of ``y`` at ``start_time``.
+    start_time : float
+        The time to start integrating from.
+    end_time, time_steps : float, int, optional
+        The end time and the number of equally-spaced points between ``start_time`` and
+        ``end_time`` (inclusive of both ends). Required together for ``method="rk2"``; for
+        ``method="rk4"``, supplying them selects this array form over the single-step form (see
+        ``dt`` below) -- their PRESENCE, not a separate flag.
+    dt : float, optional
+        The step size. For ``method="rk4"`` without ``end_time``/``time_steps``, the single step
+        to advance by (the ODE is solved once, at ``start_time + dt``). For
+        ``method="rkf"``/``"cash_karp"``, the maximum internal step size, required together with
+        ``dt_min``.
+    dt_min : float, optional
+        The minimum internal step size for ``method="rkf"``/``"cash_karp"``, required together
+        with ``dt``.
+    method : str, default "rk4"
+        One of ``"rk4"`` (the default), ``"rk2"``, ``"rkf"``, or ``"cash_karp"``.
+    tolerance : float, optional
+        The absolute error tolerance for ``method="rkf"``/``"cash_karp"`` alone. Left unset, the
+        ported routine's own default (1e-3) applies.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        For ``method="rk2"``, or ``"rk4"`` with ``end_time``/``time_steps``: an array of length
+        ``time_steps``, the solution at each grid point (``y[0]`` is ``initial_value``). For
+        every other case: a single number, the solution at ``start_time + dt`` (``"rk4"``'s
+        single-step form) or under the adaptive step control (``"rkf"``/``"cash_karp"``).
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> y = ch.ode_solve(lambda t, y: y, initial_value=1, start_time=0, end_time=1,
+    ...                   time_steps=100)
+    >>> round(y[-1], 5)
+    2.71828
+    """
+    _check_fn(f)
+    if method not in _ODE_METHODS:
+        raise ValueError(f"`method` must be one of {_ODE_METHODS!r}, got {method!r}")
+
+    def _check_number(x: object, name: str) -> float:
+        x = float(x)
+        if not np.isfinite(x):
+            raise ValueError(f"`{name}` must be a single finite number")
+        return x
+
+    initial_value = _check_number(initial_value, "initial_value")
+    start_time = _check_number(start_time, "start_time")
+    options: dict[str, float | int | str] = {
+        "initial_value": initial_value,
+        "start_time": start_time,
+    }
+    if method != "rk4":
+        options["method"] = method
+
+    array_form = method == "rk2" or (method == "rk4" and end_time is not None)
+    if array_form:
+        if end_time is None or time_steps is None:
+            raise ValueError(f"`end_time` and `time_steps` are both required for method={method!r}")
+        end_time = _check_number(end_time, "end_time")
+        if int(time_steps) < 2:
+            raise ValueError("`time_steps` must be an integer of at least 2")
+        options["end_time"] = end_time
+        options["time_steps"] = int(time_steps)
+    elif method == "rk4":
+        if dt is None:
+            raise ValueError("`dt` is required for method=\"rk4\" when `end_time` is not supplied")
+        options["dt"] = _check_number(dt, "dt")
+    else:
+        # rkf / cash_karp
+        if dt is None or dt_min is None:
+            raise ValueError(f"`dt` and `dt_min` are both required for method={method!r}")
+        options["dt"] = _check_number(dt, "dt")
+        options["dt_min"] = _check_number(dt_min, "dt_min")
+        if tolerance is not None:
+            if not float(tolerance) > 0:
+                raise ValueError("`tolerance` must be a single positive number")
+            options["tolerance"] = float(tolerance)
+
+    res = _core.callback_math_xy("ode_solve", json.dumps(options), f)
+    if array_form:
+        return np.asarray(res["values"], dtype=float)
+    return float(res["values"][0])
 
 
 _QUADRATURE_ND_METHODS = ("monte_carlo", "miser", "vegas")

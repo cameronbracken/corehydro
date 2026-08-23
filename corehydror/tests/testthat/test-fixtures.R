@@ -493,6 +493,9 @@ callback_fixture_function <- function(name) {
     # Test_AdaptiveSimpsonsRule2D.Test_PI, upstream's Integrands.PI2D: the indicator of the unit
     # disc, whose integral over [-1, 1] x [-1, 1] approximates pi.
     Quad2D_PI2D = function(x, y) if (x^2 + y^2 < 1) 1 else 0,
+    # The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
+    # [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
+    Ode_TestFunction = function(t, y) y - t^2 + 1,
     # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
     # sum in an explicit `for` loop rather than through sum(): R's sum() accumulates in extended
     # precision where C++, Python and C# accumulate in double, and a Markov chain turns one
@@ -2101,9 +2104,10 @@ test_that("oracle fixtures validate", {
           g <- callback_fixture_function(construct[[second_key]])
           ns$ch_callback_math2_(construct$method, opts, fn, g)
         } else if (identical(construct$group, "math") &&
-                     identical(construct$method, "quadrature_2d")) {
+                     construct$method %in% c("quadrature_2d", "ode_solve")) {
           # P2 "math extras": the (x, y) half of the math group, ch_callback_math_xy_ -- see
           # ch_callback_math2_ above for why a differing arity gets its own R entry point.
+          # "ode_solve" reuses quadrature_2d's f(x, y) shape with t playing x's role.
           ns$ch_callback_math_xy_(construct$method, opts, fn)
         } else if (identical(construct$group, "math") &&
                      identical(construct$method, "quadrature_vegas")) {

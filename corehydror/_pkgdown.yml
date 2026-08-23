@@ -253,6 +253,7 @@ reference:
       - quadrature
       - quadrature_2d
       - quadrature_nd
+      - ode_solve
       - derivative
   - title: The generator a callback is handed
     desc: >

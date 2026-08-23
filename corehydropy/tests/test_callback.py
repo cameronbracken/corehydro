@@ -229,6 +229,69 @@ def test_quadrature_2d_integrates_over_a_rectangle():
         ch.quadrature_2d(lambda x, y: x + y, 1, 0, 0, 1)
 
 
+def test_ode_solve_rk4_on_exponential_growth():
+    # dy/dt = y, y(0) = 1: the exact solution is y(t) = exp(t), so 100 rk4 steps to t = 1 should
+    # land within 1e-5 of e. R's twin asserts the identical setup.
+    y = ch.ode_solve(lambda t, y: y, initial_value=1, start_time=0, end_time=1, time_steps=100)
+    assert len(y) == 100
+    assert y[0] == pytest.approx(1.0)
+    assert y[-1] == pytest.approx(math.e, abs=1e-5)
+
+
+def test_ode_solve_reproduces_the_test_runge_kutta_family():
+    def ode(t, y):
+        return y - t**2 + 1
+
+    valid = [0.5, 1.425639364649936, 2.640859085770477, 4.009155464830968, 5.305471950534675]
+
+    rk2 = ch.ode_solve(ode, 0.5, 0, end_time=2, time_steps=5, method="rk2")
+    assert list(rk2) == pytest.approx(valid, abs=1)
+
+    rk4 = ch.ode_solve(ode, 0.5, 0, end_time=2, time_steps=5, method="rk4")
+    assert list(rk4) == pytest.approx(valid, abs=1e-2)
+
+    # The single-step overload: dt with no end_time returns one number, called in a loop.
+    single = [0.5]
+    y0, t0 = 0.5, 0.0
+    for _ in range(4):
+        y0 = ch.ode_solve(ode, y0, t0, dt=0.5, method="rk4")
+        t0 += 0.5
+        single.append(y0)
+    assert single == pytest.approx(valid, abs=1e-2)
+
+    rkf = [0.5]
+    y0, t0 = 0.5, 0.0
+    for _ in range(4):
+        y0 = ch.ode_solve(ode, y0, t0, dt=0.5, dt_min=0.001, method="rkf")
+        t0 += 0.5
+        rkf.append(y0)
+    assert rkf == pytest.approx(valid, abs=1e-4)
+
+    rkck = [0.5]
+    y0, t0 = 0.5, 0.0
+    for _ in range(4):
+        y0 = ch.ode_solve(ode, y0, t0, dt=0.5, dt_min=0.001, method="cash_karp")
+        t0 += 0.5
+        rkck.append(y0)
+    assert rkck == pytest.approx(valid, abs=1e-3)
+
+
+def test_ode_solve_refuses_a_bad_shape_and_reports_the_users_own_error():
+    def boom(t, y):
+        raise ValueError("my own error")
+
+    with pytest.raises(ValueError, match="my own error"):
+        ch.ode_solve(boom, 1, 0, end_time=1, time_steps=10)
+    with pytest.raises(TypeError, match="must be a function"):
+        ch.ode_solve("nope", 1, 0, end_time=1, time_steps=10)
+    with pytest.raises(ValueError, match="end_time"):
+        ch.ode_solve(lambda t, y: y, 1, 0, method="rk2")
+    with pytest.raises(ValueError, match="dt_min"):
+        ch.ode_solve(lambda t, y: y, 1, 0, dt=0.5, method="rkf")
+    with pytest.raises(ValueError, match="method"):
+        ch.ode_solve(lambda t, y: y, 1, 0, end_time=1, time_steps=10, method="nope")
+
+
 def test_an_unsupplied_option_leaves_the_ported_default_in_force():
     # The wrapper writes an option key only when the caller passes one, so None and the ported
     # default must give the identical run. R's twin asserts the same.

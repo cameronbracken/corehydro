@@ -21,6 +21,11 @@
 //   quadrature_2d: {"min_x": 0.0, "max_x": 1.0, "min_y": 0.0, "max_y": 1.0,
 //                   "absolute_tolerance": 1e-8, "relative_tolerance": 1e-8,
 //                   "min_depth": 0, "max_depth": 100}
+//   ode_solve:  {"method": "rk4", "initial_value": 0.5, "start_time": 0.0, "end_time": 2.0,
+//                "time_steps": 5}  -- or, rk4's single-step form: {"method": "rk4",
+//                "initial_value": 0.5, "start_time": 0.0, "dt": 0.5}  -- or, the adaptive forms:
+//                {"method": "rkf", "initial_value": 0.5, "start_time": 0.0, "dt": 0.5,
+//                "dt_min": 0.001, "tolerance": 1e-3}
 //   quadrature_nd: {"method": "monte_carlo", "min": [0.0, 0.0], "max": [1.0, 1.0], "seed": 12345,
 //                   "use_sobol": true, "sobol_path": "...", "max_function_evaluations": 100000,
 //                   "max_iterations": 2000, "min_iterations": 100, "relative_tolerance": 1e-3,
@@ -52,6 +57,22 @@
 // counterpart of why root_find_newton is its own method rather than a root_find option. It always
 // drives AdaptiveSimpsonsRule2D and always returns the result triple + status, exactly as
 // quadrature's Integrator-class arms do.
+//
+// `ode_solve` (P2 "math extras") drives the ported RungeKutta family over `cbs.scalar_xy` --
+// f(t, y), the same shape `quadrature_2d`'s f(x, y) already carries, reused rather than adding a
+// fourth scalar-pair member, with `t` playing `x`'s role. `method` is OPTIONAL and one of "rk4"
+// (the default), "rk2", "rkf", or "cash_karp". "rk2" always drives `RungeKutta.SecondOrder` (its
+// only overload) and always needs `end_time`/`time_steps`, returning the solution vector
+// (`dims = {time_steps}`, NOT `time_steps + 1` -- see runge_kutta.hpp's own note on the ported
+// array length). "rk4" needs one of two shapes: `end_time` PRESENT drives the array overload
+// exactly as "rk2" does; ABSENT drives the single-step overload over `dt` alone, returning one
+// number (`values = {value}`, `names = {"value"}`) -- the same "presence, not a flag" rule
+// `root_find_newton`'s bracket follows above, chosen because it mirrors the ported class's own
+// two static overloads rather than inventing a method sub-key C# does not have. "rkf" and
+// "cash_karp" always need `dt`/`dt_min` (the maximum and minimum internal step sizes) and
+// optionally `tolerance` (absent leaves the ported routine's own default, 1E-3, in force,
+// `runge_kutta.hpp`'s own `kDefaultOdeTolerance`), returning one number the same way "rk4"'s
+// single-step form does.
 //
 // `quadrature_nd` (P2 "math extras") drives the two ported stochastic multidimensional
 // integrators, MonteCarloIntegration (the default `method`) and Miser, over `cbs.vector_scalar`
@@ -182,6 +203,7 @@
 #include "corehydro/numerics/math/integration/vegas.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
+#include "corehydro/numerics/math/ode/runge_kutta.hpp"
 #include "corehydro/numerics/math/rootfinding/bisection.hpp"
 #include "corehydro/numerics/math/rootfinding/brent.hpp"
 #include "corehydro/numerics/math/rootfinding/newton_raphson.hpp"
@@ -196,6 +218,7 @@ namespace rootfinding = corehydro::numerics::math::rootfinding;
 namespace differentiation = corehydro::numerics::math::differentiation;
 namespace integration = corehydro::numerics::math::integration;
 namespace linalg = corehydro::numerics::math::linalg;
+namespace ode = corehydro::numerics::math::ode;
 namespace bfsampling = corehydro::numerics::sampling;
 
 inline CallbackResult run_math(const std::string& method, const JsonValue& o,
@@ -585,6 +608,73 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
                     integ.standard_error()};
         r.names = {"integral", "function_evaluations", "standard_error"};
         r.status = integration::status_name(integ.status());
+        return r;
+    }
+
+    if (method == "ode_solve") {
+        // Reuses `cbs.scalar_xy`, the same f(t, y) shape quadrature_2d's f(x, y) already carries
+        // (P2 "math extras"); see the file header. `t` plays `x`'s role and `y` plays `y`'s.
+        if (!cbs.scalar_xy)
+            throw std::invalid_argument("math/ode_solve requires a scalar function 'f(t, y)'");
+        GuardedCall<double, double, double> g(cbs.scalar_xy,
+                                              std::numeric_limits<double>::quiet_NaN());
+        auto fty = [&g](double t, double y) { return g(t, y); };
+        // Absent means "rk4", preserving the same "first arm listed is the default" rule the
+        // other multi-method arms above follow. See the file header.
+        std::string ode_method = o.value_or("method", "rk4");
+        double initial_value = require_double(o, "initial_value", "math/ode_solve");
+        double start_time = require_double(o, "start_time", "math/ode_solve");
+
+        try {
+            if (ode_method == "rk2") {
+                double end_time = require_double(o, "end_time", "math/ode_solve (rk2)");
+                int time_steps =
+                    static_cast<int>(require_double(o, "time_steps", "math/ode_solve (rk2)"));
+                std::vector<double> y =
+                    ode::second_order(fty, initial_value, start_time, end_time, time_steps);
+                r.values = std::move(y);
+                r.dims = {static_cast<int>(r.values.size())};
+            } else if (ode_method == "rk4") {
+                // `end_time` PRESENT selects the array overload (RungeKutta.FourthOrder's
+                // 5-argument form); ABSENT selects the single-step overload (its 4-argument
+                // form, `dt` in force of `end_time`/`time_steps`) -- not a method sub-key, the
+                // same "presence, not a flag" rule root_find_newton's bracket follows. See the
+                // file header.
+                if (o.contains("end_time")) {
+                    double end_time = o.at("end_time").as_double();
+                    int time_steps =
+                        static_cast<int>(require_double(o, "time_steps", "math/ode_solve (rk4)"));
+                    std::vector<double> y =
+                        ode::fourth_order(fty, initial_value, start_time, end_time, time_steps);
+                    r.values = std::move(y);
+                    r.dims = {static_cast<int>(r.values.size())};
+                } else {
+                    double dt = require_double(o, "dt", "math/ode_solve (rk4, single-step)");
+                    double value = ode::fourth_order_step(fty, initial_value, start_time, dt);
+                    r.values = {value};
+                    r.names = {"value"};
+                }
+            } else if (ode_method == "rkf" || ode_method == "cash_karp") {
+                double dt = require_double(o, "dt", "math/ode_solve (rkf/cash_karp)");
+                double dt_min = require_double(o, "dt_min", "math/ode_solve (rkf/cash_karp)");
+                // Absent leaves the ported routine's own default (1E-3) in force -- no copy of
+                // it here, the same rule every other optional tolerance on this surface follows.
+                double tolerance = o.contains("tolerance") ? o.at("tolerance").as_double()
+                                                           : ode::kDefaultOdeTolerance;
+                double value = ode_method == "rkf"
+                                  ? ode::fehlberg(fty, initial_value, start_time, dt, dt_min, tolerance)
+                                  : ode::cash_karp(fty, initial_value, start_time, dt, dt_min, tolerance);
+                r.values = {value};
+                r.names = {"value"};
+            } else {
+                throw std::invalid_argument("math/ode_solve: unknown 'method' '" + ode_method +
+                                            "'; expected 'rk2', 'rk4', 'rkf', or 'cash_karp'");
+            }
+        } catch (...) {
+            g.rethrow_if_aborted();
+            throw;
+        }
+        g.rethrow_if_aborted();
         return r;
     }
 

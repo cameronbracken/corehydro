@@ -1805,6 +1805,10 @@ def _callback_fixture_function(name):
     # disc, whose integral over [-1, 1] x [-1, 1] approximates pi.
     if name == "Quad2D_PI2D":
         return lambda x, y: 1.0 if x * x + y * y < 1.0 else 0.0
+    # The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
+    # [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
+    if name == "Ode_TestFunction":
+        return lambda t, y: y - t ** 2 + 1.0
     # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
     # sum in an explicit loop rather than through sum(): a Markov chain turns one differing bit
     # into a different chain outright, so the four runners have to agree to the last bit for these
@@ -2219,9 +2223,10 @@ def _run_callback_case(case):
         second_key = "df" if construct["method"] == "root_find_newton" else "jacobian"
         g = _callback_fixture_function(construct[second_key])
         r = _core.callback_math2(construct["method"], options_json, fn, g)
-    elif construct["group"] == "math" and construct["method"] == "quadrature_2d":
+    elif construct["group"] == "math" and construct["method"] in ("quadrature_2d", "ode_solve"):
         # P2 "math extras": the (x, y) half of the math group, callback_math_xy -- see
         # callback_math2 above for why a differing arity gets its own Python entry point.
+        # "ode_solve" reuses quadrature_2d's f(x, y) shape with t playing x's role.
         r = _core.callback_math_xy(construct["method"], options_json, fn)
     elif construct["group"] == "math" and construct["method"] == "quadrature_vegas":
         # P2 "math extras": the (x, weight) half of the math group, callback_math_vw -- see

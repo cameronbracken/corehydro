@@ -1892,3 +1892,77 @@ test_that("the model-only verbs refuse a fit_gmm_moments() fit by name", {
   expect_error(fit_diagnostics(f), "needs a fit built from a model")
   expect_null(f$model)
 })
+
+test_that("ode_solve solves a user-written R ODE with rk4 (P2 math extras)", {
+  # dy/dt = y, y(0) = 1: the exact solution is y(t) = exp(t), so 100 rk4 steps to t = 1 should
+  # land within 1e-5 of e. Python's twin asserts the identical setup.
+  y <- ode_solve(function(t, y) y, initial_value = 1, start_time = 0, end_time = 1,
+                 time_steps = 100)
+  expect_length(y, 100)
+  expect_equal(y[1], 1)
+  expect_equal(y[100], exp(1), tolerance = 1e-5)
+})
+
+test_that("ode_solve reproduces the Test_RungeKutta.cs family (P2 math extras)", {
+  ode <- function(t, y) y - t^2 + 1
+  valid <- c(0.5, 1.425639364649936, 2.640859085770477, 4.009155464830968, 5.305471950534675)
+
+  rk2 <- ode_solve(ode, initial_value = 0.5, start_time = 0, end_time = 2, time_steps = 5,
+                   method = "rk2")
+  expect_equal(rk2, valid, tolerance = 1)
+
+  rk4 <- ode_solve(ode, initial_value = 0.5, start_time = 0, end_time = 2, time_steps = 5,
+                   method = "rk4")
+  expect_equal(rk4, valid, tolerance = 1e-2)
+
+  # The single-step overload: dt with no end_time returns one number, called in a loop.
+  single <- numeric(5)
+  single[1] <- 0.5
+  y0 <- 0.5
+  t0 <- 0
+  for (i in 2:5) {
+    single[i] <- ode_solve(ode, initial_value = y0, start_time = t0, dt = 0.5, method = "rk4")
+    y0 <- single[i]
+    t0 <- t0 + 0.5
+  }
+  expect_length(single[1], 1)
+  expect_equal(single, valid, tolerance = 1e-2)
+
+  rkf <- numeric(5)
+  rkf[1] <- 0.5
+  y0 <- 0.5
+  t0 <- 0
+  for (i in 2:5) {
+    rkf[i] <- ode_solve(ode, initial_value = y0, start_time = t0, dt = 0.5, dt_min = 0.001,
+                        method = "rkf")
+    y0 <- rkf[i]
+    t0 <- t0 + 0.5
+  }
+  expect_equal(rkf, valid, tolerance = 1e-4)
+
+  rkck <- numeric(5)
+  rkck[1] <- 0.5
+  y0 <- 0.5
+  t0 <- 0
+  for (i in 2:5) {
+    rkck[i] <- ode_solve(ode, initial_value = y0, start_time = t0, dt = 0.5, dt_min = 0.001,
+                         method = "cash_karp")
+    y0 <- rkck[i]
+    t0 <- t0 + 0.5
+  }
+  expect_equal(rkck, valid, tolerance = 1e-3)
+})
+
+test_that("ode_solve refuses a bad shape and reports the user's own error", {
+  boom <- function(t, y) stop("my own error")
+  expect_error(ode_solve(boom, initial_value = 1, start_time = 0, end_time = 1, time_steps = 10),
+               "my own error")
+  expect_error(ode_solve("nope", initial_value = 1, start_time = 0, end_time = 1, time_steps = 10),
+               "must be a function")
+  expect_error(ode_solve(function(t, y) y, initial_value = 1, start_time = 0, method = "rk2"),
+               "end_time")
+  expect_error(ode_solve(function(t, y) y, initial_value = 1, start_time = 0, dt = 0.5,
+                         method = "rkf"), "dt_min")
+  expect_error(ode_solve(function(t, y) y, initial_value = 1, start_time = 0, end_time = 1,
+                         time_steps = 10, method = "nope"), "should be one of")
+})
