@@ -196,3 +196,9 @@ changed-upstream file whose pin was deliberately not moved.
   mutation bumps the C# cache version but not this port's, because the port has no INPC layer.
 - **`Tools.ParallelAdd` hardening** — corehydro uses serial reductions by design, which is
   stronger than the upstream property.
+- **`Numerics/Functions/TabularFunction.cs`** — the third `IUnivariateFunction` implementation
+  (P2 "math extras" Task 11 ported the other two, `LinearFunction` and `PowerFunction`). Built
+  entirely on `UncertainOrderedPairedData`/`OrderedPairedData`/`Ordinate`/`UncertainOrdinate` (the
+  `Numerics.Data` "Paired Data" subsystem), which this repo has not ported. Deferred to Phase P4
+  alongside that subsystem rather than ported against a stand-in container; see
+  `core/include/corehydro/numerics/functions/i_univariate_function.hpp`'s file header.
