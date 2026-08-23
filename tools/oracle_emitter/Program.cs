@@ -5059,6 +5059,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return SpecialDispatch(method, data, options, asrt);
         case "functions":
             return FunctionsDispatch(method, data, options, asrt);
+        case "network":
+            return NetworkDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -5136,6 +5138,64 @@ static double LinalgDispatch(string method, List<double[]> data, JsonElement opt
         return ToolboxSelectFlat(asrt, flat, result.NumberOfRows, result.NumberOfColumns);
     }
     throw new Exception($"unknown linalg method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/network.hpp's run_network arm against the real
+// Numerics.Mathematics.Optimization.Dijkstra. The edge list arrives as four parallel data arrays
+// ([from, to, weight, index], one element per edge) with the destination node indices in
+// `options.destinations` and an optional `node_count`; the float[nNodes, 3] result table is
+// flattened row-major to match the C++ ToolboxResult (dims = {nNodes, 3}).
+//
+// ALL THREE methods are driven through the free Dijkstra.Solve, INCLUDING the two network_* ones,
+// and that is deliberate rather than a shortcut: the shipped C# Network cannot be constructed at
+// all (its constructor sizes both edge caches at the maximum node index rather than max + 1 and
+// then indexes one past the end, so every construction throws IndexOutOfRangeException -- measured,
+// and written up in docs/upstream-csharp-issues.md). A patched Network -- the same file with only
+// that sizing corrected, which is the port's one intentional divergence -- was measured returning
+// the free solver's table element for element, because Network.Solve does nothing but forward its
+// cached edge lists to this very function. `network_solve_weights` is likewise driven on the
+// ORIGINAL weights, because Network.Solve(float[] edgeWeights) passes the stale cache alongside
+// its re-weighted array and the solver reads its weights out of that cache: the custom weights
+// have no effect, which is exactly what the fixture case pins.
+static double NetworkDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] from = data[0], to = data[1], weight = data[2], index = data[3];
+    var edges = new List<Edge>();
+    for (int i = 0; i < from.Length; i++)
+        edges.Add(new Edge((int)from[i], (int)to[i], (float)weight[i], (int)index[i]));
+
+    var destinations = new List<int>();
+    var d = options.GetProperty("destinations");
+    if (d.ValueKind == JsonValueKind.Array)
+        foreach (var e in d.EnumerateArray()) destinations.Add((int)ParseNum(e));
+    else destinations.Add((int)ParseNum(d));
+
+    // "dijkstra" honors the fixture's node_count (C#'s own optional nNodes parameter, -1 meaning
+    // "derive it"); the two network_* methods take none, because Network derives its own.
+    int nodeCount = -1;
+    if (method == "dijkstra")
+    {
+        if (options.TryGetProperty("node_count", out var nc)) nodeCount = (int)ParseNum(nc);
+    }
+    else if (method == "network_solve" || method == "network_solve_weights")
+    {
+        int max = 0;
+        foreach (var edge in edges) max = Math.Max(max, Math.Max(edge.FromIndex, edge.ToIndex));
+        nodeCount = max + 1;
+    }
+    else throw new Exception($"unknown network method: {method}");
+
+    // Which overload: the single-destination one for one destination, the int[] one otherwise --
+    // the same rule the C++ arm follows, and the one each transcribed C# test calls.
+    float[,] table = destinations.Count == 1
+        ? Dijkstra.Solve(edges, destinations[0], nodeCount)
+        : Dijkstra.Solve(edges, destinations.ToArray(), nodeCount);
+
+    int rows = table.GetLength(0);
+    var flat = new double[rows * 3];
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < 3; j++) flat[i * 3 + j] = table[i, j];
+    return ToolboxSelectFlat(asrt, flat, rows, 3);
 }
 
 // Mirrors numerics/support/toolbox/special.hpp's run_special arm against the real

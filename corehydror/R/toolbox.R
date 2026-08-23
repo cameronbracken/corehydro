@@ -1015,3 +1015,119 @@ univariate_function <- function(type, parameters, x, inverse = FALSE, is_inverse
   method <- if (isTRUE(inverse)) "inverse" else "evaluate"
   toolbox_run("functions", method, list(as.double(x)), opts)$values
 }
+
+# The "network" toolbox group (P3 optimizers Task 10): the Dijkstra shortest-path solver over an
+# edge list. Edges cross the runner boundary as four parallel numeric vectors -- from, to,
+# weight, edge index -- with the destinations in the options object, and the result table comes
+# back flattened row-major with dims = {node_count, 3}, the same convention `linalg`'s matrix
+# results use above.
+
+# Internal: reject the mistakes an edge list can make, naming the argument. Returns the
+# validated, coerced edge index vector.
+check_edges <- function(from, to, weight, edge_index) {
+  if (!is.numeric(from) || !is.numeric(to) || !is.numeric(weight)) {
+    stop("`from`, `to` and `weight` must be numeric vectors", call. = FALSE)
+  }
+  n <- length(from)
+  if (n == 0L) {
+    stop("`from`, `to` and `weight` must describe at least one edge", call. = FALSE)
+  }
+  if (length(to) != n || length(weight) != n) {
+    stop(sprintf(paste0("`from`, `to` and `weight` must have the same length; ",
+                        "got %d, %d and %d"), n, length(to), length(weight)), call. = FALSE)
+  }
+  if (is.null(edge_index)) {
+    return(as.double(seq_len(n) - 1L))
+  }
+  if (!is.numeric(edge_index) || length(edge_index) != n) {
+    stop(sprintf("`edge_index` must be a numeric vector the same length as `from`; got %d for %d",
+                 length(edge_index), n), call. = FALSE)
+  }
+  as.double(edge_index)
+}
+
+# Internal: a node index is a whole, non-negative number. The shared C++ group header checks this
+# too (a fixture case reaches it directly), but checking here as well keeps the message naming
+# the R argument and keeps the two packages' errors identical.
+check_node_indices <- function(x, what) {
+  if (any(!is.finite(x)) || any(x != floor(x)) || any(x < 0)) {
+    stop(sprintf("`%s` must be whole, non-negative node indices", what), call. = FALSE)
+  }
+  invisible(NULL)
+}
+
+#' Shortest paths through a network
+#'
+#' Mirrors the C# `Dijkstra.Solve` overloads: solves the cheapest route from EVERY node of a
+#' directed, weighted graph to a set of destination nodes at once, running the search backwards
+#' from the destinations. The answer is a routing table -- for each node, which neighbour to step
+#' to, along which edge, and at what remaining cost.
+#'
+#' Node indices are 0-based in both `corehydror` and `corehydropy`, matching the C# result table
+#' the two packages share; a graph with `n` nodes uses indices `0` to `n - 1`. Unreachable nodes
+#' carry `cost = Inf` with `next_node = -1` and `edge_index = -1`, and a destination node carries
+#' `cost = 0` with `next_node` equal to its own index.
+#'
+#' Costs accumulate in single precision, because the ported solver does (C# declares
+#' `float Weight` and its own tests assert the table by exact `float` equality). Fractional
+#' weights therefore round to `float` before they are summed.
+#'
+#' @param from,to,weight numeric vectors of the same length, one element per directed edge:
+#'   the start node index, the end node index, and the cost of traversing the edge. `from` and
+#'   `to` must be whole, non-negative numbers.
+#' @param destinations a numeric vector of one or more destination node indices. With several
+#'   destinations, each node keeps whichever destination it reaches most cheaply.
+#' @param edge_index an optional numeric vector the same length as `from`, labelling each edge
+#'   (typically an index into whatever the edges came from -- a river reach, a road segment).
+#'   Defaults to `0:(length(from) - 1)`. These labels are what the `edge_index` result column
+#'   reports, and they need not be distinct.
+#' @param node_count an optional node count. Defaults to `max(from, to) + 1`; supply a larger
+#'   value to include isolated nodes carrying no edge, which then report `cost = Inf`.
+#' @return a data frame with one row per node, in node-index order, and columns `next_node`,
+#'   `edge_index` (both integer) and `cost` (numeric).
+#' @examples
+#' # 0 -> 1 -> 2, plus a disconnected node 3
+#' shortest_path(
+#'   from = c(0, 1),
+#'   to = c(1, 2),
+#'   weight = c(1, 1),
+#'   destinations = 2,
+#'   node_count = 4
+#' )
+#' @export
+shortest_path <- function(from, to, weight, destinations, edge_index = NULL, node_count = NULL) {
+  edge_index <- check_edges(from, to, weight, edge_index)
+  if (!is.numeric(destinations)) {
+    stop("`destinations` must be a numeric vector of node indices", call. = FALSE)
+  }
+  if (length(destinations) == 0L) {
+    stop("`destinations` must name at least one destination node", call. = FALSE)
+  }
+  check_node_indices(from, "from")
+  check_node_indices(to, "to")
+  check_node_indices(destinations, "destinations")
+  opts <- list(destinations = spec_array(as.double(destinations)))
+  n_nodes <- max(from, to) + 1
+  if (!is.null(node_count)) {
+    if (!is.numeric(node_count) || length(node_count) != 1L || node_count < 1) {
+      stop("`node_count` must be a single positive number", call. = FALSE)
+    }
+    n_nodes <- as.double(node_count)
+    opts$node_count <- n_nodes
+  }
+  if (any(destinations >= n_nodes)) {
+    stop(sprintf("`destinations` is out of range for a network of %d nodes", as.integer(n_nodes)),
+         call. = FALSE)
+  }
+  r <- toolbox_run(
+    "network", "dijkstra",
+    list(from, to, weight, edge_index),
+    opts
+  )
+  m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+  data.frame(
+    next_node = as.integer(m[, 1]),
+    edge_index = as.integer(m[, 2]),
+    cost = m[, 3]
+  )
+}

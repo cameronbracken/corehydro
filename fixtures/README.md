@@ -1784,6 +1784,48 @@ above; `power_confidence_inverse`'s dumped value coincides with `Test_InversePow
 algebraically identical to `Function()`'s `IsInverse = true` branch for the same alpha/beta/xi/
 sigma/confidence/input.
 
+P3 "optimizers" (Task 10) added the `network` group, the fifteenth, over the ported
+dynamic-programming trio (`numerics/math/optimization/dynamic/{binary_heap,dijkstra,network}.hpp`).
+It is the only group whose subject is a GRAPH rather than a series, so the edge list crosses the
+runner boundary as FOUR parallel data vectors -- `[from, to, weight, index]`, all of the same
+length, one element per edge -- with the destination node indices in `options.destinations` (an
+array, or a bare number for one) and an optional `node_count`. Every method returns the C#
+`float[nNodes, 3]` result table flattened row-major with `dims = {node_count, 3}` and the C#
+column order (`NEXT_NODE`, `EDGE_INDEX`, `COST`), so an assertion selects a cell with
+`index: node * 3 + column`. Unreachable nodes carry `-1`, `-1`, `"inf"`.
+
+PRECISION: costs accumulate in `float`, because the ported solver does (C# declares
+`float Weight`, allocates `float[nNodes, 3]`, and its own tests assert the table by exact `float`
+equality). The toolbox boundary is where the widening to `double` happens, so a fractional weight
+rounds to `float` before it is summed. Every weight in `DijkstraTesting.cs` is a small integer, so
+every value in `fixtures/toolbox/network.json` is exact in both precisions and is asserted at
+`mode: "equal"` (tolerance 0), exactly as the C# tests assert them.
+
+Three methods, mapping to the three C# entry points: `dijkstra` is the free `Dijkstra.Solve` (its
+single-destination overload when one destination is given, its `int[]` overload otherwise, which
+is the rule each transcribed C# test follows and which the emitter mirrors); `network_solve` is
+`Network.Solve`, which caches the incoming-edge lists in its constructor and forwards to that same
+free solver; `network_solve_weights` is `Network.Solve(float[] edgeWeights)`, taking a FIFTH data
+vector of replacement weights. `node_count` is a `dijkstra`-only option -- `Network` derives its
+own node count, so supplying it to either `network_*` method is an error rather than a silently
+ignored key.
+
+Two upstream defects shape this group and are pinned rather than papered over. The shipped C#
+`Network` CANNOT BE CONSTRUCTED at all (its constructor sizes both edge caches at the maximum node
+index instead of `max + 1` and then indexes one past the end), so the dotnet emitter drives the
+free `Dijkstra.Solve` for all three methods; that is exact rather than approximate, because
+`Network.Solve` does nothing but forward its cached lists to that function, and a patched C#
+`Network` -- the same file with only the sizing corrected, which is the port's one intentional
+divergence -- was measured returning the free solver's table element for element. And
+`Network.Solve(float[] edgeWeights)` IGNORES its own argument, passing the stale cache alongside
+the re-weighted array, so the case
+`triangle_path_network_solve_weights_are_ignored` supplies all-ones weights on a graph whose real
+weights are `1/4/1/10` and pins the ORIGINAL-weight answer: honoring the weights would route node
+1 through node 0 instead of node 2, so the case fails loudly if anyone ever "fixes" the port. Both
+defects are written up in `docs/upstream-csharp-issues.md`, and the user-facing `shortest_path()`
+verb in both packages calls `dijkstra`, never `network_solve_weights`.
+
+
 ### `optimizer`
 
 The fourteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated

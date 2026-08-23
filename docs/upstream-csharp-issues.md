@@ -2205,7 +2205,12 @@ J-statistic) are unchanged and still correct as written.
   cache-length test, so the behavior falls out of a straight transcription; the header (note 5)
   says so in capitals and `test_network_optimization.cpp` pins both tables side by side so a
   future "cleanup" fails loudly. The overload is NOT exposed as a working custom-weight solve in
-  the R/Python toolbox surface.
+  the R/Python toolbox surface: it is reachable only as the `network` group's
+  `network_solve_weights` method, documented there as quirk-preserving, and the user-facing
+  `shortest_path()` verb calls the free solver instead. The fixture case
+  `triangle_path_network_solve_weights_are_ignored` in `fixtures/toolbox/network.json` pins the
+  no-op through all four runners on a graph where honoring the weights would route node 1 through
+  node 0 rather than node 2.
 - **Suggested C# fix:** pass `null` for the cache (letting the solver rebuild it from the
   re-weighted edges), or rebuild the cache from `edges` inside the overload.
 
