@@ -49,6 +49,13 @@
 // them uniformly, exactly as C#'s `catch (ArgumentException ex)` catches all three
 // subtypes.
 //
+// OBJECTIVE-FUNCTION SETTER: C# declares `ObjectiveFunction` as a public settable property
+// (whose setter throws `ArgumentNullException` on null) rather than a constructor-only field,
+// because AugmentedLagrange REPLACES the inner optimizer's objective with its own augmented
+// Lagrangian after construction. `set_objective_function()` below is that setter; the
+// constructor still assigns the backing member directly, exactly as the C# ctor assigns
+// through the property before validating NumberOfParameters.
+//
 // minimize()/maximize(): kept as two separate methods with duplicated try/catch bodies
 // (rather than factored into one shared private helper) to mirror the C# source
 // structurally line-for-line, per this port's file/method-layout convention -- see
@@ -141,6 +148,15 @@ class Optimizer {
 
     // The number of parameters to evaluate in the objective function.
     int number_of_parameters() const { return number_of_parameters_; }
+
+    // The objective function to evaluate. C# exposes this as a public settable property whose
+    // setter throws on null; AugmentedLagrange REPLACES the inner optimizer's objective with its
+    // own augmented Lagrangian through it, which is why it is public rather than protected.
+    const Objective& objective_function() const { return objective_function_; }
+    void set_objective_function(Objective value) {
+        if (!value) throw ArgumentException("The objective function cannot be null.");
+        objective_function_ = std::move(value);
+    }
 
     // --- Outputs -------------------------------------------------------------------------
 

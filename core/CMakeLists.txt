@@ -114,6 +114,7 @@ set(BF_TESTS
   test_interpolation_extras
   test_linalg_extras
   test_univariate_functions
+  test_local_optimizers
 )
 
 # Sobol test takes the direction-number file as its sole argument.
