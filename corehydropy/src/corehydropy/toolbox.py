@@ -47,6 +47,8 @@ __all__ = [
     "qr_decomposition",
     "qr_solve",
     "gauss_jordan",
+    "debye",
+    "polynomial_eval",
     "univariate_function",
 ]
 
