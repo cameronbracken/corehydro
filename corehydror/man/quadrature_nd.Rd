@@ -68,7 +68,7 @@ the dither applied when the integrand's active region falls on a subdivision bou
 the default, leaves the ported class's own defaults in force. Supplying any for another
 \code{method} raises an error.}
 
-\item{independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter, }{initialize,check_convergence,target_probability \code{method = "vegas"} alone. \code{independent_evaluations}
+\item{independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter, initialize, check_convergence, target_probability}{\code{method = "vegas"} alone. \code{independent_evaluations}
 and \code{function_calls} bound the run (their product is the maximum total evaluations);
 \code{alpha} is the grid-refinement damping exponent; \code{number_of_bins} the stratification bin
 count; \code{tail_focus_parameter} the Power Transform exponent (1.0, the default, is standard
@@ -117,18 +117,30 @@ the way the sample stream is. \code{MonteCarloIntegration}/\code{Miser}/\code{Ve
 -- unlike the callback surface's own catalog tests, which the C++ side compiles with
 \code{-ffp-contract=off} for exactly this reason -- they compile with whatever fused-multiply-add
 behavior each package's own build flags happen to produce (R's \code{-O2} and corehydropy's CMake
-default are not guaranteed to agree). \code{integral} itself reproduces to within a handful of ULP in
-every case measured; \code{standard_error} and (for \code{"vegas"}) \code{chi_squared}, both built from a
-near-cancelling subtraction (\code{avg2 - avg*avg}-shaped for Monte Carlo/Miser,
-\code{sum_chi_squared - sum_weighted_results * result} for Vegas), amplify that ULP-level difference
-and can disagree well past it. This is a property of the classes' own arithmetic, not a bug in
-either binding, and it is the same reason \code{fixtures/callback/callback_cross_language.json}'s own
-\code{quadrature_nd}/\code{quadrature_vegas} digest asserts only \code{function_evaluations} and \code{status} --
-see that file's reference note for the measurements.
+default are not guaranteed to agree), and the picture is different per method rather than
+uniform across the surface. \code{method = "monte_carlo"} is the one case measured to reproduce
+\code{integral} bit-for-bit across ALL FOUR runners -- this package, \code{corehydropy}, the C++ fixture
+runner under both FMA settings, and the real C# library -- because its own arithmetic (a running
+sum of hit/miss weights divided by the sample count) has no near-cancelling subtraction for a
+fused-multiply-add ULP to hide in; \code{fixtures/callback/callback_cross_language.json} pins it at
+zero tolerance for exactly that reason. \code{"miser"} and \code{"vegas"} do not reproduce that cleanly --
+measured directly, \code{"miser"}'s own \code{integral} misses the C# value by 1 ULP under this package's
+shipped build, and \code{"vegas"}'s \code{integral}, while itself exact against C#, sits beside a
+\code{standard_error} (both methods) and \code{chi_squared} (\code{"vegas"} only) that are not: both are built
+from a near-cancelling subtraction (\code{avg2 - avg*avg}-shaped for Monte Carlo/Miser,
+\code{sum_chi_squared - sum_weighted_results * result} for Vegas) that amplifies a fused-multiply-add
+ULP difference, and a live R-vs-\code{corehydropy} comparison of \code{"vegas"} at these settings showed
+\code{integral} itself, not just \code{standard_error}/\code{chi_squared}, moving by a few ULP language to
+language. This is a property of the classes' own arithmetic, not a bug in either binding, and it
+is why \code{fixtures/callback/callback_cross_language.json}'s own \code{quadrature_nd}/\code{quadrature_vegas}
+digest asserts \code{function_evaluations} and \code{status} on every method, \code{integral} ADDITIONALLY on
+\code{"monte_carlo"} alone, and nothing else -- see that file's reference note for the measurements.
 }
 \examples{
+# max_iterations/relative_tolerance keep this example under the CRAN 5s example budget;
+# omitting them lets `"monte_carlo"`'s own (much larger) default run to full convergence.
 quadrature_nd(function(x) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
-              seed = 12345)
+              seed = 12345, max_iterations = 2000, relative_tolerance = 0.01)
 quadrature_nd(function(x, w) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
               method = "vegas")
 }

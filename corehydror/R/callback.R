@@ -436,14 +436,24 @@ quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NU
 #' -- unlike the callback surface's own catalog tests, which the C++ side compiles with
 #' `-ffp-contract=off` for exactly this reason -- they compile with whatever fused-multiply-add
 #' behavior each package's own build flags happen to produce (R's `-O2` and corehydropy's CMake
-#' default are not guaranteed to agree). `integral` itself reproduces to within a handful of ULP in
-#' every case measured; `standard_error` and (for `"vegas"`) `chi_squared`, both built from a
-#' near-cancelling subtraction (`avg2 - avg*avg`-shaped for Monte Carlo/Miser,
-#' `sum_chi_squared - sum_weighted_results * result` for Vegas), amplify that ULP-level difference
-#' and can disagree well past it. This is a property of the classes' own arithmetic, not a bug in
-#' either binding, and it is the same reason `fixtures/callback/callback_cross_language.json`'s own
-#' `quadrature_nd`/`quadrature_vegas` digest asserts only `function_evaluations` and `status` --
-#' see that file's reference note for the measurements.
+#' default are not guaranteed to agree), and the picture is different per method rather than
+#' uniform across the surface. `method = "monte_carlo"` is the one case measured to reproduce
+#' `integral` bit-for-bit across ALL FOUR runners -- this package, `corehydropy`, the C++ fixture
+#' runner under both FMA settings, and the real C# library -- because its own arithmetic (a running
+#' sum of hit/miss weights divided by the sample count) has no near-cancelling subtraction for a
+#' fused-multiply-add ULP to hide in; `fixtures/callback/callback_cross_language.json` pins it at
+#' zero tolerance for exactly that reason. `"miser"` and `"vegas"` do not reproduce that cleanly --
+#' measured directly, `"miser"`'s own `integral` misses the C# value by 1 ULP under this package's
+#' shipped build, and `"vegas"`'s `integral`, while itself exact against C#, sits beside a
+#' `standard_error` (both methods) and `chi_squared` (`"vegas"` only) that are not: both are built
+#' from a near-cancelling subtraction (`avg2 - avg*avg`-shaped for Monte Carlo/Miser,
+#' `sum_chi_squared - sum_weighted_results * result` for Vegas) that amplifies a fused-multiply-add
+#' ULP difference, and a live R-vs-`corehydropy` comparison of `"vegas"` at these settings showed
+#' `integral` itself, not just `standard_error`/`chi_squared`, moving by a few ULP language to
+#' language. This is a property of the classes' own arithmetic, not a bug in either binding, and it
+#' is why `fixtures/callback/callback_cross_language.json`'s own `quadrature_nd`/`quadrature_vegas`
+#' digest asserts `function_evaluations` and `status` on every method, `integral` ADDITIONALLY on
+#' `"monte_carlo"` alone, and nothing else -- see that file's reference note for the measurements.
 #'
 #' @param f a function taking a numeric vector and returning one number (`method =
 #'   "monte_carlo"`/`"miser"`), or a function taking a numeric vector and a number (the sample
@@ -476,8 +486,8 @@ quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NU
 #'   the dither applied when the integrand's active region falls on a subdivision boundary. `NULL`,
 #'   the default, leaves the ported class's own defaults in force. Supplying any for another
 #'   `method` raises an error.
-#' @param independent_evaluations,function_calls,alpha,number_of_bins,tail_focus_parameter,
-#'   initialize,check_convergence,target_probability `method = "vegas"` alone. `independent_evaluations`
+#' @param independent_evaluations,function_calls,alpha,number_of_bins,tail_focus_parameter,initialize,check_convergence,target_probability
+#'   `method = "vegas"` alone. `independent_evaluations`
 #'   and `function_calls` bound the run (their product is the maximum total evaluations);
 #'   `alpha` is the grid-refinement damping exponent; `number_of_bins` the stratification bin
 #'   count; `tail_focus_parameter` the Power Transform exponent (1.0, the default, is standard
@@ -498,8 +508,10 @@ quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NU
 #'   `Miser.Integrate()`) never assigns a success status, only ever writing `"Failure"` from its
 #'   catch block.
 #' @examples
+#' # max_iterations/relative_tolerance keep this example under the CRAN 5s example budget;
+#' # omitting them lets `"monte_carlo"`'s own (much larger) default run to full convergence.
 #' quadrature_nd(function(x) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
-#'               seed = 12345)
+#'               seed = 12345, max_iterations = 2000, relative_tolerance = 0.01)
 #' quadrature_nd(function(x, w) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
 #'               method = "vegas")
 #' @export
