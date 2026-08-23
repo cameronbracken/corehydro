@@ -355,33 +355,62 @@ histogram <- function(x, bins = NULL) {
 
 #' Interpolate a paired series
 #'
-#' Mirrors the C# `Linear` interpolater of the Numerics library, including its x and y
-#' transforms.
+#' Mirrors the C# `Linear`, `CubicSpline`, and `Polynomial` interpolaters of the Numerics
+#' library. `x_transform`, `y_transform`, and `extrapolate` are Linear-only in C# (neither
+#' `CubicSpline` nor `Polynomial` has a transform surface or an `Extrapolate()` method), so
+#' they must be left at their defaults for `method = "cubic_spline"` or `"polynomial"`.
 #'
 #' @param x,y numeric vectors of equal length defining the knots.
 #' @param xout numeric vector of positions to interpolate at.
+#' @param method `"linear"` (the default), `"cubic_spline"`, or `"polynomial"`.
+#' @param order the polynomial order -- there are `order + 1` terms for each polynomial
+#'   function. Required when `method = "polynomial"`; must be `NULL` otherwise.
 #' @param x_transform,y_transform one of `"none"` (the default), `"log"`, or `"normal_z"`.
+#'   Linear-only.
 #' @param sort_order `"ascending"` (the default) or `"descending"`, describing `x`.
 #' @param extrapolate whether to extend the end segments beyond the knots. Default `FALSE`,
 #'   which clamps to the end knot, matching the C# `Interpolate()` default; `TRUE` calls the C#
-#'   `Extrapolate()` method instead.
+#'   `Extrapolate()` method instead. Linear-only.
 #' @return a numeric vector the same length as `xout`.
 #' @examples
 #' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5))
+#' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5), method = "cubic_spline")
+#' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5), method = "polynomial", order = 3)
 #' @export
-interpolate <- function(x, y, xout, x_transform = c("none", "log", "normal_z"),
+interpolate <- function(x, y, xout, method = c("linear", "cubic_spline", "polynomial"),
+                        order = NULL,
+                        x_transform = c("none", "log", "normal_z"),
                         y_transform = c("none", "log", "normal_z"),
                         sort_order = c("ascending", "descending"), extrapolate = FALSE) {
   check_pair(x, y)
   if (!is.numeric(xout)) {
     stop("`xout` must be numeric", call. = FALSE)
   }
+  method <- match.arg(method)
   x_transform <- match.arg(x_transform)
   y_transform <- match.arg(y_transform)
   sort_order <- match.arg(sort_order)
-  toolbox_run("interpolation", "linear", list(x, y, xout),
-              list(x_transform = x_transform, y_transform = y_transform,
-                   sort_order = sort_order, extrapolate = isTRUE(extrapolate)))$values
+  if (method != "linear" &&
+      (x_transform != "none" || y_transform != "none" || isTRUE(extrapolate))) {
+    stop("`x_transform`, `y_transform`, and `extrapolate` are linear-only; the C# ",
+         "CubicSpline/Polynomial classes have neither a transform surface nor an ",
+         "Extrapolate() method", call. = FALSE)
+  }
+  if (method == "polynomial") {
+    if (is.null(order)) {
+      stop("`order` is required when method = \"polynomial\"", call. = FALSE)
+    }
+  } else if (!is.null(order)) {
+    stop("`order` only applies when method = \"polynomial\"", call. = FALSE)
+  }
+  opts <- list(sort_order = sort_order)
+  if (method == "linear") {
+    opts <- c(opts, list(x_transform = x_transform, y_transform = y_transform,
+                         extrapolate = isTRUE(extrapolate)))
+  } else if (method == "polynomial") {
+    opts <- c(opts, list(order = as.integer(order)))
+  }
+  toolbox_run("interpolation", method, list(x, y, xout), opts)$values
 }
 
 #' Interpolate a 2D grid (bilinear interpolation)

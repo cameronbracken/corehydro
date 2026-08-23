@@ -1707,8 +1707,9 @@ is a positional flattened array rather than a named vector (Sobol, Stratify, His
 linear regression's coefficient/covariance/residual matrices, ...) -- has no `names` array to look
 `label` up against, so it now throws on a `label` key instead of silently falling through to
 `"index"`-or-0 the way the C++/R/Python `toolbox_select` helpers never would. Symmetrically, the
-groups whose C++ `ToolboxResult` never sets `dims` at all (`interpolation.linear`/`bilinear`,
-`regression.residuals`/`predict`, `statistics.ranks`/`percentile`, every `gof` method) now throw on
+groups whose C++ `ToolboxResult` never sets `dims` at all (`interpolation.linear`/`bilinear`/
+`cubic_spline`/`polynomial`, `regression.residuals`/`predict`, `statistics.ranks`/`percentile`,
+every `gof` method) now throw on
 `select: "rows"`/`"columns"` instead of answering a fabricated or unrelated value, matching the
 C++/R/Python helpers' behavior when `r.dims` is empty. No fixture pairs either combination with one
 of those groups today, so neither change altered any existing case. See `ToolboxSelectFlat`'s and
@@ -2231,8 +2232,8 @@ targets (new in v2.1.4, adapted from the new `Test_Search.cs`) use the same `arg
 `core/include/corehydro/numerics/data/interpolation/search.hpp`'s file header) -- two of the
 `bisection_descending_*` cases genuinely distinguish the pre-fix (`start`) from the fixed (correct
 bracketing index) behavior. Unlike `Histogram.*`/`Bilinear.log_floor_value` below, `Search.*` stays
-C++-only even after Task 4: neither `interpolation` toolbox method (`linear`/`bilinear`) returns a
-search index, only an interpolated `y`.
+C++-only even after Task 4: no `interpolation` toolbox method (`linear`/`bilinear`/`cubic_spline`/
+`polynomial`) returns a search index, only an interpolated `y`.
 
 The `Bilinear.log_floor_value` target (`fixtures/special_functions/bilinear.json`, new in v2.1.4,
 adapted from `Test_LogarithmicFloorMatchesLinearInterpolation`) takes `args = [x1_query,
@@ -2253,7 +2254,15 @@ existing one; `fixtures/toolbox/interpolation.json` pins the `linear` method's t
 `extrapolate()`-extends distinction, scraped verbatim from `Test_Linear.cs` (the exact class this
 method wraps, unlike the `Test_PairedDataInterpolation.cs`/`OrderedPairedData` class that exercises
 the identical transform formulas through a different C# type) -- no other fixture in this repo pins
-`Linear.Interpolate()`/`Extrapolate()` directly.
+`Linear.Interpolate()`/`Extrapolate()` directly. The P2 math-extras phase (Task 8) added the
+`cubic_spline`/`polynomial` cases to the same file, scraped verbatim from `Test_CubicSpline.cs`/
+`Test_Polynomial.cs`: a single-value case, a 4-point list case, and a 34-point (or 34-of-40, for
+`polynomial` -- the C# `true_Y` literal itself has 40 entries but the C# test loop only checks the
+first `X.Length` (34) of them, transcribed as-is) list case per class, at each test's own tolerance.
+Unlike `linear`/`bilinear`, neither class has a transform surface or an `Extrapolate()` method in
+C#, so these two cases carry only `sort_order` (`polynomial` also carries the required `order`) --
+the `interpolate()` R/Python verb, not the toolbox arm, is what rejects a non-default transform or
+`extrapolate` for these two methods, matching the fact that C# simply has no such option to reject.
 
 The `Probability.hpcm_joint`/`Probability.hpcm_conditional_at` targets
 (`fixtures/special_functions/probability.json`, new in v2.1.4, adapted from the new

@@ -197,6 +197,39 @@ def test_interpolate_on_a_log_log_grid_reproduces_the_csharp_test_log_oracle():
     np.testing.assert_allclose(out, [150.0], atol=1e-6)
 
 
+def test_interpolate_cubic_spline_reproduces_the_csharp_test_cubicspline_oracle():
+    x = [6, 24, 48, 72]
+    y = [9.96, 22.13, 32.27, 37.60]
+    out = interpolate(x, y, [8], method="cubic_spline")
+    np.testing.assert_allclose(out, [11.4049889205445], atol=1e-6)
+
+
+def test_interpolate_polynomial_order3_reproduces_the_csharp_test_polynomial_oracle():
+    x = [6, 24, 48, 72]
+    y = [9.96, 22.13, 32.27, 37.60]
+    out = interpolate(x, y, [8], method="polynomial", order=3)
+    np.testing.assert_allclose(out, [11.5415808882467], atol=1e-6)
+
+
+def test_interpolate_requires_order_for_method_polynomial():
+    with pytest.raises(ValueError, match="order"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], method="polynomial")
+
+
+def test_interpolate_rejects_order_for_a_non_polynomial_method():
+    with pytest.raises(ValueError, match="order"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], order=3)
+
+
+def test_interpolate_rejects_a_non_default_transform_or_extrapolate_for_a_non_linear_method():
+    with pytest.raises(ValueError, match="linear-only"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], method="cubic_spline",
+                    x_transform="log")
+    with pytest.raises(ValueError, match="linear-only"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], method="polynomial", order=3,
+                    extrapolate=True)
+
+
 def test_interpolate_2d_rejects_a_y_array_whose_shape_does_not_match_x1_by_x2():
     with pytest.raises(ValueError, match=r"3 x 2"):
         interpolate_2d([1, 2, 3], [1, 2], np.arange(4).reshape(2, 2), [1.5], [1.5])

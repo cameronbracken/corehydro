@@ -5046,6 +5046,9 @@ static string OptString(JsonElement options, string key, string fallback) =>
 static bool OptBool(JsonElement options, string key, bool fallback) =>
     options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetBoolean() : fallback;
 
+static int OptInt(JsonElement options, string key, int fallback) =>
+    options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetInt32() : fallback;
+
 static double InterpolationDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
     var order = ParseSortOrder(OptString(options, "sort_order", "ascending"));
@@ -5076,6 +5079,22 @@ static double InterpolationDispatch(string method, List<double[]> data, JsonElem
         };
         var values = new double[x1out.Length];
         for (int i = 0; i < x1out.Length; i++) values[i] = interp.Interpolate(x1out[i], x2out[i]);
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    if (method == "cubic_spline")
+    {
+        double[] x = data[0], y = data[1], xout = data[2];
+        var interp = new CubicSpline(x, y, order);
+        var values = xout.Select(v => interp.Interpolate(v)).ToArray();
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    if (method == "polynomial")
+    {
+        double[] x = data[0], y = data[1], xout = data[2];
+        int polyOrder = OptInt(options, "order", -1);
+        if (polyOrder < 0) throw new Exception("toolbox method 'interpolation.polynomial' needs an 'order' option");
+        var interp = new Polynomial(polyOrder, x, y, order);
+        var values = xout.Select(v => interp.Interpolate(v)).ToArray();
         return ToolboxSelectFlatNoDims(asrt, values);
     }
     throw new Exception($"unknown interpolation method: {method}");

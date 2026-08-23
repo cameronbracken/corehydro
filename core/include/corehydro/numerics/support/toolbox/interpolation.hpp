@@ -1,8 +1,14 @@
 // corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
-// Holds the `interpolation` group's dispatch arm (Linear/Bilinear) plus the two enum parsers
-// (transform, sort order) it needs. Includes toolbox/common.hpp, which defines the shared
-// ToolboxResult/data_at/scalar helpers used here.
+// Holds the `interpolation` group's dispatch arms (Linear/Bilinear/CubicSpline/Polynomial)
+// plus the two enum parsers (transform, sort order) it needs. Includes toolbox/common.hpp,
+// which defines the shared ToolboxResult/data_at/scalar helpers used here.
+//
+// CubicSpline and Polynomial have neither a transform surface nor an Extrapolate() method in
+// C# (only Linear/Bilinear do), so `cubic_spline`/`polynomial` accept only `sort_order` (and,
+// for `polynomial`, the required `order`); `x_transform`/`y_transform`/`extrapolate` are simply
+// not read for these two methods -- the R/Python `interpolate()` verb is the one that validates
+// and rejects them for a non-"linear" method, matching what C# has on these classes.
 #pragma once
 
 #include <stdexcept>
@@ -10,7 +16,9 @@
 #include <vector>
 
 #include "corehydro/numerics/data/interpolation/bilinear.hpp"
+#include "corehydro/numerics/data/interpolation/cubic_spline.hpp"
 #include "corehydro/numerics/data/interpolation/linear.hpp"
+#include "corehydro/numerics/data/interpolation/polynomial.hpp"
 #include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
@@ -74,6 +82,30 @@ inline ToolboxResult run_interpolation(const std::string& method,
         ToolboxResult r;
         for (std::size_t i = 0; i < x1out.size(); ++i)
             r.values.push_back(interp.interpolate(x1out[i], x2out[i]));
+        return r;
+    }
+
+    if (method == "cubic_spline") {
+        const std::vector<double>& x = data_at(data, 0, "interpolation", method);
+        const std::vector<double>& y = data_at(data, 1, "interpolation", method);
+        const std::vector<double>& xout = data_at(data, 2, "interpolation", method);
+        nd::CubicSpline interp(x, y, order);
+        ToolboxResult r;
+        for (double v : xout) r.values.push_back(interp.interpolate(v));
+        return r;
+    }
+
+    if (method == "polynomial") {
+        const std::vector<double>& x = data_at(data, 0, "interpolation", method);
+        const std::vector<double>& y = data_at(data, 1, "interpolation", method);
+        const std::vector<double>& xout = data_at(data, 2, "interpolation", method);
+        if (!options.contains("order"))
+            throw std::runtime_error("toolbox method 'interpolation.polynomial' needs an "
+                                     "'order' option");
+        int poly_order = options.at("order").as_int();
+        nd::Polynomial interp(poly_order, x, y, order);
+        ToolboxResult r;
+        for (double v : xout) r.values.push_back(interp.interpolate(v));
         return r;
     }
     throw std::runtime_error("unknown interpolation method: " + method);

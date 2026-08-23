@@ -570,12 +570,16 @@ def histogram(x, bins=None) -> dict:
     return out
 
 
-def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none",
+def interpolate(x, y, xout, method: str = "linear", order: int | None = None,
+                x_transform: str = "none", y_transform: str = "none",
                 sort_order: str = "ascending", extrapolate: bool = False) -> np.ndarray:
     """Interpolate a paired series.
 
-    Mirrors the C# ``Linear`` interpolater of the Numerics library, including its x and y
-    transforms.
+    Mirrors the C# ``Linear``, ``CubicSpline``, and ``Polynomial`` interpolaters of the
+    Numerics library. ``x_transform``, ``y_transform``, and ``extrapolate`` are Linear-only in
+    C# (neither ``CubicSpline`` nor ``Polynomial`` has a transform surface or an
+    ``Extrapolate()`` method), so they must be left at their defaults for
+    ``method="cubic_spline"`` or ``"polynomial"``.
 
     Parameters
     ----------
@@ -583,13 +587,18 @@ def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none"
         Equal-length knots.
     xout : array_like
         Positions to interpolate at.
+    method : {"linear", "cubic_spline", "polynomial"}
+    order : int, optional
+        The polynomial order -- there are ``order + 1`` terms for each polynomial function.
+        Required when ``method="polynomial"``; must be ``None`` otherwise.
     x_transform, y_transform : {"none", "log", "normal_z"}
+        Linear-only.
     sort_order : {"ascending", "descending"}
         Describes ``x``.
     extrapolate : bool
         Whether to extend the end segments beyond the knots. ``False`` (the default) clamps to
         the end knot, matching the C# ``Interpolate()`` default; ``True`` calls the C#
-        ``Extrapolate()`` method instead.
+        ``Extrapolate()`` method instead. Linear-only.
 
     Returns
     -------
@@ -601,8 +610,16 @@ def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none"
     >>> from corehydropy import interpolate
     >>> interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5, 2.5])
     array([15., 25.])
+    >>> interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5, 2.5], method="cubic_spline")
+    array([15., 25.])
+    >>> interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5, 2.5], method="polynomial", order=3)
+    array([15., 25.])
     """
     xa, ya = _check_pair(x, y)
+    if method not in ("linear", "cubic_spline", "polynomial"):
+        raise ValueError(
+            f"`method` must be one of 'linear', 'cubic_spline', 'polynomial'; got {method!r}"
+        )
     if x_transform not in ("none", "log", "normal_z"):
         raise ValueError(
             f"`x_transform` must be one of 'none', 'log', 'normal_z'; got {x_transform!r}"
@@ -613,14 +630,28 @@ def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none"
         )
     if sort_order not in ("ascending", "descending"):
         raise ValueError(f"`sort_order` must be one of 'ascending', 'descending'; got {sort_order!r}")
+    if method != "linear" and (x_transform != "none" or y_transform != "none" or extrapolate):
+        raise ValueError(
+            "`x_transform`, `y_transform`, and `extrapolate` are linear-only; the C# "
+            "CubicSpline/Polynomial classes have neither a transform surface nor an "
+            "Extrapolate() method"
+        )
+    if method == "polynomial":
+        if order is None:
+            raise ValueError('`order` is required when method="polynomial"')
+    elif order is not None:
+        raise ValueError('`order` only applies when method="polynomial"')
     xouta = np.asarray(xout, dtype=float).ravel()
-    options = {
-        "x_transform": x_transform,
-        "y_transform": y_transform,
-        "sort_order": sort_order,
-        "extrapolate": bool(extrapolate),
-    }
-    return np.asarray(_toolbox_run("interpolation", "linear", [xa, ya, xouta], options)["values"])
+    options: dict = {"sort_order": sort_order}
+    if method == "linear":
+        options.update({
+            "x_transform": x_transform,
+            "y_transform": y_transform,
+            "extrapolate": bool(extrapolate),
+        })
+    elif method == "polynomial":
+        options["order"] = int(order)
+    return np.asarray(_toolbox_run("interpolation", method, [xa, ya, xouta], options)["values"])
 
 
 def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_transform: str = "none",

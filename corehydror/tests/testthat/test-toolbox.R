@@ -146,6 +146,42 @@ test_that("interpolate() on a log-log grid reproduces the C# Test_Log oracle", {
                tolerance = 1e-6)
 })
 
+test_that("interpolate() with method = \"cubic_spline\" reproduces the C# Test_CubicSpline oracle", {
+  x <- c(6, 24, 48, 72)
+  y <- c(9.96, 22.13, 32.27, 37.60)
+  expect_equal(interpolate(x, y, 8, method = "cubic_spline"), 11.4049889205445, tolerance = 1e-6)
+})
+
+test_that("interpolate() with method = \"polynomial\" order = 3 reproduces the C# Test_Polynomial oracle", {
+  x <- c(6, 24, 48, 72)
+  y <- c(9.96, 22.13, 32.27, 37.60)
+  expect_equal(interpolate(x, y, 8, method = "polynomial", order = 3), 11.5415808882467,
+               tolerance = 1e-6)
+})
+
+test_that("interpolate() requires `order` for method = \"polynomial\"", {
+  expect_error(interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, method = "polynomial"),
+               "order")
+})
+
+test_that("interpolate() rejects `order` for a non-polynomial method", {
+  expect_error(interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, order = 3),
+               "order")
+})
+
+test_that("interpolate() rejects a non-default transform/extrapolate for a non-linear method", {
+  expect_error(
+    interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, method = "cubic_spline",
+                x_transform = "log"),
+    "linear-only"
+  )
+  expect_error(
+    interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, method = "polynomial", order = 3,
+                extrapolate = TRUE),
+    "linear-only"
+  )
+})
+
 test_that("interpolate_2d() rejects a y matrix whose dimensions don't match x1 by x2", {
   expect_error(
     interpolate_2d(c(1, 2, 3), c(1, 2), matrix(1:4, nrow = 2), 1.5, 1.5),
