@@ -265,14 +265,19 @@ quartodoc:
         - trend_predict
         - trend_parameters
         - trend_names
-    - title: Optimizers
+    - title: Optimizers and network routing
       desc: >-
-        The six ported Numerics optimizers (differential evolution, BFGS, Powell, MLSL,
-        Nelder-Mead, Brent) over a user-written Python objective.
+        The fourteen ported Numerics optimizers (differential evolution, particle swarm,
+        shuffled complex evolution, simulated annealing, multi-start, MLSL, BFGS, Powell,
+        ADAM, gradient descent, Nelder-Mead, Brent, golden section, augmented Lagrange)
+        over a user-written Python objective, and the Dijkstra shortest-path solver from the
+        same upstream Optimization namespace.
       contents:
         - OptimResult
+        - Constraint
         - optim_minimize
         - optim_maximize
+        - shortest_path
     - title: Root finding, integration and differentiation
       desc: >-
         The ported Numerics Brent root finder, adaptive Gauss-Kronrod integrator and

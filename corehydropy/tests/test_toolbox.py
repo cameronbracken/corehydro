@@ -31,6 +31,7 @@ from corehydropy import (
     ranks,
     running_covariance,
     running_statistics,
+    shortest_path,
     sobol_sequence,
     stratify,
     summary_statistics,
@@ -800,3 +801,99 @@ def test_univariate_function_rejects_is_inverse_for_type_linear():
 def test_univariate_function_rejects_an_unknown_type():
     with pytest.raises(ValueError, match="unknown function type"):
         univariate_function("quadratic", [1, 1], 1)
+
+
+# The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
+# list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
+# same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs
+# and cover the binding surface (column order, 0-based indices, the unreachable row, defaults,
+# argument validation) rather than re-pinning the solver.
+
+
+def test_shortest_path_reproduces_simple_edge_graph_cost():
+    table = shortest_path(
+        [0, 0, 1, 1, 2, 4],
+        [1, 2, 2, 3, 3, 0],
+        [2, 4, 1, 7, 3, 1],
+        destinations=3,
+        edge_index=[0, 2, 2, 3, 4, 5],
+        node_count=6,
+    )
+    assert table.shape == (6, 3)
+    np.testing.assert_array_equal(table[:, 2], [6, 4, 3, 0, 7, np.inf])
+
+
+def test_shortest_path_reproduces_simple_network_routing():
+    frm = [0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 9, 9]
+    to = [5, 1, 0, 2, 6, 7, 1, 3, 7, 2, 8, 4, 3, 9, 0, 6, 5, 1, 7, 6, 1, 2, 8, 7, 3, 9, 8, 4]
+    w = [1, 30, 30, 1, 15, 2, 1, 5, 5, 5, 2, 1, 1, 30, 1, 3, 3, 15, 1, 1, 2, 5, 1, 1, 2, 2, 2, 30]
+    idx = [0, 1, 1, 2, 3, 4, 2, 5, 6, 5, 7, 8, 8, 9, 0, 10, 10, 3, 11, 11, 4, 6, 12, 12, 7, 13, 13, 9]
+    table = shortest_path(frm, to, w, destinations=9, edge_index=idx)
+    assert table.shape == (10, 3)
+    np.testing.assert_array_equal(table[:, 0], [5, 7, 1, 8, 3, 6, 7, 8, 9, 9])
+    np.testing.assert_array_equal(table[:, 2], [8, 5, 6, 4, 5, 7, 4, 3, 2, 0])
+
+
+def test_shortest_path_takes_several_destinations():
+    table = shortest_path(
+        [0, 1, 1, 2, 1],
+        [1, 0, 2, 1, 3],
+        [1, 3, 1, 2, 3],
+        destinations=[0, 3],
+        edge_index=[0, 1, 2, 3, 4],
+        node_count=4,
+    )
+    assert table[1, 0] == 0
+    assert table[1, 2] == 3
+    assert table[2, 0] == 1
+    assert table[2, 2] == 5
+
+
+def test_shortest_path_marks_an_unreachable_node():
+    table = shortest_path(
+        [0, 1, 2], [1, 0, 3], [1, 3, 1], destinations=0, edge_index=[0, 1, 2], node_count=4
+    )
+    assert np.isposinf(table[2, 2])
+    assert table[2, 0] == -1
+    assert table[2, 1] == -1
+
+
+def test_shortest_path_defaults_edge_index_to_the_edge_position():
+    table = shortest_path([0, 1, 1, 2], [1, 0, 2, 0], [1, 4, 1, 10], destinations=[0, 2])
+    assert table.shape == (3, 3)
+    np.testing.assert_array_equal(table[:, 0], [0, 2, 2])
+    np.testing.assert_array_equal(table[:, 2], [0, 1, 0])
+    np.testing.assert_array_equal(table[:, 1], [-1, 2, -1])
+
+
+def test_shortest_path_validates_its_arguments():
+    with pytest.raises(ValueError, match="same length"):
+        shortest_path([0, 1], [1, 2], [1], destinations=0)
+    with pytest.raises(ValueError, match="at least one destination"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=[])
+    with pytest.raises(ValueError, match="whole, non-negative"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0.5)
+    with pytest.raises(ValueError, match="same length"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0, edge_index=[0, 1, 2])
+    with pytest.raises(ValueError, match="at least one"):
+        shortest_path([], [], [], destinations=0)
+    with pytest.raises(ValueError, match="out of range"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=7)
+
+
+# A `node_count` too small for the graph used to reach the solver, which answered it with an
+# out-of-bounds write: a crash here and a quietly wrong routing table in corehydror. C# raises
+# IndexOutOfRangeException for the same call (measured; see dijkstra.hpp note 9), so the solver
+# now throws too, and the wrapper rejects it up front with a message naming the argument.
+def test_shortest_path_rejects_a_node_count_too_small_for_the_graph():
+    with pytest.raises(ValueError, match=r"`node_count` must be at least 6"):
+        shortest_path([0, 1], [5, 2], [1.0, 1.0], destinations=0, node_count=2)
+    with pytest.raises(ValueError, match="must be a single positive number"):
+        shortest_path([0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=0)
+    # The boundary itself is fine, and so is anything above it.
+    assert shortest_path(
+        [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=3
+    ).shape == (3, 3)
+    assert shortest_path(
+        [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=5
+    ).shape == (5, 3)

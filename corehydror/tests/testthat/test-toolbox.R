@@ -719,3 +719,113 @@ test_that("univariate_function() rejects is_inverse for type = 'linear'", {
 test_that("univariate_function() rejects an unknown type", {
   expect_error(univariate_function("quadratic", c(1, 1), 1), "unknown function type")
 })
+
+# The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
+# list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
+# same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs
+# and cover the binding surface (column order, 0-based indices, the unreachable row, defaults,
+# argument validation) rather than re-pinning the solver.
+
+test_that("shortest_path() reproduces SimpleEdgeGraphCost", {
+  sp <- shortest_path(
+    from = c(0, 0, 1, 1, 2, 4),
+    to = c(1, 2, 2, 3, 3, 0),
+    weight = c(2, 4, 1, 7, 3, 1),
+    destinations = 3,
+    edge_index = c(0, 2, 2, 3, 4, 5),
+    node_count = 6
+  )
+  expect_s3_class(sp, "data.frame")
+  expect_identical(names(sp), c("next_node", "edge_index", "cost"))
+  expect_identical(nrow(sp), 6L)
+  expect_identical(sp$cost, c(6, 4, 3, 0, 7, Inf))
+})
+
+test_that("shortest_path() reproduces SimpleNetworkRouting's next-node column", {
+  from <- c(0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 9, 9)
+  to <- c(5, 1, 0, 2, 6, 7, 1, 3, 7, 2, 8, 4, 3, 9, 0, 6, 5, 1, 7, 6, 1, 2, 8, 7, 3, 9, 8, 4)
+  w <- c(1, 30, 30, 1, 15, 2, 1, 5, 5, 5, 2, 1, 1, 30, 1, 3, 3, 15, 1, 1, 2, 5, 1, 1, 2, 2, 2, 30)
+  idx <- c(0, 1, 1, 2, 3, 4, 2, 5, 6, 5, 7, 8, 8, 9, 0, 10, 10, 3, 11, 11, 4, 6, 12, 12, 7, 13, 13, 9)
+  sp <- shortest_path(from, to, w, destinations = 9, edge_index = idx)
+  expect_identical(nrow(sp), 10L)
+  expect_identical(sp$next_node, c(5L, 7L, 1L, 8L, 3L, 6L, 7L, 8L, 9L, 9L))
+  expect_identical(sp$cost, c(8, 5, 6, 4, 5, 7, 4, 3, 2, 0))
+})
+
+test_that("shortest_path() takes several destinations", {
+  sp <- shortest_path(
+    from = c(0, 1, 1, 2, 1),
+    to = c(1, 0, 2, 1, 3),
+    weight = c(1, 3, 1, 2, 3),
+    destinations = c(0, 3),
+    edge_index = c(0, 1, 2, 3, 4),
+    node_count = 4
+  )
+  expect_identical(sp$next_node[[2]], 0L)
+  expect_identical(sp$cost[[2]], 3)
+  expect_identical(sp$next_node[[3]], 1L)
+  expect_identical(sp$cost[[3]], 5)
+})
+
+test_that("shortest_path() marks an unreachable node", {
+  sp <- shortest_path(
+    from = c(0, 1, 2),
+    to = c(1, 0, 3),
+    weight = c(1, 3, 1),
+    destinations = 0,
+    edge_index = c(0, 1, 2),
+    node_count = 4
+  )
+  expect_identical(sp$cost[[3]], Inf)
+  expect_identical(sp$next_node[[3]], -1L)
+  expect_identical(sp$edge_index[[3]], -1L)
+})
+
+test_that("shortest_path() defaults edge_index to the edge position", {
+  sp <- shortest_path(
+    from = c(0, 1, 1, 2),
+    to = c(1, 0, 2, 0),
+    weight = c(1, 4, 1, 10),
+    destinations = c(0, 2)
+  )
+  expect_identical(nrow(sp), 3L)
+  expect_identical(sp$next_node, c(0L, 2L, 2L))
+  expect_identical(sp$cost, c(0, 1, 0))
+  expect_identical(sp$edge_index, c(-1L, 2L, -1L))
+})
+
+test_that("shortest_path() validates its arguments", {
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1), destinations = 0), "same length")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = numeric(0)),
+               "at least one destination")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0.5),
+               "whole, non-negative")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
+                             edge_index = c(0, 1, 2)), "same length")
+  expect_error(shortest_path(numeric(0), numeric(0), numeric(0), destinations = 0), "at least one")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 7), "out of range")
+})
+
+# A `node_count` too small for the graph used to reach the solver, which answered it with an
+# out-of-bounds write: a quietly wrong routing table here and a crash in corehydropy. C# raises
+# IndexOutOfRangeException for the same call (measured; see dijkstra.hpp note 9), so the solver
+# now throws too, and the wrapper rejects it up front with a message naming the argument.
+test_that("shortest_path() rejects a node_count too small for the graph", {
+  expect_error(
+    shortest_path(from = c(0, 1), to = c(5, 2), weight = c(1, 1), destinations = 0,
+                  node_count = 2),
+    "`node_count` must be at least 6"
+  )
+  expect_error(
+    shortest_path(from = c(0, 1), to = c(1, 2), weight = c(1, 1), destinations = 0,
+                  node_count = 0),
+    "must be a single positive number"
+  )
+  # The boundary itself is fine, and so is anything above it.
+  expect_equal(
+    nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 3)), 3L
+  )
+  expect_equal(
+    nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 5)), 5L
+  )
+})

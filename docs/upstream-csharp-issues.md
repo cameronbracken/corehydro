@@ -2090,6 +2090,279 @@ J-statistic) are unchanged and still correct as written.
   ((double)i - 1)` — or hoist `double di = i` at the top of the loop, matching what `N` already
   is. `long` would push the failure out to about 2.1 million points rather than removing it.
 
+## FIDELITY (not a port defect) — a seeded ParticleSwarm or ShuffledComplexEvolution run takes a different search path under a compiler that emits fused multiply-add
+
+- **Where:** `Numerics/Mathematics/Optimization/Global/ParticleSwarm.cs` and
+  `ShuffledComplexEvolution.cs` @ 2a0357a, against
+  `core/include/corehydro/numerics/math/optimization/particle_swarm.hpp` and
+  `shuffled_complex_evolution.hpp`. Surfaced writing the seeded cross-language digest cases in
+  `fixtures/toolbox/toolbox_cross_language.json` for the optimizer phase's user-facing surface
+  (`optim_minimize(method = "particle_swarm" | "sce")`).
+- **What (measured, same machine, same seed 12345, same objective):** with the ported core
+  compiled `-ffp-contract=off`, the C++ runner is bit-identical to the real C# library on every
+  construct tried — ParticleSwarm on Booth `3073` iterations / `92220` evaluations / fitness
+  `3.1554436208840472E-30`, on Eggholder `2413` / `72420` / `-959.64066272085097` at
+  `(512, 404.23180505405406)`; ShuffledComplexEvolution on Booth `54` / `4786` /
+  `1.7264378682942888E-25`, on 5-D DeJong `57` / `9483` / `1.6274114682612478E-20`. With
+  contraction left at the compiler default (which is what the shipped R and Python packages get,
+  and what `test_fixtures` compiles the core with), the same runs give ParticleSwarm/Booth `3855`
+  / `115680` / `0`, ParticleSwarm/Eggholder the same `2413` / `72420` / `-959.64066272085097` but
+  `y = 404.23180501084073`, SCE/Booth `51` / `4232` / `9.2296725910858381e-29`, and SCE/DeJong the
+  same `57` / `9483` but `1.6274155980703362e-20`. Every one of those still lands on the textbook
+  optimum well inside the upstream MSTest deltas, so `fixtures/toolbox/optimizers.json` reproduces
+  in all four runners.
+- **Cause:** both algorithms branch on comparisons between accumulated sums (`if (fitness <
+  particle.BestFitness)`, the SCE sub-complex sort and its reflection/contraction acceptance
+  tests). clang and gcc contract `a*b + c` into a single fused multiply-add by default; .NET never
+  does. One contracted expression is enough to flip an accept/reject, and from there every later
+  PRNG draw is spent on a different point. This is the same arithmetic-contraction class already
+  documented for `test_fixtures`'s callback catalog (see `core/CMakeLists.txt` and
+  `fixtures/callback/callback_cross_language.json`), not an algorithmic divergence: the ported code
+  reproduces C# exactly the moment contraction is off. `SimulatedAnnealing` and `MultiStart`, the
+  other two global optimizers exposed in the same phase, are NOT affected — both reproduce C#
+  bit-for-bit either way (measured on Booth and FXYZ respectively, down to the evaluation count).
+- **Port handling:** `optimizers.json` pins the ACCURACY of all four methods at the upstream MSTest
+  literals and tolerances, which reproduce in C++, R, Python and C# alike. The cross-language digest
+  cases pin, at zero tolerance, only the quantities measured to survive both paths: everything for
+  SimulatedAnnealing and MultiStart; the iteration count, evaluation count, converged value and the
+  on-bound parameter for ParticleSwarm/Eggholder; the iteration and evaluation counts for
+  SCE/DeJong. The unpinned quantities are simply **not asserted** — there is **NO `oracle_skip` and
+  NO loosened tolerance** — following the D6/X12 precedent. The fixture's own `reference` string
+  carries the same measurement.
+- **Suggested action:** none for correctness; a seeded run is exactly reproducible within one build,
+  and both packages remain bit-identical to each other. Making a seeded ParticleSwarm or SCE run
+  reproduce the C# stream on every platform would mean compiling those two headers without
+  contraction in the shipped packages, which neither an R `Makevars` nor a portable pragma can
+  promise across the three CI compilers, so it is deliberately not attempted.
+
+## BUG — `Network` cannot be constructed at all: the constructor sizes both edge caches one element short, and never sets `_nodeCount`
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Network.cs` @ 2a0357a, the constructor
+  (lines 41-69), against `core/include/corehydro/numerics/math/optimization/dynamic/network.hpp`.
+  Surfaced porting the dynamic-programming trio (BinaryHeap / Dijkstra / Network) in the optimizer
+  phase.
+- **What:** the constructor computes `max = Math.Max(edges.Max(x => x.FromIndex), edges.Max(x =>
+  x.ToIndex))` and then allocates `_incomingEdges = new List<Edge>[max]` and `_outgoingEdges = new
+  List<Edge>[max]`. `max` is by construction an index that some edge actually uses, so the build
+  loop immediately below indexes at `max` and runs off the end of one array or the other. There is
+  no graph that escapes it, including an empty one (LINQ `Max` throws on an empty sequence
+  instead). Separately, `_nodeCount` is assigned `0` on the constructor's fourth line and never
+  raised — the two lines that would have raised it, and the `//_nodeCount += 1;` that would have
+  turned it into a count, are inside the commented-out `RoadSegment` block just above — so every
+  `Solve` overload forwards a node count of `0` to `Dijkstra.Solve`, which is not the `-1` sentinel
+  and would rebuild a zero-length cache and throw in its turn.
+- **Evidence (measured against the real library, not reasoned):** a throwaway console app
+  referencing `upstream/Numerics/Numerics/Numerics.csproj` at 2a0357a (`/tmp/getpath_probe`,
+  `dotnet run -c Release`):
+
+  ```
+  === ctor(one edge 0->0)
+    THREW System.IndexOutOfRangeException: Index was outside the bounds of the array.
+    STACK at Numerics.Mathematics.Optimization.Network..ctor(Edge[] edges, Int32[]
+           destinationIndices) in .../Mathematics/Optimization/Dynamic/Network.cs:line 41
+  === ctor(one edge 0->1)
+    THREW System.IndexOutOfRangeException: Index was outside the bounds of the array.
+  === ctor(no edges)
+    THREW System.InvalidOperationException: Sequence contains no elements
+  === Dijkstra.Solve(edges, 1, nodeCount: 0)
+    THREW System.IndexOutOfRangeException ... in .../Dynamic/Dijkstra.cs:line 123
+  ```
+
+  Padding the graph with an isolated highest node does not help, because the padding node becomes
+  the new `max`. Consistent with the class being unreachable, `Test_Numerics` has no `Network` test
+  class at all: `DijkstraTesting.cs` declares `ShortestPathTesting` and all eight of its methods
+  call `Dijkstra.Solve` directly.
+- **Port handling (INTENTIONAL C++ DIVERGENCE, the only one in this file):** the port allocates
+  `max + 1` and sets `node_count_ = max + 1`. A class whose every construction throws has no
+  behavior to be faithful to, and the commented-out block upstream states the intended sizing
+  outright (`if (_edges[i].ToIndex > _nodeCount) { _nodeCount = _edges[i].ToIndex; }` … `//// Add
+  one to the count for the index offset. //_nodeCount += 1;`). Nothing else in the class is
+  changed. The divergence is independently checkable rather than assumed: with it,
+  `network.solve(d)` returns exactly what `dijkstra::solve(edges, d)` returns, and that free
+  function DOES run in C#. The ctest oracles in `core/tests/test_network_optimization.cpp` were
+  measured off a copy of `Network.cs` carrying this one patch and nothing else, compiled against
+  the real Numerics assembly (`/tmp/getpath_probe/PatchedNetwork.cs`); the patched
+  `Solve(9)` on the `SimpleNetworkRouting` grid printed `identical to free Dijkstra.Solve: True`
+  element for element. The divergence is recorded in `network.hpp`'s transcription note 1.
+- **Suggested C# fix:** `_nodeCount = max + 1;` and `new List<Edge>[_nodeCount]` for both caches.
+  No oracle value moves, because no C# caller can be relying on the current behavior.
+
+## BUG — `Network.Solve(float[] edgeWeights)` silently ignores the custom weights it was given
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Network.cs` @ 2a0357a,
+  `Solve(float[] edgeWeights)`.
+- **What:** the overload builds a re-weighted copy of the edge array and then calls
+  `Dijkstra.Solve(edges, _destinationIndices, _nodeCount, _incomingEdges)` — passing the STALE
+  cached incoming-edge lists, which still hold the ORIGINAL weights. `Dijkstra.Solve` uses a
+  supplied cache whenever `edgesFromNodes.Length == nNodes`, and it reads the weights only out of
+  that cache, so the re-weighted array is never looked at. The method is a no-op with respect to
+  its own argument.
+- **Evidence (measured on the patched Network above, so the first defect does not mask this one):**
+  feeding all-ones weights to the `SimpleNetworkRouting` grid (whose real weights run 1 to 30)
+  returns the ORIGINAL cost column `8, 5, 6, 4, 5, 7, 4, 3, 2, 0`, identical to `Solve(new[]{9})`,
+  where an honest unit-weight solve of the same graph gives `4, 3, 3, 2, 1, 4, 3, 2, 1, 0`.
+- **Port handling:** mirrored faithfully. The port's `dijkstra::solve` applies the same
+  cache-length test, so the behavior falls out of a straight transcription; the header (note 5)
+  says so in capitals and `test_network_optimization.cpp` pins both tables side by side so a
+  future "cleanup" fails loudly. The overload is NOT exposed as a working custom-weight solve in
+  the R/Python toolbox surface: it is reachable only as the `network` group's
+  `network_solve_weights` method, documented there as quirk-preserving, and the user-facing
+  `shortest_path()` verb calls the free solver instead. The fixture case
+  `triangle_path_network_solve_weights_are_ignored` in `fixtures/toolbox/network.json` pins the
+  no-op through all four runners on a graph where honoring the weights would route node 1 through
+  node 0 rather than node 2.
+- **Suggested C# fix:** pass `null` for the cache (letting the solver rebuild it from the
+  re-weighted edges), or rebuild the cache from `edges` inside the overload.
+
+## BUG — `Network.GetPath` cannot return a path: it binary-searches an `int[]` for an `Edge`
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Network.cs` @ 2a0357a, both `GetPath`
+  overloads. This is the defect the optimizer phase's plan flagged for investigation; the
+  investigation confirmed it and found it is not the only problem with the method.
+- **What:** both overloads filter candidate edges with `Array.BinarySearch(edgesToRemove, edge)`,
+  where `edgesToRemove` is `int[]` and `edge` is an `Edge` struct. There is no
+  `BinarySearch<T>(T[], T)` match, so it binds `Array.BinarySearch(Array array, object value)`,
+  which boxes the `Edge` and asks an `Int32` to compare itself against it.
+- **Evidence (measured):**
+
+  ```
+  === Array.BinarySearch(int[]{0,1,2}, (object)Edge)
+    THREW System.InvalidOperationException: Failed to compare two elements in the array.
+    INNER System.ArgumentException: Object must be of type Int32.
+  === GetPath(new[]{0}, 0)         THREW System.InvalidOperationException: Failed to compare ...
+  === GetPath(new[]{0}, 0, table)  THREW System.InvalidOperationException: Failed to compare ...
+  === GetPath(empty, 0)            returned null
+  === GetPath(empty, 9)            returned null
+  === GetPath(empty, 0, table)     returned []
+  === Array.BinarySearch(int[0], (object)Edge)  returned -1
+  ```
+
+  So any call carrying a non-empty removal list — which is every call the method exists to serve —
+  dies on the first edge it examines. A zero-length binary search never invokes the comparer, so an
+  empty removal list is the one input that gets through, and then the outer `do { … } while
+  (heap.Count == 0)` (which loops only while the heap is EMPTY, i.e. runs one pass and exits, or
+  re-enters and throws `"Heap is empty."`) leaves `foundPath` false. The complete set of observable
+  outcomes for both overloads is therefore: **throw, null, or an empty list. Never a path.** Two
+  further defects sit behind that one and are unreachable because of it: the `while (heap.Count ==
+  0)` loop condition itself, and the second overload's path-reconstruction walk, which steps
+  `tempNode = (int)existingResultsTable[tempNode, 2]` — the COST column — where its sibling
+  overload correctly steps `[…, 0]`, the NEXT_NODE column.
+- **Port handling:** transcribed structurally so upstream diffs still map, with the offending
+  expression ported as `detail::binary_search_edge`, which reproduces the measured behavior (`-1`
+  for an empty list, the .NET exception message otherwise) rather than pretending the line does
+  something it does not. All three observable outcomes are pinned in
+  `core/tests/test_network_optimization.cpp` against the patched-C# measurements. The method is
+  **SEVERED from the R/Python surface** (see `upstream/CLAUDE.md`) — the toolbox `network` group
+  exposes the `Solve` overloads only.
+- **Suggested C# fix:** compare the edge INDEX, `Array.BinarySearch(edgesToRemove, edge.Index)`,
+  which is what the sibling call sites in the same method already do. Then fix the two follow-on
+  defects above, and give the method a test — it has none.
+
+## ROBUSTNESS — `Dijkstra.Solve` bounds-checks its node indices only by accident, so a too-small `nodeCount` is an IndexOutOfRangeException (and was undefined behavior in the port)
+
+- **Where:** `Numerics/Mathematics/Optimization/Dynamic/Dijkstra.cs` @ 2a0357a, both `Solve`
+  overloads. Port side: `core/include/corehydro/numerics/math/optimization/dynamic/dijkstra.hpp`.
+- **What:** every array the solver allocates is sized `nNodes`, and every one of them is then
+  indexed by a node index read straight off an `Edge` — `edgesToNodes[edge.ToIndex]`,
+  `resultTable[destinationIndex, …]`, `nodeWeightToDestination[from]` — with nothing checking that
+  the index fits. In C# the CLR checks it, so a `nodeCount` smaller than the graph is an
+  `IndexOutOfRangeException`. That is a defensible outcome and the port must reproduce it, but the
+  C# check is LAZY, not a validation pass: an out-of-range index on an edge the search never
+  relaxes never throws at all.
+- **Evidence (measured against the real Numerics library at 2a0357a; probe `/tmp/getpath_probe`):**
+
+  ```
+  Solve({(0,1),(1,5)}, 0, nodeCount: 2)   THREW System.IndexOutOfRangeException: Index was outside the bounds of the array.
+  Solve({(0,1),(1,5)}, new[]{0}, 2)       THREW System.IndexOutOfRangeException
+  Solve({(5,1),(0,1)}, 1, nodeCount: 2)   THREW System.IndexOutOfRangeException
+  Solve({(0,1)},       5, nodeCount: 2)   THREW System.IndexOutOfRangeException
+  Solve({(0,1),(7,0)}, 1, nodeCount: 2)   THREW System.IndexOutOfRangeException
+  Solve({(0,1),(7,1)}, 0, nodeCount: 2)   RETURNED [(0,-1,0), (-1,-1,Inf)]
+  ```
+
+- **Port defect this exposed (FIXED here):** the port transcribed those indexing expressions as
+  `std::vector::operator[]`, which is undefined behavior rather than a checked throw, so the same
+  calls wrote past the end of the cache. Reproduced three ways before the fix: AddressSanitizer
+  reported `heap-buffer-overflow … in dijkstra::detail::build_edges_to_nodes` at
+  `dijkstra.hpp:122`; `shortest_path(from = c(0,1), to = c(5,2), weight = c(1,1), destinations = 0,
+  node_count = 2)` returned a quietly corrupt routing table in R; and the same call fatally
+  terminated the Python interpreter. No fixture, ctest or package test supplied a `node_count`
+  below `max(from, to) + 1`, which is why every suite was green.
+- **Port handling:** `dijkstra::detail::checked_node_index` now guards each of the sites C# indexes
+  by a node index and throws `std::out_of_range` carrying the C# message. The guard is deliberately
+  in place at each site rather than hoisted into one up-front sweep, so the lazy case above still
+  returns its table (measured both ways; an up-front variant aborts that assertion). See
+  `dijkstra.hpp` note 9 and `a_node_count_below_the_graph_throws_like_csharp` in
+  `core/tests/test_network_optimization.cpp`, which pins all six measurements. The R and Python
+  `shortest_path()` wrappers are STRICTER than the solver on purpose: they reject any `node_count`
+  below `max(from, to) + 1` up front, so the user gets a message naming the argument instead of a
+  bounds message from inside the solver, at the cost of also rejecting the lazy case — a graph a
+  caller cannot have meant.
+- **Suggested C# fix:** validate `nodeCount` against `edges.Max(o => Math.Max(o.FromIndex,
+  o.ToIndex)) + 1` at the top of both overloads and throw `ArgumentOutOfRangeException(nameof(
+  nodeCount), …)`, so the caller learns which argument is wrong.
+
+## BUG — `AugmentedLagrange` cannot maximize: `Optimize()` always drives the inner optimizer through `Minimize()`
+
+- **Where:** `Numerics/Mathematics/Optimization/Constrained/AugmentedLagrange.cs` @ 2a0357a,
+  `Optimize()` (both `this.Optimizer.Minimize()` call sites) and `augmentedLagrangianFunction`.
+- **What:** the constructor replaces the inner optimizer's objective with
+  `augmentedLagrangianFunction`, which opens `double phi = _primaryObjectiveFunction(x);` — the RAW
+  objective, called directly, never through the base's `Evaluate` and so never through
+  `FunctionScale`. `Optimize()` then calls `this.Optimizer.Minimize()` unconditionally. Under
+  `Maximize()` the outer object's own bookkeeping flips sign, but the search does not: the inner
+  optimizer still MINIMIZES the objective plus penalty. The run reports `Success` and returns the
+  constrained MINIMUM.
+- **Evidence (measured through the shipped packages before the guard):** maximizing
+  `f(x) = -(x - 3)^2` subject to `x <= 1` over `[-10, 10]` — true optimum `x = 1`, value `-4` —
+  returned `x = -10.00011`, value `-169.0029`, status `Success`, byte for byte the same answer as
+  the matching `optim_minimize` call. Two-parameter constructs behave the same way: maximizing
+  `-((x-1)^2 + (y-3)^2)` on `[0,10]^2` under the inactive constraint `x + y <= 20` (true maximum 0
+  at `(1,3)`) returns `(10.000110, 9.999878)`, value `-130.0003`, status `Success`, and maximizing
+  `-((x-5)^2 + (y-7)^2)` under `x + y == 4` (true maximum `-8` at `(2,2)`) returns
+  `(4.00001, -0.00001)`, value `-50.0001`, status `Success`.
+- **Port handling:** the ported class mirrors it exactly (see
+  `core/include/corehydro/numerics/math/optimization/augmented_lagrange.hpp` note 2 and the
+  `optimizer_runner.hpp` grammar block), because a fixture case must be able to pin upstream
+  behavior. The guard lives on the two PUBLIC verbs instead:
+  `optim_maximize(method = "augmented_lagrange")` is rejected by name in both packages
+  (`kOptimMinimizeOnlyMethods` in `corehydror/R/optim.R`, `_MINIMIZE_ONLY_METHODS` in
+  `corehydropy/src/corehydropy/optim.py`), and the error names the upstream reason and the
+  workaround. The workaround is exact rather than approximate: minimizing `-f` under the same
+  constraints IS maximizing `f`, and both packages' tests run it and check the answer.
+- **Suggested C# fix:** have `augmentedLagrangianFunction` obtain `phi` through the base's
+  `Evaluate` (so `FunctionScale` applies), or call `this.Optimizer.Maximize()` when the outer run
+  is a maximization. Either way the class needs a maximizing test; all six existing ones minimize.
+
+## BUG — `MultiStart`'s polish step clamps the recorded best point after its fitness was recorded, so the reported value need not be attained at the reported parameters
+
+- **Where:** `Numerics/Mathematics/Optimization/Global/MultiStart.cs` @ 2a0357a, the polish block at
+  the end of `Optimize()`, which passes `BestParameterSet.Values` into `GetLocalOptimizer`.
+- **What:** `GetLocalOptimizer` calls `RepairParameter` on the array it is handed, in place. On the
+  polish call that array IS `BestParameterSet.Values`, so a best point that a local search left
+  outside the box is clamped back onto the bound while `BestParameterSet.Fitness` keeps the
+  out-of-box value that was recorded for the unclamped point. The run then reports a value the
+  reported parameters do not produce. The same aliasing shape as note 2 of the ported header (the
+  re-seated `InitialValues` array), but with a numeric rather than a bookkeeping consequence.
+- **Evidence (measured through the shipped Python package, and identical in R):** minimizing the
+  Eggholder function over `[-512, 512]^2` from `(0, 0)` with `method = "multi_start"` reports
+  `value = -959.829329467467` at `(512, 404.32280392733844)`. The objective AT that point is
+  `-959.6312431930309`. A 2001 x 2001 grid scan puts the whole-box minimum at about `-959.57`
+  (the true box optimum is `-959.6407`), so the reported value is not attainable anywhere in the
+  box; just outside it, at `x = 512.5`, the same objective reads `-961.148161258961`. Task 3 of the
+  P3 phase measured the real C# `MultiStart` returning `iters=100 evals=8414286
+  fitness=-959.82932946746701 values=512, 404.32280392733844` — bit-for-bit what the port returns,
+  so this is upstream behavior faithfully reproduced, not a port defect.
+- **Port handling:** mirrored exactly (see
+  `core/include/corehydro/numerics/math/optimization/multi_start.hpp` note 3), because the search
+  path and the C# oracles depend on it. Invisible on the fixture-pinned FXYZ construct, whose value
+  and parameters are consistent, which is why no fixture case catches it. It is noted in the
+  0.10.0 release notes so a user who sees an inconsistent pair knows it is upstream, and worked
+  example 19 deliberately does not showcase this method.
+- **Suggested C# fix:** polish a COPY of `BestParameterSet.Values` and adopt the result only if its
+  re-evaluated fitness is an improvement, or re-evaluate the objective after the repair so the
+  reported fitness always belongs to the reported point.
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a

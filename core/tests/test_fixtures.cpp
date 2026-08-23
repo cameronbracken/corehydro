@@ -1668,8 +1668,30 @@ static void run_optimizer_kind(const json& spec) {
         json construct = c["construct"];
         std::string objective_name = construct.value("objective", "DeJong");
         construct.erase("objective");
-        tbx::OptimResult r =
-            tbx::run_optimizer(construct.dump(), fixture_catalog::optimizer_objective(objective_name));
+        // The optional analytic gradient the two gradient-taking methods take, resolved out of its
+        // own catalog. Absent, the callback stays empty, which is what "differentiate numerically"
+        // means to both ported classes (a null C# Gradient delegate).
+        tbx::OptimCallbacks cbs;
+        cbs.objective = fixture_catalog::optimizer_objective(objective_name);
+        if (construct.contains("gradient")) {
+            cbs.gradient =
+                fixture_catalog::optimizer_gradient(construct["gradient"].get<std::string>());
+            construct.erase("gradient");
+        }
+        // The "augmented_lagrange" method's constraint callbacks. Each `constraints[i]` object
+        // carries a `function` key naming an entry in the SAME catalog the objective comes from
+        // (an objective and a constraint have the same shape); that key is stripped exactly as
+        // `objective`/`gradient` are, because it is a fixture-catalog name, not part of the
+        // runner's own grammar. What is left -- type/value/tolerance -- passes straight through,
+        // paired positionally with the callbacks below.
+        if (construct.contains("constraints")) {
+            for (auto& cs : construct["constraints"]) {
+                cbs.constraints.push_back(
+                    fixture_catalog::optimizer_objective(cs["function"].get<std::string>()));
+                cs.erase("function");
+            }
+        }
+        tbx::OptimResult r = tbx::run_optimizer(construct.dump(), cbs);
         for (const auto& as : c["assertions"]) {
             std::string method = as["method"].get<std::string>();
             std::string where = "optimizer/" + name + "/" + method;
@@ -1678,6 +1700,20 @@ static void run_optimizer_kind(const json& spec) {
             } else if (method == "parameter") {
                 std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
                 check_value(r.parameters.at(i), as, where);
+            } else if (method == "iterations") {
+                check_value(static_cast<double>(r.iterations), as, where);
+            } else if (method == "function_evaluations") {
+                check_value(static_cast<double>(r.function_evaluations), as, where);
+            } else if (method == "multiplier") {
+                // args: [set, index] -- "lambda"/"mu"/"nu", the three AugmentedLagrange multiplier
+                // vectors in the class's own naming.
+                std::string set = as["args"][0].get<std::string>();
+                std::size_t i = static_cast<std::size_t>(as["args"][1].get<int>());
+                if (set != "lambda" && set != "mu" && set != "nu")
+                    throw std::runtime_error("unknown multiplier set: " + set);
+                const std::vector<double>& v =
+                    set == "lambda" ? r.lambda : (set == "mu" ? r.mu : r.nu);
+                check_value(v.at(i), as, where);
             } else if (method == "status") {
                 if (r.status == as["expected"].get<std::string>())
                     chtest::report_pass();
@@ -1812,8 +1848,10 @@ static void run_toolbox_cross_language_kind(const json& spec) {
     for (const auto& c : spec["cases"]) {
         std::string name = c["name"].get<std::string>();
 
-        // optimizer sub-block
-        {
+        // optimizer sub-block. Every sub-block is OPTIONAL: the first case nests all three, while
+        // the seeded per-method digest cases added by the optimizer phase carry an "optimizer"
+        // block alone. Mirrors the same presence check in the other three runners.
+        if (c.contains("optimizer")) {
             json construct = c["optimizer"]["construct"];
             std::string objective_name = construct.value("objective", "DeJong");
             construct.erase("objective");
@@ -1827,6 +1865,10 @@ static void run_toolbox_cross_language_kind(const json& spec) {
                 } else if (method == "parameter") {
                     std::size_t i = static_cast<std::size_t>(as["args"][0].get<int>());
                     check_value(r.parameters.at(i), as, where);
+                } else if (method == "iterations") {
+                    check_value(static_cast<double>(r.iterations), as, where);
+                } else if (method == "function_evaluations") {
+                    check_value(static_cast<double>(r.function_evaluations), as, where);
                 } else if (method == "status") {
                     if (r.status == as["expected"].get<std::string>())
                         chtest::report_pass();
@@ -1842,6 +1884,7 @@ static void run_toolbox_cross_language_kind(const json& spec) {
         }
         // sobol / stratify sub-blocks: group "sampling", no positional data, options only.
         for (const char* sub : {"sobol", "stratify"}) {
+            if (!c.contains(sub)) continue;
             json options = c[sub].value("options", json::object());
             if (std::string(sub) == "sobol") options["path"] = g_sobol_path;
             std::string options_str = options.dump();

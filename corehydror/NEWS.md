@@ -1,3 +1,62 @@
+# corehydror 0.10.0
+
+The rest of the Numerics optimization layer. `optim_minimize()` grew from six methods to
+fourteen, gained an optional analytic gradient and its first constrained method, and the
+dynamic-programming trio arrives as `shortest_path()`. See `CHANGELOG.md` at the repository root
+for the full account.
+
+## New features
+
+* Four new global optimizers on `optim_minimize()` / `optim_maximize()`: `"particle_swarm"`,
+  `"sce"` (shuffled complex evolution), `"simulated_annealing"` and `"multi_start"`. All four are
+  seeded, and each takes its own settings through `control` -- `population_size`; `complexes` /
+  `cce_iterations` / `tolerance_steps`; `initial_temperature` / `min_temperature` /
+  `cooling_rate` / `update_cycles` / `temperature_cycles` / `tolerance_steps`; and `local_method` /
+  `local_absolute_tolerance` / `local_relative_tolerance` / `polish`.
+* Three new local optimizers: `"adam"`, `"gradient_descent"` and `"golden_section"` (the last
+  one-dimensional, like `"brent"`). ADAM and gradient descent take `alpha` through `control`, and
+  ADAM the decay factors `beta1` and `beta2`.
+* A `gradient` argument on both verbs: a function returning one partial derivative per parameter,
+  accepted by `"adam"` and `"gradient_descent"`. Supplying it cut a five-dimensional gradient
+  descent from 103,141 objective calls to 8,596.
+* Constrained optimization through `method = "augmented_lagrange"`, with the new
+  `optim_constraint()` constructor and the two new arguments `constraints` and `inner`. The result
+  carries `multipliers`, the three Lagrange multiplier vectors.
+* `local_method` is now a `control` setting on `"mlsl"` as well as on the new `"multi_start"`.
+* `shortest_path()` -- Dijkstra shortest paths over a graph given as parallel `from`, `to` and
+  `weight` vectors plus a set of destinations, returning the next node, edge and cost for every
+  node, backed by the ported `BinaryHeap` / `Dijkstra` / `Network`. Node indices are
+  0-based, matching the C# literals and the Python twin.
+* A worked example pair, 19, covering the seeded global searches, the constrained problem and its
+  shadow price, the analytic gradient, and `shortest_path()`, ending in an executable reproduction
+  check.
+
+## Changes to results
+
+* `optim_maximize()` now rejects `method = "augmented_lagrange"` by name. The upstream C# class
+  always minimizes internally, so a maximize request returned the constrained minimum labelled
+  `Success`. Negate the objective and call `optim_minimize()`; the error message says so.
+* A `control` setting that belongs to a different method is now an error naming both, rather than
+  a silent no-op. Every method's settings are validated against one table.
+
+## Bug fixes
+
+* `shortest_path()` rejects a `node_count` smaller than the graph rather than reading past the end
+  of its arrays. The unguarded core code was undefined behavior, and could terminate the session
+  instead of raising; C# raises an `IndexOutOfRangeException` there, and the port now does the
+  equivalent.
+
+## Notes
+
+* A seeded `"particle_swarm"` or `"sce"` run reproduces bit-for-bit between corehydror and
+  corehydropy, but not necessarily against the C# library: both branch on comparisons between
+  accumulated sums, and a compiler that emits fused multiply-add takes a different search path.
+  The difference is measured and documented rather than hidden -- `"simulated_annealing"` and
+  `"multi_start"` reproduce C# exactly, and the deterministic methods have no PRNG at all.
+* `method = "multi_start"` can report a value its own reported parameters do not produce, because
+  upstream's polish step clamps the best point onto the bounds after recording its fitness. The
+  real C# library returns the same numbers; see `docs/upstream-csharp-issues.md`.
+
 # corehydror 0.9.0
 
 The last unported slice of Numerics that is not a distribution, model, or estimator: root

@@ -432,6 +432,19 @@ optimizer_spec_json <- function(ns, construct) {
     initial = num_vec(construct$initial),
     maximize = if (is.null(construct$maximize)) NULL else isTRUE(construct$maximize),
     seed = if (is.null(construct$seed)) NULL else as.integer(construct$seed),
+    constraints = if (is.null(construct$constraints)) NULL
+                  else ns$spec_array(lapply(construct$constraints, function(cn) {
+                    list(type = cn$type, value = as.double(cn$value),
+                         tolerance = if (is.null(cn$tolerance)) NULL else as.double(cn$tolerance))
+                  })),
+    inner = if (is.null(construct$inner)) NULL else list(
+      method = construct$inner$method,
+      lower = num_vec(construct$inner$lower), upper = num_vec(construct$inner$upper),
+      initial = num_vec(construct$inner$initial),
+      seed = if (is.null(construct$inner$seed)) NULL else as.integer(construct$inner$seed),
+      control = if (is.null(construct$inner$control) || length(construct$inner$control) == 0L) NULL
+                else construct$inner$control
+    ),
     control = if (is.null(construct$control) || length(construct$control) == 0L) NULL
               else construct$control
   ))
@@ -441,14 +454,91 @@ optimizer_spec_json <- function(ns, construct) {
 # NATIVE R closures reproducing the same formulas as core/tests/optimization_test_functions.hpp,
 # so every optimizer fixture case exercises the real R callback path
 # (corehydro::numerics::support::GuardedObjective exists to protect exactly this call).
+# NOTE the accumulating objectives spell their sum out as an explicit loop rather than calling
+# `sum()`: R's `sum()` accumulates in long double where the C++/Python/C# catalogs accumulate in
+# double, which on an x87 platform would make the four runners evaluate different arithmetic.
 optimizer_fixture_objective <- function(name) {
   switch(name,
     FXYZ = function(p) (4 * p[1] - 0.5)^2 + (3 * p[2] - 0.6)^2 + (2 * p[3] - 0.7)^2,
-    DeJong = function(p) sum(p^2),
+    DeJong = function(p) {
+      s <- 0
+      for (i in seq_along(p)) s <- s + p[i]^2
+      s
+    },
     Booth = function(p) (p[1] + 2 * p[2] - 7)^2 + (2 * p[1] + p[2] - 5)^2,
     McCormick = function(p) sin(p[1] + p[2]) + (p[1] - p[2])^2 - 1.5 * p[1] + 2.5 * p[2] + 1,
     FX = function(p) (p[1] + 3) * (p[1] - 1)^2,
+    # Test_AugmentedLagrange.cs's own inline objectives and constraint functions -- NOT from
+    # TestFunctions.cs, so each is transcribed from its [TestMethod] body term for term (the C#
+    # `Tools.Sum` is itself a plain loop over `sum += values[i]`). A constraint has the same shape
+    # as an objective, so both roles resolve out of this one catalog; `Disk` really is used as
+    # both (its formula is Test_RosenbrockDisk's constraint and Test_MixedConstraints's objective,
+    # written identically upstream).
+    AL1_Objective = function(p) {
+      NB <- numeric(3)
+      for (i in 1:3) NB[i] <- (20 * p[i] - p[i] * p[i] - 24) / 1.10^(i - 1)
+      s <- 0
+      for (i in seq_along(NB)) s <- s + NB[i]
+      -s
+    },
+    AL2_Objective = function(p) {
+      NB <- numeric(2)
+      NB[1] <- 60 * p[1] - 0.5 * p[1] * p[1]
+      NB[2] <- (64 * p[2] - 0.5 * p[2] * p[2]) / 1.5
+      s <- 0
+      for (i in seq_along(NB)) s <- s + NB[i]
+      -s
+    },
+    SumAll = function(p) {
+      s <- 0
+      for (i in seq_along(p)) s <- s + p[i]
+      s
+    },
+    Haimes_Primary = function(p) (p[1] - 2)^2 + (p[2] - 4)^2 + 5,
+    Haimes_Secondary = function(p) (p[1] - 6)^2 + (p[2] - 10)^2 + 6,
+    # NOT the same expression as Rosenbrock above: the C# test writes the two-dimensional case out
+    # by hand, `(1 - x)^2` FIRST and the 100-weighted term second.
+    RosenbrockDisk_Objective = function(p) (1 - p[1])^2 + 100 * (p[2] - p[1] * p[1])^2,
+    Disk = function(p) (p[1] * p[1]) + (p[2] * p[2]),
+    SumXY = function(p) p[1] + p[2],
+    X0 = function(p) p[1],
+    X1 = function(p) p[2],
+    Rosenbrock = function(p) {
+      s <- 0
+      for (i in seq_len(length(p) - 1L)) s <- s + 100 * (p[i + 1] - p[i] * p[i])^2 + (1 - p[i])^2
+      s
+    },
+    Eggholder = function(p) {
+      -(p[2] + 47) * sin(sqrt(abs((p[1] / 2) + (p[2] + 47)))) -
+        p[1] * sin(sqrt(abs(p[1] - (p[2] + 47))))
+    },
+    SumOfPowerFunctions = function(p) {
+      s <- 0
+      for (i in seq_along(p)) s <- s + abs(p[i])^(i - 1 + 2)
+      s
+    },
     stop(sprintf("unknown optimizer fixture objective: %s", name))
+  )
+}
+
+# The optional analytic gradients fixtures/toolbox/optimizers.json names by `construct.gradient` --
+# the second R callback the "adam"/"gradient_descent" methods take. Each is written out term by
+# term, matching core/tests/optimization_test_functions.hpp's own hand-differentiated gradients
+# (which carry no upstream C# counterpart -- see that file's addition note). The `Grad_` prefix
+# keeps these names distinct from the objective catalog's above.
+optimizer_fixture_gradient <- function(name) {
+  switch(name,
+    Grad_FXYZ = function(p) c(8 * (4 * p[1] - 0.5), 6 * (3 * p[2] - 0.6), 4 * (2 * p[3] - 0.7)),
+    Grad_DeJong = function(p) {
+      g <- numeric(length(p))
+      for (i in seq_along(p)) g[i] <- 2 * p[i]
+      g
+    },
+    Grad_Booth = function(p) {
+      c(2 * (p[1] + 2 * p[2] - 7) + 4 * (2 * p[1] + p[2] - 5),
+        4 * (p[1] + 2 * p[2] - 7) + 2 * (2 * p[1] + p[2] - 5))
+    },
+    stop(sprintf("unknown optimizer fixture gradient: %s", name))
   )
 }
 
@@ -2042,13 +2132,44 @@ test_that("oracle fixtures validate", {
         construct <- case$construct
         objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
         construct$objective <- NULL
-        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
-                              optimizer_fixture_objective(objective_name))
+        # The optional analytic gradient goes through the second glue entry point; absent, the
+        # ported classes differentiate numerically (a null C# Gradient delegate).
+        gradient_name <- construct$gradient
+        construct$gradient <- NULL
+        # The "augmented_lagrange" method's constraint callbacks. Each `constraints[i]` object
+        # carries a `function` key naming an entry in the SAME catalog the objective comes from
+        # (an objective and a constraint have the same shape); optimizer_spec_json ignores it, and
+        # what is left -- type/value/tolerance -- pairs positionally with these callbacks.
+        constraint_fns <- if (is.null(construct$constraints)) NULL
+                          else lapply(construct$constraints,
+                                      function(cn) optimizer_fixture_objective(cn[["function"]]))
+        r <- if (!is.null(constraint_fns)) {
+          ns$ch_optim_run_constrained_(optimizer_spec_json(ns, construct),
+                                       optimizer_fixture_objective(objective_name),
+                                       constraint_fns)
+        } else if (is.null(gradient_name)) {
+          ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                           optimizer_fixture_objective(objective_name))
+        } else {
+          ns$ch_optim_run_grad_(optimizer_spec_json(ns, construct),
+                                optimizer_fixture_objective(objective_name),
+                                optimizer_fixture_gradient(gradient_name))
+        }
         for (a in case$assertions) {
           if (identical(a$method, "value")) {
             check_assertion(r$value, a)
           } else if (identical(a$method, "parameter")) {
             check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "iterations")) {
+            check_assertion(as.double(r$iterations), a)
+          } else if (identical(a$method, "function_evaluations")) {
+            check_assertion(as.double(r$function_evaluations), a)
+          } else if (identical(a$method, "multiplier")) {
+            # args: [set, index] -- "lambda"/"mu"/"nu", the three AugmentedLagrange multiplier
+            # vectors in the class's own naming.
+            set <- a$args[[1]]
+            stopifnot(set %in% c("lambda", "mu", "nu"))
+            check_assertion(r[[set]][[a$args[[2]] + 1L]], a)
           } else if (identical(a$method, "status")) {
             expect_identical(r$status, a$expected)
           } else {
@@ -2199,25 +2320,45 @@ test_that("oracle fixtures validate", {
       # verbatim -- see the "optimizer" and "toolbox" blocks above.
       ns <- asNamespace("corehydror")
       for (case in spec$cases) {
+        # Every sub-block is OPTIONAL: the first case nests all three, while the seeded per-method
+        # digest cases added by the optimizer phase carry an "optimizer" block alone. Mirrors the
+        # same presence check in the other three runners.
         opt <- case$optimizer
+        if (!is.null(opt)) {
         construct <- opt$construct
         objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
         construct$objective <- NULL
-        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
-                              optimizer_fixture_objective(objective_name))
+        # The optional analytic gradient goes through the second glue entry point; absent, the
+        # ported classes differentiate numerically (a null C# Gradient delegate).
+        gradient_name <- construct$gradient
+        construct$gradient <- NULL
+        r <- if (is.null(gradient_name)) {
+          ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                           optimizer_fixture_objective(objective_name))
+        } else {
+          ns$ch_optim_run_grad_(optimizer_spec_json(ns, construct),
+                                optimizer_fixture_objective(objective_name),
+                                optimizer_fixture_gradient(gradient_name))
+        }
         for (a in opt$assertions) {
           if (identical(a$method, "value")) {
             check_assertion(r$value, a)
           } else if (identical(a$method, "parameter")) {
             check_assertion(r$parameters[[a$args[[1]] + 1L]], a)
+          } else if (identical(a$method, "iterations")) {
+            check_assertion(as.double(r$iterations), a)
+          } else if (identical(a$method, "function_evaluations")) {
+            check_assertion(as.double(r$function_evaluations), a)
           } else if (identical(a$method, "status")) {
             expect_identical(r$status, a$expected)
           } else {
             stop(sprintf("unknown toolbox_cross_language optimizer assertion method: %s", a$method))
           }
         }
+        }
         for (sub in c("sobol", "stratify")) {
           block <- case[[sub]]
+          if (is.null(block)) next
           opts_list <- if (is.null(block$options)) list() else block$options
           if (identical(sub, "sobol")) {
             opts_list$path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")

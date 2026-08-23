@@ -14,9 +14,9 @@
 //
 // Stateless by construction: one call builds whatever it needs, evaluates once, and drops it.
 //
-// The fourteen groups (correlation, gof, statistics, spectra, histogram, interpolation,
-// regression, sampling, probability, link, trend, linalg, special, functions) each live in their
-// own header under numerics/support/toolbox/, holding that group's
+// The fifteen groups (correlation, gof, statistics, spectra, histogram, interpolation,
+// regression, sampling, probability, link, trend, linalg, special, functions, network) each live
+// in their own header under numerics/support/toolbox/, holding that group's
 // detail::run_<group> function and any helper used only by it. Shared types and helpers are in
 // toolbox/common.hpp. This file includes all group headers and the run_toolbox dispatch table.
 #pragma once
@@ -40,6 +40,7 @@
 #include "corehydro/numerics/support/toolbox/linalg.hpp"
 #include "corehydro/numerics/support/toolbox/special.hpp"
 #include "corehydro/numerics/support/toolbox/functions.hpp"
+#include "corehydro/numerics/support/toolbox/network.hpp"
 
 namespace corehydro::numerics::support {
 
@@ -61,6 +62,7 @@ inline ToolboxResult run_toolbox(const std::string& group, const std::string& me
     if (group == "linalg") return detail::run_linalg(method, data, options);
     if (group == "special") return detail::run_special(method, data, options);
     if (group == "functions") return detail::run_functions(method, data, options);
+    if (group == "network") return detail::run_network(method, data, options);
     throw std::runtime_error("unknown toolbox group: " + group);
 }
 

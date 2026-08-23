@@ -50,6 +50,7 @@ __all__ = [
     "debye",
     "polynomial_eval",
     "univariate_function",
+    "shortest_path",
 ]
 
 
@@ -1668,3 +1669,133 @@ def univariate_function(
     method = "inverse" if inverse else "evaluate"
     r = _toolbox_run("functions", method, [xa], options)
     return np.asarray(r["values"], dtype=float)
+
+
+# The "network" toolbox group (P3 optimizers Task 10): the Dijkstra shortest-path solver over an
+# edge list. Edges cross the runner boundary as four parallel numeric vectors -- from, to, weight,
+# edge index -- with the destinations in the options object, and the result table comes back
+# flattened row-major with dims = {node_count, 3}, the same convention the `linalg` matrix results
+# use above. Mirrors corehydror's shortest_path().
+
+
+def _check_node_indices(x: np.ndarray, what: str) -> None:
+    """Internal: a node index is a whole, non-negative number.
+
+    The shared C++ group header checks this too (a fixture case reaches it directly), but
+    checking here as well keeps the message naming the Python argument and keeps the two
+    packages' errors identical.
+    """
+    if not np.all(np.isfinite(x)) or np.any(x != np.floor(x)) or np.any(x < 0):
+        raise ValueError(f"`{what}` must be whole, non-negative node indices")
+
+
+def shortest_path(
+    frm,
+    to,
+    weight,
+    destinations,
+    edge_index=None,
+    node_count: int | None = None,
+) -> np.ndarray:
+    """Solve the shortest paths through a network.
+
+    Mirrors the C# ``Dijkstra.Solve`` overloads: solves the cheapest route from EVERY node of a
+    directed, weighted graph to a set of destination nodes at once, running the search backwards
+    from the destinations. The answer is a routing table -- for each node, which neighbour to
+    step to, along which edge, and at what remaining cost.
+
+    Node indices are 0-based in both ``corehydropy`` and ``corehydror``, matching the C# result
+    table the two packages share; a graph with ``n`` nodes uses indices ``0`` to ``n - 1``.
+    Unreachable nodes carry ``cost = inf`` with ``next_node = -1`` and ``edge_index = -1``, and a
+    destination node carries ``cost = 0`` with ``next_node`` equal to its own index.
+
+    Costs accumulate in single precision, because the ported solver does (C# declares
+    ``float Weight`` and its own tests assert the table by exact ``float`` equality). Fractional
+    weights therefore round to ``float`` before they are summed.
+
+    Parameters
+    ----------
+    frm, to, weight : array_like
+        Arrays of the same length, one element per directed edge: the start node index, the end
+        node index, and the cost of traversing the edge. ``frm`` and ``to`` must be whole,
+        non-negative numbers. (``frm``, not ``from``, because ``from`` is a Python keyword; the R
+        twin spells it ``from``.)
+    destinations : array_like or int
+        One or more destination node indices. With several destinations, each node keeps
+        whichever destination it reaches most cheaply.
+    edge_index : array_like, optional
+        An array the same length as ``frm``, labelling each edge (typically an index into
+        whatever the edges came from -- a river reach, a road segment). Defaults to
+        ``range(len(frm))``. These labels are what the ``edge_index`` result column reports, and
+        they need not be distinct.
+    node_count : int, optional
+        Defaults to ``max(frm, to) + 1``; supply a larger value to include isolated nodes
+        carrying no edge, which then report ``cost = inf``. A value below ``max(frm, to) + 1``
+        is an error: the graph would not fit the routing table it asks for.
+
+    Returns
+    -------
+    numpy.ndarray
+        One row per node, in node-index order, with columns ``[next_node, edge_index, cost]``.
+
+    Examples
+    --------
+    >>> from corehydropy import shortest_path
+    >>> shortest_path([0, 1], [1, 2], [1, 1], destinations=2, node_count=4)
+    array([[ 1.,  0.,  2.],
+           [ 2.,  1.,  1.],
+           [ 2., -1.,  0.],
+           [-1., -1., inf]])
+    """
+    f = np.atleast_1d(np.asarray(frm, dtype=float)).ravel()
+    t = np.atleast_1d(np.asarray(to, dtype=float)).ravel()
+    w = np.atleast_1d(np.asarray(weight, dtype=float)).ravel()
+    n = f.size
+    if n == 0:
+        raise ValueError("`frm`, `to` and `weight` must describe at least one edge")
+    if t.size != n or w.size != n:
+        raise ValueError(
+            "`frm`, `to` and `weight` must have the same length; "
+            f"got {n}, {t.size} and {w.size}"
+        )
+    if edge_index is None:
+        idx = np.arange(n, dtype=float)
+    else:
+        idx = np.atleast_1d(np.asarray(edge_index, dtype=float)).ravel()
+        if idx.size != n:
+            raise ValueError(
+                "`edge_index` must be an array the same length as `frm`; "
+                f"got {idx.size} for {n}"
+            )
+    dest = np.atleast_1d(np.asarray(destinations, dtype=float)).ravel()
+    if dest.size == 0:
+        raise ValueError("`destinations` must name at least one destination node")
+    _check_node_indices(f, "frm")
+    _check_node_indices(t, "to")
+    _check_node_indices(dest, "destinations")
+    options: dict = {"destinations": dest.tolist()}
+    n_nodes = float(max(f.max(), t.max())) + 1.0
+    if node_count is not None:
+        if float(node_count) < 1:
+            raise ValueError("`node_count` must be a single positive number")
+        # A `node_count` below `max(frm, to) + 1` cannot describe the edge list. The ported
+        # solver raises the C# IndexOutOfRangeException message from inside itself when it
+        # reaches the offending index, which is both late and unhelpful here, so reject it up
+        # front and name the argument. This is deliberately STRICTER than the C# solver, whose
+        # bounds check is lazy: it accepts a too-small count as long as no out-of-range index is
+        # ever reached (see dijkstra.hpp note 9). That input is a graph the caller cannot have
+        # meant.
+        if float(node_count) < n_nodes:
+            raise ValueError(
+                f"`node_count` must be at least {int(n_nodes)}, the number of nodes `frm` and "
+                f"`to` describe; got {int(node_count)}"
+            )
+        n_nodes = float(node_count)
+        options["node_count"] = n_nodes
+    if bool(np.any(dest >= n_nodes)):
+        raise ValueError(
+            f"`destinations` is out of range for a network of {int(n_nodes)} nodes"
+        )
+    r = _toolbox_run("network", "dijkstra", [f, t, w, idx], options)
+    values = np.asarray(r["values"], dtype=float)
+    return values.reshape(int(r["dims"][0]), int(r["dims"][1]))

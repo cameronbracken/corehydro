@@ -827,11 +827,71 @@ static double NumericalDerivativeNormalLoglik(double[] x)
 static double OptimizerTestFX(double x) => (x + 3d) * Math.Pow(x - 1d, 2d);
 static double OptimizerTestFXYZ(double[] p) =>
     Math.Pow(4d * p[0] - 0.5d, 2d) + Math.Pow(3d * p[1] - 0.6d, 2d) + Math.Pow(2d * p[2] - 0.7d, 2d);
-static double OptimizerTestDeJong(double[] p) => p.Sum(v => v * v);
+// The two accumulating objectives spell their sum out as an explicit loop rather than calling
+// LINQ's Sum(), matching the C++/R/Python catalogs' own loops term for term.
+static double OptimizerTestDeJong(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i < p.Length; i++) F += Math.Pow(p[i], 2);
+    return F;
+}
 static double OptimizerTestBooth(double[] p) =>
     Math.Pow(p[0] + 2d * p[1] - 7d, 2d) + Math.Pow(2d * p[0] + p[1] - 5d, 2d);
 static double OptimizerTestMcCormick(double[] p) =>
     Math.Sin(p[0] + p[1]) + Math.Pow(p[0] - p[1], 2d) - 1.5d * p[0] + 2.5d * p[1] + 1d;
+static double OptimizerTestRosenbrock(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i + 1 < p.Length; i++)
+        F += 100 * Math.Pow(p[i + 1] - p[i] * p[i], 2) + Math.Pow(1 - p[i], 2);
+    return F;
+}
+static double OptimizerTestEggholder(double[] p) =>
+    -(p[1] + 47d) * Math.Sin(Math.Sqrt(Math.Abs((p[0] / 2d) + (p[1] + 47d))))
+    - p[0] * Math.Sin(Math.Sqrt(Math.Abs(p[0] - (p[1] + 47d))));
+static double OptimizerTestSumOfPowerFunctions(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i < p.Length; i++) F += Math.Pow(Math.Abs(p[i]), i + 2d);
+    return F;
+}
+// Test_AugmentedLagrange.cs's own inline objectives and constraint functions. Unlike everything
+// above, these do NOT come from TestFunctions.cs: the constrained tests define both inline in each
+// [TestMethod] body, so each is transcribed term for term in the C# expression order, with the two
+// accumulating ones spelled out as explicit loops (the real `Tools.Sum` is itself a plain loop over
+// `sum += values[i]`, and this emitter's catalog must evaluate what the other three catalogs do).
+static double OptimizerTestAL1Objective(double[] x)
+{
+    var NB = new double[3];
+    for (int i = 0; i < 3; i++) NB[i] = (20 * x[i] - x[i] * x[i] - 24) / Math.Pow(1.10, i);
+    double sum = 0d;
+    for (int i = 0; i < NB.Length; i++) sum += NB[i];
+    return -sum;
+}
+static double OptimizerTestAL2Objective(double[] x)
+{
+    var NB = new double[2];
+    NB[0] = 60 * x[0] - 0.5 * x[0] * x[0];
+    NB[1] = (64 * x[1] - 0.5 * x[1] * x[1]) / 1.5;
+    double sum = 0d;
+    for (int i = 0; i < NB.Length; i++) sum += NB[i];
+    return -sum;
+}
+static double OptimizerTestSumAll(double[] x)
+{
+    double sum = 0d;
+    for (int i = 0; i < x.Length; i++) sum += x[i];
+    return sum;
+}
+static double OptimizerTestHaimesPrimary(double[] x) =>
+    Math.Pow(x[0] - 2, 2) + Math.Pow(x[1] - 4, 2) + 5;
+static double OptimizerTestHaimesSecondary(double[] x) =>
+    Math.Pow(x[0] - 6, 2) + Math.Pow(x[1] - 10, 2) + 6;
+// NOT the same expression as OptimizerTestRosenbrock: the C# test writes the two-dimensional case
+// out by hand, `(1 - x)^2` FIRST and the 100-weighted term second.
+static double OptimizerTestRosenbrockDiskObjective(double[] x) =>
+    Math.Pow(1 - x[0], 2) + 100 * Math.Pow(x[1] - x[0] * x[0], 2);
+static double OptimizerTestDisk(double[] x) => (x[0] * x[0]) + (x[1] * x[1]);
 static Func<double[], double> OptimizerTestFunction(string name) => name switch
 {
     "FXYZ" => OptimizerTestFXYZ,
@@ -839,8 +899,253 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
     "Booth" => OptimizerTestBooth,
     "McCormick" => OptimizerTestMcCormick,
     "FX" => p => OptimizerTestFX(p[0]),
+    "Rosenbrock" => OptimizerTestRosenbrock,
+    "Eggholder" => OptimizerTestEggholder,
+    "SumOfPowerFunctions" => OptimizerTestSumOfPowerFunctions,
+    // A constraint has the same Func<double[], double> shape as an objective, so both roles resolve
+    // out of this one catalog; `Disk` really is used as both (its formula is Test_RosenbrockDisk's
+    // constraint and Test_MixedConstraints's objective, written identically upstream).
+    "AL1_Objective" => OptimizerTestAL1Objective,
+    "AL2_Objective" => OptimizerTestAL2Objective,
+    "SumAll" => OptimizerTestSumAll,
+    "Haimes_Primary" => OptimizerTestHaimesPrimary,
+    "Haimes_Secondary" => OptimizerTestHaimesSecondary,
+    "RosenbrockDisk_Objective" => OptimizerTestRosenbrockDiskObjective,
+    "Disk" => OptimizerTestDisk,
+    "SumXY" => p => p[0] + p[1],
+    "X0" => p => p[0],
+    "X1" => p => p[1],
     _ => throw new Exception($"unknown optimizer fixture objective: {name}")
 };
+
+// The optional analytic gradients an `optimizer`-kind construct names by `construct.gradient` --
+// the second delegate the real C# ADAM / GradientDescent take (a null one is what "differentiate
+// numerically" means to both). TestFunctions.cs carries no gradients, so these are the
+// hand-differentiated counterparts of core/tests/optimization_test_functions.hpp's own additions,
+// written out term by term so all four catalogs evaluate the identical arithmetic.
+static double[] OptimizerTestGradFXYZ(double[] p) =>
+    new double[] { 8d * (4d * p[0] - 0.5), 6d * (3d * p[1] - 0.6), 4d * (2d * p[2] - 0.7) };
+static double[] OptimizerTestGradDeJong(double[] p)
+{
+    var g = new double[p.Length];
+    for (int i = 0; i < p.Length; i++) g[i] = 2d * p[i];
+    return g;
+}
+static double[] OptimizerTestGradBooth(double[] p) => new double[]
+{
+    2d * (p[0] + 2d * p[1] - 7d) + 4d * (2d * p[0] + p[1] - 5d),
+    4d * (p[0] + 2d * p[1] - 7d) + 2d * (2d * p[0] + p[1] - 5d)
+};
+static Func<double[], double[]> OptimizerTestGradient(string name) => name switch
+{
+    "Grad_FXYZ" => OptimizerTestGradFXYZ,
+    "Grad_DeJong" => OptimizerTestGradDeJong,
+    "Grad_Booth" => OptimizerTestGradBooth,
+    _ => throw new Exception($"unknown optimizer fixture gradient: {name}")
+};
+
+// Builds and configures the REAL C# optimizer an `optimizer`-kind construct names, mirroring
+// optimizer_runner.hpp's run_optimizer arm for arm: the same fourteen method names, the seed applied
+// to whichever of the six stochastic classes was built, and every `control` key applied only when
+// present and only by the class that reads it (an absent key leaves the C# class default). Shared
+// by the "optimizer" and "toolbox_cross_language" branches below, which had carried two copies of
+// the construction switch before this phase added five methods and the control block to it.
+// MultiStart sets MaxIterations in its CONSTRUCTOR, so the control block must stay after
+// construction exactly as the C++ runner's does.
+static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
+{
+    string method = construct.GetProperty("method").GetString()!;
+    string objectiveName = construct.TryGetProperty("objective", out var objEl)
+        ? objEl.GetString()! : "DeJong";
+    Func<double[], double> objective = OptimizerTestFunction(objectiveName);
+    double[] lower = construct.TryGetProperty("lower", out var lowerEl)
+        ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    double[] upper = construct.TryGetProperty("upper", out var upperEl)
+        ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    double[] initial = construct.TryGetProperty("initial", out var initialEl)
+        ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+    // The optional analytic gradient the two gradient-taking methods take, resolved out of its own
+    // catalog. A null delegate is exactly what "differentiate numerically" means to both classes.
+    Func<double[], double[]>? gradient = construct.TryGetProperty("gradient", out var gradEl)
+        ? OptimizerTestGradient(gradEl.GetString()!) : null;
+    JsonElement? control = construct.TryGetProperty("control", out var ctrlEl) ? ctrlEl : null;
+
+    // The one constrained method. It BORROWS an inner optimizer (built by the same BuildOne every
+    // unconstrained method goes through, so an "inner" sub-spec may name any of them, falling back
+    // to BFGS over the top-level vectors) and takes one constraint function per `constraints`
+    // entry, resolved out of the same catalog as the objective. Mirrors optimizer_runner.hpp's
+    // "augmented_lagrange" arm key for key.
+    if (method == "augmented_lagrange")
+    {
+        string innerMethod = "bfgs";
+        double[] il = lower, iu = upper, ii = initial;
+        int? iseed = null;
+        JsonElement? ictrl = null;
+        if (construct.TryGetProperty("inner", out var innerEl))
+        {
+            innerMethod = innerEl.GetProperty("method").GetString()!;
+            if (innerEl.TryGetProperty("lower", out var e1))
+                il = e1.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("upper", out var e2))
+                iu = e2.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("initial", out var e3))
+                ii = e3.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("seed", out var e4)) iseed = e4.GetInt32();
+            if (innerEl.TryGetProperty("control", out var e5)) ictrl = e5;
+        }
+        Optimizer inner = BuildOne(innerMethod, objective, il, iu, ii, iseed, ictrl, null);
+        var cons = new List<IConstraint>();
+        foreach (var c in construct.GetProperty("constraints").EnumerateArray())
+        {
+            string typeName = c.GetProperty("type").GetString()!;
+            ConstraintType ct = typeName switch
+            {
+                "eq" => ConstraintType.EqualTo,
+                "le" => ConstraintType.LesserThanOrEqualTo,
+                "ge" => ConstraintType.GreaterThanOrEqualTo,
+                _ => throw new Exception($"unknown constraint type: {typeName}")
+            };
+            double cValue = ParseNum(c.GetProperty("value"));
+            double cTol = c.TryGetProperty("tolerance", out var tolEl) ? ParseNum(tolEl) : 1E-8;
+            cons.Add(new Constraint(OptimizerTestFunction(c.GetProperty("function").GetString()!),
+                                    inner.NumberOfParameters, cValue, ct, cTol));
+        }
+        var al = new AugmentedLagrange(objective, inner, cons.ToArray());
+        ApplyOptimizerControls(al, control);
+        return al;
+    }
+    return BuildOne(method, objective, lower, upper, initial, seed, control, gradient);
+}
+
+// The per-method construction switch, split out of BuildOptimizerFromConstruct so the constrained
+// arm above can build its INNER optimizer through the identical path rather than a second copy.
+static Optimizer BuildOne(string method, Func<double[], double> objective, double[] lower,
+                          double[] upper, double[] initial, int? seed, JsonElement? control,
+                          Func<double[], double[]>? gradient)
+{
+    Optimizer optimizer = method switch
+    {
+        "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
+        "particle_swarm" => new ParticleSwarm(objective, lower.Length, lower, upper),
+        "sce" => new ShuffledComplexEvolution(objective, lower.Length, lower, upper),
+        "simulated_annealing" => new SimulatedAnnealing(objective, lower.Length, lower, upper),
+        "multi_start" => new MultiStart(objective, initial.Length, initial, lower, upper),
+        "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
+        "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+        // Alpha is left at the ctor default here and applied from `control` below like every other
+        // knob, so one code path handles it rather than two.
+        "adam" => new ADAM(objective, initial.Length, initial, lower, upper, 0.001, gradient),
+        "gradient_descent" =>
+            new GradientDescent(objective, initial.Length, initial, lower, upper, 0.001, gradient),
+        "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
+        "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
+        "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
+        "golden_section" => new GoldenSection(x => objective([x]), lower[0], upper[0]),
+        _ => throw new Exception($"unknown optimizer method: {method}")
+    };
+    if (seed.HasValue)
+    {
+        if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is ParticleSwarm psOptimizer) psOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is ShuffledComplexEvolution sceOptimizer) sceOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is SimulatedAnnealing saOptimizer) saOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is MultiStart msOptimizer) msOptimizer.PRNGSeed = seed.Value;
+    }
+    ApplyOptimizerControls(optimizer, control);
+    return optimizer;
+}
+
+// Reads one Lagrange multiplier off a finished AugmentedLagrange run, for the `multiplier` fixture
+// assertion method. Named sets rather than one flat vector because the three are sized by COUNTING
+// the constraints of each type, so index 0 of "mu" is not index 0 of the constraint list.
+static double OptimizerMultiplier(Optimizer optimizer, JsonElement args)
+{
+    if (optimizer is not AugmentedLagrange al)
+        throw new Exception("the `multiplier` assertion only applies to augmented_lagrange");
+    string set = args[0].GetString()!;
+    int index = args[1].GetInt32();
+    return set switch
+    {
+        "lambda" => al.Lambda[index],
+        "mu" => al.Mu[index],
+        "nu" => al.Nu[index],
+        _ => throw new Exception($"unknown multiplier set: {set}")
+    };
+}
+
+// Applies one `control` object's knobs to an already-constructed optimizer, only the keys present
+// and only on the class that reads each (an absent key leaves the C# class default). Split out
+// with BuildOne so the constrained arm can apply the OUTER control block to the AugmentedLagrange
+// itself. MultiStart sets MaxIterations in its CONSTRUCTOR, so this must stay after construction
+// exactly as the C++ runner's application does.
+static void ApplyOptimizerControls(Optimizer optimizer, JsonElement? control)
+{
+    if (control.HasValue)
+    {
+        foreach (var knob in control.Value.EnumerateObject())
+        {
+            switch (knob.Name)
+            {
+                case "max_iterations": optimizer.MaxIterations = knob.Value.GetInt32(); break;
+                case "absolute_tolerance": optimizer.AbsoluteTolerance = ParseNum(knob.Value); break;
+                case "relative_tolerance": optimizer.RelativeTolerance = ParseNum(knob.Value); break;
+                case "max_function_evaluations":
+                    optimizer.MaxFunctionEvaluations = knob.Value.GetInt32(); break;
+                case "report_failure": optimizer.ReportFailure = knob.Value.GetBoolean(); break;
+                case "compute_hessian": optimizer.ComputeHessian = knob.Value.GetBoolean(); break;
+                case "population_size":
+                    if (optimizer is DifferentialEvolution dePop) dePop.PopulationSize = knob.Value.GetInt32();
+                    else ((ParticleSwarm)optimizer).PopulationSize = knob.Value.GetInt32();
+                    break;
+                case "complexes":
+                    ((ShuffledComplexEvolution)optimizer).Complexes = knob.Value.GetInt32(); break;
+                case "cce_iterations":
+                    ((ShuffledComplexEvolution)optimizer).CCEIterations = knob.Value.GetInt32(); break;
+                case "tolerance_steps":
+                    if (optimizer is ShuffledComplexEvolution sceTol) sceTol.ToleranceSteps = knob.Value.GetInt32();
+                    else ((SimulatedAnnealing)optimizer).ToleranceSteps = knob.Value.GetInt32();
+                    break;
+                case "initial_temperature":
+                    ((SimulatedAnnealing)optimizer).InitialTemperature = ParseNum(knob.Value); break;
+                case "min_temperature":
+                    ((SimulatedAnnealing)optimizer).MinTemperature = ParseNum(knob.Value); break;
+                case "cooling_rate":
+                    ((SimulatedAnnealing)optimizer).CoolingRate = ParseNum(knob.Value); break;
+                case "update_cycles":
+                    ((SimulatedAnnealing)optimizer).UpdateCycles = knob.Value.GetInt32(); break;
+                case "temperature_cycles":
+                    ((SimulatedAnnealing)optimizer).TemperatureCycles = knob.Value.GetInt32(); break;
+                case "local_method":
+                    {
+                        LocalMethod lm = knob.Value.GetString() switch
+                        {
+                            "bfgs" => LocalMethod.BFGS,
+                            "nelder_mead" => LocalMethod.NelderMead,
+                            "powell" => LocalMethod.Powell,
+                            _ => throw new Exception($"unknown local_method: {knob.Value.GetString()}")
+                        };
+                        if (optimizer is MLSL mlslLm) mlslLm.Method = lm;
+                        else ((MultiStart)optimizer).Method = lm;
+                        break;
+                    }
+                case "local_absolute_tolerance":
+                    ((MultiStart)optimizer).LocalAbsoluteTolerance = ParseNum(knob.Value); break;
+                case "local_relative_tolerance":
+                    ((MultiStart)optimizer).LocalRelativeTolerance = ParseNum(knob.Value); break;
+                case "polish": ((MultiStart)optimizer).Polish = knob.Value.GetBoolean(); break;
+                case "alpha":
+                    if (optimizer is ADAM adamAlpha) adamAlpha.Alpha = ParseNum(knob.Value);
+                    else ((GradientDescent)optimizer).Alpha = ParseNum(knob.Value);
+                    break;
+                case "beta1": ((ADAM)optimizer).Beta1 = ParseNum(knob.Value); break;
+                case "beta2": ((ADAM)optimizer).Beta2 = ParseNum(knob.Value); break;
+                default: throw new Exception($"unknown optimizer control: {knob.Name}");
+            }
+        }
+    }
+}
 
 // The callback surface, Task 1: the Test_Brent/Test_Differentiation formulas
 // fixtures/callback/math.json names by string, inlined here for the same reason as the optimizer
@@ -4754,6 +5059,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return SpecialDispatch(method, data, options, asrt);
         case "functions":
             return FunctionsDispatch(method, data, options, asrt);
+        case "network":
+            return NetworkDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -4831,6 +5138,64 @@ static double LinalgDispatch(string method, List<double[]> data, JsonElement opt
         return ToolboxSelectFlat(asrt, flat, result.NumberOfRows, result.NumberOfColumns);
     }
     throw new Exception($"unknown linalg method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/network.hpp's run_network arm against the real
+// Numerics.Mathematics.Optimization.Dijkstra. The edge list arrives as four parallel data arrays
+// ([from, to, weight, index], one element per edge) with the destination node indices in
+// `options.destinations` and an optional `node_count`; the float[nNodes, 3] result table is
+// flattened row-major to match the C++ ToolboxResult (dims = {nNodes, 3}).
+//
+// ALL THREE methods are driven through the free Dijkstra.Solve, INCLUDING the two network_* ones,
+// and that is deliberate rather than a shortcut: the shipped C# Network cannot be constructed at
+// all (its constructor sizes both edge caches at the maximum node index rather than max + 1 and
+// then indexes one past the end, so every construction throws IndexOutOfRangeException -- measured,
+// and written up in docs/upstream-csharp-issues.md). A patched Network -- the same file with only
+// that sizing corrected, which is the port's one intentional divergence -- was measured returning
+// the free solver's table element for element, because Network.Solve does nothing but forward its
+// cached edge lists to this very function. `network_solve_weights` is likewise driven on the
+// ORIGINAL weights, because Network.Solve(float[] edgeWeights) passes the stale cache alongside
+// its re-weighted array and the solver reads its weights out of that cache: the custom weights
+// have no effect, which is exactly what the fixture case pins.
+static double NetworkDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] from = data[0], to = data[1], weight = data[2], index = data[3];
+    var edges = new List<Edge>();
+    for (int i = 0; i < from.Length; i++)
+        edges.Add(new Edge((int)from[i], (int)to[i], (float)weight[i], (int)index[i]));
+
+    var destinations = new List<int>();
+    var d = options.GetProperty("destinations");
+    if (d.ValueKind == JsonValueKind.Array)
+        foreach (var e in d.EnumerateArray()) destinations.Add((int)ParseNum(e));
+    else destinations.Add((int)ParseNum(d));
+
+    // "dijkstra" honors the fixture's node_count (C#'s own optional nNodes parameter, -1 meaning
+    // "derive it"); the two network_* methods take none, because Network derives its own.
+    int nodeCount = -1;
+    if (method == "dijkstra")
+    {
+        if (options.TryGetProperty("node_count", out var nc)) nodeCount = (int)ParseNum(nc);
+    }
+    else if (method == "network_solve" || method == "network_solve_weights")
+    {
+        int max = 0;
+        foreach (var edge in edges) max = Math.Max(max, Math.Max(edge.FromIndex, edge.ToIndex));
+        nodeCount = max + 1;
+    }
+    else throw new Exception($"unknown network method: {method}");
+
+    // Which overload: the single-destination one for one destination, the int[] one otherwise --
+    // the same rule the C++ arm follows, and the one each transcribed C# test calls.
+    float[,] table = destinations.Count == 1
+        ? Dijkstra.Solve(edges, destinations[0], nodeCount)
+        : Dijkstra.Solve(edges, destinations.ToArray(), nodeCount);
+
+    int rows = table.GetLength(0);
+    var flat = new double[rows * 3];
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < 3; j++) flat[i * 3 + j] = table[i, j];
+    return ToolboxSelectFlat(asrt, flat, rows, 3);
 }
 
 // Mirrors numerics/support/toolbox/special.hpp's run_special arm against the real
@@ -5729,34 +6094,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         {
             string caseName = c.GetProperty("name").GetString()!;
             var construct = c.GetProperty("construct");
-            string method = construct.GetProperty("method").GetString()!;
-            string objectiveName = construct.TryGetProperty("objective", out var objEl)
-                ? objEl.GetString()! : "DeJong";
-            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
-            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
-                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] upper = construct.TryGetProperty("upper", out var upperEl)
-                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] initial = construct.TryGetProperty("initial", out var initialEl)
-                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
             bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
-            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
-
-            Optimizer optimizer = method switch
-            {
-                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
-                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
-                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
-                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
-                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
-                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
-                _ => throw new Exception($"unknown optimizer method: {method}")
-            };
-            if (seed.HasValue)
-            {
-                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
-                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
-            }
+            Optimizer optimizer = BuildOptimizerFromConstruct(construct);
 
             if (maximize) optimizer.Maximize(); else optimizer.Minimize();
             double[] parameters = optimizer.BestParameterSet.Values;
@@ -5778,6 +6117,11 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 {
                     "value" => value,
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    "iterations" => optimizer.Iterations,
+                    "function_evaluations" => optimizer.FunctionEvaluations,
+                    // args: [set, index] -- "lambda"/"mu"/"nu", the three AugmentedLagrange
+                    // multiplier vectors in the class's own naming. Only that one class has them.
+                    "multiplier" => OptimizerMultiplier(optimizer, asrt.GetProperty("args")),
                     _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
                 };
                 if (Compare(actual, asrt)) pass++;
@@ -6403,36 +6747,14 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             string caseName = c.GetProperty("name").GetString()!;
 
             // --- optimizer sub-block (mirrors the "optimizer" kind branch above) -----------
-            var optBlock = c.GetProperty("optimizer");
+            // Every sub-block is OPTIONAL: the first case nests all three, while the seeded
+            // per-method digest cases added by the optimizer phase carry an "optimizer" block
+            // alone. Mirrors the same presence check in the other three runners.
+            if (c.TryGetProperty("optimizer", out var optBlock))
+            {
             var construct = optBlock.GetProperty("construct");
-            string method = construct.GetProperty("method").GetString()!;
-            string objectiveName = construct.TryGetProperty("objective", out var objEl)
-                ? objEl.GetString()! : "DeJong";
-            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
-            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
-                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] upper = construct.TryGetProperty("upper", out var upperEl)
-                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] initial = construct.TryGetProperty("initial", out var initialEl)
-                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
             bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
-            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
-
-            Optimizer optimizer = method switch
-            {
-                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
-                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
-                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
-                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
-                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
-                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
-                _ => throw new Exception($"unknown optimizer method: {method}")
-            };
-            if (seed.HasValue)
-            {
-                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
-                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
-            }
+            Optimizer optimizer = BuildOptimizerFromConstruct(construct);
             if (maximize) optimizer.Maximize(); else optimizer.Minimize();
             double[] parameters = optimizer.BestParameterSet.Values;
             double optValue = maximize ? -optimizer.BestParameterSet.Fitness : optimizer.BestParameterSet.Fitness;
@@ -6450,6 +6772,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     {
                         "value" => (object)optValue,
                         "parameter" => (object)parameters[asrt.GetProperty("args")[0].GetInt32()],
+                        "iterations" => (object)optimizer.Iterations,
+                        "function_evaluations" => (object)optimizer.FunctionEvaluations,
                         "status" => (object)status,
                         _ => throw new Exception(
                             $"unknown toolbox_cross_language optimizer assertion method: {am}")
@@ -6467,11 +6791,14 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 {
                     "value" => optValue,
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    "iterations" => optimizer.Iterations,
+                    "function_evaluations" => optimizer.FunctionEvaluations,
                     _ => throw new Exception(
                         $"unknown toolbox_cross_language optimizer assertion method: {am}")
                 };
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
             }
 
             // --- sobol / stratify sub-blocks, both routed through the same ToolboxDispatch the
@@ -6479,7 +6806,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             // only) ------------------------------------------------------------------------
             foreach (var (subKey, methodName) in new[] { ("sobol", "sobol"), ("stratify", "stratify") })
             {
-                var block = c.GetProperty(subKey);
+                if (!c.TryGetProperty(subKey, out var block)) continue;
                 JsonElement options = block.TryGetProperty("options", out var oEl) ? oEl : default;
                 var data = new List<double[]>();
                 foreach (var asrt in block.GetProperty("assertions").EnumerateArray())

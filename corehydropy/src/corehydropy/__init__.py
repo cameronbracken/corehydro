@@ -49,6 +49,7 @@ from .toolbox import (
     ranks,
     running_covariance,
     running_statistics,
+    shortest_path,
     sobol_sequence,
     stratify,
     summary_statistics,
@@ -57,7 +58,7 @@ from .toolbox import (
     trend_predict,
     univariate_function,
 )
-from .optim import OptimResult, optim_maximize, optim_minimize
+from .optim import Constraint, OptimResult, optim_maximize, optim_minimize
 from .callback import (
     QuadratureResult,
     Rng,
@@ -206,9 +207,11 @@ __all__ = [
     "debye",
     "polynomial_eval",
     "univariate_function",
+    "shortest_path",
     "OptimResult",
     "optim_minimize",
     "optim_maximize",
+    "Constraint",
     "root_find",
     "root_find_system",
     "quadrature",

@@ -1,0 +1,1000 @@
+{
+  "kind": "toolbox",
+  "group": "network",
+  "source": "Numerics/Mathematics/Optimization/Dynamic/Dijkstra.cs, Network.cs, BinaryHeap.cs; every graph and every expected value scraped verbatim from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs (SimpleEdgeGraphCost, SimpleNetworkRouting, BidirectionalRouting, DisconnectedNodesTest, MultipleDestSharedPath, DisconnectedComponent, DisconnectedComponent2, TrianglePath).",
+  "reference": "Numerics @ 2a0357a. Costs are C# `float`, and every weight in DijkstraTesting.cs is a small integer, so all of these values are exact in both float and double: they are asserted at mode \"equal\" (tolerance 0), exactly as the C# tests assert them (Assert.AreEqual(3f, result[2, 2]) with no delta). Unreachable nodes are the C# float.IsPositiveInfinity checks, spelled \"inf\" here. The three method names map to the three C# entry points: \"dijkstra\" is the free Dijkstra.Solve (its single-destination overload when one destination is given, its int[] overload otherwise, matching which one each transcribed test calls); \"network_solve\" is Network.Solve, which caches the incoming-edge lists in its constructor and forwards to the same free solver; \"network_solve_weights\" is Network.Solve(float[] edgeWeights). The oracle emitter drives the free Dijkstra.Solve for ALL THREE, because the shipped C# Network CANNOT BE CONSTRUCTED -- its constructor sizes both edge caches at max node index instead of max + 1 and indexes one past the end, so every construction throws IndexOutOfRangeException (measured; see docs/upstream-csharp-issues.md and numerics/math/optimization/dynamic/network.hpp note 1, which documents the port's one intentional divergence, `max + 1`). Routing the emitter through the free solver is exact rather than approximate: with the ported constructor fixed, Network.Solve forwards its cached edge lists to that very function, and a patched C# Network was measured returning the free solver's table element for element. The \"triangle_path_network_solve_weights_are_ignored\" case pins a SECOND upstream defect on purpose: Network.Solve(float[] edgeWeights) builds a re-weighted edge array and then passes the STALE cached incoming-edge lists alongside it, and the solver reads its weights out of that cache, so the custom weights have no effect whatever. The case supplies all-ones weights on a graph whose real weights are 1/4/1/10 and pins the ORIGINAL-weight answer; if anyone ever \"fixes\" the port to honor the weights, this case fails loudly. That is also why the user-facing shortest_path() verb in both packages never calls this method.",
+  "cases": [
+    {
+      "name": "simple_edge_graph_cost",
+      "data": [
+        [
+          0,
+          0,
+          1,
+          1,
+          2,
+          4
+        ],
+        [
+          1,
+          2,
+          2,
+          3,
+          3,
+          0
+        ],
+        [
+          2,
+          4,
+          1,
+          7,
+          3,
+          1
+        ],
+        [
+          0,
+          2,
+          2,
+          3,
+          4,
+          5
+        ]
+      ],
+      "options": {
+        "destinations": [
+          3
+        ],
+        "node_count": 6
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "select": "rows",
+          "expected": 6,
+          "mode": "equal",
+          "source": "SimpleEdgeGraphCost (nNodes = 6)"
+        },
+        {
+          "method": "dijkstra",
+          "select": "columns",
+          "expected": 3,
+          "mode": "equal",
+          "source": "Dijkstra.Solve returns a float[nNodes, 3] table"
+        },
+        {
+          "method": "dijkstra",
+          "index": 11,
+          "expected": 0,
+          "mode": "equal",
+          "source": "SimpleEdgeGraphCost"
+        },
+        {
+          "method": "dijkstra",
+          "index": 8,
+          "expected": 3,
+          "mode": "equal",
+          "source": "SimpleEdgeGraphCost"
+        },
+        {
+          "method": "dijkstra",
+          "index": 5,
+          "expected": 4,
+          "mode": "equal",
+          "source": "SimpleEdgeGraphCost"
+        },
+        {
+          "method": "dijkstra",
+          "index": 2,
+          "expected": 6,
+          "mode": "equal",
+          "source": "SimpleEdgeGraphCost"
+        },
+        {
+          "method": "dijkstra",
+          "index": 14,
+          "expected": 7,
+          "mode": "equal",
+          "source": "SimpleEdgeGraphCost"
+        },
+        {
+          "method": "dijkstra",
+          "index": 17,
+          "expected": "inf",
+          "mode": "equal",
+          "source": "SimpleEdgeGraphCost"
+        }
+      ]
+    },
+    {
+      "name": "simple_network_routing",
+      "data": [
+        [
+          0,
+          0,
+          1,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          4,
+          4,
+          5,
+          5,
+          6,
+          6,
+          6,
+          7,
+          7,
+          7,
+          7,
+          8,
+          8,
+          8,
+          9,
+          9
+        ],
+        [
+          5,
+          1,
+          0,
+          2,
+          6,
+          7,
+          1,
+          3,
+          7,
+          2,
+          8,
+          4,
+          3,
+          9,
+          0,
+          6,
+          5,
+          1,
+          7,
+          6,
+          1,
+          2,
+          8,
+          7,
+          3,
+          9,
+          8,
+          4
+        ],
+        [
+          1,
+          30,
+          30,
+          1,
+          15,
+          2,
+          1,
+          5,
+          5,
+          5,
+          2,
+          1,
+          1,
+          30,
+          1,
+          3,
+          3,
+          15,
+          1,
+          1,
+          2,
+          5,
+          1,
+          1,
+          2,
+          2,
+          2,
+          30
+        ],
+        [
+          0,
+          1,
+          1,
+          2,
+          3,
+          4,
+          2,
+          5,
+          6,
+          5,
+          7,
+          8,
+          8,
+          9,
+          0,
+          10,
+          10,
+          3,
+          11,
+          11,
+          4,
+          6,
+          12,
+          12,
+          7,
+          13,
+          13,
+          9
+        ]
+      ],
+      "options": {
+        "destinations": [
+          9
+        ]
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "select": "rows",
+          "expected": 10,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting (node count derived from the edge list)"
+        },
+        {
+          "method": "dijkstra",
+          "index": 0,
+          "expected": 5,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 2,
+          "expected": 8,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 3,
+          "expected": 7,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 5,
+          "expected": 5,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 6,
+          "expected": 1,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 8,
+          "expected": 6,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 9,
+          "expected": 8,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 11,
+          "expected": 4,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 12,
+          "expected": 3,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 14,
+          "expected": 5,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 15,
+          "expected": 6,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 17,
+          "expected": 7,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 18,
+          "expected": 7,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 20,
+          "expected": 4,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 21,
+          "expected": 8,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 23,
+          "expected": 3,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 24,
+          "expected": 9,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 26,
+          "expected": 2,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 27,
+          "expected": 9,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 29,
+          "expected": 0,
+          "mode": "equal",
+          "source": "SimpleNetworkRouting"
+        }
+      ]
+    },
+    {
+      "name": "bidirectional_routing",
+      "data": [
+        [
+          0,
+          0,
+          1,
+          1,
+          1,
+          1,
+          2,
+          2,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        [
+          1,
+          3,
+          0,
+          2,
+          3,
+          4,
+          1,
+          4,
+          0,
+          1,
+          4,
+          1,
+          2,
+          3
+        ],
+        [
+          6,
+          1,
+          6,
+          5,
+          2,
+          2,
+          5,
+          5,
+          1,
+          2,
+          1,
+          2,
+          5,
+          1
+        ],
+        [
+          0,
+          1,
+          0,
+          2,
+          3,
+          4,
+          2,
+          5,
+          1,
+          3,
+          6,
+          4,
+          5,
+          6
+        ]
+      ],
+      "options": {
+        "destinations": [
+          4
+        ]
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "index": 0,
+          "expected": 3,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 2,
+          "expected": 2,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 3,
+          "expected": 4,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 5,
+          "expected": 2,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 6,
+          "expected": 4,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 8,
+          "expected": 5,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 9,
+          "expected": 4,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 11,
+          "expected": 1,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 12,
+          "expected": 4,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        },
+        {
+          "method": "dijkstra",
+          "index": 14,
+          "expected": 0,
+          "mode": "equal",
+          "source": "BidirectionalRouting"
+        }
+      ]
+    },
+    {
+      "name": "disconnected_nodes",
+      "data": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "options": {
+        "destinations": [
+          2
+        ],
+        "node_count": 4
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "index": 3,
+          "expected": 2,
+          "mode": "equal",
+          "source": "DisconnectedNodesTest"
+        },
+        {
+          "method": "dijkstra",
+          "index": 5,
+          "expected": 1,
+          "mode": "equal",
+          "source": "DisconnectedNodesTest"
+        },
+        {
+          "method": "dijkstra",
+          "index": 0,
+          "expected": 1,
+          "mode": "equal",
+          "source": "DisconnectedNodesTest"
+        },
+        {
+          "method": "dijkstra",
+          "index": 2,
+          "expected": 2,
+          "mode": "equal",
+          "source": "DisconnectedNodesTest"
+        },
+        {
+          "method": "dijkstra",
+          "index": 11,
+          "expected": "inf",
+          "mode": "equal",
+          "source": "DisconnectedNodesTest"
+        }
+      ]
+    },
+    {
+      "name": "multiple_dest_shared_path",
+      "data": [
+        [
+          0,
+          1,
+          1,
+          2,
+          1
+        ],
+        [
+          1,
+          0,
+          2,
+          1,
+          3
+        ],
+        [
+          1,
+          3,
+          1,
+          2,
+          3
+        ],
+        [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "options": {
+        "destinations": [
+          0,
+          3
+        ],
+        "node_count": 4
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "index": 3,
+          "expected": 0,
+          "mode": "equal",
+          "source": "MultipleDestSharedPath"
+        },
+        {
+          "method": "dijkstra",
+          "index": 5,
+          "expected": 3,
+          "mode": "equal",
+          "source": "MultipleDestSharedPath"
+        },
+        {
+          "method": "dijkstra",
+          "index": 6,
+          "expected": 1,
+          "mode": "equal",
+          "source": "MultipleDestSharedPath"
+        },
+        {
+          "method": "dijkstra",
+          "index": 8,
+          "expected": 5,
+          "mode": "equal",
+          "source": "MultipleDestSharedPath"
+        }
+      ]
+    },
+    {
+      "name": "disconnected_component",
+      "data": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          1,
+          0,
+          3
+        ],
+        [
+          1,
+          3,
+          1
+        ],
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "options": {
+        "destinations": [
+          0,
+          3
+        ],
+        "node_count": 4
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "index": 3,
+          "expected": 0,
+          "mode": "equal",
+          "source": "DisconnectedComponent"
+        },
+        {
+          "method": "dijkstra",
+          "index": 5,
+          "expected": 3,
+          "mode": "equal",
+          "source": "DisconnectedComponent"
+        },
+        {
+          "method": "dijkstra",
+          "index": 6,
+          "expected": 3,
+          "mode": "equal",
+          "source": "DisconnectedComponent"
+        },
+        {
+          "method": "dijkstra",
+          "index": 8,
+          "expected": 1,
+          "mode": "equal",
+          "source": "DisconnectedComponent"
+        }
+      ]
+    },
+    {
+      "name": "disconnected_component_single_destination",
+      "data": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          1,
+          0,
+          3
+        ],
+        [
+          1,
+          3,
+          1
+        ],
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "options": {
+        "destinations": [
+          0
+        ],
+        "node_count": 4
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "index": 8,
+          "expected": "inf",
+          "mode": "equal",
+          "source": "DisconnectedComponent2"
+        }
+      ]
+    },
+    {
+      "name": "triangle_path",
+      "data": [
+        [
+          0,
+          1,
+          1,
+          2
+        ],
+        [
+          1,
+          0,
+          2,
+          0
+        ],
+        [
+          1,
+          4,
+          1,
+          10
+        ],
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "options": {
+        "destinations": [
+          0,
+          2
+        ],
+        "node_count": 3
+      },
+      "assertions": [
+        {
+          "method": "dijkstra",
+          "index": 0,
+          "expected": 0,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "dijkstra",
+          "index": 2,
+          "expected": 0,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "dijkstra",
+          "index": 3,
+          "expected": 2,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "dijkstra",
+          "index": 5,
+          "expected": 1,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "dijkstra",
+          "index": 6,
+          "expected": 2,
+          "mode": "equal",
+          "source": "TrianglePath"
+        }
+      ]
+    },
+    {
+      "name": "triangle_path_network_solve",
+      "data": [
+        [
+          0,
+          1,
+          1,
+          2
+        ],
+        [
+          1,
+          0,
+          2,
+          0
+        ],
+        [
+          1,
+          4,
+          1,
+          10
+        ],
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "options": {
+        "destinations": [
+          0,
+          2
+        ]
+      },
+      "assertions": [
+        {
+          "method": "network_solve",
+          "select": "rows",
+          "expected": 3,
+          "mode": "equal",
+          "source": "Network derives its own node count (max node index + 1)"
+        },
+        {
+          "method": "network_solve",
+          "index": 0,
+          "expected": 0,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "network_solve",
+          "index": 2,
+          "expected": 0,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "network_solve",
+          "index": 3,
+          "expected": 2,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "network_solve",
+          "index": 5,
+          "expected": 1,
+          "mode": "equal",
+          "source": "TrianglePath"
+        },
+        {
+          "method": "network_solve",
+          "index": 6,
+          "expected": 2,
+          "mode": "equal",
+          "source": "TrianglePath"
+        }
+      ]
+    },
+    {
+      "name": "triangle_path_network_solve_weights_are_ignored",
+      "data": [
+        [
+          0,
+          1,
+          1,
+          2
+        ],
+        [
+          1,
+          0,
+          2,
+          0
+        ],
+        [
+          1,
+          4,
+          1,
+          10
+        ],
+        [
+          0,
+          1,
+          2,
+          3
+        ],
+        [
+          1,
+          1,
+          1,
+          1
+        ]
+      ],
+      "options": {
+        "destinations": [
+          0,
+          2
+        ]
+      },
+      "assertions": [
+        {
+          "method": "network_solve_weights",
+          "index": 0,
+          "expected": 0,
+          "mode": "equal",
+          "source": "TrianglePath (upstream no-op; see the case source)"
+        },
+        {
+          "method": "network_solve_weights",
+          "index": 2,
+          "expected": 0,
+          "mode": "equal",
+          "source": "TrianglePath (upstream no-op; see the case source)"
+        },
+        {
+          "method": "network_solve_weights",
+          "index": 3,
+          "expected": 2,
+          "mode": "equal",
+          "source": "TrianglePath (upstream no-op; see the case source)"
+        },
+        {
+          "method": "network_solve_weights",
+          "index": 5,
+          "expected": 1,
+          "mode": "equal",
+          "source": "TrianglePath (upstream no-op; see the case source)"
+        },
+        {
+          "method": "network_solve_weights",
+          "index": 6,
+          "expected": 2,
+          "mode": "equal",
+          "source": "TrianglePath (upstream no-op; see the case source)"
+        }
+      ]
+    }
+  ]
+}

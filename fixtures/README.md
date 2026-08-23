@@ -1784,12 +1784,64 @@ above; `power_confidence_inverse`'s dumped value coincides with `Test_InversePow
 algebraically identical to `Function()`'s `IsInverse = true` branch for the same alpha/beta/xi/
 sigma/confidence/input.
 
+P3 "optimizers" (Task 10) added the `network` group, the fifteenth, over the ported
+dynamic-programming trio (`numerics/math/optimization/dynamic/{binary_heap,dijkstra,network}.hpp`).
+It is the only group whose subject is a GRAPH rather than a series, so the edge list crosses the
+runner boundary as FOUR parallel data vectors -- `[from, to, weight, index]`, all of the same
+length, one element per edge -- with the destination node indices in `options.destinations` (an
+array, or a bare number for one) and an optional `node_count`. Every method returns the C#
+`float[nNodes, 3]` result table flattened row-major with `dims = {node_count, 3}` and the C#
+column order (`NEXT_NODE`, `EDGE_INDEX`, `COST`), so an assertion selects a cell with
+`index: node * 3 + column`. Unreachable nodes carry `-1`, `-1`, `"inf"`.
+
+PRECISION: costs accumulate in `float`, because the ported solver does (C# declares
+`float Weight`, allocates `float[nNodes, 3]`, and its own tests assert the table by exact `float`
+equality). The toolbox boundary is where the widening to `double` happens, so a fractional weight
+rounds to `float` before it is summed. Every weight in `DijkstraTesting.cs` is a small integer, so
+every value in `fixtures/toolbox/network.json` is exact in both precisions and is asserted at
+`mode: "equal"` (tolerance 0), exactly as the C# tests assert them.
+
+Three methods, mapping to the three C# entry points: `dijkstra` is the free `Dijkstra.Solve` (its
+single-destination overload when one destination is given, its `int[]` overload otherwise, which
+is the rule each transcribed C# test follows and which the emitter mirrors); `network_solve` is
+`Network.Solve`, which caches the incoming-edge lists in its constructor and forwards to that same
+free solver; `network_solve_weights` is `Network.Solve(float[] edgeWeights)`, taking a FIFTH data
+vector of replacement weights. `node_count` is a `dijkstra`-only option -- `Network` derives its
+own node count, so supplying it to either `network_*` method is an error rather than a silently
+ignored key.
+
+Two upstream defects shape this group and are pinned rather than papered over. The shipped C#
+`Network` CANNOT BE CONSTRUCTED at all (its constructor sizes both edge caches at the maximum node
+index instead of `max + 1` and then indexes one past the end), so the dotnet emitter drives the
+free `Dijkstra.Solve` for all three methods; that is exact rather than approximate, because
+`Network.Solve` does nothing but forward its cached lists to that function, and a patched C#
+`Network` -- the same file with only the sizing corrected, which is the port's one intentional
+divergence -- was measured returning the free solver's table element for element. And
+`Network.Solve(float[] edgeWeights)` IGNORES its own argument, passing the stale cache alongside
+the re-weighted array, so the case
+`triangle_path_network_solve_weights_are_ignored` supplies all-ones weights on a graph whose real
+weights are `1/4/1/10` and pins the ORIGINAL-weight answer: honoring the weights would route node
+1 through node 0 instead of node 2, so the case fails loudly if anyone ever "fixes" the port. Both
+defects are written up in `docs/upstream-csharp-issues.md`, and the user-facing `shortest_path()`
+verb in both packages calls `dijkstra`, never `network_solve_weights`.
+
+
 ### `optimizer`
 
-The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a
-NAMED built-in objective (one of `FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`, the same formulas
-`core/tests/optimization_test_functions.hpp` and each fixture runner's own native closure
-implement) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
+The fourteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
+annealing, multi-start, MLSL, BFGS, Powell, ADAM, gradient descent, Nelder-Mead, Brent, golden
+section, augmented Lagrange), run against a
+NAMED built-in objective (one of
+`FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`/`Rosenbrock`/`Eggholder`/`SumOfPowerFunctions`, plus the
+ten `Test_AugmentedLagrange.cs` inline functions
+`AL1_Objective`/`AL2_Objective`/`Haimes_Primary`/`Haimes_Secondary`/`RosenbrockDisk_Objective`/
+`Disk`/`SumAll`/`SumXY`/`X0`/`X1`,
+the same formulas `core/tests/optimization_test_functions.hpp` and each fixture runner's own native
+closure implement -- the accumulating ones, `DeJong`, `Rosenbrock`, `SumOfPowerFunctions`,
+`AL1_Objective`, `AL2_Objective` and `SumAll`,
+spell their sum out as an
+explicit loop in all four catalogs rather than calling `sum()`/`Sum()`, which would accumulate in a
+different precision in R) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
 `toolbox` group, reached through its own runner (`numerics/support/optimizer_runner.hpp`) and its
 own glue (`ch_optim_run_` / `_core.optim_run`). `construct` is passed straight through as the
 runner's spec JSON, minus the `objective` key (not part of the runner's own grammar). Processed by
@@ -1821,7 +1873,65 @@ literals this way).
 
 Assertion `method` is `"value"` (the objective's own value at the optimum, in its own sign
 convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
-or `"status"` (the exact `OptimizationStatus` name).
+`"iterations"`, `"function_evaluations"` (both integer counts, so `"mode": "equal"`),
+`"multiplier"` (`args: [set, index]`, where `set` is `"lambda"` | `"mu"` | `"nu"` -- the three
+augmented Lagrange multiplier vectors, in that class's own naming), or
+`"status"` (the exact `OptimizationStatus` name).
+
+`construct.control` is optional and passes straight through as the runner's `control` object; each
+method reads only the keys its own class exposes (`population_size` for `"de"`/`"particle_swarm"`;
+`complexes`/`cce_iterations`/`tolerance_steps` for `"sce"`;
+`initial_temperature`/`min_temperature`/`cooling_rate`/`update_cycles`/`temperature_cycles`/
+`tolerance_steps` for `"simulated_annealing"`; `local_method` for `"multi_start"`/`"mlsl"`; and
+`local_absolute_tolerance`/`local_relative_tolerance`/`polish` for `"multi_start"`; `alpha` for
+`"adam"`/`"gradient_descent"`; and `beta1`/`beta2` for `"adam"`, beside the
+`max_iterations`/`absolute_tolerance`/`relative_tolerance`/`max_function_evaluations`/
+`report_failure`/`compute_hessian` set the `Optimizer` base carries). An absent key leaves the
+ported class's own default.
+
+`construct.gradient` is optional and names an analytic gradient in a SECOND catalog
+(`Grad_FXYZ`/`Grad_DeJong`/`Grad_Booth`, likewise written out term by term in all four runners),
+the second host-language callback the two gradient-taking methods accept. It is not part of the
+runner's spec grammar either -- each runner strips it and passes the resolved function through the
+gradient entry point (`ch_optim_run_grad_` / `_core.optim_run_grad`) instead of the plain one. Only
+`"adam"` and `"gradient_descent"` read it; omitted, both classes differentiate the objective
+numerically, exactly as a null C# `Gradient` delegate makes them. The three cases that supply one
+also pin `iterations` and `function_evaluations` at exact equality, because those counts are the
+only thing that distinguishes a run driven by the supplied gradient from one that silently ignored
+it (1518 evaluations against 12137 for the otherwise identical `adam_fxyz`); all three counts were
+measured identical in the real C# library, in the C++ core compiled with and without
+floating-point contraction, in R and in Python. The `Grad_` prefix follows the same convention the
+`callback` kind's catalog uses, and the two catalogs are separate lookups.
+
+`construct.constraints` and `construct.inner` belong to `"augmented_lagrange"` and to nothing else.
+Each `constraints[i]` object carries a `function` key naming an entry in the SAME catalog the
+objective comes from (an objective and a constraint are the same shape, so both roles resolve out
+of one lookup -- `Disk` really is used as both, being `Test_RosenbrockDisk`'s constraint and
+`Test_MixedConstraints`'s objective written identically upstream), plus the serializable half of
+the constraint: `type` (`"eq"` | `"le"` | `"ge"`, mapping onto
+`EqualTo`/`LesserThanOrEqualTo`/`GreaterThanOrEqualTo`), `value`, and an optional `tolerance`
+(default `1E-8`). Like `objective` and `gradient`, `function` is a catalog name and NOT part of the
+runner's own grammar: each runner strips it, resolves it, and passes the callbacks through the
+constrained entry point (`ch_optim_run_constrained_` / `_core.optim_run_constrained`), where they
+pair POSITIONALLY with what is left of the `constraints` array. `inner` names the borrowed inner
+optimizer (`method` plus optional `initial`/`lower`/`upper`/`seed`/`control`, each vector falling
+back to the top-level one); omitted, it is BFGS over the top-level vectors, the shape every
+upstream C# test uses.
+
+```jsonc
+{
+  "name": "augmented_lagrange_haimes",
+  "construct": {
+    "method": "augmented_lagrange", "objective": "Haimes_Primary",
+    "initial": [5, 5], "lower": [0, 0], "upper": [10, 10],
+    "constraints": [{ "function": "Haimes_Secondary", "type": "le", "value": 13.31 }]
+  },
+  "assertions": [
+    { "method": "parameter", "args": [0], "expected": 4.5, "mode": "abs", "tol": 1e-2 },
+    { "method": "multiplier", "args": ["mu", 0], "expected": 1.67, "mode": "abs", "tol": 1e-2 }
+  ]
+}
+```
 
 ### `callback`
 
@@ -2115,11 +2225,16 @@ contracted lambda computes a different function from the one the fixture names.
 ### `toolbox_cross_language`
 
 One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose
-kind: its single case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
+kind: its first case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
 case's `construct`/`assertions`) alongside `"sobol"` and `"stratify"` sub-blocks (each shaped
 exactly like a `toolbox`-kind group-`"sampling"` case's `options`/`assertions`), so that ONE
 fixture drives a seeded stochastic optimizer run and two deterministic sequence generators through
-all four runners together. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
+all four runners together. Every sub-block is OPTIONAL: the four cases the optimizer phase added
+(one per stochastic method newly reachable from `optim_minimize()`) carry an `"optimizer"` block
+alone, and each pins only the quantities MEASURED to reproduce in all four harnesses -- see the
+fixture's own `reference` field, and the matching `FIDELITY` entry in
+`docs/upstream-csharp-issues.md`, for why a seeded ParticleSwarm or SCE run pins its iteration and
+evaluation counts but not every converged digit. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
 `short_exact`-digest precedent: proving R and Python agree bit for bit, this time across the
 toolbox/optimizer surface rather than a Bayesian MCMC chain. Every value is dumped from the REAL
 C# `DifferentialEvolution`/`SobolSequence`/`Stratify` via `tools/oracle_emitter --dump` and
