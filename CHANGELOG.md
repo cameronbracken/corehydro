@@ -7,6 +7,140 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-23
+
+The rest of the Numerics optimization layer. `optim_minimize()` grew from six methods to fourteen:
+four global searches (particle swarm, shuffled complex evolution, simulated annealing,
+multi-start), three local ones (ADAM, gradient descent, golden section), and the first constrained
+method, augmented Lagrange, which takes one or more constraint functions and reports the Lagrange
+multiplier on each. ADAM and gradient descent accept an optional analytic gradient, which on a
+five-dimensional problem cut the objective calls from 103,141 to 8,596. The dynamic-programming
+trio (BinaryHeap, Dijkstra, Network) is not an optimizer -- its input is a graph, not a callable --
+so it joins the toolbox as a fifteenth group and reaches users as `shortest_path()`. This is the
+third step of the release arc laid out in
+`docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`, following the
+math-extras release (0.9.0).
+
+### Added
+
+- **Four global optimizers**, ported from `Numerics/Mathematics/Optimization/Global/`, as new
+  `method` names on `optim_minimize()` / `optim_maximize()`: `"particle_swarm"` (`ParticleSwarm`,
+  the Kochenderfer-Wheeler swarm at Alam's recommended inertia weights), `"sce"`
+  (`ShuffledComplexEvolution`, the SCE-UA of Duan et al.),
+  `"simulated_annealing"` (`SimulatedAnnealing`, Corana adaptive step control),
+  and `"multi_start"` (`MultiStart`, repeated local searches from uniform restarts). Each is
+  seeded, and each carries its own settings through `control`: `population_size` for the swarm;
+  `complexes`, `cce_iterations` and `tolerance_steps` for SCE; `initial_temperature`,
+  `min_temperature`, `cooling_rate`, `update_cycles`, `temperature_cycles` and `tolerance_steps`
+  for annealing; `local_method`, `local_absolute_tolerance`, `local_relative_tolerance` and
+  `polish` for multi-start.
+- **Three local optimizers**, ported from `Numerics/Mathematics/Optimization/Local/`:
+  `"adam"` (`ADAM`), `"gradient_descent"` (`GradientDescent`), and `"golden_section"`
+  (`GoldenSection`, one-dimensional like `"brent"`). ADAM and gradient descent take `alpha` (the
+  step size) through `control`, and ADAM the two decay factors `beta1` and `beta2`.
+- **An optional analytic gradient.** `optim_minimize()` / `optim_maximize()` gain a `gradient`
+  argument -- an R function or Python callable returning one partial derivative per parameter --
+  accepted by `"adam"` and `"gradient_descent"` and an error for every other method. Omitted, both
+  methods differentiate numerically, as the C# classes do with a null gradient. It is the optimizer
+  surface's second host-language callback after the objective itself, and it goes through the same
+  abort-state guard: an exception raised inside the gradient survives the ported optimizer's own
+  catch-all rather than being replaced by an internal C++ one.
+- **Constrained optimization**, ported from `Numerics/Mathematics/Optimization/Constrained/`.
+  `method = "augmented_lagrange"` runs `AugmentedLagrange` over a borrowed inner optimizer, with
+  two new arguments on both verbs: `constraints`, a list of the new `optim_constraint()` (R) /
+  `Constraint` (Python) objects, each pairing a function with a `value`, a `type` (`"eq"`, `"le"`,
+  `"ge"`) and a `tolerance`; and `inner`, an optional spec naming the inner optimizer and its own
+  bounds, seed and control (defaulting to BFGS over the top-level vectors). The result gains
+  `multipliers`, the three Lagrange multiplier vectors (`equality`, `less_than`, `greater_than`),
+  one entry per constraint of that type. Which inner optimizer is chosen can change which local
+  solution the constrained problem converges to -- worked example 19 shows BFGS and Powell landing
+  on 25.32 and 28.31 on the same Haimes problem, in the C# library exactly as in the port.
+- **`local_method` on `"mlsl"`.** MLSL's choice of local solver (`"bfgs"`, `"nelder_mead"`,
+  `"powell"`) was ported at Phase 6 but never exposed; it is now a `control` setting on `"mlsl"` as
+  well as on the new `"multi_start"`. Both methods reject `"adam"` and `"gradient_descent"` as a
+  local method, which is upstream behavior and not a gap in the port.
+- **`shortest_path()`**, over a new `network` toolbox group (the fifteenth), backed by the ported
+  `BinaryHeap`, `Dijkstra` and `Network` from `Numerics/Mathematics/Optimization/Dynamic/`. It
+  takes a graph as three parallel vectors (`from`, `to`, `weight`, plus an optional `edge_index`)
+  and one or more
+  `destinations`, and returns the routing table Dijkstra produces: the next node on the cheapest
+  path, the edge to take, and the cost, one row per node. Node indices are **0-based in both
+  languages**, matching the C# literals; an unreachable node reports `next_node = -1`,
+  `edge_index = -1` and `cost = Inf`. Edge weights are single precision in the C# library and the
+  port keeps them so, widening to double only at the language boundary.
+- **A worked example pair, 19, global and constrained optimization**, walking four seeded global
+  searches on the Eggholder function (including the two that miss the optimum at their defaults,
+  and what to change), the constrained Haimes problem with its multiplier put to work as a shadow
+  price and checked against an actual bound relaxation, ADAM with and without an analytic gradient,
+  and `shortest_path()` over the upstream ten-node routing graph. It ends, as every example does,
+  in an executable reproduction check.
+
+### Changed
+
+- **`optim_maximize()` rejects `method = "augmented_lagrange"` by name.** The upstream C# class
+  always drives its inner optimizer through `Minimize()` over an augmented Lagrangian built from
+  the raw objective, so a maximize request flips the reported sign without flipping the search
+  direction and returns the constrained MINIMUM labelled `Success` (measured; see
+  `docs/upstream-csharp-issues.md`). The ported class still mirrors upstream so a fixture can pin
+  it; the guard lives on the public verbs, and its message names the exact workaround -- minimizing
+  `-f` under the same constraints is exactly maximizing `f`.
+- **Optimizer settings are validated against a single per-method table** in both packages, replacing
+  three ad-hoc special cases. A `control` setting that belongs to a different method is now an
+  error naming both the setting and the method it belongs to, rather than a silent no-op.
+- **The optimizer runner builds every method through one `make_optimizer` helper**, so the inner
+  optimizer of a constrained run and a top-level run go through the identical construction path
+  rather than two copies of the same switch.
+
+### Fixed
+
+- **`Dijkstra.Solve` had no real bounds check on its node indices**, so a `node_count` smaller than
+  the graph indexed past the end of its own arrays. In C# that is an `IndexOutOfRangeException`; in
+  the port it was undefined behavior, confirmed with AddressSanitizer, and through the Python
+  package it terminated the interpreter rather than raising. The four sites C# indexes a node-sized
+  array now check in place -- in place, not up front, because the C# check is lazy and an
+  out-of-range index on an edge the search never relaxes must still return a table -- and
+  `shortest_path()` additionally rejects `node_count < max(from, to) + 1` up front so the error
+  names the argument.
+
+### Notes
+
+- **Three upstream defects in `Network` are documented rather than papered over**, all measured
+  against the real C# library and written up in `docs/upstream-csharp-issues.md`. The class cannot
+  be constructed at all (its constructor sizes both edge caches one element short and never sets
+  its node count), `Solve(float[] edgeWeights)` silently ignores the weights it is given, and
+  `GetPath` binary-searches an `int[]` for an `Edge` and so can only throw, return null, or return
+  an empty list. The port mirrors the second and third exactly and pins them with tests; it
+  diverges on the first, deliberately and visibly, because a constructor that always throws has no
+  behavior to be faithful to. None of this reaches the user surface: `shortest_path()` goes through
+  the free solver, which works, and `GetPath` is severed (see `upstream/CLAUDE.md`).
+- **A seeded `"particle_swarm"` or `"sce"` run reproduces between R and Python but not necessarily
+  against the C# library**, and the reason is measured rather than assumed. Both algorithms branch
+  on comparisons between accumulated sums; clang and gcc contract `a*b + c` into a fused
+  multiply-add by default and .NET never does, so one contracted expression flips an accept-or-
+  reject and every later draw is spent differently (particle swarm on Booth: 3,073 iterations and
+  92,220 evaluations against the packages' 3,855 and 115,680). Compiled with `-ffp-contract=off`
+  the port is bit-identical to C# on every construct tried. `"simulated_annealing"` and
+  `"multi_start"` reproduce the C# library exactly, down to the evaluation count, and `"adam"`,
+  `"gradient_descent"`, `"augmented_lagrange"` and `shortest_path()` have no PRNG at all. The
+  affected fixture cases pin only what survives both paths -- iteration counts, evaluation counts,
+  status, and the parameters that land exactly on a bound. No tolerance was loosened and no oracle
+  was skipped.
+- **`method = "multi_start"` can report a value that its own reported parameters do not produce.**
+  Upstream's polish step clamps the best point back onto the bounds in place, after its fitness was
+  recorded, so a local search that wandered outside the box leaves an out-of-box value attached to
+  an on-the-bound point. Measured on the Eggholder function: value `-959.8293` at
+  `(512, 404.3228)`, where the objective is `-959.6312`. The real C# library returns the same
+  numbers bit for bit, so this is faithful reproduction; it is written up in
+  `docs/upstream-csharp-issues.md`, and worked example 19 does not showcase this method.
+
+### Validation
+
+ctest 102/102 (the fixture suite alone 5953 checks); oracle gate 5942 reproduced, 0 failed, 11
+skipped (the documented GEV standard-error set, unchanged); testthat 6916/0; pytest 1711 passed.
+`R CMD check --as-cran` holds at the same three NOTEs
+(the CRAN-incoming non-FOSS-license note, the long-path note listing vendored core headers, and a
+local HTML-tidy-version note) with no WARNING.
+
 ## [0.9.0] - 2026-08-22
 
 The last major slice of Numerics that is not a distribution, model, or estimator: root finding,
@@ -781,7 +915,9 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/cameronbracken/corehydro/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/cameronbracken/corehydro/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/cameronbracken/corehydro/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/cameronbracken/corehydro/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cameronbracken/corehydro/compare/v0.5.0...v0.6.0

@@ -2334,6 +2334,35 @@ J-statistic) are unchanged and still correct as written.
   `Evaluate` (so `FunctionScale` applies), or call `this.Optimizer.Maximize()` when the outer run
   is a maximization. Either way the class needs a maximizing test; all six existing ones minimize.
 
+## BUG — `MultiStart`'s polish step clamps the recorded best point after its fitness was recorded, so the reported value need not be attained at the reported parameters
+
+- **Where:** `Numerics/Mathematics/Optimization/Global/MultiStart.cs` @ 2a0357a, the polish block at
+  the end of `Optimize()`, which passes `BestParameterSet.Values` into `GetLocalOptimizer`.
+- **What:** `GetLocalOptimizer` calls `RepairParameter` on the array it is handed, in place. On the
+  polish call that array IS `BestParameterSet.Values`, so a best point that a local search left
+  outside the box is clamped back onto the bound while `BestParameterSet.Fitness` keeps the
+  out-of-box value that was recorded for the unclamped point. The run then reports a value the
+  reported parameters do not produce. The same aliasing shape as note 2 of the ported header (the
+  re-seated `InitialValues` array), but with a numeric rather than a bookkeeping consequence.
+- **Evidence (measured through the shipped Python package, and identical in R):** minimizing the
+  Eggholder function over `[-512, 512]^2` from `(0, 0)` with `method = "multi_start"` reports
+  `value = -959.829329467467` at `(512, 404.32280392733844)`. The objective AT that point is
+  `-959.6312431930309`. A 2001 x 2001 grid scan puts the whole-box minimum at about `-959.57`
+  (the true box optimum is `-959.6407`), so the reported value is not attainable anywhere in the
+  box; just outside it, at `x = 512.5`, the same objective reads `-961.148161258961`. Task 3 of the
+  P3 phase measured the real C# `MultiStart` returning `iters=100 evals=8414286
+  fitness=-959.82932946746701 values=512, 404.32280392733844` — bit-for-bit what the port returns,
+  so this is upstream behavior faithfully reproduced, not a port defect.
+- **Port handling:** mirrored exactly (see
+  `core/include/corehydro/numerics/math/optimization/multi_start.hpp` note 3), because the search
+  path and the C# oracles depend on it. Invisible on the fixture-pinned FXYZ construct, whose value
+  and parameters are consistent, which is why no fixture case catches it. It is noted in the
+  0.10.0 release notes so a user who sees an inconsistent pair knows it is upstream, and worked
+  example 19 deliberately does not showcase this method.
+- **Suggested C# fix:** polish a COPY of `BestParameterSet.Values` and adopt the result only if its
+  re-evaluated fitness is an improvement, or re-evaluate the objective after the repair so the
+  reported fitness always belongs to the reported point.
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a

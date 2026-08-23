@@ -82,16 +82,21 @@ all reach both languages through this one pair of headers rather than per-family
 
 `core/include/corehydro/numerics/support/toolbox_runner.hpp` (siblings of `dist_runner.hpp` and
 `estimation/support/fit_runner.hpp`, likewise corehydro additions with no upstream C# counterpart)
-is the one place a general-purpose Numerics utility method is dispatched: fourteen groups --
+is the one place a general-purpose Numerics utility method is dispatched: fifteen groups --
 `correlation`, `gof`, `statistics`, `spectra`, `histogram`, `interpolation`, `regression`,
-`sampling`, `probability`, `link`, `trend`, `linalg`, `special`, `functions` -- each a
+`sampling`, `probability`, `link`, `trend`, `linalg`, `special`, `functions`, `network` -- each a
 standalone-compiling header under
 `numerics/support/toolbox/` (plus `common.hpp` for the shared `ToolboxResult`/data-access
 helpers), holding that group's `detail::run_<group>` function. Bulk data travels as native double
 vectors (not JSON, unlike `dist_spec`'s construct grammar) since a goodness-of-fit call carrying
 two arbitrary-length series has no business paying a JSON parse; scalars, enum names, and flags
-travel in a small `options_json`. `numerics/support/optimizer_runner.hpp` is the sibling for the
-six ported optimizers (Differential Evolution, BFGS, Powell, MLSL, Nelder-Mead, Brent): unlike
+travel in a small `options_json`. The `network` group is the outlier in that list: its subject,
+`numerics/math/optimization/dynamic/` (BinaryHeap, Dijkstra, Network), is an optimization class
+whose input is a graph rather than a callable, so it joins the toolbox rather than the optimizer
+runner and reaches users as `shortest_path()`. `numerics/support/optimizer_runner.hpp` is the
+sibling for the fourteen ported optimizers (Differential Evolution, ParticleSwarm,
+ShuffledComplexEvolution, SimulatedAnnealing, MultiStart, MLSL, BFGS, Powell, ADAM,
+GradientDescent, Nelder-Mead, Brent, GoldenSection, AugmentedLagrange): unlike
 every other toolbox/fixture surface, an optimizer's INPUT is a live callable, not serializable
 data, so it is a separate runner rather than a `run_toolbox` group, and `GuardedObjective` there
 is the one place a host-language (R/Python) callback crosses into the shared core, latching the
@@ -107,6 +112,20 @@ replay, and a user's `correlation()` or `optim_minimize()` call are the same cod
 a seeded DE run's parameters and two deterministic generators reproduce identically across all
 four runners in one fixture, the toolbox layer's counterpart to the estimation layer's
 `fit_cross_language.json`.
+
+`core/include/corehydro/numerics/math/optimization/` carries every ported optimizer beside
+`support/optimizer.hpp` (the shared base) and `support/parameter_set.hpp`: the global set
+(`differential_evolution.hpp`, `particle_swarm.hpp`, `shuffled_complex_evolution.hpp`,
+`simulated_annealing.hpp`, `multi_start.hpp`, `mlsl.hpp`), the local set (`bfgs.hpp`,
+`powell.hpp`, `adam.hpp`, `gradient_descent.hpp`, `golden_section.hpp`, plus the two standalone
+Phase-0 classes `nelder_mead.hpp` and `brent_search.hpp`), and the constrained
+`augmented_lagrange.hpp` over `constraint/` (`constraint_type.hpp`, `i_constraint.hpp`,
+`constraint.hpp`). `dynamic/` holds the dynamic-programming trio (`binary_heap.hpp`,
+`dijkstra.hpp`, `network.hpp`) that the `network` toolbox group dispatches. Two of these headers
+deliberately reproduce upstream array aliasing that is oracle-visible and must not be "cleaned
+up" -- `shuffled_complex_evolution.hpp`'s reused scratch point and `multi_start.hpp`'s
+re-seated initial-values array; each says so in a numbered transcription note, as does
+`network.hpp` for the three defects that make the C# `Network` class unconstructible.
 
 `core/include/corehydro/numerics/support/callback_runner.hpp` is the third runner in that family
 and the one place a ported class whose INPUT is a live host-language function is dispatched:
@@ -829,3 +848,57 @@ loosened and no oracle was skipped anywhere in the phase. The version bump to **
 Final numbers: **ctest 98/98 (test_fixtures 5762 checks); oracle gate 5751 reproduced, 0 failed, 11
 skipped; testthat 6622/0; pytest 1619**; `R CMD check --as-cran` holds at the same three NOTEs with
 no WARNING.
+
+The optimizers phase (P3, branch `port-optimizers`, August 2026) closed the rest of the Numerics
+optimization layer and is the third step of the release arc laid out in
+`docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`. `optim_minimize()` /
+`optim_maximize()` went from six methods to **fourteen**: the four global optimizers
+(`particle_swarm`, `sce`, `simulated_annealing`, `multi_start`), the three local ones (`adam`,
+`gradient_descent`, `golden_section`), and the constrained `augmented_lagrange` over a new
+constraint layer (`optim_constraint()` / `Constraint`, the `constraints` and `inner` arguments, and
+the three Lagrange multiplier vectors on the result). `adam`/`gradient_descent` take an optional
+analytic `gradient` callback -- the second host-language function to cross into the shared core,
+guarded through the same `CallbackAbortState` the callback layer uses. `mlsl` gained the
+`local_method` control it had been ported with but never exposed. The dynamic-programming trio
+(BinaryHeap, Dijkstra, Network) is not an optimizer -- its input is a graph -- so it joined the
+toolbox as the fifteenth group, `network`, reaching users as `shortest_path()` (0-based node
+indices in BOTH languages, single-precision weights kept single-precision through the core).
+The ctest suites are `core/tests/test_local_optimizers.cpp`, `test_global_optimizers.cpp`,
+`test_augmented_lagrange.cpp`, and `test_network_optimization.cpp`, all transcribing the upstream
+MSTest methods 1:1 and each carrying a clearly-marked supplement where mutation testing showed the
+C# assertions guard the ANSWER but not the ALGORITHM.
+
+Four findings worth carrying forward. First, **`test_global_optimizers` is compiled
+`-ffp-contract=off`** and the reason is measured: ParticleSwarm and SCE branch on comparisons
+between accumulated sums, .NET never fuses `a*b + c` and clang/gcc do by default, so one contracted
+expression flips an accept/reject and every later PRNG draw is spent differently. With the flag the
+port is bit-identical to the real C# library on all ten configurations tried; without it SCE's
+Eggholder oracle misses outright. The shipped R and Python packages pass no such flag, so a seeded
+`particle_swarm` or `sce` run reproduces R-to-Python but NOT necessarily package-to-C# -- unlike
+P2's limit, the divergence is inside the shared core, so even the parameters drift. Those two
+fixture cases pin only what survives both paths (iteration count, evaluation count, status, a
+parameter that lands exactly on a bound); `simulated_annealing` and `multi_start` reproduce C#
+exactly down to the evaluation count and ARE pinned exactly. Second, **two ported headers reproduce
+upstream array aliasing on purpose** and must not be cleaned up: SCE reuses one scratch point across
+its beta loop and stores it by reference, so a later write silently moves an already-scored
+sub-complex entry (without it the port does not reproduce C#), and MultiStart re-seats its `values`
+pointer onto `InitialValues`, so a finished run's `InitialValues` holds the last sampled restart.
+MultiStart's polish step is the same shape with a numeric consequence: it clamps the recorded best
+point after its fitness was recorded, so the reported value need not be attained at the reported
+parameters (measured on Eggholder; C# returns the same numbers bit for bit). Third, the shipped C#
+**`Network` class is entirely unreachable code** -- its constructor sizes both edge caches one short
+and never sets `_nodeCount`, `Solve(float[])` ignores the weights it is handed, and `GetPath`
+binary-searches an `int[]` for an `Edge` so it can only throw, return null, or return an empty
+list. The port diverges on the constructor alone (a ctor that always throws has no behavior to be
+faithful to, and the fix is independently checkable: `network.solve(d)` then equals
+`dijkstra::solve(edges, d)`, which does run in C#), mirrors the other two exactly with tests
+pinning them, severs `GetPath`, and routes the user verb through the free solver. Fourth,
+**`AugmentedLagrange` cannot maximize**: `Optimize()` always drives the inner optimizer through
+`Minimize()`, so a maximize request returns the constrained minimum labelled Success. The ported
+class mirrors it (a fixture must be able to pin upstream); the guard lives on the two public verbs,
+which reject the method by name and state the exact workaround. All four are written up in
+`docs/upstream-csharp-issues.md`, and one worked example pair, **19**, exercises the whole surface
+ending in an executable reproduction check. The version bump to **0.10.0** records it. Final
+numbers: **ctest 102/102 (test_fixtures 5953 checks); oracle gate 5942 reproduced, 0 failed, 11
+skipped; testthat 6916/0; pytest 1711**; `R CMD check --as-cran` holds at the same three NOTEs with
+no WARNING. No `oracle_skip` and no loosened tolerance was added anywhere in the phase.
