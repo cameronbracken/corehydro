@@ -408,7 +408,7 @@ pixi run python -m pytest corehydropy/tests -q
 
 `fixtures/toolbox/hypothesis.json` (kind `toolbox`, group `hypothesis`) carrying one case per C#
 test method from Task 2's table, reusing the same input arrays as `datasets` entries
-(`harricana`, `noise128`, `data30a`, `data30b`, ...) so they are written once. Every assertion
+(`harricana`, `noise`, `data30a`, `data30b`, ...) so they are written once. Every assertion
 carries a `source` naming the C# test method. Use the C# tolerances; where the C# expected value
 is an EXPRESSION rather than a literal (Wald-Wolfowitz's `(1 - StandardCDF(1.167)) * 2` and
 Mann-Whitney's `(1 - StandardCDF(0.54)) * 2`), evaluate it once and pin the number, recording the
@@ -1456,7 +1456,7 @@ without Cam's go-ahead.
 - **Deliberate non-placeholders.** Port tasks cite the exact C# file and line as the
   implementation reference (the established port convention) and enumerate by number every
   transcription detail measured to be oracle-visible or defect-preserving. Large input arrays (the
-  78-point query sweep, the 128-value noise series, the 69-value Harricana record) are named by
+  78-point query sweep, the noise series, the 69-value Harricana record) are named by
   their C# test file and method with an instruction to transcribe verbatim rather than reproduced
   here, because a plan that retypes a 78-element array is a plan that introduces a typo -- the
   same convention P3's plan used for the Dijkstra graphs. Every EXPECTED value, which is what a
