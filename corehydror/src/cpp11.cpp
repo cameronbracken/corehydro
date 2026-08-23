@@ -593,6 +593,13 @@ extern "C" SEXP _corehydror_ch_optim_run_(SEXP spec_json, SEXP objective) {
     return cpp11::as_sexp(ch_optim_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<function>>(objective)));
   END_CPP11
 }
+// toolbox.cpp
+list ch_optim_run_grad_(std::string spec_json, function objective, function gradient);
+extern "C" SEXP _corehydror_ch_optim_run_grad_(SEXP spec_json, SEXP objective, SEXP gradient) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_optim_run_grad_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<function>>(objective), cpp11::as_cpp<cpp11::decay_t<function>>(gradient)));
+  END_CPP11
+}
 
 extern "C" {
 static const R_CallMethodDef CallEntries[] = {
@@ -670,6 +677,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_mvn_val_",                      (DL_FUNC) &_corehydror_ch_mvn_val_,                       4},
     {"_corehydror_ch_mvt_val_",                      (DL_FUNC) &_corehydror_ch_mvt_val_,                       5},
     {"_corehydror_ch_optim_run_",                    (DL_FUNC) &_corehydror_ch_optim_run_,                     2},
+    {"_corehydror_ch_optim_run_grad_",               (DL_FUNC) &_corehydror_ch_optim_run_grad_,                3},
     {"_corehydror_ch_plotting_positions_",           (DL_FUNC) &_corehydror_ch_plotting_positions_,            2},
     {"_corehydror_ch_plotting_positions_alpha_",     (DL_FUNC) &_corehydror_ch_plotting_positions_alpha_,      2},
     {"_corehydror_ch_rng_integers_",                 (DL_FUNC) &_corehydror_ch_rng_integers_,                  4},

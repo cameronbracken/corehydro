@@ -43,10 +43,25 @@ tbx::Objective optimizer_objective(const std::string& name) {
     if (name == "McCormick") return tbx::Objective(test_functions::mccormick);
     if (name == "Rosenbrock") return tbx::Objective(test_functions::rosenbrock);
     if (name == "Eggholder") return tbx::Objective(test_functions::eggholder);
+    if (name == "SumOfPowerFunctions")
+        return tbx::Objective(test_functions::sum_of_power_functions);
     if (name == "FX")
         return tbx::Objective(
             [](const std::vector<double>& v) { return test_functions::fx(v[0]); });
     throw std::runtime_error("unknown optimizer fixture objective: " + name);
+}
+
+// The optional analytic gradients the "adam"/"gradient_descent" cases name by `construct.gradient`
+// -- the second host-language callback the optimizer surface takes. Same shape as the objective
+// catalog above, and deliberately a SEPARATE table: a gradient name resolves to a vector-valued
+// function, so a typo naming an objective here cannot silently type-check. The `Grad_` prefix
+// keeps these names distinct from the objective catalog's for the same reason the callback
+// catalog's `Diff_`/`Root_`/`Quad_` prefixes do.
+tbx::Gradient optimizer_gradient(const std::string& name) {
+    if (name == "Grad_FXYZ") return tbx::Gradient(test_functions::grad_fxyz);
+    if (name == "Grad_DeJong") return tbx::Gradient(test_functions::grad_de_jong);
+    if (name == "Grad_Booth") return tbx::Gradient(test_functions::grad_booth);
+    throw std::runtime_error("unknown optimizer fixture gradient: " + name);
 }
 
 // --- callback path (callback surface, Task 1) --------------------------------------------

@@ -849,6 +849,12 @@ static double OptimizerTestRosenbrock(double[] p)
 static double OptimizerTestEggholder(double[] p) =>
     -(p[1] + 47d) * Math.Sin(Math.Sqrt(Math.Abs((p[0] / 2d) + (p[1] + 47d))))
     - p[0] * Math.Sin(Math.Sqrt(Math.Abs(p[0] - (p[1] + 47d))));
+static double OptimizerTestSumOfPowerFunctions(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i < p.Length; i++) F += Math.Pow(Math.Abs(p[i]), i + 2d);
+    return F;
+}
 static Func<double[], double> OptimizerTestFunction(string name) => name switch
 {
     "FXYZ" => OptimizerTestFXYZ,
@@ -858,11 +864,38 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
     "FX" => p => OptimizerTestFX(p[0]),
     "Rosenbrock" => OptimizerTestRosenbrock,
     "Eggholder" => OptimizerTestEggholder,
+    "SumOfPowerFunctions" => OptimizerTestSumOfPowerFunctions,
     _ => throw new Exception($"unknown optimizer fixture objective: {name}")
 };
 
+// The optional analytic gradients an `optimizer`-kind construct names by `construct.gradient` --
+// the second delegate the real C# ADAM / GradientDescent take (a null one is what "differentiate
+// numerically" means to both). TestFunctions.cs carries no gradients, so these are the
+// hand-differentiated counterparts of core/tests/optimization_test_functions.hpp's own additions,
+// written out term by term so all four catalogs evaluate the identical arithmetic.
+static double[] OptimizerTestGradFXYZ(double[] p) =>
+    new double[] { 8d * (4d * p[0] - 0.5), 6d * (3d * p[1] - 0.6), 4d * (2d * p[2] - 0.7) };
+static double[] OptimizerTestGradDeJong(double[] p)
+{
+    var g = new double[p.Length];
+    for (int i = 0; i < p.Length; i++) g[i] = 2d * p[i];
+    return g;
+}
+static double[] OptimizerTestGradBooth(double[] p) => new double[]
+{
+    2d * (p[0] + 2d * p[1] - 7d) + 4d * (2d * p[0] + p[1] - 5d),
+    4d * (p[0] + 2d * p[1] - 7d) + 2d * (2d * p[0] + p[1] - 5d)
+};
+static Func<double[], double[]> OptimizerTestGradient(string name) => name switch
+{
+    "Grad_FXYZ" => OptimizerTestGradFXYZ,
+    "Grad_DeJong" => OptimizerTestGradDeJong,
+    "Grad_Booth" => OptimizerTestGradBooth,
+    _ => throw new Exception($"unknown optimizer fixture gradient: {name}")
+};
+
 // Builds and configures the REAL C# optimizer an `optimizer`-kind construct names, mirroring
-// optimizer_runner.hpp's run_optimizer arm for arm: the same eleven method names, the seed applied
+// optimizer_runner.hpp's run_optimizer arm for arm: the same thirteen method names, the seed applied
 // to whichever of the six stochastic classes was built, and every `control` key applied only when
 // present and only by the class that reads it (an absent key leaves the C# class default). Shared
 // by the "optimizer" and "toolbox_cross_language" branches below, which had carried two copies of
@@ -882,6 +915,10 @@ static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
     double[] initial = construct.TryGetProperty("initial", out var initialEl)
         ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
     int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+    // The optional analytic gradient the two gradient-taking methods take, resolved out of its own
+    // catalog. A null delegate is exactly what "differentiate numerically" means to both classes.
+    Func<double[], double[]>? gradient = construct.TryGetProperty("gradient", out var gradEl)
+        ? OptimizerTestGradient(gradEl.GetString()!) : null;
 
     Optimizer optimizer = method switch
     {
@@ -892,6 +929,11 @@ static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
         "multi_start" => new MultiStart(objective, initial.Length, initial, lower, upper),
         "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
         "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+        // Alpha is left at the ctor default here and applied from `control` below like every other
+        // knob, so one code path handles it rather than two.
+        "adam" => new ADAM(objective, initial.Length, initial, lower, upper, 0.001, gradient),
+        "gradient_descent" =>
+            new GradientDescent(objective, initial.Length, initial, lower, upper, 0.001, gradient),
         "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
         "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
         "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
@@ -960,6 +1002,12 @@ static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
                 case "local_relative_tolerance":
                     ((MultiStart)optimizer).LocalRelativeTolerance = ParseNum(knob.Value); break;
                 case "polish": ((MultiStart)optimizer).Polish = knob.Value.GetBoolean(); break;
+                case "alpha":
+                    if (optimizer is ADAM adamAlpha) adamAlpha.Alpha = ParseNum(knob.Value);
+                    else ((GradientDescent)optimizer).Alpha = ParseNum(knob.Value);
+                    break;
+                case "beta1": ((ADAM)optimizer).Beta1 = ParseNum(knob.Value); break;
+                case "beta2": ((ADAM)optimizer).Beta2 = ParseNum(knob.Value); break;
                 default: throw new Exception($"unknown optimizer control: {knob.Name}");
             }
         }

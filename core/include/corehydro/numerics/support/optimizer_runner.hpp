@@ -18,7 +18,7 @@
 // `optim_minimize()`/`optim_maximize()` call always supplies the objective directly, in R or
 // Python, never by name.
 //
-// Two of the eleven ported optimizers -- NelderMead and BrentSearch -- deliberately do NOT derive
+// Two of the thirteen ported optimizers -- NelderMead and BrentSearch -- deliberately do NOT derive
 // from the Optimizer base (see optimizer.hpp's file header); this runner handles that difference
 // explicitly rather than forcing a common base onto them. Their maximize()/minimize() have no
 // OptimizationStatus, no function_evaluations()/iterations() accessor, and (NelderMead only) no
@@ -34,10 +34,12 @@
 #include <vector>
 
 #include "corehydro/models/json_lite.hpp"
+#include "corehydro/numerics/math/optimization/adam.hpp"
 #include "corehydro/numerics/math/optimization/bfgs.hpp"
 #include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/math/optimization/differential_evolution.hpp"
 #include "corehydro/numerics/math/optimization/golden_section.hpp"
+#include "corehydro/numerics/math/optimization/gradient_descent.hpp"
 #include "corehydro/numerics/math/optimization/mlsl.hpp"
 #include "corehydro/numerics/math/optimization/multi_start.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
@@ -62,6 +64,21 @@ using corehydro::models::spec::JsonValue;
 // function) has no business mutating the optimizer's own working vector, and every existing
 // caller of this runner (fixtures, the R/Python glue) hands over a read-only function anyway.
 using Objective = std::function<double(const std::vector<double>&)>;
+
+// A gradient callback: the trial point in, one partial derivative per parameter out. Read only by
+// the two gradient-taking methods ("adam", "gradient_descent"), which mirror the C# classes'
+// optional `Gradient` field -- absent, both fall back to the ported NumericalDerivative.Gradient
+// exactly as a null C# delegate does.
+using Gradient = std::function<std::vector<double>(const std::vector<double>&)>;
+
+// Everything a run may need from the host language. `objective` is always required; `gradient` is
+// read only by the "adam"/"gradient_descent" methods. Every callback present is guarded, and all
+// the guards share ONE abort state, so a throw in any of them short-circuits the rest instead of
+// re-entering the host mid-unwind (see callback_guard.hpp's contract).
+struct OptimCallbacks {
+    Objective objective;
+    Gradient gradient;
+};
 
 // Flat result surface every binding and every fixture assertion reads. `hessian`/`hessian_dims`
 // are empty unless the method both supports a Hessian (the nine Optimizer-base methods only --
@@ -107,6 +124,15 @@ inline GuardedObjective make_guarded_objective(const Objective& fn, bool maximiz
                                          : std::numeric_limits<double>::infinity());
 }
 
+// The gradient guard, for the two gradient-taking methods. Its sentinel is an EMPTY vector: unlike
+// an objective value there is no "worst gradient" a ported consumer treats as rejected, and there
+// is no length to fill at construction time anyway. Both ported classes index the returned vector
+// over [0, D) with no length check, so the two arms below re-fill an ABORTED call's result with
+// zeros -- a zero gradient takes no step -- rather than handing either class an empty vector; the
+// run's result is discarded by rethrow_if_aborted() in any case. It shares the objective guard's
+// abort state, so a throw in either callback stops both, and one rethrow_if_aborted() covers both.
+using GuardedGradient = GuardedCall<std::vector<double>, const std::vector<double>&>;
+
 namespace detail {
 
 // A thin forwarder to the one definition, which lives beside the enum
@@ -119,7 +145,7 @@ inline std::vector<double> spec_vector(const JsonValue& spec, const char* key) {
     return spec.at(key).as_double_vector();
 }
 
-// Applies the three tolerance/iteration knobs every one of the eleven optimizer classes exposes
+// Applies the three tolerance/iteration knobs every one of the thirteen optimizer classes exposes
 // (max_iterations, absolute_tolerance, relative_tolerance), only when the spec's control object
 // carries the key -- an absent key leaves the ported class's own default untouched.
 template <typename TOpt>
@@ -144,7 +170,7 @@ inline opt::LocalMethod parse_local_method(const std::string& s) {
 }
 
 // Applies the extra knobs only the real Optimizer subclasses (DE/ParticleSwarm/SCE/
-// SimulatedAnnealing/MultiStart/MLSL/BFGS/Powell/GoldenSection) expose:
+// SimulatedAnnealing/MultiStart/MLSL/BFGS/Powell/ADAM/GradientDescent/GoldenSection) expose:
 // max_function_evaluations, report_failure, compute_hessian. NelderMead/BrentSearch have none of
 // these (see the file header), so they never call this helper.
 template <typename TOpt>
@@ -185,11 +211,12 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 }  // namespace detail
 
 // Runs the optimizer named by `spec_json["method"]` (one of "de", "particle_swarm", "sce",
-// "simulated_annealing", "multi_start", "mlsl", "bfgs", "powell", "nelder_mead", "brent",
-// "golden_section") against `objective`, and returns a flat OptimResult. Spec grammar:
+// "simulated_annealing", "multi_start", "mlsl", "bfgs", "powell", "adam", "gradient_descent",
+// "nelder_mead", "brent", "golden_section") against `callbacks.objective`, and returns a flat
+// OptimResult. Spec grammar:
 //
-//   {"method": "de|particle_swarm|sce|simulated_annealing|multi_start|mlsl|bfgs|powell|
-//               nelder_mead|brent|golden_section",
+//   {"method": "de|particle_swarm|sce|simulated_annealing|multi_start|mlsl|bfgs|powell|adam|
+//               gradient_descent|nelder_mead|brent|golden_section",
 //    "lower": [...], "upper": [...], "initial": [...],
 //    "maximize": false, "seed": 12345,
 //    "control": {"max_iterations": 1000, "max_function_evaluations": 100000,
@@ -199,12 +226,13 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 //                "tolerance_steps": 20, "initial_temperature": 10, "min_temperature": 0.1,
 //                "cooling_rate": 0.95, "update_cycles": 4, "temperature_cycles": 10,
 //                "local_method": "bfgs", "local_absolute_tolerance": 1e-8,
-//                "local_relative_tolerance": 1e-8, "polish": true}}
+//                "local_relative_tolerance": 1e-8, "polish": true,
+//                "alpha": 0.001, "beta1": 0.9, "beta2": 0.999}}
 //
 // "de"/"particle_swarm"/"sce"/"simulated_annealing"/"brent"/"golden_section" need "lower"/"upper"
-// only; "bfgs"/"powell"/"mlsl"/"multi_start"/"nelder_mead" additionally need "initial" (all three
-// are then required to be the same length -- the underlying ctors validate this; see each
-// optimizer's own header). "brent" and "golden_section" are one-dimensional and read only the
+// only; "bfgs"/"powell"/"mlsl"/"multi_start"/"adam"/"gradient_descent"/"nelder_mead" additionally
+// need "initial" (all three are then required to be the same length -- the underlying ctors
+// validate this; see each optimizer's own header). "brent" and "golden_section" are one-dimensional and read only the
 // first bound of each. "seed" only applies to the six stochastic methods ("de", "particle_swarm",
 // "sce", "simulated_annealing", "multi_start", "mlsl": all six default their own prng_seed to
 // 12345 when omitted, matching the ported class field default). Every "control" key is applied
@@ -212,7 +240,11 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 // "multi_start" includes max_iterations, set to 100 by ITS CONSTRUCTOR rather than by a field
 // initializer, so the control application below must (and does) come after construction. Each
 // method reads only the control keys of its own class; the R and Python surfaces reject the rest
-// by name rather than letting them look like they did something (see R/optim.R's kOptimMethods). Argument-shape validation beyond what the ported constructors
+// by name rather than letting them look like they did something (see R/optim.R's kOptimMethods).
+// "alpha" is read by "adam" and "gradient_descent"; "beta1"/"beta2" by "adam" alone.
+// `callbacks.gradient` is likewise read only by those two methods -- absent, both fall back to the
+// ported NumericalDerivative.Gradient exactly as a null C# `Gradient` delegate does.
+// Argument-shape validation beyond what the ported constructors
 // already do (missing bounds/initial, mismatched lengths) is deliberately NOT duplicated here --
 // see the file header on this being a thin dispatcher, and R/toolbox: optim_run()/
 // corehydropy.optim for the complete, symmetric, user-facing validation.
@@ -231,7 +263,8 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 // Calling the class's own maximize() needs no such care. See make_guarded_objective() above for
 // the one place this decision has an observable consequence: which infinity is "worst" for the
 // aborted-objective path.
-inline OptimResult run_optimizer(const std::string& spec_json, const Objective& objective) {
+inline OptimResult run_optimizer(const std::string& spec_json, const OptimCallbacks& callbacks) {
+    const Objective& objective = callbacks.objective;
     JsonValue spec = corehydro::models::spec::parse_json(spec_json);
     std::string method = spec.at("method").as_string();
     bool maximize = spec.value_or("maximize", false);
@@ -396,6 +429,67 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
         }
         guarded.rethrow_if_aborted();
         detail::fill_optimizer_result(result, powell, maximize);
+    } else if (method == "adam" || method == "gradient_descent") {
+        // The only two methods that take a SECOND host-language callback. Both mirror the same C#
+        // shape (a settable optional `Gradient` field; null means finite differences), so they
+        // share one arm rather than duplicating the guard plumbing twice -- the classes differ only
+        // in ADAM's two extra decay factors and are constructed separately below.
+        int D = static_cast<int>(initial.size());
+        // Shares the objective guard's abort state so a throw in either callback stops both, and so
+        // the single guarded.rethrow_if_aborted() below covers both.
+        GuardedGradient guarded_grad(callbacks.gradient, std::vector<double>{},
+                                     guarded.abort_state());
+        // The ported classes call the gradient unconditionally when the field is set, so the field
+        // stays EMPTY unless the host supplied one -- an empty std::function is exactly what C#'s
+        // null Gradient means, and both classes already branch on it.
+        opt::ADAM::GradientFunction grad_fn = nullptr;
+        if (callbacks.gradient) {
+            grad_fn = [&guarded_grad, D](const std::vector<double>& p) {
+                std::vector<double> g = guarded_grad(p);
+                // See GuardedGradient's comment: an aborted call returns the empty sentinel, which
+                // both classes would index out of range.
+                if (guarded_grad.aborted()) g.assign(static_cast<std::size_t>(D), 0.0);
+                if (static_cast<int>(g.size()) != D)
+                    throw std::runtime_error(
+                        "the gradient must return one value per parameter; got a value of length " +
+                        std::to_string(static_cast<long long>(g.size())) + " for " +
+                        std::to_string(static_cast<long long>(D)) + " parameters");
+                return g;
+            };
+        }
+        double alpha = 0.001;  // both ctors' own default
+        if (has_control && control.contains("alpha")) alpha = control.at("alpha").as_double();
+        if (method == "adam") {
+            opt::ADAM adam(adapted, D, initial, lower, upper, alpha, grad_fn);
+            if (has_control) {
+                detail::apply_common_controls(adam, control);
+                detail::apply_optimizer_controls(adam, control);
+                if (control.contains("beta1")) adam.beta1 = control.at("beta1").as_double();
+                if (control.contains("beta2")) adam.beta2 = control.at("beta2").as_double();
+            }
+            try {
+                if (maximize) adam.maximize(); else adam.minimize();
+            } catch (...) {
+                guarded.rethrow_if_aborted();
+                throw;
+            }
+            guarded.rethrow_if_aborted();
+            detail::fill_optimizer_result(result, adam, maximize);
+        } else {
+            opt::GradientDescent gd(adapted, D, initial, lower, upper, alpha, grad_fn);
+            if (has_control) {
+                detail::apply_common_controls(gd, control);
+                detail::apply_optimizer_controls(gd, control);
+            }
+            try {
+                if (maximize) gd.maximize(); else gd.minimize();
+            } catch (...) {
+                guarded.rethrow_if_aborted();
+                throw;
+            }
+            guarded.rethrow_if_aborted();
+            detail::fill_optimizer_result(result, gd, maximize);
+        }
     } else if (method == "mlsl") {
         int D = static_cast<int>(initial.size());
         opt::MLSL mlsl(adapted, D, initial, lower, upper);
@@ -499,6 +593,12 @@ inline OptimResult run_optimizer(const std::string& spec_json, const Objective& 
     }
 
     return result;
+}
+
+// The objective-only form, kept so every caller that needs no second callback -- which is every
+// method except "adam"/"gradient_descent" -- compiles and reads unchanged.
+inline OptimResult run_optimizer(const std::string& spec_json, const Objective& objective) {
+    return run_optimizer(spec_json, OptimCallbacks{objective, nullptr});
 }
 
 }  // namespace corehydro::numerics::support

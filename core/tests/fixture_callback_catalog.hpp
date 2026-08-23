@@ -21,6 +21,10 @@ namespace fixture_catalog {
 // DeJong/FXYZ/Booth/McCormick/FX) -> the real C++ function in optimization_test_functions.hpp.
 corehydro::numerics::support::Objective optimizer_objective(const std::string& name);
 
+// fixtures/toolbox/optimizers.json's optional `construct.gradient` names (Grad_FXYZ/Grad_DeJong/
+// Grad_Booth) -> the real C++ analytic gradient, for the two gradient-taking methods.
+corehydro::numerics::support::Gradient optimizer_gradient(const std::string& name);
+
 // fixtures/callback/*.json's callback names -> a real C++ lambda, assigned to whichever member of
 // `cbs` that name's delegate shape belongs to. Called once per delegate a case supplies, so a
 // single CallbackSet accumulates a group's required and optional callbacks.

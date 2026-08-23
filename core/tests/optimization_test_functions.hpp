@@ -172,4 +172,33 @@ inline double tp2(const std::vector<double>& parms) {
     return F;
 }
 
+// --- corehydro ADDITION -- no upstream C# counterpart --------------------------------------
+//
+// TestFunctions.cs carries no gradients: every upstream ADAM / GradientDescent test runs those
+// classes' finite-difference fallback. These three are the hand-differentiated gradients of
+// `fxyz`, `de_jong` and `booth` above, and exist so the optimizer fixtures can exercise the
+// runner's optional analytic-gradient callback (a second host-language function crossing into the
+// core). Each is written out term by term -- no loop over a shared helper, no autodiff -- so the
+// R, Python and C# fixture catalogs reproduce the identical arithmetic in the identical order.
+inline std::vector<double> grad_fxyz(const std::vector<double>& parms) {
+    double x = parms[0];
+    double y = parms[1];
+    double z = parms[2];
+    return {8.0 * (4.0 * x - 0.5), 6.0 * (3.0 * y - 0.6), 4.0 * (2.0 * z - 0.7)};
+}
+
+inline std::vector<double> grad_de_jong(const std::vector<double>& x) {
+    std::size_t n = x.size();
+    std::vector<double> g(n);
+    for (std::size_t i = 0; i < n; i++) g[i] = 2.0 * x[i];
+    return g;
+}
+
+inline std::vector<double> grad_booth(const std::vector<double>& parms) {
+    double x = parms[0];
+    double y = parms[1];
+    return {2.0 * (x + 2.0 * y - 7.0) + 4.0 * (2.0 * x + y - 5.0),
+            4.0 * (x + 2.0 * y - 7.0) + 2.0 * (2.0 * x + y - 5.0)};
+}
+
 }  // namespace test_functions

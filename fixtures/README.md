@@ -1786,11 +1786,14 @@ sigma/confidence/input.
 
 ### `optimizer`
 
-The eleven ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
-annealing, multi-start, MLSL, BFGS, Powell, Nelder-Mead, Brent, golden section), run against a
-NAMED built-in objective (one of `FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`/`Rosenbrock`/`Eggholder`,
+The thirteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
+annealing, multi-start, MLSL, BFGS, Powell, ADAM, gradient descent, Nelder-Mead, Brent, golden
+section), run against a
+NAMED built-in objective (one of
+`FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`/`Rosenbrock`/`Eggholder`/`SumOfPowerFunctions`,
 the same formulas `core/tests/optimization_test_functions.hpp` and each fixture runner's own native
-closure implement -- the two accumulating ones, `DeJong` and `Rosenbrock`, spell their sum out as an
+closure implement -- the three accumulating ones, `DeJong`, `Rosenbrock` and `SumOfPowerFunctions`,
+spell their sum out as an
 explicit loop in all four catalogs rather than calling `sum()`/`Sum()`, which would accumulate in a
 different precision in R) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
 `toolbox` group, reached through its own runner (`numerics/support/optimizer_runner.hpp`) and its
@@ -1832,10 +1835,25 @@ method reads only the keys its own class exposes (`population_size` for `"de"`/`
 `complexes`/`cce_iterations`/`tolerance_steps` for `"sce"`;
 `initial_temperature`/`min_temperature`/`cooling_rate`/`update_cycles`/`temperature_cycles`/
 `tolerance_steps` for `"simulated_annealing"`; `local_method` for `"multi_start"`/`"mlsl"`; and
-`local_absolute_tolerance`/`local_relative_tolerance`/`polish` for `"multi_start"`, beside the
+`local_absolute_tolerance`/`local_relative_tolerance`/`polish` for `"multi_start"`; `alpha` for
+`"adam"`/`"gradient_descent"`; and `beta1`/`beta2` for `"adam"`, beside the
 `max_iterations`/`absolute_tolerance`/`relative_tolerance`/`max_function_evaluations`/
 `report_failure`/`compute_hessian` set the `Optimizer` base carries). An absent key leaves the
 ported class's own default.
+
+`construct.gradient` is optional and names an analytic gradient in a SECOND catalog
+(`Grad_FXYZ`/`Grad_DeJong`/`Grad_Booth`, likewise written out term by term in all four runners),
+the second host-language callback the two gradient-taking methods accept. It is not part of the
+runner's spec grammar either -- each runner strips it and passes the resolved function through the
+gradient entry point (`ch_optim_run_grad_` / `_core.optim_run_grad`) instead of the plain one. Only
+`"adam"` and `"gradient_descent"` read it; omitted, both classes differentiate the objective
+numerically, exactly as a null C# `Gradient` delegate makes them. The three cases that supply one
+also pin `iterations` and `function_evaluations` at exact equality, because those counts are the
+only thing that distinguishes a run driven by the supplied gradient from one that silently ignored
+it (1518 evaluations against 12137 for the otherwise identical `adam_fxyz`); all three counts were
+measured identical in the real C# library, in the C++ core compiled with and without
+floating-point contraction, in R and in Python. The `Grad_` prefix follows the same convention the
+`callback` kind's catalog uses, and the two catalogs are separate lookups.
 
 ### `callback`
 

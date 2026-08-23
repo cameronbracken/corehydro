@@ -40,17 +40,15 @@ list ch_toolbox_run_(std::string group, std::string method, list data, std::stri
     return pack(tb::run_toolbox(group, method, vecs, options_json));
 }
 
-// Runs one of the eleven ported optimizers (R/optim.R) against an R objective function. `objective`
-// is called with a single numeric vector argument and must return a single number -- `as_doubles`
-// below accepts either a double or an integer return (an all-integer objective like
-// `function(p) sum(p > 0)` is common); a non-numeric or wrong-length return raises inside that
-// conversion, which cpp11 turns into an R error that travels back out through
-// optimizer_runner.hpp's guard and is rethrown (see that header's GuardedObjective for why an R
-// error crossing this boundary cannot be allowed to just propagate through
-// Optimizer::minimize()'s own catch-all unguarded).
-[[cpp11::register]]
-list ch_optim_run_(std::string spec_json, function objective) {
-    tb::OptimResult r = tb::run_optimizer(spec_json, [&](const std::vector<double>& p) -> double {
+// Converts one R function into the runner's objective callback. `objective` is called with a single
+// numeric vector argument and must return a single number -- `as_doubles` accepts either a double or
+// an integer return (an all-integer objective like `function(p) sum(p > 0)` is common); a
+// non-numeric or wrong-length return raises inside that conversion, which cpp11 turns into an R
+// error that travels back out through optimizer_runner.hpp's guard and is rethrown (see that
+// header's GuardedObjective for why an R error crossing this boundary cannot be allowed to just
+// propagate through Optimizer::minimize()'s own catch-all unguarded).
+static tb::Objective as_objective(function objective) {
+    return [objective](const std::vector<double>& p) -> double {
         writable::doubles par(static_cast<R_xlen_t>(p.size()));
         for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
         sexp out = objective(par);
@@ -60,7 +58,24 @@ list ch_optim_run_(std::string spec_json, function objective) {
                 "the objective must return a single number; got a value of length " +
                 std::to_string(static_cast<long long>(v.size())));
         return v[0];
-    });
+    };
+}
+
+// Converts one R function into the runner's gradient callback (the "adam"/"gradient_descent"
+// methods only). Same conversion as as_objective above, but the return is a whole vector rather
+// than a scalar; the runner rejects a wrong LENGTH by name, so this side only has to reject a
+// non-numeric return, which as_doubles does.
+static tb::Gradient as_gradient(function gradient) {
+    return [gradient](const std::vector<double>& p) -> std::vector<double> {
+        writable::doubles par(static_cast<R_xlen_t>(p.size()));
+        for (std::size_t i = 0; i < p.size(); ++i) par[static_cast<R_xlen_t>(i)] = p[i];
+        sexp out = gradient(par);
+        doubles v = as_doubles(out);
+        return std::vector<double>(v.begin(), v.end());
+    };
+}
+
+static list pack_optim(const tb::OptimResult& r) {
     writable::doubles params(static_cast<R_xlen_t>(r.parameters.size()));
     for (std::size_t i = 0; i < r.parameters.size(); ++i)
         params[static_cast<R_xlen_t>(i)] = r.parameters[i];
@@ -77,4 +92,27 @@ list ch_optim_run_(std::string spec_json, function objective) {
                            "status"_nm = writable::strings({r.status}),
                            "hessian"_nm = hess,
                            "hessian_dims"_nm = hdims});
+}
+
+// Runs one of the thirteen ported optimizers (R/optim.R) against an R objective function.
+[[cpp11::register]]
+list ch_optim_run_(std::string spec_json, function objective) {
+    tb::OptimCallbacks cbs;
+    cbs.objective = as_objective(objective);
+    return pack_optim(tb::run_optimizer(spec_json, cbs));
+}
+
+// The same, plus a second R callback: the analytic gradient the "adam" and "gradient_descent"
+// methods take. A separate entry point rather than a NULL-able argument on ch_optim_run_ because
+// cpp11 registration is by signature -- optim_run() calls this one only when the caller supplied a
+// gradient, and the other one otherwise (an absent gradient is the ported classes' null Gradient,
+// which falls back to NumericalDerivative.Gradient exactly as C# does). Both callbacks are guarded
+// through ONE shared abort state inside the runner, so an R error in either stops the other from
+// being re-entered.
+[[cpp11::register]]
+list ch_optim_run_grad_(std::string spec_json, function objective, function gradient) {
+    tb::OptimCallbacks cbs;
+    cbs.objective = as_objective(objective);
+    cbs.gradient = as_gradient(gradient);
+    return pack_optim(tb::run_optimizer(spec_json, cbs));
 }

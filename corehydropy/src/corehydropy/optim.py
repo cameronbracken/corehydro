@@ -1,10 +1,11 @@
-"""The general-purpose optimizer surface over the eleven ported Numerics optimizers (DE, particle
-swarm, shuffled complex evolution, simulated annealing, multi-start, MLSL, BFGS, Powell,
-Nelder-Mead, Brent, golden section). Unlike every other verb in toolbox.py/gof.py (which pass
-serializable data through the shared ``toolbox_run`` dispatcher), an optimizer takes a live Python
-function, so this goes through its own runner (``core/include/corehydro/numerics/support/
-optimizer_runner.hpp``) and its own binding (``optim_run`` in ``bindings/toolbox.cpp``), rather
-than ``toolbox_run``. Mirrors ``corehydror``'s ``R/optim.R`` verb for verb.
+"""The general-purpose optimizer surface over the thirteen ported Numerics optimizers (DE, particle
+swarm, shuffled complex evolution, simulated annealing, multi-start, MLSL, BFGS, Powell, ADAM,
+gradient descent, Nelder-Mead, Brent, golden section). Unlike every other verb in toolbox.py/gof.py
+(which pass serializable data through the shared ``toolbox_run`` dispatcher), an optimizer takes a
+live Python function, so this goes through its own runner (``core/include/corehydro/numerics/
+support/optimizer_runner.hpp``) and its own bindings (``optim_run`` / ``optim_run_grad`` in
+``bindings/toolbox.cpp``), rather than ``toolbox_run``. Mirrors ``corehydror``'s ``R/optim.R`` verb
+for verb.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from . import _core
 
 __all__ = ["OptimResult", "optim_minimize", "optim_maximize"]
 
-# The three tolerance/iteration knobs every one of the eleven optimizer classes exposes, plus the
+# The three tolerance/iteration knobs every one of the thirteen optimizer classes exposes, plus the
 # three only the classes deriving from the ported `Optimizer` base take. ``"nelder_mead"`` and
 # ``"brent"`` are the two standalone classes (see optimizer_runner.hpp's file header);
 # ``"golden_section"`` IS an ``Optimizer`` subclass, so it takes the full base set.
@@ -25,40 +26,51 @@ _SCALAR_CONTROLS = ("max_iterations", "absolute_tolerance", "relative_tolerance"
 _BASE_CONTROLS = _SCALAR_CONTROLS + (
     "max_function_evaluations", "report_failure", "compute_hessian",
 )
-# Per-method: which control names it accepts, whether it needs `initial`, and whether it is
-# stochastic (accepts a seed). Every validation message below reads off this one table so the
-# Python and R surfaces cannot drift. Every method needs `lower`/`upper` (even "de", "brent" and
-# "golden_section", which take no `initial`); a method with ``needs_initial`` additionally needs an
-# initial guess, and all three of `initial`/`lower`/`upper` are then required to be the same
-# length, which the underlying C++ constructors validate once the request reaches them (NelderMead's
-# ctor does not validate this itself -- see optimizer_runner.hpp's "nelder_mead" arm -- so the
-# length check below is load-bearing, not just a friendlier error, for that one method).
+# Per-method: which control names it accepts, whether it needs `initial`, whether it is stochastic
+# (accepts a seed), and whether it takes an analytic gradient. Every validation message below reads
+# off this one table so the Python and R surfaces cannot drift. Every method needs `lower`/`upper`
+# (even "de", "brent" and "golden_section", which take no `initial`); a method with
+# ``needs_initial`` additionally needs an initial guess, and all three of `initial`/`lower`/`upper`
+# are then required to be the same length, which the underlying C++ constructors validate once the
+# request reaches them (NelderMead's ctor does not validate this itself -- see
+# optimizer_runner.hpp's "nelder_mead" arm -- so the length check below is load-bearing, not just a
+# friendlier error, for that one method).
 _METHOD_TABLE = {
     "de": {"controls": _BASE_CONTROLS + ("population_size",),
-           "needs_initial": False, "stochastic": True},
+           "needs_initial": False, "stochastic": True, "gradient": False},
     "particle_swarm": {"controls": _BASE_CONTROLS + ("population_size",),
-                       "needs_initial": False, "stochastic": True},
+                       "needs_initial": False, "stochastic": True, "gradient": False},
     "sce": {"controls": _BASE_CONTROLS + ("complexes", "cce_iterations", "tolerance_steps"),
-            "needs_initial": False, "stochastic": True},
+            "needs_initial": False, "stochastic": True, "gradient": False},
     "simulated_annealing": {
         "controls": _BASE_CONTROLS + ("initial_temperature", "min_temperature", "cooling_rate",
                                       "update_cycles", "temperature_cycles", "tolerance_steps"),
-        "needs_initial": False, "stochastic": True},
+        "needs_initial": False, "stochastic": True, "gradient": False},
     "multi_start": {"controls": _BASE_CONTROLS + ("local_method", "local_absolute_tolerance",
                                                   "local_relative_tolerance", "polish"),
-                    "needs_initial": True, "stochastic": True},
+                    "needs_initial": True, "stochastic": True, "gradient": False},
     "mlsl": {"controls": _BASE_CONTROLS + ("local_method",),
-             "needs_initial": True, "stochastic": True},
-    "bfgs": {"controls": _BASE_CONTROLS, "needs_initial": True, "stochastic": False},
-    "powell": {"controls": _BASE_CONTROLS, "needs_initial": True, "stochastic": False},
-    "nelder_mead": {"controls": _SCALAR_CONTROLS, "needs_initial": True, "stochastic": False},
-    "brent": {"controls": _SCALAR_CONTROLS, "needs_initial": False, "stochastic": False},
-    "golden_section": {"controls": _BASE_CONTROLS, "needs_initial": False, "stochastic": False},
+             "needs_initial": True, "stochastic": True, "gradient": False},
+    "bfgs": {"controls": _BASE_CONTROLS, "needs_initial": True, "stochastic": False,
+             "gradient": False},
+    "powell": {"controls": _BASE_CONTROLS, "needs_initial": True, "stochastic": False,
+               "gradient": False},
+    "adam": {"controls": _BASE_CONTROLS + ("alpha", "beta1", "beta2"),
+             "needs_initial": True, "stochastic": False, "gradient": True},
+    "gradient_descent": {"controls": _BASE_CONTROLS + ("alpha",),
+                         "needs_initial": True, "stochastic": False, "gradient": True},
+    "nelder_mead": {"controls": _SCALAR_CONTROLS, "needs_initial": True, "stochastic": False,
+                    "gradient": False},
+    "brent": {"controls": _SCALAR_CONTROLS, "needs_initial": False, "stochastic": False,
+              "gradient": False},
+    "golden_section": {"controls": _BASE_CONTROLS, "needs_initial": False, "stochastic": False,
+                       "gradient": False},
 }
 _METHODS = tuple(_METHOD_TABLE)
 _CONTROL_KEYS = {name for spec in _METHOD_TABLE.values() for name in spec["controls"]}
 _STOCHASTIC_METHODS = {m for m, spec in _METHOD_TABLE.items() if spec["stochastic"]}
 _NEEDS_INITIAL = {m for m, spec in _METHOD_TABLE.items() if spec["needs_initial"]}
+_GRADIENT_METHODS = {m for m, spec in _METHOD_TABLE.items() if spec["gradient"]}
 # The three local methods MLSL and MultiStart actually construct. ADAM and GradientDescent are
 # LocalMethod members upstream but throw "Unsupported local method" inside both classes (see
 # optimization/support/local_method.hpp), so they are not offered here.
@@ -104,13 +116,24 @@ class OptimResult:
         )
 
 
-def _optim_run(objective, lower, upper, initial, method: str, seed, control: dict, maximize: bool) -> OptimResult:
+def _optim_run(objective, lower, upper, initial, method: str, seed, control: dict, maximize: bool,
+               gradient=None) -> OptimResult:
     """Internal: validate everything Python-side, then make one call. Both verbs share this so
     their messages and defaults can never drift apart."""
     if not callable(objective):
         raise TypeError("`objective` must be a callable taking a numeric vector and returning one number")
+    if gradient is not None and not callable(gradient):
+        raise TypeError(
+            "`gradient` must be a callable taking a numeric vector and returning one value per "
+            "parameter"
+        )
     if method not in _METHODS:
         raise ValueError(f"`method` must be one of {_METHODS}; got {method!r}")
+    if gradient is not None and method not in _GRADIENT_METHODS:
+        raise ValueError(
+            f"`gradient` only applies to method(s) {sorted(_GRADIENT_METHODS)}; "
+            f"got method {method!r}"
+        )
     if lower is None or upper is None:
         raise ValueError(f"method {method!r} needs `lower` and `upper` bounds")
     lower_a = np.asarray(lower, dtype=float).ravel()
@@ -181,7 +204,16 @@ def _optim_run(objective, lower, upper, initial, method: str, seed, control: dic
     def _objective(p):
         return objective(np.asarray(p, dtype=float))
 
-    r = _core.optim_run(json.dumps(spec), _objective)
+    # The gradient travels as a SECOND callback, not in the spec, so it goes through its own
+    # binding. An absent gradient is the ported classes' null Gradient, which falls back to
+    # numerical differentiation exactly as C# does.
+    if gradient is None:
+        r = _core.optim_run(json.dumps(spec), _objective)
+    else:
+        def _gradient(p):
+            return np.asarray(gradient(np.asarray(p, dtype=float)), dtype=float).tolist()
+
+        r = _core.optim_run_grad(json.dumps(spec), _objective, _gradient)
     hessian = None
     if r["hessian"]:
         hessian = np.asarray(r["hessian"], dtype=float).reshape(r["hessian_dims"][0], r["hessian_dims"][1])
@@ -196,10 +228,10 @@ def _optim_run(objective, lower, upper, initial, method: str, seed, control: dic
 
 
 def optim_minimize(objective, lower=None, upper=None, initial=None, method: str = "de", seed=None,
-                   control: dict | None = None) -> OptimResult:
+                   control: dict | None = None, gradient=None) -> OptimResult:
     """Minimize a user-written objective.
 
-    Runs one of the eleven ported Numerics optimizers over a Python function. The optimizer's
+    Runs one of the thirteen ported Numerics optimizers over a Python function. The optimizer's
     random number generator lives in C++, so a seeded run reproduces exactly, and reproduces
     identically in corehydror.
 
@@ -213,9 +245,10 @@ def optim_minimize(objective, lower=None, upper=None, initial=None, method: str 
         ``"brent"`` and ``"golden_section"`` are one-dimensional: pass a single bound each.
     initial : array_like, optional
         Starting values, the same length as ``lower``/``upper``. Required for ``"bfgs"``,
-        ``"powell"``, ``"mlsl"``, ``"multi_start"`` and ``"nelder_mead"``.
+        ``"powell"``, ``"mlsl"``, ``"multi_start"``, ``"adam"``, ``"gradient_descent"`` and
+        ``"nelder_mead"``.
     method : {"de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl", "bfgs", \
-"powell", "nelder_mead", "brent", "golden_section"}
+"powell", "adam", "gradient_descent", "nelder_mead", "brent", "golden_section"}
         ``"de"`` (differential evolution) is the default. The five global methods are ``"de"``,
         ``"particle_swarm"``, ``"sce"`` (shuffled complex evolution), ``"simulated_annealing"``
         and ``"multi_start"``; ``"mlsl"`` is multi-level single linkage; the rest are local.
@@ -233,12 +266,19 @@ def optim_minimize(objective, lower=None, upper=None, initial=None, method: str 
         ``tolerance_steps`` (``"sce"``); ``initial_temperature``, ``min_temperature``,
         ``cooling_rate``, ``update_cycles``, ``temperature_cycles`` and ``tolerance_steps``
         (``"simulated_annealing"``); ``local_method`` (``"multi_start"``, ``"mlsl"``, one of
-        ``"bfgs"``, ``"nelder_mead"``, ``"powell"``); and ``local_absolute_tolerance``,
-        ``local_relative_tolerance``, ``polish`` (``"multi_start"``). Passing a setting a method
+        ``"bfgs"``, ``"nelder_mead"``, ``"powell"``); ``local_absolute_tolerance``,
+        ``local_relative_tolerance``, ``polish`` (``"multi_start"``); ``alpha``, the step size or
+        learning rate (``"adam"``, ``"gradient_descent"``); and ``beta1``, ``beta2``, the two decay
+        factors (``"adam"``). Passing a setting a method
         does not read is an error rather than a silent no-op. ``compute_hessian`` DEFAULTS TO
         ``True`` for the ``Optimizer``-base methods (matching the ported C# ``Optimizer`` base),
         so a successful run returns a Hessian, computed by extra objective evaluations, unless
         ``control={"compute_hessian": False}`` turns it off.
+    gradient : callable, optional
+        Takes the parameter vector and returns one partial derivative per parameter. Accepted only
+        by ``"adam"`` and ``"gradient_descent"``, an error for every other method. Omitted, both
+        methods differentiate the objective numerically, exactly as the upstream C# classes do with
+        a null gradient.
 
     Returns
     -------
@@ -254,11 +294,12 @@ def optim_minimize(objective, lower=None, upper=None, initial=None, method: str 
     >>> np.round(fit.parameters, 3)
     array([1., 1.])
     """
-    return _optim_run(objective, lower, upper, initial, method, seed, control or {}, maximize=False)
+    return _optim_run(objective, lower, upper, initial, method, seed, control or {}, maximize=False,
+                      gradient=gradient)
 
 
 def optim_maximize(objective, lower=None, upper=None, initial=None, method: str = "de", seed=None,
-                   control: dict | None = None) -> OptimResult:
+                   control: dict | None = None, gradient=None) -> OptimResult:
     """Maximize a user-written objective. See :func:`optim_minimize` for the arguments.
 
     Examples
@@ -271,4 +312,5 @@ def optim_maximize(objective, lower=None, upper=None, initial=None, method: str 
     >>> np.round(fit.parameters, 3)
     array([ 2., -1.])
     """
-    return _optim_run(objective, lower, upper, initial, method, seed, control or {}, maximize=True)
+    return _optim_run(objective, lower, upper, initial, method, seed, control or {}, maximize=True,
+                      gradient=gradient)

@@ -1736,7 +1736,32 @@ def _optimizer_fixture_objective(name):
             -(p[1] + 47.0) * math.sin(math.sqrt(abs((p[0] / 2.0) + (p[1] + 47.0))))
             - p[0] * math.sin(math.sqrt(abs(p[0] - (p[1] + 47.0))))
         )
+    if name == "SumOfPowerFunctions":
+        return _sum_of_power_functions
     raise KeyError(f"unknown optimizer fixture objective: {name}")
+
+
+# The optional analytic gradients fixtures/toolbox/optimizers.json names by `construct.gradient` --
+# the second Python callback the "adam"/"gradient_descent" methods take. Each is written out term
+# by term, matching core/tests/optimization_test_functions.hpp's own hand-differentiated gradients
+# (which carry no upstream C# counterpart -- see that file's addition note). The `Grad_` prefix
+# keeps these names distinct from the objective catalog's above.
+def _optimizer_fixture_gradient(name):
+    if name == "Grad_FXYZ":
+        return lambda p: [8 * (4 * p[0] - 0.5), 6 * (3 * p[1] - 0.6), 4 * (2 * p[2] - 0.7)]
+    if name == "Grad_DeJong":
+        return _grad_dejong
+    if name == "Grad_Booth":
+        return lambda p: [2 * (p[0] + 2 * p[1] - 7) + 4 * (2 * p[0] + p[1] - 5),
+                          4 * (p[0] + 2 * p[1] - 7) + 2 * (2 * p[0] + p[1] - 5)]
+    raise KeyError(f"unknown optimizer fixture gradient: {name}")
+
+
+def _grad_dejong(p):
+    g = []
+    for v in p:
+        g.append(2 * v)
+    return g
 
 
 # The two accumulating objectives, spelled out as explicit loops rather than sum()/numpy calls so
@@ -1755,10 +1780,26 @@ def _rosenbrock(p):
     return total
 
 
+def _sum_of_power_functions(p):
+    total = 0.0
+    for i in range(len(p)):
+        total += abs(p[i]) ** (i + 2)
+    return total
+
+
 def _run_optimizer_case(case):
     construct = dict(case["construct"])
     objective_name = construct.pop("objective", "DeJong")
-    r = _core.optim_run(_optimizer_spec_json(construct), _optimizer_fixture_objective(objective_name))
+    # The optional analytic gradient goes through the second binding; absent, the ported classes
+    # differentiate numerically (a null C# Gradient delegate).
+    gradient_name = construct.pop("gradient", None)
+    if gradient_name is None:
+        r = _core.optim_run(_optimizer_spec_json(construct),
+                            _optimizer_fixture_objective(objective_name))
+    else:
+        r = _core.optim_run_grad(_optimizer_spec_json(construct),
+                                 _optimizer_fixture_objective(objective_name),
+                                 _optimizer_fixture_gradient(gradient_name))
     for a in case["assertions"]:
         if a["method"] == "value":
             _check(r["value"], a)

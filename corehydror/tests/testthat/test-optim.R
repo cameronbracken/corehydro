@@ -262,3 +262,113 @@ test_that("a control value actually reaches the optimizer: max_function_evaluati
   expect_lte(capped$function_evaluations, 45)
   expect_lt(capped$function_evaluations, uncapped$function_evaluations)
 })
+
+# --- the two gradient-taking methods ------------------------------------------------------
+#
+# f(p) = (p1 - 3)^2 + (p2 + 1)^2, minimum 0 at (3, -1), with the analytic gradient written out
+# term by term so the Python twin in corehydropy/tests/test_optim.py evaluates the identical
+# arithmetic.
+quad_shifted <- function(p) (p[1] - 3)^2 + (p[2] + 1)^2
+quad_shifted_gradient <- function(p) c(2 * (p[1] - 3), 2 * (p[2] + 1))
+
+test_that("adam and gradient_descent take an analytic gradient", {
+  for (m in c("gradient_descent", "adam")) {
+    fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                          method = m, gradient = quad_shifted_gradient,
+                          control = list(alpha = 0.1))
+    expect_equal(fit$parameters, c(3, -1), tolerance = 1e-3, info = m)
+  }
+})
+
+test_that("adam and gradient_descent fall back to numerical differentiation", {
+  # An omitted `gradient` is the ported classes' null Gradient, which routes through
+  # NumericalDerivative.Gradient exactly as C# does -- so the same run must land in the same place.
+  for (m in c("gradient_descent", "adam")) {
+    fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                          method = m, control = list(alpha = 0.1))
+    expect_equal(fit$parameters, c(3, -1), tolerance = 1e-3, info = m)
+  }
+})
+
+test_that("the analytic gradient is actually used, not just accepted", {
+  # A run driven by the supplied gradient never pays for the 2*D finite-difference probes, so it
+  # costs strictly fewer objective evaluations than the same run without one. Without this, a
+  # runner arm that dropped the gradient on the floor would pass every assertion above.
+  with_g <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                           method = "gradient_descent", gradient = quad_shifted_gradient,
+                           control = list(alpha = 0.1))
+  without_g <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10),
+                              upper = c(10, 10), method = "gradient_descent",
+                              control = list(alpha = 0.1))
+  expect_lt(with_g$function_evaluations, without_g$function_evaluations)
+})
+
+test_that("an error inside the gradient reaches the caller intact", {
+  boom <- function(p) stop("boom in the gradient")
+  for (m in c("gradient_descent", "adam")) {
+    expect_error(
+      optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                     method = m, gradient = boom),
+      "boom in the gradient", info = m
+    )
+  }
+})
+
+test_that("a gradient returning the wrong length is rejected by message", {
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "adam", gradient = function(p) 1),
+    "one value per parameter"
+  )
+})
+
+test_that("`gradient` is rejected for every method that cannot take one", {
+  expect_error(
+    optim_minimize(quad_shifted, lower = c(-10, -10), upper = c(10, 10), method = "de", seed = 1,
+                   gradient = quad_shifted_gradient),
+    "gradient"
+  )
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "bfgs", gradient = quad_shifted_gradient),
+    "gradient"
+  )
+})
+
+test_that("`gradient` must be a function", {
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "adam", gradient = 1),
+    "function"
+  )
+})
+
+test_that("alpha, beta1 and beta2 reach the right classes", {
+  # alpha is shared; beta1/beta2 are ADAM's alone, so gradient_descent must reject them by name.
+  fast <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                         method = "gradient_descent", gradient = quad_shifted_gradient,
+                         control = list(alpha = 0.1))
+  slow <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                         method = "gradient_descent", gradient = quad_shifted_gradient,
+                         control = list(alpha = 0.01))
+  expect_lt(fast$iterations, slow$iterations)
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "gradient_descent", control = list(beta1 = 0.5)),
+    "beta1"
+  )
+  fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "adam", gradient = quad_shifted_gradient,
+                        control = list(alpha = 0.1, beta1 = 0.8, beta2 = 0.9))
+  expect_s3_class(fit, "corehydro_optim")
+})
+
+test_that("`seed` is rejected for the two gradient methods", {
+  for (m in c("adam", "gradient_descent")) {
+    expect_error(
+      optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                     method = m, seed = 1),
+      "stochastic", info = m
+    )
+  }
+})

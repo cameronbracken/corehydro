@@ -464,7 +464,33 @@ optimizer_fixture_objective <- function(name) {
       -(p[2] + 47) * sin(sqrt(abs((p[1] / 2) + (p[2] + 47)))) -
         p[1] * sin(sqrt(abs(p[1] - (p[2] + 47))))
     },
+    SumOfPowerFunctions = function(p) {
+      s <- 0
+      for (i in seq_along(p)) s <- s + abs(p[i])^(i - 1 + 2)
+      s
+    },
     stop(sprintf("unknown optimizer fixture objective: %s", name))
+  )
+}
+
+# The optional analytic gradients fixtures/toolbox/optimizers.json names by `construct.gradient` --
+# the second R callback the "adam"/"gradient_descent" methods take. Each is written out term by
+# term, matching core/tests/optimization_test_functions.hpp's own hand-differentiated gradients
+# (which carry no upstream C# counterpart -- see that file's addition note). The `Grad_` prefix
+# keeps these names distinct from the objective catalog's above.
+optimizer_fixture_gradient <- function(name) {
+  switch(name,
+    Grad_FXYZ = function(p) c(8 * (4 * p[1] - 0.5), 6 * (3 * p[2] - 0.6), 4 * (2 * p[3] - 0.7)),
+    Grad_DeJong = function(p) {
+      g <- numeric(length(p))
+      for (i in seq_along(p)) g[i] <- 2 * p[i]
+      g
+    },
+    Grad_Booth = function(p) {
+      c(2 * (p[1] + 2 * p[2] - 7) + 4 * (2 * p[1] + p[2] - 5),
+        4 * (p[1] + 2 * p[2] - 7) + 2 * (2 * p[1] + p[2] - 5))
+    },
+    stop(sprintf("unknown optimizer fixture gradient: %s", name))
   )
 }
 
@@ -2058,8 +2084,18 @@ test_that("oracle fixtures validate", {
         construct <- case$construct
         objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
         construct$objective <- NULL
-        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
-                              optimizer_fixture_objective(objective_name))
+        # The optional analytic gradient goes through the second glue entry point; absent, the
+        # ported classes differentiate numerically (a null C# Gradient delegate).
+        gradient_name <- construct$gradient
+        construct$gradient <- NULL
+        r <- if (is.null(gradient_name)) {
+          ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                           optimizer_fixture_objective(objective_name))
+        } else {
+          ns$ch_optim_run_grad_(optimizer_spec_json(ns, construct),
+                                optimizer_fixture_objective(objective_name),
+                                optimizer_fixture_gradient(gradient_name))
+        }
         for (a in case$assertions) {
           if (identical(a$method, "value")) {
             check_assertion(r$value, a)
@@ -2227,8 +2263,18 @@ test_that("oracle fixtures validate", {
         construct <- opt$construct
         objective_name <- if (is.null(construct$objective)) "DeJong" else construct$objective
         construct$objective <- NULL
-        r <- ns$ch_optim_run_(optimizer_spec_json(ns, construct),
-                              optimizer_fixture_objective(objective_name))
+        # The optional analytic gradient goes through the second glue entry point; absent, the
+        # ported classes differentiate numerically (a null C# Gradient delegate).
+        gradient_name <- construct$gradient
+        construct$gradient <- NULL
+        r <- if (is.null(gradient_name)) {
+          ns$ch_optim_run_(optimizer_spec_json(ns, construct),
+                           optimizer_fixture_objective(objective_name))
+        } else {
+          ns$ch_optim_run_grad_(optimizer_spec_json(ns, construct),
+                                optimizer_fixture_objective(objective_name),
+                                optimizer_fixture_gradient(gradient_name))
+        }
         for (a in opt$assertions) {
           if (identical(a$method, "value")) {
             check_assertion(r$value, a)

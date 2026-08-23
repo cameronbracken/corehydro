@@ -1,7 +1,7 @@
 {
   "kind": "optimizer",
-  "source": "Numerics/Mathematics/Optimization/{Global/Test_DifferentialEvolution.cs, Global/Test_ParticleSwarm.cs, Global/Test_ShuffledComplexEvolution.cs, Global/Test_SimulatedAnnealing.cs, Global/Test_MultiStart.cs, Global/Test_MLSL.cs, Local/Test_BFGS.cs, Local/Test_Powell.cs, Local/Test_NelderMead.cs, Local/Test_BrentSearch.cs, Local/Test_GoldenSection.cs}",
-  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_optimizer (core/include/corehydro/numerics/support/optimizer_runner.hpp) against the built-in objectives named by `construct.objective`, mapping onto the same TestFunctions.cs formulas the upstream MSTest classes call (FXYZ/DeJong/Booth/McCormick/FX -- see core/tests/optimization_test_functions.hpp). `parameter` assertions read `OptimResult.parameters[args[0]]`; `value` reads `OptimResult.value` (the raw objective at the optimum, in its own sign convention -- see optimizer_runner.hpp's fill_optimizer_result). Every case's tolerance matches the upstream MSTest `Assert.AreEqual(actual, expected, delta)` literal exactly. Every expected value is the upstream test file's own literal, transcribed verbatim -- never a value computed by this repo's own C++.",
+  "source": "Numerics/Mathematics/Optimization/{Global/Test_DifferentialEvolution.cs, Global/Test_ParticleSwarm.cs, Global/Test_ShuffledComplexEvolution.cs, Global/Test_SimulatedAnnealing.cs, Global/Test_MultiStart.cs, Global/Test_MLSL.cs, Local/Test_BFGS.cs, Local/Test_Powell.cs, Local/Test_Adam.cs, Local/Test_GradientDescent.cs, Local/Test_NelderMead.cs, Local/Test_BrentSearch.cs, Local/Test_GoldenSection.cs}",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_optimizer (core/include/corehydro/numerics/support/optimizer_runner.hpp) against the built-in objectives named by `construct.objective`, mapping onto the same TestFunctions.cs formulas the upstream MSTest classes call (FXYZ/DeJong/Booth/McCormick/FX -- see core/tests/optimization_test_functions.hpp). `parameter` assertions read `OptimResult.parameters[args[0]]`; `value` reads `OptimResult.value` (the raw objective at the optimum, in its own sign convention -- see optimizer_runner.hpp's fill_optimizer_result). Every case's tolerance matches the upstream MSTest `Assert.AreEqual(actual, expected, delta)` literal exactly. Every expected value is the upstream test file's own literal, transcribed verbatim -- never a value computed by this repo's own C++. The optional `construct.gradient` key names an analytic gradient in the same four catalogs (`Grad_FXYZ`/`Grad_DeJong`/`Grad_Booth`), the second host-language callback the `\"adam\"` and `\"gradient_descent\"` methods take; omitted, both classes differentiate numerically exactly as a null C# `Gradient` delegate makes them. The three gradient cases additionally pin `iterations` and `function_evaluations` at exact equality: they are the only quantity that distinguishes a run driven by the supplied gradient from one that silently ignored it (1518 evaluations against 12137 for adam_fxyz), and all three counts were measured identical in the real C# library, in the C++ core compiled with and without floating-point contraction, in R and in Python.",
   "cases": [
     {
       "name": "de_fxyz",
@@ -280,6 +280,123 @@
       "assertions": [
         { "method": "value", "expected": 9.4815, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Maximize" },
         { "method": "parameter", "args": [0], "expected": -1.6667, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Maximize" }
+      ]
+    },
+    {
+      "name": "adam_fxyz",
+      "construct": {
+        "method": "adam", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "adam_booth",
+      "construct": {
+        "method": "adam", "objective": "Booth",
+        "initial": [0.0, 0.0], "lower": [-10, -10], "upper": [10, 10],
+        "control": { "max_iterations": 100000 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_Booth (which sets MaxIterations = 100000 -- 'Requires a lot of iterations')" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_Booth" }
+      ]
+    },
+    {
+      "name": "gradient_descent_fxyz",
+      "construct": {
+        "method": "gradient_descent", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "gradient_descent_sum_of_power_functions",
+      "construct": {
+        "method": "gradient_descent", "objective": "SumOfPowerFunctions",
+        "initial": [0.5, -0.5], "lower": [-1, -1], "upper": [1, 1],
+        "control": { "max_iterations": 100000 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_SumOfPowerFunctions" },
+        { "method": "parameter", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-2, "source": "Test_GradientDescent.Test_SumOfPowerFunctions ('Level of precision in parameters is not great' -- the parameters are asserted at 1E-2 where the fitness is at 1E-4)" },
+        { "method": "parameter", "args": [1], "expected": 0.0, "mode": "abs", "tol": 1e-2, "source": "Test_GradientDescent.Test_SumOfPowerFunctions" },
+        { "method": "status", "expected": "MaximumIterationsReached", "source": "Numerics/Mathematics/Optimization/Local/GradientDescent.cs -- this objective's cubic term flattens near the optimum, so the run exhausts the 100000-iteration cap the C# test raises it to rather than tripping CheckConvergence" }
+      ]
+    },
+    {
+      "name": "adam_fxyz_analytic_gradient",
+      "construct": {
+        "method": "adam", "objective": "FXYZ", "gradient": "Grad_FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ -- the same construct, driven through the ctor's optional Gradient delegate instead of the finite-difference fallback. No upstream test supplies a gradient, so the optimum literals are the C# test's own and the two counts below are reproduced against the real C# ADAM by the dotnet gate." },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "iterations", "expected": 1516, "mode": "equal", "source": "the real C# ADAM driven with the same Grad_FXYZ delegate" },
+        { "method": "function_evaluations", "expected": 1518, "mode": "equal", "source": "the real C# ADAM driven with the same Grad_FXYZ delegate -- one evaluation per iteration plus the initial one, against 12137 for the identical finite-difference run (adam_fxyz above), which is what proves the supplied gradient is actually used" }
+      ]
+    },
+    {
+      "name": "adam_fxyz_tuned_decay",
+      "construct": {
+        "method": "adam", "objective": "FXYZ", "gradient": "Grad_FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "control": { "beta1": 0.8, "beta2": 0.99 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ -- the same construct with the two decay factors moved off their defaults. No upstream test sets Beta1/Beta2, so the optimum literals are the C# test's own; the two counts below are the ONLY thing that separates a correctly wired Beta1/Beta2 from a transposed pair, and they are reproduced against the real C# ADAM by the dotnet gate." },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "iterations", "expected": 753, "mode": "equal", "source": "the real C# ADAM at Beta1 = 0.8, Beta2 = 0.99 (1516 at the defaults; 3011 with the two swapped onto 0.99/0.999)" },
+        { "method": "function_evaluations", "expected": 755, "mode": "equal", "source": "the real C# ADAM at Beta1 = 0.8, Beta2 = 0.99" }
+      ]
+    },
+    {
+      "name": "gradient_descent_booth_analytic_gradient",
+      "construct": {
+        "method": "gradient_descent", "objective": "Booth", "gradient": "Grad_Booth",
+        "initial": [0.0, 0.0], "lower": [-10, -10], "upper": [10, 10],
+        "control": { "max_iterations": 100000 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_Booth -- the same construct (including its MaxIterations = 100000), driven through the ctor's optional Gradient delegate" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_Booth" },
+        { "method": "iterations", "expected": 8169, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_Booth delegate" },
+        { "method": "function_evaluations", "expected": 8171, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_Booth delegate" }
+      ]
+    },
+    {
+      "name": "gradient_descent_dejong_analytic_gradient",
+      "construct": {
+        "method": "gradient_descent", "objective": "DeJong", "gradient": "Grad_DeJong",
+        "initial": [1.0, -1.0, 2.0, -2.0, 1.0],
+        "lower": [-5.12, -5.12, -5.12, -5.12, -5.12],
+        "upper": [5.12, 5.12, 5.12, 5.12, 5.12]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_DeJong -- the same construct, driven through the ctor's optional Gradient delegate. This is the only gradient case above one dimension per term, so it is the one that would catch a gradient wired up transposed or truncated." },
+        { "method": "parameter", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_DeJong" },
+        { "method": "parameter", "args": [4], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_DeJong" },
+        { "method": "iterations", "expected": 8594, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_DeJong delegate" },
+        { "method": "function_evaluations", "expected": 8596, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_DeJong delegate -- against 103141 for the identical finite-difference run" }
       ]
     },
     {

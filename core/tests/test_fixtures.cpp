@@ -1668,8 +1668,17 @@ static void run_optimizer_kind(const json& spec) {
         json construct = c["construct"];
         std::string objective_name = construct.value("objective", "DeJong");
         construct.erase("objective");
-        tbx::OptimResult r =
-            tbx::run_optimizer(construct.dump(), fixture_catalog::optimizer_objective(objective_name));
+        // The optional analytic gradient the two gradient-taking methods take, resolved out of its
+        // own catalog. Absent, the callback stays empty, which is what "differentiate numerically"
+        // means to both ported classes (a null C# Gradient delegate).
+        tbx::OptimCallbacks cbs;
+        cbs.objective = fixture_catalog::optimizer_objective(objective_name);
+        if (construct.contains("gradient")) {
+            cbs.gradient =
+                fixture_catalog::optimizer_gradient(construct["gradient"].get<std::string>());
+            construct.erase("gradient");
+        }
+        tbx::OptimResult r = tbx::run_optimizer(construct.dump(), cbs);
         for (const auto& as : c["assertions"]) {
             std::string method = as["method"].get<std::string>();
             std::string where = "optimizer/" + name + "/" + method;

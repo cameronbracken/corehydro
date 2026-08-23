@@ -11,9 +11,11 @@ optim_minimize(
   upper = NULL,
   initial = NULL,
   method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
-    "bfgs", "powell", "nelder_mead", "brent", "golden_section"),
+    "bfgs", "powell", "adam", "gradient_descent", "nelder_mead", "brent",
+    "golden_section"),
   seed = NULL,
-  control = list()
+  control = list(),
+  gradient = NULL
 )
 
 optim_maximize(
@@ -22,9 +24,11 @@ optim_maximize(
   upper = NULL,
   initial = NULL,
   method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
-    "bfgs", "powell", "nelder_mead", "brent", "golden_section"),
+    "bfgs", "powell", "adam", "gradient_descent", "nelder_mead", "brent",
+    "golden_section"),
   seed = NULL,
-  control = list()
+  control = list(),
+  gradient = NULL
 )
 }
 \arguments{
@@ -36,11 +40,13 @@ take no \code{initial}. \code{"brent"} and \code{"golden_section"} are one-dimen
 each.}
 
 \item{initial}{optional numeric vector of starting values, the same length as \code{lower}/\code{upper}.
-Required for \code{"bfgs"}, \code{"powell"}, \code{"mlsl"}, \code{"multi_start"} and \code{"nelder_mead"}.}
+Required for \code{"bfgs"}, \code{"powell"}, \code{"mlsl"}, \code{"multi_start"}, \code{"adam"}, \code{"gradient_descent"}
+and \code{"nelder_mead"}.}
 
 \item{method}{one of \code{"de"} (differential evolution, the default), \code{"particle_swarm"}, \code{"sce"}
 (shuffled complex evolution), \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}, \code{"bfgs"},
-\code{"powell"}, \code{"nelder_mead"}, \code{"brent"}, or \code{"golden_section"}.}
+\code{"powell"}, \code{"adam"}, \code{"gradient_descent"}, \code{"nelder_mead"}, \code{"brent"}, or
+\code{"golden_section"}.}
 
 \item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"particle_swarm"},
 \code{"sce"}, \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}); an error for any other method.}
@@ -54,12 +60,19 @@ configuration failure as an R error rather than returning a failed status quietl
 \code{"particle_swarm"}); \code{complexes}, \code{cce_iterations} and \code{tolerance_steps} (\code{"sce"});
 \code{initial_temperature}, \code{min_temperature}, \code{cooling_rate}, \code{update_cycles},
 \code{temperature_cycles} and \code{tolerance_steps} (\code{"simulated_annealing"}); \code{local_method}
-(\code{"multi_start"}, \code{"mlsl"}, one of \code{"bfgs"}, \code{"nelder_mead"}, \code{"powell"}); and
-\code{local_absolute_tolerance}, \code{local_relative_tolerance}, \code{polish} (\code{"multi_start"}). Passing a
+(\code{"multi_start"}, \code{"mlsl"}, one of \code{"bfgs"}, \code{"nelder_mead"}, \code{"powell"});
+\code{local_absolute_tolerance}, \code{local_relative_tolerance}, \code{polish} (\code{"multi_start"}); \code{alpha},
+the step size or learning rate (\code{"adam"}, \code{"gradient_descent"}); and \code{beta1}, \code{beta2}, the
+two decay factors (\code{"adam"}). Passing a
 setting a method does not read is an error rather than a silent no-op. \code{compute_hessian}
 DEFAULTS TO \code{TRUE} for the \code{Optimizer}-base methods (matching the ported C# \code{Optimizer} base),
 so a successful run returns a Hessian, computed by extra objective evaluations, unless the
 caller passes \code{control = list(compute_hessian = FALSE)} to skip it.}
+
+\item{gradient}{optional function taking the parameter vector and returning one partial
+derivative per parameter. Accepted only by \code{"adam"} and \code{"gradient_descent"}, an error for
+every other method. Omitted, both methods differentiate the objective numerically, exactly as
+the upstream C# classes do with a null gradient.}
 }
 \value{
 a \code{corehydro_optim} list with \code{parameters}, \code{value} (the objective's own value at the
@@ -69,7 +82,7 @@ optimum, in its own sign convention -- not negated for \code{optim_maximize()}),
 \code{compute_hessian} was turned off).
 }
 \description{
-Runs one of the eleven ported Numerics optimizers over an R function. The optimizer's random
+Runs one of the thirteen ported Numerics optimizers over an R function. The optimizer's random
 number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 in corehydropy.
 }

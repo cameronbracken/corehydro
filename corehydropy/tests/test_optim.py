@@ -261,3 +261,99 @@ def test_max_function_evaluations_caps_the_reported_count():
     uncapped = optim_minimize(f, lower=[-5, -5], upper=[5, 5], seed=42)
     assert capped.function_evaluations <= 45
     assert capped.function_evaluations < uncapped.function_evaluations
+
+
+# --- the two gradient-taking methods ------------------------------------------------------
+#
+# f(p) = (p1 - 3)^2 + (p2 + 1)^2, minimum 0 at (3, -1), with the analytic gradient written out
+# term by term so the R twin in corehydror/tests/testthat/test-optim.R evaluates the identical
+# arithmetic.
+def _quad_shifted(p):
+    return (p[0] - 3) ** 2 + (p[1] + 1) ** 2
+
+
+def _quad_shifted_gradient(p):
+    return [2 * (p[0] - 3), 2 * (p[1] + 1)]
+
+
+@pytest.mark.parametrize("method", ["gradient_descent", "adam"])
+def test_adam_and_gradient_descent_take_an_analytic_gradient(method):
+    fit = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                         method=method, gradient=_quad_shifted_gradient,
+                         control={"alpha": 0.1})
+    assert fit.parameters == pytest.approx([3.0, -1.0], abs=1e-3)
+
+
+@pytest.mark.parametrize("method", ["gradient_descent", "adam"])
+def test_adam_and_gradient_descent_fall_back_to_numerical_differentiation(method):
+    # An omitted `gradient` is the ported classes' null Gradient, which routes through
+    # NumericalDerivative.Gradient exactly as C# does -- so the same run lands in the same place.
+    fit = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                         method=method, control={"alpha": 0.1})
+    assert fit.parameters == pytest.approx([3.0, -1.0], abs=1e-3)
+
+
+def test_the_analytic_gradient_is_actually_used():
+    # A run driven by the supplied gradient never pays for the 2*D finite-difference probes, so it
+    # costs strictly fewer objective evaluations than the same run without one. Without this, a
+    # runner arm that dropped the gradient on the floor would pass every assertion above.
+    with_g = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                            method="gradient_descent", gradient=_quad_shifted_gradient,
+                            control={"alpha": 0.1})
+    without_g = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                               method="gradient_descent", control={"alpha": 0.1})
+    assert with_g.function_evaluations < without_g.function_evaluations
+
+
+@pytest.mark.parametrize("method", ["gradient_descent", "adam"])
+def test_an_error_inside_the_gradient_reaches_the_caller(method):
+    def boom(p):
+        raise RuntimeError("boom in the gradient")
+
+    with pytest.raises(RuntimeError, match="boom in the gradient"):
+        optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                       method=method, gradient=boom)
+
+
+def test_a_gradient_returning_the_wrong_length_is_rejected():
+    with pytest.raises(Exception, match="one value per parameter"):
+        optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                       method="adam", gradient=lambda p: [1.0])
+
+
+@pytest.mark.parametrize("method,initial,seed", [("de", None, 1), ("bfgs", [0, 0], None)])
+def test_gradient_is_rejected_for_methods_that_cannot_take_one(method, initial, seed):
+    with pytest.raises(ValueError, match="gradient"):
+        optim_minimize(_quad_shifted, initial=initial, lower=[-10, -10], upper=[10, 10],
+                       method=method, seed=seed, gradient=_quad_shifted_gradient)
+
+
+def test_gradient_must_be_callable():
+    with pytest.raises(TypeError, match="callable"):
+        optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                       method="adam", gradient=1)
+
+
+def test_alpha_beta1_and_beta2_reach_the_right_classes():
+    # alpha is shared; beta1/beta2 are ADAM's alone, so gradient_descent must reject them by name.
+    fast = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                          method="gradient_descent", gradient=_quad_shifted_gradient,
+                          control={"alpha": 0.1})
+    slow = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                          method="gradient_descent", gradient=_quad_shifted_gradient,
+                          control={"alpha": 0.01})
+    assert fast.iterations < slow.iterations
+    with pytest.raises(ValueError, match="beta1"):
+        optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                       method="gradient_descent", control={"beta1": 0.5})
+    fit = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                         method="adam", gradient=_quad_shifted_gradient,
+                         control={"alpha": 0.1, "beta1": 0.8, "beta2": 0.9})
+    assert fit.status
+
+
+@pytest.mark.parametrize("method", ["adam", "gradient_descent"])
+def test_seed_is_rejected_for_the_two_gradient_methods(method):
+    with pytest.raises(ValueError, match="stochastic"):
+        optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                       method=method, seed=1)
