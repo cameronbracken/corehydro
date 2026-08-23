@@ -1,0 +1,160 @@
+{
+ "kind": "toolbox",
+ "group": "linalg",
+ "source": "Numerics/Mathematics/Linear Algebra/QRDecomposition.cs, GaussJordanElimination.cs; matrices scraped verbatim from Test_Numerics/Mathematics/Linear Algebra/Test_QRDecomposition.cs (Test_QRDecomp, Test_SolveVector, Test_SolveMatrix, Test_QR_Solve_Vector_NonSymmetric_Square, Test_QR_Solve_Matrix_NonSymmetric_Square, Test_QR_Solve_Vector_NonSymmetric_Overdetermined, Test_QR_Solve_Matrix_NonSymmetric_Overdetermined, Test_QR_Solve_Vector_NonSymmetric_Underdetermined, Test_QR_Solve_Matrix_NonSymmetric_Underdetermined) and Test_GaussJordanElimination.cs (Test_GaussJordanElim).",
+ "reference": "Numerics @ 2a0357a. None of Test_QRDecomposition.cs's nine methods compares Q, R, or a solved x against a literal -- every one is a residual/reconstruction check (A*x ~= b to 1e-10, or Q*R ~= A to 1e-10). qr_q/qr_r/qr_solve/qr_solve_matrix values here are therefore curated via oracle_emitter --dump against the REAL C# QRDecomposition (the `Q`/`RMatrix`/`Solve` this file's fixture cases exercise), not lifted from a test literal, per the fixtures/README.md `bivariate_copula`/`multivariate_distribution` curation convention. gauss_jordan_inverse/gauss_jordan_solution reuse Test_GaussJordanElim's own literal true_IA = {{7,-3,-3},{-1,1,0},{-1,0,1}} (the inverse of {{1,3,3},{1,4,3},{1,3,4}}), asserted EXACTLY (tol 0), unlike every curated value in this file.",
+ "datasets": {
+  "qr_square_a": [1, 1, 1, 0, 2, 5, 2, 5, -1],
+  "qr_square_b": [6, -4, 27],
+  "nonsym_square_a": [1, 2, 3, 0, 1, 4, 5, 6, 0],
+  "nonsym_square_b": [1, 2, 3],
+  "overdetermined_a": [1, 1, 1, 1, 2, 3, 1, 3, 6, 1, 4, 10],
+  "overdetermined_b": [6, 0, 0, 6],
+  "underdetermined_a": [2, 3, 5, 1, 1, 0, 2, 3, 0, 1, 4, 2],
+  "underdetermined_b": [1, 2, 3],
+  "gj_a": [1, 3, 3, 1, 4, 3, 1, 3, 4]
+ },
+ "cases": [
+  {
+   "name": "qr_square_q",
+   "data": ["qr_square_a"],
+   "options": {"rows": 3, "cols": 3},
+   "assertions": [
+    {"method": "qr_q", "index": 0, "expected": -0.44721359549995793, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump (Test_QRDecomp's own A)"},
+    {"method": "qr_q", "index": 4, "expected": -0.83045479853739979, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_q", "index": 8, "expected": -0.37139067635410372, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_q", "select": "rows", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: Q is m x m"},
+    {"method": "qr_q", "select": "columns", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: Q is m x m"}
+   ]
+  },
+  {
+   "name": "qr_square_r",
+   "data": ["qr_square_a"],
+   "options": {"rows": 3, "cols": 3},
+   "assertions": [
+    {"method": "qr_r", "index": 0, "expected": -2.2360679774997894, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_r", "index": 4, "expected": -2.4083189157584597, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_r", "index": 8, "expected": 3.8996021017180893, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_r", "select": "rows", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: R is m x n"},
+    {"method": "qr_r", "select": "columns", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: R is m x n"}
+   ]
+  },
+  {
+   "name": "qr_solve_vector_square",
+   "data": ["qr_square_a", "qr_square_b"],
+   "options": {"rows": 3, "cols": 3},
+   "assertions": [
+    {"method": "qr_solve", "index": 0, "expected": 5.0, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump (Test_SolveVector's own A, b)"},
+    {"method": "qr_solve", "index": 1, "expected": 3.0, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve", "index": 2, "expected": -2.0, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"}
+   ]
+  },
+  {
+   "name": "qr_solve_matrix_square",
+   "data": ["qr_square_a", "qr_square_b"],
+   "options": {"rows": 3, "cols": 3, "b_cols": 1},
+   "assertions": [
+    {"method": "qr_solve_matrix", "index": 0, "expected": 5.0, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump (Test_SolveMatrix's own A, matB)"},
+    {"method": "qr_solve_matrix", "index": 1, "expected": 3.0, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve_matrix", "index": 2, "expected": -2.0, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve_matrix", "select": "rows", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: X is n x b_cols"},
+    {"method": "qr_solve_matrix", "select": "columns", "expected": 1, "mode": "abs", "tol": 0, "source": "structural: X is n x b_cols"}
+   ]
+  },
+  {
+   "name": "qr_solve_vector_nonsymmetric_square",
+   "data": ["nonsym_square_a", "nonsym_square_b"],
+   "options": {"rows": 3, "cols": 3},
+   "assertions": [
+    {"method": "qr_solve", "index": 0, "expected": 27, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump (Test_QR_Solve_Vector_NonSymmetric_Square's own A, b)"},
+    {"method": "qr_solve", "index": 1, "expected": -22, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve", "index": 2, "expected": 6, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"}
+   ]
+  },
+  {
+   "name": "qr_solve_matrix_nonsymmetric_square",
+   "data": ["nonsym_square_a", "nonsym_square_b"],
+   "options": {"rows": 3, "cols": 3, "b_cols": 1},
+   "assertions": [
+    {"method": "qr_solve_matrix", "index": 0, "expected": 27, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump (Test_QR_Solve_Matrix_NonSymmetric_Square's own A, B)"},
+    {"method": "qr_solve_matrix", "index": 1, "expected": -22, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve_matrix", "index": 2, "expected": 6, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"}
+   ]
+  },
+  {
+   "name": "qr_solve_vector_overdetermined",
+   "data": ["overdetermined_a", "overdetermined_b"],
+   "options": {"rows": 4, "cols": 3},
+   "assertions": [
+    {"method": "qr_solve", "index": 0, "expected": 18.0, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump (Test_QR_Solve_Vector_NonSymmetric_Overdetermined's own A, b)"},
+    {"method": "qr_solve", "index": 1, "expected": -18.0, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve", "index": 2, "expected": 6.0, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"}
+   ]
+  },
+  {
+   "name": "qr_solve_matrix_overdetermined",
+   "data": ["overdetermined_a", "overdetermined_b"],
+   "options": {"rows": 4, "cols": 3, "b_cols": 1},
+   "assertions": [
+    {"method": "qr_solve_matrix", "index": 0, "expected": 18.0, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump (Test_QR_Solve_Matrix_NonSymmetric_Overdetermined's own A, B)"},
+    {"method": "qr_solve_matrix", "index": 1, "expected": -18.0, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve_matrix", "index": 2, "expected": 6.0, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve_matrix", "select": "rows", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: X is n x b_cols"},
+    {"method": "qr_solve_matrix", "select": "columns", "expected": 1, "mode": "abs", "tol": 0, "source": "structural: X is n x b_cols"}
+   ]
+  },
+  {
+   "name": "qr_solve_vector_underdetermined",
+   "data": ["underdetermined_a", "underdetermined_b"],
+   "options": {"rows": 3, "cols": 4},
+   "assertions": [
+    {"method": "qr_solve", "index": 0, "expected": -0.18181818181818182, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump (Test_QR_Solve_Vector_NonSymmetric_Underdetermined's own A, b)"},
+    {"method": "qr_solve", "index": 1, "expected": -1.3636363636363635, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve", "index": 2, "expected": 1.0909090909090908, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve", "index": 3, "expected": 0.0, "mode": "abs", "tol": 0, "source": "structural: min(m,n) = 3 < n = 4, so QRDecomposition.Solve leaves x[3] at its zero-initialized default"}
+   ]
+  },
+  {
+   "name": "qr_solve_matrix_underdetermined",
+   "data": ["underdetermined_a", "underdetermined_b"],
+   "options": {"rows": 3, "cols": 4, "b_cols": 1},
+   "assertions": [
+    {"method": "qr_solve_matrix", "index": 0, "expected": -0.18181818181818182, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump (Test_QR_Solve_Matrix_NonSymmetric_Underdetermined's own A, B)"},
+    {"method": "qr_solve_matrix", "index": 1, "expected": -1.3636363636363635, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve_matrix", "index": 2, "expected": 1.0909090909090908, "mode": "abs", "tol": 1e-8, "source": "curated via oracle_emitter --dump"},
+    {"method": "qr_solve_matrix", "index": 3, "expected": 0.0, "mode": "abs", "tol": 0, "source": "structural: min(m,n) = 3 < n = 4, so QRDecomposition.Solve leaves x[3] at its zero-initialized default"},
+    {"method": "qr_solve_matrix", "select": "rows", "expected": 4, "mode": "abs", "tol": 0, "source": "structural: X is n x b_cols"},
+    {"method": "qr_solve_matrix", "select": "columns", "expected": 1, "mode": "abs", "tol": 0, "source": "structural: X is n x b_cols"}
+   ]
+  },
+  {
+   "name": "gauss_jordan_inverse_and_solution",
+   "data": ["gj_a", "gj_a"],
+   "options": {"rows": 3, "cols": 3, "b_cols": 3},
+   "assertions": [
+    {"method": "gauss_jordan_inverse", "index": 0, "expected": 7, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[0,0]"},
+    {"method": "gauss_jordan_inverse", "index": 1, "expected": -3, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[0,1]"},
+    {"method": "gauss_jordan_inverse", "index": 2, "expected": -3, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[0,2]"},
+    {"method": "gauss_jordan_inverse", "index": 3, "expected": -1, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[1,0]"},
+    {"method": "gauss_jordan_inverse", "index": 4, "expected": 1, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[1,1]"},
+    {"method": "gauss_jordan_inverse", "index": 5, "expected": 0, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[1,2]"},
+    {"method": "gauss_jordan_inverse", "index": 6, "expected": -1, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[2,0]"},
+    {"method": "gauss_jordan_inverse", "index": 7, "expected": 0, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[2,1]"},
+    {"method": "gauss_jordan_inverse", "index": 8, "expected": 1, "mode": "abs", "tol": 0, "source": "Test_GaussJordanElim true_IA[2,2]"},
+    {"method": "gauss_jordan_inverse", "select": "rows", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: the inverse has A's shape"},
+    {"method": "gauss_jordan_inverse", "select": "columns", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: the inverse has A's shape"},
+    {"method": "gauss_jordan_solution", "index": 0, "expected": 1, "mode": "abs", "tol": 0, "source": "structural: B = A, so the solution set A^-1*A is the identity"},
+    {"method": "gauss_jordan_solution", "index": 1, "expected": 0, "mode": "abs", "tol": 0, "source": "structural: identity, off-diagonal"},
+    {"method": "gauss_jordan_solution", "index": 2, "expected": 0, "mode": "abs", "tol": 0, "source": "structural: identity, off-diagonal"},
+    {"method": "gauss_jordan_solution", "index": 3, "expected": 0, "mode": "abs", "tol": 0, "source": "structural: identity, off-diagonal"},
+    {"method": "gauss_jordan_solution", "index": 4, "expected": 1, "mode": "abs", "tol": 0, "source": "structural: identity, diagonal"},
+    {"method": "gauss_jordan_solution", "index": 5, "expected": 0, "mode": "abs", "tol": 0, "source": "structural: identity, off-diagonal"},
+    {"method": "gauss_jordan_solution", "index": 6, "expected": 0, "mode": "abs", "tol": 0, "source": "structural: identity, off-diagonal"},
+    {"method": "gauss_jordan_solution", "index": 7, "expected": 0, "mode": "abs", "tol": 0, "source": "structural: identity, off-diagonal"},
+    {"method": "gauss_jordan_solution", "index": 8, "expected": 1, "mode": "abs", "tol": 0, "source": "structural: identity, diagonal"},
+    {"method": "gauss_jordan_solution", "select": "rows", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: the solution set has A's shape when B = A"},
+    {"method": "gauss_jordan_solution", "select": "columns", "expected": 3, "mode": "abs", "tol": 0, "source": "structural: the solution set has A's shape when B = A"}
+   ]
+  }
+ ]
+}

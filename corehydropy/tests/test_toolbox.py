@@ -10,6 +10,7 @@ from corehydropy import (
     autocorrelation,
     cross_correlation,
     dft,
+    gauss_jordan,
     histogram,
     interpolate,
     interpolate_2d,
@@ -23,6 +24,8 @@ from corehydropy import (
     linear_regression,
     percentile,
     product_moments,
+    qr_decomposition,
+    qr_solve,
     ranks,
     running_covariance,
     running_statistics,
@@ -597,3 +600,70 @@ def test_trend_names_and_trend_cannot_drift_every_listed_type_constructs():
     for type_ in trend_names():
         tr = trend("location", type_)
         assert tr.type == type_
+
+
+# The "linalg" toolbox group (P2 "math extras" Task 9).
+
+
+def test_qr_decomposition_reproduces_a():
+    a = [[1, 1, 1], [0, 2, 5], [2, 5, -1]]
+    qr = qr_decomposition(a)
+    assert qr["q"].shape == (3, 3)
+    assert qr["r"].shape == (3, 3)
+    np.testing.assert_allclose(qr["q"] @ qr["r"], a, atol=1e-10)
+
+
+def test_qr_solve_reproduces_the_test_qrdecomposition_square_system_expected_vector():
+    # Test_QRDecomposition.cs's Test_SolveVector: A = [[1,1,1],[0,2,5],[2,5,-1]],
+    # b = [6,-4,27]; the real system solves to x = [5, 3, -2].
+    a = [[1, 1, 1], [0, 2, 5], [2, 5, -1]]
+    b = [6, -4, 27]
+    x = qr_solve(a, b)
+    np.testing.assert_allclose(x, [5.0, 3.0, -2.0], atol=1e-9)
+    np.testing.assert_allclose(np.asarray(a) @ x, b, atol=1e-9)
+
+
+def test_qr_solve_matrix_rhs_matches_the_vector_rhs():
+    a = [[1, 2, 3], [0, 1, 4], [5, 6, 0]]
+    b_vec = [1, 2, 3]
+    b_mat = [[1], [2], [3]]
+    x_vec = qr_solve(a, b_vec)
+    x_mat = qr_solve(a, b_mat)
+    assert x_mat.shape == (3, 1)
+    np.testing.assert_allclose(x_mat[:, 0], x_vec, atol=1e-10)
+
+
+def test_qr_solve_underdetermined_leaves_the_trailing_unknown_at_zero():
+    a = [[2, 3, 5, 1], [1, 0, 2, 3], [0, 1, 4, 2]]
+    b = [1, 2, 3]
+    x = qr_solve(a, b)
+    assert x.shape == (4,)
+    assert x[3] == 0.0
+    np.testing.assert_allclose(np.asarray(a) @ x, b, atol=1e-8)
+
+
+def test_qr_solve_rejects_a_mismatched_b_length():
+    a = [[1, 0], [0, 1]]
+    with pytest.raises(ValueError, match="rows"):
+        qr_solve(a, [1, 2, 3])
+
+
+def test_gauss_jordan_reproduces_true_ia_exactly():
+    # Test_GaussJordanElimination.cs's Test_GaussJordanElim: A = [[1,3,3],[1,4,3],[1,3,4]],
+    # true_IA = [[7,-3,-3],[-1,1,0],[-1,0,1]].
+    a = [[1, 3, 3], [1, 4, 3], [1, 3, 4]]
+    result = gauss_jordan(a)
+    np.testing.assert_array_equal(result["inverse"], [[7, -3, -3], [-1, 1, 0], [-1, 0, 1]])
+    assert result["solution"].shape == (3, 0)
+
+
+def test_gauss_jordan_solution_solves_ax_equals_b():
+    a = [[1, 3, 3], [1, 4, 3], [1, 3, 4]]
+    b = [[1], [0], [0]]
+    result = gauss_jordan(a, b)
+    np.testing.assert_allclose(np.asarray(a) @ result["solution"], b, atol=1e-10)
+
+
+def test_gauss_jordan_rejects_a_non_square_a():
+    with pytest.raises(ValueError, match="square"):
+        gauss_jordan([[1, 2, 3], [4, 5, 6]])

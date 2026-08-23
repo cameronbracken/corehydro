@@ -544,3 +544,65 @@ test_that("trend_names() and trend() cannot drift: every listed type constructs"
     expect_identical(tr$type, type, info = type)
   }
 })
+
+# The "linalg" toolbox group (P2 "math extras" Task 9).
+
+test_that("qr_decomposition() reproduces a NON-symmetric a", {
+  a <- matrix(c(1, 2, 3, 0, 1, 4, 5, 6, 0), nrow = 3, byrow = TRUE)
+  qr <- qr_decomposition(a)
+  expect_equal(dim(qr$q), c(3L, 3L))
+  expect_equal(dim(qr$r), c(3L, 3L))
+  expect_equal(qr$q %*% qr$r, a, tolerance = 1e-10)
+})
+
+test_that("qr_solve() reproduces the Test_QRDecomposition square-system expected vector", {
+  # Test_QRDecomposition.cs's Test_SolveVector: A = [[1,1,1],[0,2,5],[2,5,-1]], b = [6,-4,27];
+  # the real system solves to x = [5, 3, -2].
+  a <- matrix(c(1, 1, 1, 0, 2, 5, 2, 5, -1), nrow = 3, byrow = TRUE)
+  b <- c(6, -4, 27)
+  x <- qr_solve(a, b)
+  expect_equal(x, c(5, 3, -2), tolerance = 1e-9)
+  expect_equal(as.numeric(a %*% x), b, tolerance = 1e-9)
+})
+
+test_that("qr_solve() matrix right-hand side matches the vector right-hand side", {
+  a <- matrix(c(1, 2, 3, 0, 1, 4, 5, 6, 0), nrow = 3, byrow = TRUE)
+  x_vec <- qr_solve(a, c(1, 2, 3))
+  x_mat <- qr_solve(a, matrix(c(1, 2, 3), ncol = 1))
+  expect_equal(dim(x_mat), c(3L, 1L))
+  expect_equal(x_mat[, 1], x_vec, tolerance = 1e-10)
+})
+
+test_that("qr_solve() on an underdetermined system leaves the trailing unknown at zero", {
+  a <- matrix(c(2, 3, 5, 1, 1, 0, 2, 3, 0, 1, 4, 2), nrow = 3, byrow = TRUE)
+  b <- c(1, 2, 3)
+  x <- qr_solve(a, b)
+  expect_length(x, 4L)
+  expect_equal(x[4], 0)
+  expect_equal(as.numeric(a %*% x), b, tolerance = 1e-8)
+})
+
+test_that("qr_solve() rejects a mismatched b length", {
+  a <- diag(2)
+  expect_error(qr_solve(a, c(1, 2, 3)), "rows")
+})
+
+test_that("gauss_jordan() reproduces true_IA exactly", {
+  # Test_GaussJordanElimination.cs's Test_GaussJordanElim: A = [[1,3,3],[1,4,3],[1,3,4]],
+  # true_IA = [[7,-3,-3],[-1,1,0],[-1,0,1]].
+  a <- matrix(c(1, 3, 3, 1, 4, 3, 1, 3, 4), nrow = 3, byrow = TRUE)
+  result <- gauss_jordan(a)
+  expect_equal(result$inverse, matrix(c(7, -3, -3, -1, 1, 0, -1, 0, 1), nrow = 3, byrow = TRUE))
+  expect_equal(dim(result$solution), c(3L, 0L))
+})
+
+test_that("gauss_jordan() solution solves a %*% x = b", {
+  a <- matrix(c(1, 3, 3, 1, 4, 3, 1, 3, 4), nrow = 3, byrow = TRUE)
+  b <- matrix(c(1, 0, 0), ncol = 1)
+  result <- gauss_jordan(a, b)
+  expect_equal(a %*% result$solution, b, tolerance = 1e-10)
+})
+
+test_that("gauss_jordan() rejects a non-square a", {
+  expect_error(gauss_jordan(matrix(1:6, nrow = 2)), "square")
+})

@@ -4748,9 +4748,85 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return LinkDispatch(method, data, options, asrt);
         case "trend":
             return TrendDispatch(method, data, options, asrt);
+        case "linalg":
+            return LinalgDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Mirrors numerics/support/toolbox/linalg.hpp's run_linalg arm against the real
+// Numerics.Mathematics.LinearAlgebra.QRDecomposition/GaussJordanElimination. Matrices cross as
+// one flattened row-major array plus `rows`/`cols` options (`b_cols` for a second matrix B),
+// the same convention RegressionDispatch above uses for its predictor matrix. C#
+// GaussJordanElimination.Solve mutates its `ref Matrix A, ref Matrix B` arguments in place, so
+// each gauss_jordan_* arm clones A/B fresh from the flat input before calling Solve -- the two
+// arms must not share one mutated pair, since either could be evaluated first depending on
+// fixture assertion order.
+static Matrix LinalgMatrixFromFlat(double[] flat, int rows, int cols)
+{
+    var m = new Matrix(rows, cols);
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < cols; j++) m[i, j] = flat[i * cols + j];
+    return m;
+}
+
+static double LinalgDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    int rows = options.GetProperty("rows").GetInt32();
+    int cols = options.GetProperty("cols").GetInt32();
+    var a = LinalgMatrixFromFlat(data[0], rows, cols);
+
+    if (method == "qr_q")
+    {
+        var qr = new QRDecomposition(a);
+        var q = qr.Q;
+        var flat = new double[q.NumberOfRows * q.NumberOfColumns];
+        for (int i = 0; i < q.NumberOfRows; i++)
+            for (int j = 0; j < q.NumberOfColumns; j++) flat[i * q.NumberOfColumns + j] = q[i, j];
+        return ToolboxSelectFlat(asrt, flat, q.NumberOfRows, q.NumberOfColumns);
+    }
+    if (method == "qr_r")
+    {
+        var qr = new QRDecomposition(a);
+        var r = qr.RMatrix;
+        var flat = new double[r.NumberOfRows * r.NumberOfColumns];
+        for (int i = 0; i < r.NumberOfRows; i++)
+            for (int j = 0; j < r.NumberOfColumns; j++) flat[i * r.NumberOfColumns + j] = r[i, j];
+        return ToolboxSelectFlat(asrt, flat, r.NumberOfRows, r.NumberOfColumns);
+    }
+    if (method == "qr_solve")
+    {
+        var qr = new QRDecomposition(a);
+        var x = qr.Solve(new Vector(data[1]));
+        var flat = new double[x.Length];
+        for (int i = 0; i < x.Length; i++) flat[i] = x[i];
+        return ToolboxSelectFlatNoDims(asrt, flat);
+    }
+    if (method == "qr_solve_matrix")
+    {
+        int bCols = options.GetProperty("b_cols").GetInt32();
+        var b = LinalgMatrixFromFlat(data[1], rows, bCols);
+        var qr = new QRDecomposition(a);
+        var x = qr.Solve(b);
+        var flat = new double[x.NumberOfRows * x.NumberOfColumns];
+        for (int i = 0; i < x.NumberOfRows; i++)
+            for (int j = 0; j < x.NumberOfColumns; j++) flat[i * x.NumberOfColumns + j] = x[i, j];
+        return ToolboxSelectFlat(asrt, flat, x.NumberOfRows, x.NumberOfColumns);
+    }
+    if (method == "gauss_jordan_inverse" || method == "gauss_jordan_solution")
+    {
+        int bCols = options.GetProperty("b_cols").GetInt32();
+        Matrix aArg = LinalgMatrixFromFlat(data[0], rows, cols);
+        Matrix bArg = LinalgMatrixFromFlat(data[1], rows, bCols);
+        GaussJordanElimination.Solve(ref aArg, ref bArg);
+        var result = method == "gauss_jordan_inverse" ? aArg : bArg;
+        var flat = new double[result.NumberOfRows * result.NumberOfColumns];
+        for (int i = 0; i < result.NumberOfRows; i++)
+            for (int j = 0; j < result.NumberOfColumns; j++) flat[i * result.NumberOfColumns + j] = result[i, j];
+        return ToolboxSelectFlat(asrt, flat, result.NumberOfRows, result.NumberOfColumns);
+    }
+    throw new Exception($"unknown linalg method: {method}");
 }
 
 // Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor

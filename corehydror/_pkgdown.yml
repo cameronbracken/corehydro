@@ -255,6 +255,14 @@ reference:
       - quadrature_nd
       - ode_solve
       - derivative
+  - title: Linear algebra and special functions
+    desc: >
+      The ported Numerics QRDecomposition (Householder reflections) and GaussJordanElimination
+      linear-algebra routines.
+    contents:
+      - qr_decomposition
+      - qr_solve
+      - gauss_jordan
   - title: The generator a callback is handed
     desc: >
       Drawing from the core's seeded random number generator inside a function you write, so

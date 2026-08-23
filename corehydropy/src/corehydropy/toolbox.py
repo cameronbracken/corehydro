@@ -44,6 +44,9 @@ __all__ = [
     "trend_predict",
     "trend_parameters",
     "trend_names",
+    "qr_decomposition",
+    "qr_solve",
+    "gauss_jordan",
 ]
 
 
@@ -1348,3 +1351,154 @@ def trend_names() -> list[str]:
     ['Constant', 'Cubic', 'Exponential', 'Linear', 'Logistic', 'Power', 'Quadratic', 'Reciprocal', 'Sinusoidal', 'StepFunction', 'GeneralLinear']
     """
     return list(_toolbox_run("trend", "names")["names"])
+
+
+# The "linalg" toolbox group (P2 "math extras" Task 9): QRDecomposition (Householder
+# reflections) and GaussJordanElimination. Matrices cross the runner boundary as ONE
+# flattened row-major vector plus `rows`/`cols` options, the same convention
+# linear_regression()'s predictor matrix uses above; numpy's default `ravel()`/`reshape()`
+# are already row-major (C order), so -- unlike the R verbs, which must transpose first --
+# these need no extra flattening step.
+
+
+def qr_decomposition(a) -> dict:
+    """QR decomposition.
+
+    Mirrors the C# ``QRDecomposition`` class (Householder reflections): decomposes the
+    ``M x N`` array ``a`` into an ``M x M`` orthogonal array ``q`` and an ``M x N`` upper
+    triangular array ``r`` such that ``q @ r`` reproduces ``a``. The C# ``RMatrix`` property
+    is named ``r`` here (``R`` has no naming collision in this package, unlike in the C#
+    codebase).
+
+    Parameters
+    ----------
+    a : array_like
+        A 2D array, M x N.
+
+    Returns
+    -------
+    dict
+        ``{"q": ndarray (M, M), "r": ndarray (M, N)}``.
+
+    Examples
+    --------
+    >>> from corehydropy import qr_decomposition
+    >>> a = [[1, 1, 1], [0, 2, 5], [2, 5, -1]]
+    >>> qr = qr_decomposition(a)
+    >>> import numpy as np
+    >>> np.allclose(qr["q"] @ qr["r"], a)
+    True
+    """
+    aa = np.asarray(a, dtype=float)
+    if aa.ndim != 2:
+        raise ValueError("`a` must be a 2D array")
+    rows, cols = aa.shape
+    options = {"rows": int(rows), "cols": int(cols)}
+    data = [aa.ravel()]
+    q = _toolbox_run("linalg", "qr_q", data, options)
+    r = _toolbox_run("linalg", "qr_r", data, options)
+    return {
+        "q": np.asarray(q["values"], dtype=float).reshape(q["dims"][0], q["dims"][1]),
+        "r": np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1]),
+    }
+
+
+def qr_solve(a, b):
+    """Solve a linear system by QR decomposition.
+
+    Mirrors the C# ``QRDecomposition.Solve`` overloads (vector and matrix right-hand
+    sides). ``a`` need not be square: an overdetermined system is solved in the
+    least-squares sense; an underdetermined system leaves the trailing
+    ``a.shape[1] - min(a.shape)`` unknowns at zero (matching ``QRDecomposition.Solve``'s
+    own truncated back-substitution, which only ever fills indices below
+    ``min(m, n)``).
+
+    Parameters
+    ----------
+    a : array_like
+        A 2D array, M x N.
+    b : array_like
+        A 1D array of length M, or a 2D array with M rows.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 1D array of length N when ``b`` is 1D, or an ``N x b.shape[1]`` array when ``b``
+        is 2D.
+
+    Examples
+    --------
+    >>> from corehydropy import qr_solve
+    >>> a = [[1, 2, 3], [0, 1, 4], [5, 6, 0]]
+    >>> qr_solve(a, [1, 2, 3])
+    array([27., -22.,   6.])
+    """
+    aa = np.asarray(a, dtype=float)
+    if aa.ndim != 2:
+        raise ValueError("`a` must be a 2D array")
+    rows, cols = aa.shape
+    options = {"rows": int(rows), "cols": int(cols)}
+    ba = np.asarray(b, dtype=float)
+    if ba.ndim == 2:
+        if ba.shape[0] != rows:
+            raise ValueError(f"`b` must have {rows} rows, matching `a`; got {ba.shape[0]}")
+        options["b_cols"] = int(ba.shape[1])
+        r = _toolbox_run("linalg", "qr_solve_matrix", [aa.ravel(), ba.ravel()], options)
+        return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
+    bv = ba.ravel()
+    if bv.size != rows:
+        raise ValueError(f"`b` must have length {rows}, matching `a`'s rows; got {bv.size}")
+    r = _toolbox_run("linalg", "qr_solve", [aa.ravel(), bv], options)
+    return np.asarray(r["values"], dtype=float)
+
+
+def gauss_jordan(a, b=None) -> dict:
+    """Gauss-Jordan elimination.
+
+    Mirrors the C# ``GaussJordanElimination.Solve(ref Matrix A, ref Matrix B)``: one
+    full-pivot Gauss-Jordan reduction that produces ``a``'s inverse and, when ``b`` is
+    supplied, the solution set of ``a @ x = b``. Unlike the C# ``ref, ref`` in-place API,
+    ``a`` and ``b`` are never mutated in Python -- both results come back as new arrays.
+
+    Parameters
+    ----------
+    a : array_like
+        A square 2D array, N x N.
+    b : array_like, optional
+        A 1D array of length N, or a 2D array with N rows (the right-hand sides). Omit for
+        the inverse alone, in which case ``solution`` is an ``N x 0`` array.
+
+    Returns
+    -------
+    dict
+        ``{"inverse": ndarray (N, N), "solution": ndarray (N, b.shape[1])}``.
+
+    Examples
+    --------
+    >>> from corehydropy import gauss_jordan
+    >>> a = [[1, 3, 3], [1, 4, 3], [1, 3, 4]]
+    >>> gauss_jordan(a)["inverse"]
+    array([[ 7., -3., -3.],
+           [-1.,  1.,  0.],
+           [-1.,  0.,  1.]])
+    """
+    aa = np.asarray(a, dtype=float)
+    if aa.ndim != 2 or aa.shape[0] != aa.shape[1]:
+        raise ValueError("`a` must be a square 2D array")
+    n = aa.shape[0]
+    if b is None:
+        ba = np.zeros((n, 0))
+    else:
+        ba = np.asarray(b, dtype=float)
+        if ba.ndim == 1:
+            ba = ba.reshape(-1, 1)
+        if ba.shape[0] != n:
+            raise ValueError(f"`b` must have {n} rows, matching `a`; got {ba.shape[0]}")
+    options = {"rows": int(n), "cols": int(n), "b_cols": int(ba.shape[1])}
+    data = [aa.ravel(), ba.ravel()]
+    inv = _toolbox_run("linalg", "gauss_jordan_inverse", data, options)
+    sol = _toolbox_run("linalg", "gauss_jordan_solution", data, options)
+    return {
+        "inverse": np.asarray(inv["values"], dtype=float).reshape(inv["dims"][0], inv["dims"][1]),
+        "solution": np.asarray(sol["values"], dtype=float).reshape(sol["dims"][0], sol["dims"][1]),
+    }

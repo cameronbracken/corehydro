@@ -1715,6 +1715,31 @@ C++/R/Python helpers' behavior when `r.dims` is empty. No fixture pairs either c
 of those groups today, so neither change altered any existing case. See `ToolboxSelectFlat`'s and
 `ToolboxSelectFlatNoDims`'s header comments in `tools/oracle_emitter/Program.cs`.
 
+P2 "math extras" (Task 9) added the `linalg` group, the first entirely NEW toolbox group since the
+Phase 4 docs/examples effort's original eleven -- over the ported `QRDecomposition` (Householder
+reflections) and `GaussJordanElimination` (`numerics/math/linalg/{qr_decomposition,
+gauss_jordan_elimination}.hpp`). Every matrix crosses the runner boundary as ONE flattened
+row-major `double` vector plus `rows`/`cols` options (`b_cols` for a second matrix), the same
+convention `regression`'s predictor matrix already uses -- there is no matrix type common to
+C++/R/Python/C#, so a nested array is never on this grammar. Methods: `qr_q`/`qr_r` (`data:
+[a_flat]`) return Q (`M x M`) and R (`M x N`); `qr_solve` (`data: [a_flat, b]`, `b` length `M`)
+returns the length-`N` solution vector with NO `dims` (mirroring `interpolation.linear`'s own
+undimensioned result -- `select: "rows"`/`"columns"` throws here exactly as it does there);
+`qr_solve_matrix` (`data: [a_flat, b_flat]`, `b_cols` required) returns the `N x b_cols` solution
+matrix; `gauss_jordan_inverse`/`gauss_jordan_solution` (`data: [a_flat, b_flat]`, `b_cols`
+required) drive the SAME in-place `Solve(ref A, ref B)` call and read back `A` (now the inverse,
+`N x N`) or `B` (now the solution set, `N x b_cols`) respectively -- each fixture assertion, and
+each dotnet-emitter call, clones `A`/`B` fresh before calling `Solve`, since the C# delegate
+mutates its arguments and the two arms must not observe each other's mutation.
+`fixtures/toolbox/linalg.json` is the one file of this group. None of
+`Test_QRDecomposition.cs`'s nine methods compares `Q`, `R`, or a solved `x` against a literal --
+every one is a residual/reconstruction check (`A*x ~= b` or `Q*R ~= A` to `1e-10`) -- so the
+`qr_q`/`qr_r`/`qr_solve`/`qr_solve_matrix` values are curated via `oracle_emitter --dump` against
+the real C# classes rather than lifted from a test literal, per the `bivariate_copula`/
+`multivariate_distribution` curation convention above; `gauss_jordan_inverse`/
+`gauss_jordan_solution` reuse `Test_GaussJordanElim`'s own literal `true_IA` and are asserted
+EXACTLY (`tol: 0`), the one pair of methods in this file that are.
+
 ### `optimizer`
 
 The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a

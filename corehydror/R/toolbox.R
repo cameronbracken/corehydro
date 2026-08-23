@@ -781,3 +781,123 @@ trend_names <- function() toolbox_run("trend", "names")$names
 unclass_trend <- function(tr) {
   list(type = tr$type, start_index = tr$start_index, values = tr$values)
 }
+
+# The "linalg" toolbox group (P2 "math extras" Task 9): QRDecomposition (Householder
+# reflections) and GaussJordanElimination. Matrices cross the runner boundary as ONE
+# flattened row-major vector plus `rows`/`cols` options, the same convention
+# interpolate_2d()'s bilinear `y` uses above -- since R matrices are stored column-major,
+# every verb below flattens via `as.double(t(m))`, and every result comes back via
+# `matrix(..., byrow = TRUE)`.
+
+#' QR decomposition
+#'
+#' Mirrors the C# `QRDecomposition` class (Householder reflections): decomposes the `M x N`
+#' matrix `a` into an `M x M` orthogonal matrix `q` and an `M x N` upper triangular matrix
+#' `r` such that `q %*% r` reproduces `a`. The C# `RMatrix` property is named `r` here (`R`
+#' has no naming collision in this package, unlike in the C# codebase).
+#'
+#' @param a a numeric matrix, M x N.
+#' @return a list with elements `q` (M x M) and `r` (M x N).
+#' @examples
+#' a <- matrix(c(1, 0, 2, 1, 2, 5, 1, 5, -1), nrow = 3)
+#' qr <- qr_decomposition(a)
+#' qr$q %*% qr$r  # reproduces a
+#' @export
+qr_decomposition <- function(a) {
+  a <- as.matrix(a)
+  if (!is.numeric(a)) {
+    stop("`a` must be a numeric matrix", call. = FALSE)
+  }
+  opts <- list(rows = as.integer(nrow(a)), cols = as.integer(ncol(a)))
+  a_flat <- as.double(t(a))
+  q <- toolbox_run("linalg", "qr_q", list(a_flat), opts)
+  r <- toolbox_run("linalg", "qr_r", list(a_flat), opts)
+  list(
+    q = matrix(q$values, nrow = q$dims[1], ncol = q$dims[2], byrow = TRUE),
+    r = matrix(r$values, nrow = r$dims[1], ncol = r$dims[2], byrow = TRUE)
+  )
+}
+
+#' Solve a linear system by QR decomposition
+#'
+#' Mirrors the C# `QRDecomposition::Solve` overloads (vector and matrix right-hand sides).
+#' `a` need not be square: an overdetermined system is solved in the least-squares sense; an
+#' underdetermined system leaves the trailing `ncol(a) - min(nrow(a), ncol(a))` unknowns at
+#' zero (matching `QRDecomposition.Solve`'s own truncated back-substitution, which only ever
+#' fills indices below `min(m, n)`).
+#'
+#' @param a a numeric matrix, M x N.
+#' @param b a numeric vector of length M, or a numeric matrix with M rows.
+#' @return a numeric vector of length N when `b` is a vector, or an `N x ncol(b)` matrix when
+#'   `b` is a matrix.
+#' @examples
+#' a <- matrix(c(1, 2, 3, 0, 1, 4, 5, 6, 0), nrow = 3, byrow = TRUE)
+#' qr_solve(a, c(1, 2, 3))
+#' @export
+qr_solve <- function(a, b) {
+  a <- as.matrix(a)
+  if (!is.numeric(a)) {
+    stop("`a` must be a numeric matrix", call. = FALSE)
+  }
+  rows <- nrow(a)
+  cols <- ncol(a)
+  a_flat <- as.double(t(a))
+  opts <- list(rows = as.integer(rows), cols = as.integer(cols))
+  if (is.matrix(b)) {
+    if (nrow(b) != rows) {
+      stop(sprintf("`b` must have %d rows, matching `a`; got %d", rows, nrow(b)), call. = FALSE)
+    }
+    opts$b_cols <- as.integer(ncol(b))
+    b_flat <- as.double(t(b))
+    r <- toolbox_run("linalg", "qr_solve_matrix", list(a_flat, b_flat), opts)
+    matrix(r$values, nrow = r$dims[1], ncol = r$dims[2], byrow = TRUE)
+  } else {
+    if (!is.numeric(b) || length(b) != rows) {
+      stop(sprintf("`b` must be a numeric vector of length %d, matching `a`'s rows; got %d",
+                   rows, length(b)), call. = FALSE)
+    }
+    toolbox_run("linalg", "qr_solve", list(a_flat, as.double(b)), opts)$values
+  }
+}
+
+#' Gauss-Jordan elimination
+#'
+#' Mirrors the C# `GaussJordanElimination::Solve(ref Matrix A, ref Matrix B)`: one full-pivot
+#' Gauss-Jordan reduction that produces `a`'s inverse and, when `b` is supplied, the solution
+#' set of `a %*% x = b`. Unlike the C# `ref, ref` in-place API, `a` and `b` are never mutated
+#' in R -- both results come back as new matrices.
+#'
+#' @param a a square numeric matrix, N x N.
+#' @param b a numeric matrix with N rows (the right-hand sides). Omit for the inverse alone,
+#'   in which case `solution` is an `N x 0` matrix.
+#' @return a list with elements `inverse` (`a`'s inverse, N x N) and `solution` (`N x ncol(b)`).
+#' @examples
+#' a <- matrix(c(1, 3, 3, 1, 4, 3, 1, 3, 4), nrow = 3, byrow = TRUE)
+#' gauss_jordan(a)$inverse
+#' @export
+gauss_jordan <- function(a, b = NULL) {
+  a <- as.matrix(a)
+  if (!is.numeric(a) || nrow(a) != ncol(a)) {
+    stop("`a` must be a square numeric matrix", call. = FALSE)
+  }
+  n <- nrow(a)
+  a_flat <- as.double(t(a))
+  if (is.null(b)) {
+    b_flat <- double(0)
+    b_cols <- 0L
+  } else {
+    b <- as.matrix(b)
+    if (!is.numeric(b) || nrow(b) != n) {
+      stop(sprintf("`b` must have %d rows, matching `a`; got %d", n, nrow(b)), call. = FALSE)
+    }
+    b_flat <- as.double(t(b))
+    b_cols <- as.integer(ncol(b))
+  }
+  opts <- list(rows = as.integer(n), cols = as.integer(n), b_cols = b_cols)
+  inv <- toolbox_run("linalg", "gauss_jordan_inverse", list(a_flat, b_flat), opts)
+  sol <- toolbox_run("linalg", "gauss_jordan_solution", list(a_flat, b_flat), opts)
+  list(
+    inverse = matrix(inv$values, nrow = inv$dims[1], ncol = inv$dims[2], byrow = TRUE),
+    solution = matrix(sol$values, nrow = sol$dims[1], ncol = sol$dims[2], byrow = TRUE)
+  )
+}
