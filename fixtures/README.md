@@ -1740,6 +1740,22 @@ the real C# classes rather than lifted from a test literal, per the `bivariate_c
 `gauss_jordan_solution` reuse `Test_GaussJordanElim`'s own literal `true_IA` and are asserted
 EXACTLY (`tol: 0`), the one pair of methods in this file that are.
 
+Task 10 added the `special` group over the ported `Debye` and `Evaluate` classes
+(`numerics/math/special/{debye,evaluate}.hpp`). All four methods vectorize over the LAST data
+vector and return one value per element, with no `dims`/`names` -- the same shape `trend`'s
+`predict` arm uses. `debye` (`data: [x]`) evaluates `Debye.Function` at every `x`;
+`polynomial`/`polynomial_rev`/`polynomial_rev_1` (`data: [coefficients, x]`) evaluate the
+matching `Evaluate.*` static at every `x` against the one shared `coefficients` vector;
+`polynomial_rev` additionally reads an optional integer `n` option, mirroring
+`Evaluate.PolynomialRev`'s own optional `n` parameter (default `-1`, meaning "use the whole
+coefficient list"). `fixtures/toolbox/special_functions.json` is the one file of this group:
+the `debye` case's eight values are `Test_Debye`'s own literal array, asserted at its own `1E-4`
+tolerance; the three `polynomial*` cases instead assert `Evaluate.Polynomial`/`PolynomialRev`/
+`PolynomialRev_1` against `Test_Polynomial`/`Test_PolynomialRev`/`Test_PolynomialRev_1`'s
+hand-computed formula over one shared `coeffs = [3, 5, 7]`, `x = 4` (`Test_PolynomialRev` also
+covers the optional `n = 1` argument), asserted EXACTLY (`tol: 0`) since that arithmetic is
+integer-valued with no rounding.
+
 ### `optimizer`
 
 The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a

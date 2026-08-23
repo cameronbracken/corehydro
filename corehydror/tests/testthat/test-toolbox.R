@@ -606,3 +606,45 @@ test_that("gauss_jordan() solution solves a %*% x = b", {
 test_that("gauss_jordan() rejects a non-square a", {
   expect_error(gauss_jordan(matrix(1:6, nrow = 2)), "square")
 })
+
+# The "special" toolbox group (P2 "math extras" Task 10).
+
+test_that("debye() reproduces the Test_Debye literal at x = 1.0", {
+  # Test_SpecialFunctions.cs's Test_Debye: testX[1] = 1.0, testValid[1] = 0.6744156.
+  expect_equal(debye(1.0), 0.6744156, tolerance = 1e-4)
+})
+
+test_that("debye() is vectorized over x, reproducing the whole Test_Debye array", {
+  x <- c(0.1, 1.0, 2.8, 9.5, 10, 15, 25, 100)
+  valid <- c(0.9629999, 0.6744156, 0.3099952, 0.02241066, 0.01929577, 0.005771263,
+             0.001246836, 1.948182e-05)
+  expect_equal(debye(x), valid, tolerance = 1e-4)
+})
+
+test_that("debye() rejects a negative x", {
+  expect_error(debye(-1))
+})
+
+test_that("polynomial_eval() variant = 'standard' reproduces Test_Polynomial", {
+  # Test_PolynomialRev.cs's Test_Polynomial: coeffs = c(3, 5, 7), x = 4, valid = 135.
+  expect_equal(polynomial_eval(c(3, 5, 7), 4), 135)
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "standard"), 135)
+})
+
+test_that("polynomial_eval() variant = 'reverse' reproduces Test_PolynomialRev, with and without n", {
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "reverse"), 75)
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "reverse", n = 1), 17)
+})
+
+test_that("polynomial_eval() variant = 'reverse_unit' reproduces Test_PolynomialRev_1", {
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "reverse_unit"), 139)
+})
+
+test_that("polynomial_eval() is vectorized over x", {
+  expect_equal(polynomial_eval(c(3, 5, 7), c(0, 4)), c(3, 135))
+})
+
+test_that("polynomial_eval() rejects n with a non-'reverse' variant", {
+  expect_error(polynomial_eval(c(3, 5, 7), 4, variant = "standard", n = 1), "reverse")
+  expect_error(polynomial_eval(c(3, 5, 7), 4, variant = "reverse_unit", n = 1), "reverse")
+})

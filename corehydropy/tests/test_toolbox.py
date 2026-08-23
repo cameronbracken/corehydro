@@ -9,6 +9,7 @@ from corehydropy import (
     RunningStatistics,
     autocorrelation,
     cross_correlation,
+    debye,
     dft,
     gauss_jordan,
     histogram,
@@ -23,6 +24,7 @@ from corehydropy import (
     link_names,
     linear_regression,
     percentile,
+    polynomial_eval,
     product_moments,
     qr_decomposition,
     qr_solve,
@@ -667,3 +669,49 @@ def test_gauss_jordan_solution_solves_ax_equals_b():
 def test_gauss_jordan_rejects_a_non_square_a():
     with pytest.raises(ValueError, match="square"):
         gauss_jordan([[1, 2, 3], [4, 5, 6]])
+
+
+# The "special" toolbox group (P2 "math extras" Task 10).
+
+
+def test_debye_reproduces_the_test_debye_literal_at_x_1_0():
+    # Test_SpecialFunctions.cs's Test_Debye: testX[1] = 1.0, testValid[1] = 0.6744156.
+    np.testing.assert_allclose(debye(1.0), [0.6744156], atol=1e-4)
+
+
+def test_debye_is_vectorized_over_x_reproducing_the_whole_test_debye_array():
+    x = [0.1, 1.0, 2.8, 9.5, 10, 15, 25, 100]
+    valid = [0.9629999, 0.6744156, 0.3099952, 0.02241066, 0.01929577, 0.005771263,
+             0.001246836, 1.948182e-05]
+    np.testing.assert_allclose(debye(x), valid, atol=1e-4)
+
+
+def test_debye_rejects_a_negative_x():
+    with pytest.raises(Exception):
+        debye(-1)
+
+
+def test_polynomial_eval_variant_standard_reproduces_test_polynomial():
+    # Test_SpecialFunctions.cs's Test_Polynomial: coeffs = [3, 5, 7], x = 4, valid = 135.
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4), [135])
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="standard"), [135])
+
+
+def test_polynomial_eval_variant_reverse_reproduces_test_polynomial_rev_with_and_without_n():
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="reverse"), [75])
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="reverse", n=1), [17])
+
+
+def test_polynomial_eval_variant_reverse_unit_reproduces_test_polynomial_rev_1():
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="reverse_unit"), [139])
+
+
+def test_polynomial_eval_is_vectorized_over_x():
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], [0, 4]), [3, 135])
+
+
+def test_polynomial_eval_rejects_n_with_a_non_reverse_variant():
+    with pytest.raises(ValueError, match="reverse"):
+        polynomial_eval([3, 5, 7], 4, variant="standard", n=1)
+    with pytest.raises(ValueError, match="reverse"):
+        polynomial_eval([3, 5, 7], 4, variant="reverse_unit", n=1)

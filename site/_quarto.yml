@@ -291,11 +291,13 @@ quartodoc:
     - title: Linear algebra and special functions
       desc: >-
         The ported Numerics QRDecomposition (Householder reflections) and GaussJordanElimination
-        linear-algebra routines.
+        linear-algebra routines, plus the Debye and Evaluate special functions.
       contents:
         - qr_decomposition
         - qr_solve
         - gauss_jordan
+        - debye
+        - polynomial_eval
     - title: The generator a callback is handed
       desc: >-
         Drawing from the core's seeded random number generator inside a function you write, so

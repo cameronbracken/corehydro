@@ -1502,3 +1502,84 @@ def gauss_jordan(a, b=None) -> dict:
         "inverse": np.asarray(inv["values"], dtype=float).reshape(inv["dims"][0], inv["dims"][1]),
         "solution": np.asarray(sol["values"], dtype=float).reshape(sol["dims"][0], sol["dims"][1]),
     }
+
+
+# The "special" toolbox group (P2 "math extras" Task 10): the ported Debye and Evaluate special
+# functions. Both verbs vectorize over ``x``, returning one value per element -- there is no
+# matrix result here, so no flatten/reshape step like ``linalg``'s above.
+
+
+def debye(x) -> np.ndarray:
+    """The Debye function.
+
+    Mirrors the C# ``Debye.Function``: a piecewise approximation of
+    ``D(x) = (n/x**n) * integral_0^x t**n / (e**t - 1) dt``, vectorized over ``x``.
+
+    Parameters
+    ----------
+    x : array_like
+        Non-negative values.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import debye
+    >>> debye(0.5)
+    array([0.8249631])
+    """
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    r = _toolbox_run("special", "debye", [xa], {})
+    return np.asarray(r["values"], dtype=float)
+
+
+def polynomial_eval(coefficients, x, variant: str = "standard", n: int | None = None) -> np.ndarray:
+    """Evaluate a polynomial.
+
+    Mirrors the C# ``Evaluate`` class's three polynomial evaluators (Horner's method),
+    vectorized over ``x`` against one shared ``coefficients`` array: ``variant="standard"``
+    calls ``Evaluate.Polynomial`` (coefficients in ASCENDING order, ``coefficients[0]`` the
+    constant term); ``"reverse"`` calls ``Evaluate.PolynomialRev`` (coefficients in DESCENDING
+    order, ``coefficients[0]`` the highest-order term), optionally truncated to order ``n + 1``
+    via ``n``; ``"reverse_unit"`` calls ``Evaluate.PolynomialRev_1`` (DESCENDING order with an
+    implicit leading coefficient of 1).
+
+    Parameters
+    ----------
+    coefficients : array_like
+        Polynomial coefficients.
+    x : array_like
+        Points at which to evaluate.
+    variant : {"standard", "reverse", "reverse_unit"}
+    n : int, optional
+        Redefines the polynomial's order to ``n + 1``. Only valid with ``variant="reverse"``.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import polynomial_eval
+    >>> polynomial_eval([3, 5, 7], 4)
+    array([135.])
+    >>> polynomial_eval([3, 5, 7], 4, variant="reverse")
+    array([75.])
+    >>> polynomial_eval([3, 5, 7], 4, variant="reverse", n=1)
+    array([17.])
+    """
+    if variant not in ("standard", "reverse", "reverse_unit"):
+        raise ValueError(
+            f"`variant` must be one of 'standard', 'reverse', 'reverse_unit'; got {variant!r}"
+        )
+    if n is not None and variant != "reverse":
+        raise ValueError('`n` is only valid with variant="reverse"')
+    method = {"standard": "polynomial", "reverse": "polynomial_rev",
+              "reverse_unit": "polynomial_rev_1"}[variant]
+    ca = np.atleast_1d(np.asarray(coefficients, dtype=float))
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    options = {} if n is None else {"n": int(n)}
+    r = _toolbox_run("special", method, [ca, xa], options)
+    return np.asarray(r["values"], dtype=float)

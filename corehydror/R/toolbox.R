@@ -901,3 +901,58 @@ gauss_jordan <- function(a, b = NULL) {
     solution = matrix(sol$values, nrow = sol$dims[1], ncol = sol$dims[2], byrow = TRUE)
   )
 }
+
+# The "special" toolbox group (P2 "math extras" Task 10): the ported Debye and Evaluate special
+# functions. Both verbs vectorize over `x`, returning one value per element -- there is no
+# matrix result here, so no flatten/reassemble step like `linalg`'s above.
+
+#' The Debye function
+#'
+#' Mirrors the C# `Debye.Function`: a piecewise approximation of
+#' `D(x) = (n/x^n) * integral_0^x t^n / (e^t - 1) dt`, vectorized over `x`.
+#'
+#' @param x a non-negative numeric vector.
+#' @return a numeric vector the same length as `x`.
+#' @examples
+#' debye(0.5)
+#' debye(c(0.1, 1, 10))
+#' @export
+debye <- function(x) {
+  toolbox_run("special", "debye", list(as.double(x)))$values
+}
+
+#' Evaluate a polynomial
+#'
+#' Mirrors the C# `Evaluate` class's three polynomial evaluators (Horner's method), vectorized
+#' over `x` against one shared `coefficients` vector: `variant = "standard"` calls
+#' `Evaluate.Polynomial` (coefficients in ASCENDING order, `coefficients[1]` the constant term);
+#' `"reverse"` calls `Evaluate.PolynomialRev` (coefficients in DESCENDING order,
+#' `coefficients[1]` the highest-order term), optionally truncated to order `n + 1` via `n`;
+#' `"reverse_unit"` calls `Evaluate.PolynomialRev_1` (DESCENDING order with an implicit leading
+#' coefficient of 1).
+#'
+#' @param coefficients a numeric vector of polynomial coefficients.
+#' @param x a numeric vector, the points at which to evaluate.
+#' @param variant one of `"standard"` (default), `"reverse"`, or `"reverse_unit"`.
+#' @param n an optional integer redefining the polynomial's order to `n + 1`; only valid with
+#'   `variant = "reverse"`.
+#' @return a numeric vector the same length as `x`.
+#' @examples
+#' polynomial_eval(c(3, 5, 7), 4)
+#' polynomial_eval(c(3, 5, 7), 4, variant = "reverse")
+#' polynomial_eval(c(3, 5, 7), 4, variant = "reverse", n = 1)
+#' @export
+polynomial_eval <- function(coefficients, x, variant = c("standard", "reverse", "reverse_unit"),
+                            n = NULL) {
+  variant <- match.arg(variant)
+  if (!is.null(n) && variant != "reverse") {
+    stop("`n` is only valid with variant = \"reverse\"", call. = FALSE)
+  }
+  method <- switch(variant,
+    standard = "polynomial",
+    reverse = "polynomial_rev",
+    reverse_unit = "polynomial_rev_1"
+  )
+  opts <- if (is.null(n)) list() else list(n = as.integer(n))
+  toolbox_run("special", method, list(as.double(coefficients), as.double(x)), opts)$values
+}

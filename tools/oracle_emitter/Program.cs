@@ -4750,6 +4750,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return TrendDispatch(method, data, options, asrt);
         case "linalg":
             return LinalgDispatch(method, data, options, asrt);
+        case "special":
+            return SpecialDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -4827,6 +4829,44 @@ static double LinalgDispatch(string method, List<double[]> data, JsonElement opt
         return ToolboxSelectFlat(asrt, flat, result.NumberOfRows, result.NumberOfColumns);
     }
     throw new Exception($"unknown linalg method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/special.hpp's run_special arm against the real
+// Numerics.Mathematics.SpecialFunctions.Debye/Evaluate. "debye" (data[0] = x) evaluates
+// Debye.Function at every x; "polynomial"/"polynomial_rev"/"polynomial_rev_1" (data[0] =
+// coefficients, data[1] = x) evaluate the matching Evaluate.* static at every x with the shared
+// coefficients array; "polynomial_rev" additionally reads an optional integer "n" option
+// (Evaluate.PolynomialRev's own optional n parameter, default -1).
+static double SpecialDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "debye")
+    {
+        double[] xs = data[0];
+        double[] values = xs.Select(x => Debye.Function(x)).ToArray();
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    if (method == "polynomial" || method == "polynomial_rev" || method == "polynomial_rev_1")
+    {
+        double[] coefficients = data[0];
+        double[] xs = data[1];
+        double[] values;
+        if (method == "polynomial")
+        {
+            values = xs.Select(x => Evaluate.Polynomial(coefficients, x)).ToArray();
+        }
+        else if (method == "polynomial_rev")
+        {
+            int n = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("n", out var nEl)
+                ? nEl.GetInt32() : -1;
+            values = xs.Select(x => Evaluate.PolynomialRev(coefficients, x, n)).ToArray();
+        }
+        else
+        {
+            values = xs.Select(x => Evaluate.PolynomialRev_1(coefficients, x)).ToArray();
+        }
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    throw new Exception($"unknown special method: {method}");
 }
 
 // Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor
