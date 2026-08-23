@@ -119,6 +119,7 @@ set(BF_TESTS
   test_augmented_lagrange
   test_network_optimization
   test_statistics_helpers
+  test_hypothesis_tests
 )
 
 # Sobol test takes the direction-number file as its sole argument.

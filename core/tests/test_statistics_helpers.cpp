@@ -75,12 +75,39 @@ void test_percentile_vector() {
     }
 }
 
+// Addendum (Task 1 review, folded into Task 2): the tie overload's `AlmostEquals` comparison is
+// ABSOLUTE (`|a - b| <= kDoubleMachineEpsilon`, 1.11e-16), not a plain `==`. Near a magnitude
+// like 20.0 the spacing between adjacent doubles is ~3.55e-15 -- wider than the tolerance -- so
+// no representable pair there can ever distinguish "tied under tolerance" from "tied under exact
+// equality"; every case in the test above happens to be bit-identical, so it cannot discriminate
+// the two comparisons. 1e-17 and 2e-17 can: they are distinct representable doubles (so `==`
+// would NOT tie them), but their difference, exactly 1e-17, is within the 1.11e-16 tolerance (so
+// `AlmostEquals` DOES tie them). Verified below against the average-rank formula by hand.
+void test_ranks_in_place_ties_tolerance_discriminates() {
+    std::vector<double> data{1e-17, 2e-17, 100.0};
+    std::vector<double> ties;
+    auto ranks = bfdata::ranks_in_place(data, ties);
+
+    // Under exact equality, 1e-17 != 2e-17, so no tie would form and ranks would be {1, 2, 3}.
+    // Under the tolerance test, |1e-17 - 2e-17| = 1e-17 <= 1.11e-16, so they tie and share the
+    // average rank (b + a - 1) / 2 + 1 = (2 + 0 - 1) / 2 + 1 = 1.5; the untied 100.0 gets rank 3.
+    const std::vector<double> expected_ranks{1.5, 1.5, 3.0};
+    CHECK_EQ(ranks.size(), expected_ranks.size());
+    for (std::size_t i = 0; i < expected_ranks.size(); ++i) CHECK_NEAR(ranks[i], expected_ranks[i], 0.0);
+
+    CHECK_EQ(ties.size(), data.size());
+    CHECK_NEAR(ties[1], 1.0, 0.0);  // the 2-element tie run [0, 2) closes at index i - 1 = 1
+    CHECK_NEAR(ties[0], 0.0, 0.0);
+    CHECK_NEAR(ties[2], 0.0, 0.0);
+}
+
 }  // namespace
 
 int main() {
     test_pow();
     test_mean_variance();
     test_ranks_in_place_with_ties();
+    test_ranks_in_place_ties_tolerance_discriminates();
     test_percentile_vector();
     return chtest::summary("test_statistics_helpers");
 }
