@@ -2085,7 +2085,9 @@ J-statistic) are unchanged and still correct as written.
   library has ever been pinned against — no shipped fixture carries a sample longer than a few
   hundred points, and no oracle value moved. Above the overflow the port returns the
   mathematically correct weight where C# returns a wrapped one. Guarded by
-  `core/tests/test_linear_moments_overflow.cpp`.
+  `core/tests/test_linear_moments_overflow.cpp`. Filed with RMC as
+  https://github.com/USACE-RMC/Numerics/issues/146, so the divergence retires if upstream adopts
+  the fix below.
 - **Suggested C# fix:** make the numerators `double` — `((double)i - 3) * ((double)i - 2) *
   ((double)i - 1)` — or hoist `double di = i` at the top of the loop, matching what `N` already
   is. `long` would push the failure out to about 2.1 million points rather than removing it.
