@@ -239,10 +239,13 @@ reference:
       - trend_names
   - title: Optimizers
     desc: >
-      The six ported Numerics optimizers (differential evolution, BFGS, Powell, MLSL,
-      Nelder-Mead, Brent) over a user-written R objective.
+      The fourteen ported Numerics optimizers (differential evolution, particle swarm,
+      shuffled complex evolution, simulated annealing, multi-start, MLSL, BFGS, Powell,
+      ADAM, gradient descent, Nelder-Mead, Brent, golden section, augmented Lagrange)
+      over a user-written R objective.
     contents:
       - optim_minimize
+      - optim_constraint
   - title: Root finding, integration and differentiation
     desc: >
       The ported Numerics Brent root finder, adaptive Gauss-Kronrod integrator and

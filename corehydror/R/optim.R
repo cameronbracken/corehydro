@@ -1,14 +1,16 @@
-# The general-purpose optimizer surface over the thirteen ported Numerics optimizers (DE, particle
+# The general-purpose optimizer surface over the fourteen ported Numerics optimizers (DE, particle
 # swarm, shuffled complex evolution, simulated annealing, multi-start, MLSL, BFGS, Powell, ADAM,
-# gradient descent, Nelder-Mead, Brent, golden section). Unlike every other verb in toolbox.R/gof.R
+# gradient descent, Nelder-Mead, Brent, golden section, augmented Lagrange). Unlike every other
+# verb in toolbox.R/gof.R
 # (which pass serializable data through the shared run_toolbox dispatcher), an optimizer takes a
 # live R function, so this goes through its own runner (core/include/corehydro/numerics/support/
-# optimizer_runner.hpp) and its own glue (ch_optim_run_ / ch_optim_run_grad_ in src/toolbox.cpp),
+# optimizer_runner.hpp) and its own glue (ch_optim_run_ / ch_optim_run_grad_ /
+# ch_optim_run_constrained_ in src/toolbox.cpp),
 # rather than ch_toolbox_run_. Mirrors corehydropy's src/corehydropy/optim.py verb for verb.
 
 #' Minimize or maximize a user-written objective
 #'
-#' Runs one of the thirteen ported Numerics optimizers over an R function. The optimizer's random
+#' Runs one of the fourteen ported Numerics optimizers over an R function. The optimizer's random
 #' number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 #' in corehydropy.
 #'
@@ -22,8 +24,8 @@
 #'   and `"nelder_mead"`.
 #' @param method one of `"de"` (differential evolution, the default), `"particle_swarm"`, `"sce"`
 #'   (shuffled complex evolution), `"simulated_annealing"`, `"multi_start"`, `"mlsl"`, `"bfgs"`,
-#'   `"powell"`, `"adam"`, `"gradient_descent"`, `"nelder_mead"`, `"brent"`, or
-#'   `"golden_section"`.
+#'   `"powell"`, `"adam"`, `"gradient_descent"`, `"nelder_mead"`, `"brent"`, `"golden_section"`,
+#'   or `"augmented_lagrange"` (the one constrained method).
 #' @param gradient optional function taking the parameter vector and returning one partial
 #'   derivative per parameter. Accepted only by `"adam"` and `"gradient_descent"`, an error for
 #'   every other method. Omitted, both methods differentiate the objective numerically, exactly as
@@ -47,24 +49,43 @@
 #'   DEFAULTS TO `TRUE` for the `Optimizer`-base methods (matching the ported C# `Optimizer` base),
 #'   so a successful run returns a Hessian, computed by extra objective evaluations, unless the
 #'   caller passes `control = list(compute_hessian = FALSE)` to skip it.
+#' @param constraints a list of [optim_constraint()] objects. Required by, and accepted only by,
+#'   `method = "augmented_lagrange"`.
+#' @param inner an optional named list describing the inner optimizer the augmented Lagrange
+#'   method drives, with names `method`, `initial`, `lower`, `upper`, `seed` and `control`. Any
+#'   vector left out falls back to the top-level one, so `list(method = "powell")` is enough.
+#'   Accepted only by `method = "augmented_lagrange"`; omitted, the inner optimizer is `"bfgs"`
+#'   over the top-level `initial`/`lower`/`upper`. The inner method may be any method except
+#'   `"augmented_lagrange"` itself and the two standalone classes `"nelder_mead"`/`"brent"`.
 #' @return a `corehydro_optim` list with `parameters`, `value` (the objective's own value at the
 #'   optimum, in its own sign convention -- not negated for `optim_maximize()`), `iterations`,
 #'   `function_evaluations`, `status`, and `hessian` (populated by default for every
 #'   `Optimizer`-base method; always `NULL` for `"nelder_mead"`/`"brent"`, or when
-#'   `compute_hessian` was turned off).
+#'   `compute_hessian` was turned off). For `"augmented_lagrange"` it additionally carries
+#'   `multipliers`, a list of the three Lagrange multiplier vectors -- `equality`, `less_than` and
+#'   `greater_than` -- each holding one entry per constraint of that type, in the order the
+#'   constraints were given.
 #' @examples
 #' rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
 #' fit <- optim_minimize(rosenbrock, lower = c(-5, -5), upper = c(5, 5), seed = 42)
+#' round(fit$parameters, 3)
+#'
+#' # Constrained: minimize the same function on the unit disk.
+#' con <- optim_constraint(function(p) p[1]^2 + p[2]^2, value = 2, type = "le")
+#' fit <- optim_minimize(rosenbrock, initial = c(0, 0), lower = c(-1.5, -1.5),
+#'                       upper = c(1.5, 1.5), method = "augmented_lagrange",
+#'                       constraints = list(con))
 #' round(fit$parameters, 3)
 #' @export
 optim_minimize <- function(objective, lower = NULL, upper = NULL, initial = NULL,
                            method = c("de", "particle_swarm", "sce", "simulated_annealing",
                                       "multi_start", "mlsl", "bfgs", "powell", "adam",
                                       "gradient_descent", "nelder_mead", "brent",
-                                      "golden_section"),
-                           seed = NULL, control = list(), gradient = NULL) {
+                                      "golden_section", "augmented_lagrange"),
+                           seed = NULL, control = list(), gradient = NULL,
+                           constraints = NULL, inner = NULL) {
   optim_run(objective, lower, upper, initial, match.arg(method), seed, control,
-            maximize = FALSE, gradient = gradient)
+            maximize = FALSE, gradient = gradient, constraints = constraints, inner = inner)
 }
 
 #' @rdname optim_minimize
@@ -73,13 +94,56 @@ optim_maximize <- function(objective, lower = NULL, upper = NULL, initial = NULL
                            method = c("de", "particle_swarm", "sce", "simulated_annealing",
                                       "multi_start", "mlsl", "bfgs", "powell", "adam",
                                       "gradient_descent", "nelder_mead", "brent",
-                                      "golden_section"),
-                           seed = NULL, control = list(), gradient = NULL) {
+                                      "golden_section", "augmented_lagrange"),
+                           seed = NULL, control = list(), gradient = NULL,
+                           constraints = NULL, inner = NULL) {
   optim_run(objective, lower, upper, initial, match.arg(method), seed, control,
-            maximize = TRUE, gradient = gradient)
+            maximize = TRUE, gradient = gradient, constraints = constraints, inner = inner)
 }
 
-# The three tolerance/iteration knobs every one of the thirteen optimizer classes exposes, plus the
+#' Declare one constraint for the augmented Lagrange optimizer
+#'
+#' Pairs a constraint function with the value it is compared against and the comparison type.
+#' Pass a list of these as `constraints` to [optim_minimize()] with
+#' `method = "augmented_lagrange"`.
+#'
+#' @param f a function taking a numeric parameter vector and returning a single number -- the
+#'   left-hand side of the constraint.
+#' @param value the number `f` is compared against.
+#' @param type `"eq"` for `f(x) == value`, `"le"` for `f(x) <= value`, or `"ge"` for
+#'   `f(x) >= value`.
+#' @param tolerance how far from `value` still counts as feasible, matching the upstream
+#'   `Constraint` class's own default.
+#' @return a `corehydro_constraint` list.
+#' @examples
+#' # x + y == 4
+#' optim_constraint(function(p) p[1] + p[2], value = 4, type = "eq")
+#' @export
+optim_constraint <- function(f, value, type = c("eq", "le", "ge"), tolerance = 1e-8) {
+  type <- match.arg(type)
+  if (!is.function(f)) {
+    stop("`f` must be a function taking a numeric vector and returning one number", call. = FALSE)
+  }
+  if (!is.numeric(value) || length(value) != 1L || !is.finite(value)) {
+    stop("`value` must be a single finite number", call. = FALSE)
+  }
+  if (!is.numeric(tolerance) || length(tolerance) != 1L || !is.finite(tolerance) ||
+        tolerance < 0) {
+    stop("`tolerance` must be a single non-negative number", call. = FALSE)
+  }
+  structure(list(f = f, value = as.double(value), type = type,
+                 tolerance = as.double(tolerance)),
+            class = "corehydro_constraint")
+}
+
+#' @export
+print.corehydro_constraint <- function(x, ...) {
+  op <- c(eq = "==", le = "<=", ge = ">=")[[x$type]]
+  cat(sprintf("<corehydro_constraint> f(x) %s %.8g (tolerance %.8g)\n", op, x$value, x$tolerance))
+  invisible(x)
+}
+
+# The three tolerance/iteration knobs every one of the fourteen optimizer classes exposes, plus the
 # three only the classes deriving from the ported `Optimizer` base take. "nelder_mead" and "brent"
 # are the two standalone classes (see optimizer_runner.hpp's file header); "golden_section" IS an
 # `Optimizer` subclass, so it takes the full base set.
@@ -126,22 +190,52 @@ kOptimMethods <- list(
   brent               = list(controls = kOptimScalarControls, needs_initial = FALSE,
                              stochastic = FALSE, gradient = FALSE),
   golden_section      = list(controls = kOptimBaseControls, needs_initial = FALSE,
-                             stochastic = FALSE, gradient = FALSE)
+                             stochastic = FALSE, gradient = FALSE),
+  # The one constrained method. `needs_initial` is TRUE because its default inner optimizer is
+  # BFGS over the top-level `initial`/`lower`/`upper`, and an `inner` spec that omits a vector
+  # falls back to the same ones.
+  augmented_lagrange  = list(controls = kOptimBaseControls, needs_initial = TRUE,
+                             stochastic = FALSE, gradient = FALSE, constrained = TRUE)
 )
 kOptimMethodNames <- names(kOptimMethods)
 kOptimControl <- unique(unlist(lapply(kOptimMethods, `[[`, "controls"), use.names = FALSE))
 kOptimNeedsInitial <- kOptimMethodNames[vapply(kOptimMethods, `[[`, logical(1), "needs_initial")]
 kOptimStochasticMethods <- kOptimMethodNames[vapply(kOptimMethods, `[[`, logical(1), "stochastic")]
 kOptimGradientMethods <- kOptimMethodNames[vapply(kOptimMethods, `[[`, logical(1), "gradient")]
+# The methods taking `constraints` and `inner`. Read off the same table (an absent `constrained`
+# field means FALSE) so the two arguments can never drift from the method list above.
+kOptimConstraintMethods <- kOptimMethodNames[vapply(
+  kOptimMethods, function(m) isTRUE(m$constrained), logical(1))]
+# The three ConstraintType members, in the short spelling optimizer_runner.hpp's spec grammar
+# takes: "eq" for ==, "le" for <=, "ge" for >=.
+kOptimConstraintTypes <- c("eq", "le", "ge")
+# The keys an `inner` sub-spec may carry. `seed` is there because an inner optimizer may be one of
+# the stochastic methods; the C++ runner reads exactly these.
+kOptimInnerKeys <- c("method", "initial", "lower", "upper", "control", "seed")
 # The three local methods MLSL and MultiStart actually construct. ADAM and GradientDescent are
 # LocalMethod members upstream but throw "Unsupported local method" inside both classes (see
 # optimization/support/local_method.hpp), so they are not offered here.
 kOptimLocalMethods <- c("bfgs", "nelder_mead", "powell")
 
+# Internal: the `inner` sub-spec, shaped exactly like a top-level spec (the C++ runner reads both
+# through the same reader) minus `maximize`, which AugmentedLagrange never gives its inner
+# optimizer -- it always drives it through minimize(), whatever the outer request. A vector left
+# out here falls back to the top-level one C++-side, so naming only a method is enough.
+optim_inner_spec <- function(inner) {
+  list(
+    method = inner$method,
+    lower = if (is.null(inner$lower)) NULL else spec_array(as.double(inner$lower)),
+    upper = if (is.null(inner$upper)) NULL else spec_array(as.double(inner$upper)),
+    initial = if (is.null(inner$initial)) NULL else spec_array(as.double(inner$initial)),
+    seed = if (is.null(inner$seed)) NULL else as.integer(inner$seed),
+    control = if (is.null(inner$control) || length(inner$control) == 0L) NULL else inner$control
+  )
+}
+
 # Internal: validate everything R-side, then make one call. Both verbs share this so their
 # messages and defaults can never drift apart.
 optim_run <- function(objective, lower, upper, initial, method, seed, control, maximize,
-                      gradient = NULL) {
+                      gradient = NULL, constraints = NULL, inner = NULL) {
   if (!is.function(objective)) {
     stop("`objective` must be a function taking a numeric vector and returning one number",
          call. = FALSE)
@@ -208,22 +302,78 @@ optim_run <- function(objective, lower, upper, initial, method, seed, control, m
     stop(sprintf("`initial` only applies to method(s) %s; got method \"%s\"",
                  paste(kOptimNeedsInitial, collapse = ", "), method), call. = FALSE)
   }
+  for (arg in c("constraints", "inner")) {
+    if (!is.null(get(arg)) && !method %in% kOptimConstraintMethods) {
+      stop(sprintf("`%s` only applies to method(s) %s; got method \"%s\"", arg,
+                   paste(sprintf('"%s"', kOptimConstraintMethods), collapse = ", "), method),
+           call. = FALSE)
+    }
+  }
+  if (method %in% kOptimConstraintMethods) {
+    if (!is.list(constraints) || length(constraints) == 0L) {
+      stop(sprintf(paste0("method \"%s\" needs a non-empty list of `constraints`, each built by ",
+                          "`optim_constraint()`"), method), call. = FALSE)
+    }
+    if (!all(vapply(constraints, inherits, logical(1), "corehydro_constraint"))) {
+      stop("every element of `constraints` must come from `optim_constraint()`", call. = FALSE)
+    }
+    if (!is.null(inner)) {
+      if (!is.list(inner) || is.null(inner$method)) {
+        stop("`inner` must be a named list carrying at least a `method`", call. = FALSE)
+      }
+      bad <- setdiff(names(inner), kOptimInnerKeys)
+      if (length(bad) > 0L) {
+        stop(sprintf("unknown `inner` name(s): %s. Available: %s",
+                     paste(bad, collapse = ", "), paste(kOptimInnerKeys, collapse = ", ")),
+             call. = FALSE)
+      }
+      if (!inner$method %in% kOptimMethodNames) {
+        stop(sprintf("`inner$method` must be one of %s; got \"%s\"",
+                     paste(kOptimMethodNames, collapse = ", "), inner$method), call. = FALSE)
+      }
+    }
+  }
+  # An `optim_constraint()` object has a serializable half (type/value/tolerance) and a function
+  # half, and the two are paired POSITIONALLY by the C++ runner -- the serializable halves go into
+  # the spec's `constraints` array in order, the functions into the callback list in the SAME
+  # order. Split in one pass so the two can never fall out of step.
+  constraint_specs <- NULL
+  constraint_fns <- NULL
+  if (!is.null(constraints)) {
+    constraint_specs <- spec_array(lapply(constraints, function(cn) {
+      list(type = cn$type, value = cn$value, tolerance = cn$tolerance)
+    }))
+    constraint_fns <- lapply(constraints, `[[`, "f")
+  }
   spec <- to_spec_json(list(
     method = method, maximize = maximize,
     lower = if (is.null(lower)) NULL else spec_array(as.double(lower)),
     upper = if (is.null(upper)) NULL else spec_array(as.double(upper)),
     initial = if (is.null(initial)) NULL else spec_array(as.double(initial)),
     seed = if (is.null(seed)) NULL else as.integer(seed),
+    constraints = constraint_specs,
+    inner = if (is.null(inner)) NULL else optim_inner_spec(inner),
     control = if (length(control) == 0L) NULL else control
   ))
-  # The gradient travels as a SECOND callback, not in the spec, so it needs its own entry point
-  # (cpp11 registration is by signature). An absent gradient is the ported classes' null Gradient,
-  # which falls back to numerical differentiation exactly as C# does.
-  r <- if (is.null(gradient)) {
+  # The gradient and the constraint functions travel as EXTRA callbacks, not in the spec, so each
+  # needs its own entry point (cpp11 registration is by signature). An absent gradient is the
+  # ported classes' null Gradient, which falls back to numerical differentiation exactly as C#
+  # does.
+  r <- if (!is.null(constraint_fns)) {
+    ch_optim_run_constrained_(spec, objective, constraint_fns)
+  } else if (is.null(gradient)) {
     ch_optim_run_(spec, objective)
   } else {
     ch_optim_run_grad_(spec, objective, gradient)
   }
+  # The three multiplier vectors are folded into one list, and are present only for the one method
+  # that has multipliers at all.
+  if (method %in% kOptimConstraintMethods) {
+    r$multipliers <- list(equality = r$lambda, less_than = r$mu, greater_than = r$nu)
+  }
+  r$lambda <- NULL
+  r$mu <- NULL
+  r$nu <- NULL
   if (length(r$hessian) > 0L) {
     r$hessian <- matrix(r$hessian, nrow = r$hessian_dims[[1]], ncol = r$hessian_dims[[2]],
                         byrow = TRUE)
@@ -240,5 +390,14 @@ print.corehydro_optim <- function(x, ...) {
               x$status, x$iterations, x$function_evaluations))
   cat(sprintf("  value: %.8g\n", x$value))
   cat(sprintf("  parameters: %s\n", paste(format(x$parameters, digits = 6), collapse = ", ")))
+  # Only "augmented_lagrange" has multipliers, and only the sets its own constraints populated:
+  # each of the three is sized by counting the constraints of that type, so an empty one means the
+  # problem carried no constraint of it and there is nothing to show.
+  for (set in names(x$multipliers)) {
+    if (length(x$multipliers[[set]]) > 0L) {
+      cat(sprintf("  %s multipliers: %s\n", gsub("_", " ", set),
+                  paste(format(x$multipliers[[set]], digits = 6), collapse = ", ")))
+    }
+  }
   invisible(x)
 }

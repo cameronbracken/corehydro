@@ -339,3 +339,7 @@ ch_optim_run_ <- function(spec_json, objective) {
 ch_optim_run_grad_ <- function(spec_json, objective, gradient) {
   .Call(`_corehydror_ch_optim_run_grad_`, spec_json, objective, gradient)
 }
+
+ch_optim_run_constrained_ <- function(spec_json, objective, constraints) {
+  .Call(`_corehydror_ch_optim_run_constrained_`, spec_json, objective, constraints)
+}

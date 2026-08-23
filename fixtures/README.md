@@ -1786,13 +1786,17 @@ sigma/confidence/input.
 
 ### `optimizer`
 
-The thirteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
+The fourteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
 annealing, multi-start, MLSL, BFGS, Powell, ADAM, gradient descent, Nelder-Mead, Brent, golden
-section), run against a
+section, augmented Lagrange), run against a
 NAMED built-in objective (one of
-`FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`/`Rosenbrock`/`Eggholder`/`SumOfPowerFunctions`,
+`FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`/`Rosenbrock`/`Eggholder`/`SumOfPowerFunctions`, plus the
+ten `Test_AugmentedLagrange.cs` inline functions
+`AL1_Objective`/`AL2_Objective`/`Haimes_Primary`/`Haimes_Secondary`/`RosenbrockDisk_Objective`/
+`Disk`/`SumAll`/`SumXY`/`X0`/`X1`,
 the same formulas `core/tests/optimization_test_functions.hpp` and each fixture runner's own native
-closure implement -- the three accumulating ones, `DeJong`, `Rosenbrock` and `SumOfPowerFunctions`,
+closure implement -- the accumulating ones, `DeJong`, `Rosenbrock`, `SumOfPowerFunctions`,
+`AL1_Objective`, `AL2_Objective` and `SumAll`,
 spell their sum out as an
 explicit loop in all four catalogs rather than calling `sum()`/`Sum()`, which would accumulate in a
 different precision in R) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
@@ -1827,7 +1831,9 @@ literals this way).
 
 Assertion `method` is `"value"` (the objective's own value at the optimum, in its own sign
 convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
-`"iterations"`, `"function_evaluations"` (both integer counts, so `"mode": "equal"`), or
+`"iterations"`, `"function_evaluations"` (both integer counts, so `"mode": "equal"`),
+`"multiplier"` (`args: [set, index]`, where `set` is `"lambda"` | `"mu"` | `"nu"` -- the three
+augmented Lagrange multiplier vectors, in that class's own naming), or
 `"status"` (the exact `OptimizationStatus` name).
 
 `construct.control` is optional and passes straight through as the runner's `control` object; each
@@ -1854,6 +1860,36 @@ it (1518 evaluations against 12137 for the otherwise identical `adam_fxyz`); all
 measured identical in the real C# library, in the C++ core compiled with and without
 floating-point contraction, in R and in Python. The `Grad_` prefix follows the same convention the
 `callback` kind's catalog uses, and the two catalogs are separate lookups.
+
+`construct.constraints` and `construct.inner` belong to `"augmented_lagrange"` and to nothing else.
+Each `constraints[i]` object carries a `function` key naming an entry in the SAME catalog the
+objective comes from (an objective and a constraint are the same shape, so both roles resolve out
+of one lookup -- `Disk` really is used as both, being `Test_RosenbrockDisk`'s constraint and
+`Test_MixedConstraints`'s objective written identically upstream), plus the serializable half of
+the constraint: `type` (`"eq"` | `"le"` | `"ge"`, mapping onto
+`EqualTo`/`LesserThanOrEqualTo`/`GreaterThanOrEqualTo`), `value`, and an optional `tolerance`
+(default `1E-8`). Like `objective` and `gradient`, `function` is a catalog name and NOT part of the
+runner's own grammar: each runner strips it, resolves it, and passes the callbacks through the
+constrained entry point (`ch_optim_run_constrained_` / `_core.optim_run_constrained`), where they
+pair POSITIONALLY with what is left of the `constraints` array. `inner` names the borrowed inner
+optimizer (`method` plus optional `initial`/`lower`/`upper`/`seed`/`control`, each vector falling
+back to the top-level one); omitted, it is BFGS over the top-level vectors, the shape every
+upstream C# test uses.
+
+```jsonc
+{
+  "name": "augmented_lagrange_haimes",
+  "construct": {
+    "method": "augmented_lagrange", "objective": "Haimes_Primary",
+    "initial": [5, 5], "lower": [0, 0], "upper": [10, 10],
+    "constraints": [{ "function": "Haimes_Secondary", "type": "le", "value": 13.31 }]
+  },
+  "assertions": [
+    { "method": "parameter", "args": [0], "expected": 4.5, "mode": "abs", "tol": 1e-2 },
+    { "method": "multiplier", "args": ["mu", 0], "expected": 1.67, "mode": "abs", "tol": 1e-2 }
+  ]
+}
+```
 
 ### `callback`
 

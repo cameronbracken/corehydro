@@ -1706,6 +1706,24 @@ def _optimizer_spec_json(construct):
         spec["maximize"] = bool(construct["maximize"])
     if "seed" in construct:
         spec["seed"] = int(construct["seed"])
+    # The "augmented_lagrange" method's constraints. Each entry's `function` key names a fixture
+    # catalog entry, not part of the runner's own grammar, so it is dropped here exactly as
+    # `objective`/`gradient` are; what is left pairs positionally with the callbacks.
+    if "constraints" in construct:
+        spec["constraints"] = [
+            {k: v for k, v in c.items() if k != "function"} for c in construct["constraints"]
+        ]
+    if "inner" in construct:
+        inner = construct["inner"]
+        sub = {"method": inner["method"]}
+        for key in ("lower", "upper", "initial"):
+            if key in inner:
+                sub[key] = inner[key]
+        if "seed" in inner:
+            sub["seed"] = int(inner["seed"])
+        if inner.get("control"):
+            sub["control"] = inner["control"]
+        spec["inner"] = sub
     if construct.get("control"):
         spec["control"] = construct["control"]
     return json.dumps(spec)
@@ -1738,7 +1756,62 @@ def _optimizer_fixture_objective(name):
         )
     if name == "SumOfPowerFunctions":
         return _sum_of_power_functions
+    # Test_AugmentedLagrange.cs's own inline objectives and constraint functions -- NOT from
+    # TestFunctions.cs, so each is transcribed from its [TestMethod] body term for term (the C#
+    # `Tools.Sum` is itself a plain loop over `sum += values[i]`). A constraint has the same shape
+    # as an objective, so both roles resolve out of this one catalog; `Disk` really is used as both
+    # (its formula is Test_RosenbrockDisk's constraint and Test_MixedConstraints's objective,
+    # written identically upstream).
+    if name == "AL1_Objective":
+        return _al1_objective
+    if name == "AL2_Objective":
+        return _al2_objective
+    if name == "SumAll":
+        return _sum_all
+    if name == "Haimes_Primary":
+        return lambda p: (p[0] - 2) ** 2 + (p[1] - 4) ** 2 + 5
+    if name == "Haimes_Secondary":
+        return lambda p: (p[0] - 6) ** 2 + (p[1] - 10) ** 2 + 6
+    # NOT the same expression as Rosenbrock above: the C# test writes the two-dimensional case out
+    # by hand, `(1 - x)^2` FIRST and the 100-weighted term second.
+    if name == "RosenbrockDisk_Objective":
+        return lambda p: (1 - p[0]) ** 2 + 100 * (p[1] - p[0] * p[0]) ** 2
+    if name == "Disk":
+        return lambda p: (p[0] * p[0]) + (p[1] * p[1])
+    if name == "SumXY":
+        return lambda p: p[0] + p[1]
+    if name == "X0":
+        return lambda p: p[0]
+    if name == "X1":
+        return lambda p: p[1]
     raise KeyError(f"unknown optimizer fixture objective: {name}")
+
+
+def _al1_objective(p):
+    NB = [0.0] * 3
+    for i in range(3):
+        NB[i] = (20 * p[i] - p[i] * p[i] - 24) / 1.10 ** i
+    total = 0.0
+    for v in NB:
+        total += v
+    return -total
+
+
+def _al2_objective(p):
+    NB = [0.0] * 2
+    NB[0] = 60 * p[0] - 0.5 * p[0] * p[0]
+    NB[1] = (64 * p[1] - 0.5 * p[1] * p[1]) / 1.5
+    total = 0.0
+    for v in NB:
+        total += v
+    return -total
+
+
+def _sum_all(p):
+    total = 0.0
+    for v in p:
+        total += v
+    return total
 
 
 # The optional analytic gradients fixtures/toolbox/optimizers.json names by `construct.gradient` --
@@ -1793,7 +1866,17 @@ def _run_optimizer_case(case):
     # The optional analytic gradient goes through the second binding; absent, the ported classes
     # differentiate numerically (a null C# Gradient delegate).
     gradient_name = construct.pop("gradient", None)
-    if gradient_name is None:
+    # The "augmented_lagrange" method's constraint callbacks, resolved out of the SAME catalog the
+    # objective comes from (an objective and a constraint have the same shape).
+    constraint_fns = None
+    if "constraints" in construct:
+        constraint_fns = [_optimizer_fixture_objective(c["function"])
+                          for c in construct["constraints"]]
+    if constraint_fns is not None:
+        r = _core.optim_run_constrained(_optimizer_spec_json(construct),
+                                        _optimizer_fixture_objective(objective_name),
+                                        constraint_fns)
+    elif gradient_name is None:
         r = _core.optim_run(_optimizer_spec_json(construct),
                             _optimizer_fixture_objective(objective_name))
     else:
@@ -1809,6 +1892,12 @@ def _run_optimizer_case(case):
             _check(float(r["iterations"]), a)
         elif a["method"] == "function_evaluations":
             _check(float(r["function_evaluations"]), a)
+        elif a["method"] == "multiplier":
+            # args: [set, index] -- "lambda"/"mu"/"nu", the three AugmentedLagrange multiplier
+            # vectors in the class's own naming.
+            group = a["args"][0]
+            assert group in ("lambda", "mu", "nu"), f"unknown multiplier set: {group}"
+            _check(r[group][a["args"][1]], a)
         elif a["method"] == "status":
             assert r["status"] == a["expected"]
         else:

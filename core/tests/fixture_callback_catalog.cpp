@@ -48,6 +48,22 @@ tbx::Objective optimizer_objective(const std::string& name) {
     if (name == "FX")
         return tbx::Objective(
             [](const std::vector<double>& v) { return test_functions::fx(v[0]); });
+    // Test_AugmentedLagrange.cs's own inline objectives and constraint functions (see
+    // optimization_test_functions.hpp's addition block). A constraint has the same
+    // `double(const std::vector<double>&)` shape as an objective, so both roles resolve out of
+    // this one catalog; `Disk` really is used as both (its C# formula is Test_RosenbrockDisk's
+    // constraint and Test_MixedConstraints's objective, written identically).
+    if (name == "AL1_Objective") return tbx::Objective(test_functions::al1_objective);
+    if (name == "AL2_Objective") return tbx::Objective(test_functions::al2_objective);
+    if (name == "SumAll") return tbx::Objective(test_functions::sum_all);
+    if (name == "Haimes_Primary") return tbx::Objective(test_functions::haimes_primary);
+    if (name == "Haimes_Secondary") return tbx::Objective(test_functions::haimes_secondary);
+    if (name == "RosenbrockDisk_Objective")
+        return tbx::Objective(test_functions::rosenbrock_disk_objective);
+    if (name == "Disk") return tbx::Objective(test_functions::disk);
+    if (name == "SumXY") return tbx::Objective(test_functions::sum_xy);
+    if (name == "X0") return tbx::Objective(test_functions::x0);
+    if (name == "X1") return tbx::Objective(test_functions::x1);
     throw std::runtime_error("unknown optimizer fixture objective: " + name);
 }
 

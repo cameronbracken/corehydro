@@ -372,3 +372,141 @@ test_that("`seed` is rejected for the two gradient methods", {
     )
   }
 })
+
+# --- the constrained surface (augmented Lagrange) -------------------------------------------
+#
+# Test_Haimes_5_2 from Test_AugmentedLagrange.cs, driven end to end through the public R surface:
+# the objective and the constraint are both R closures, so this exercises the two host-language
+# callbacks the arm guards, not just the C++ classes core/tests/test_augmented_lagrange.cpp
+# already covers. Every expected value below is that C# test's own literal, at its own tolerance.
+haimes_primary <- function(p) (p[1] - 2)^2 + (p[2] - 4)^2 + 5
+haimes_secondary <- function(p) (p[1] - 6)^2 + (p[2] - 10)^2 + 6
+
+test_that("augmented Lagrange reproduces Test_Haimes_5_2 through the public surface", {
+  fit <- optim_minimize(
+    haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  )
+  expect_s3_class(fit, "corehydro_optim")
+  expect_equal(fit$parameters[[1]], 4.5, tolerance = 1e-2)
+  expect_equal(fit$parameters[[2]], 7.75, tolerance = 1e-2)
+  expect_equal(fit$value, 25.31, tolerance = 1e-2)
+  expect_equal(fit$multipliers$less_than[[1]], 1.67, tolerance = 1e-2)
+  # The other two multiplier sets exist and are empty: this problem has no equality or
+  # greater-than constraint, and the three vectors are sized by COUNTING each type.
+  expect_length(fit$multipliers$equality, 0L)
+  expect_length(fit$multipliers$greater_than, 0L)
+})
+
+test_that("an explicit `inner` spec drives the same problem to the same answer", {
+  fit <- optim_minimize(
+    haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(optim_constraint(haimes_secondary, value = 13.31, type = "le")),
+    inner = list(method = "bfgs", initial = c(5, 5), lower = c(0, 0), upper = c(10, 10))
+  )
+  expect_equal(fit$parameters[[1]], 4.5, tolerance = 1e-2)
+  expect_equal(fit$parameters[[2]], 7.75, tolerance = 1e-2)
+})
+
+test_that("all three constraint types index their own multiplier vector", {
+  # Test_MixedConstraints: minimize x^2 + y^2 subject to x + y = 4, x <= 3, y >= 0.5.
+  fit <- optim_minimize(
+    function(p) p[1]^2 + p[2]^2, initial = c(1, 3), lower = c(-10, -10), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(
+      optim_constraint(function(p) p[1] + p[2], value = 4, type = "eq"),
+      optim_constraint(function(p) p[1], value = 3, type = "le"),
+      optim_constraint(function(p) p[2], value = 0.5, type = "ge")
+    )
+  )
+  expect_equal(fit$parameters[[1]], 2, tolerance = 0.1)
+  expect_equal(fit$parameters[[2]], 2, tolerance = 0.1)
+  expect_equal(fit$value, 8, tolerance = 0.5)
+  expect_length(fit$multipliers$equality, 1L)
+  expect_length(fit$multipliers$less_than, 1L)
+  expect_length(fit$multipliers$greater_than, 1L)
+})
+
+test_that("`constraints` and `inner` are rejected for every other method", {
+  con <- list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  expect_error(
+    optim_minimize(haimes_primary, lower = c(0, 0), upper = c(10, 10), method = "de", seed = 1,
+                   constraints = con),
+    "augmented_lagrange"
+  )
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "bfgs", inner = list(method = "bfgs")),
+    "augmented_lagrange"
+  )
+})
+
+test_that("augmented Lagrange requires at least one constraint", {
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "augmented_lagrange"),
+    "constraints"
+  )
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "augmented_lagrange", constraints = list()),
+    "constraints"
+  )
+})
+
+test_that("optim_constraint validates its own arguments", {
+  expect_error(optim_constraint(1, value = 1), "function")
+  expect_error(optim_constraint(haimes_secondary, value = 1, type = "lt"), "'arg'")
+  expect_error(optim_constraint(haimes_secondary, value = c(1, 2)), "single finite number")
+  expect_error(optim_constraint(haimes_secondary, value = 1, tolerance = -1), "non-negative")
+})
+
+test_that("an inner method that cannot be an inner optimizer is rejected by name", {
+  con <- list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  for (m in c("nelder_mead", "brent", "augmented_lagrange")) {
+    expect_error(
+      optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                     method = "augmented_lagrange", constraints = con,
+                     inner = list(method = m, initial = c(5, 5), lower = c(0, 0),
+                                  upper = c(10, 10))),
+      m, info = m
+    )
+  }
+})
+
+test_that("an error inside a constraint reaches the caller intact", {
+  # The constraint is the third host-language callback the optimizer surface takes, guarded
+  # through the SAME abort state as the objective (see optimizer_runner.hpp) -- so an R error
+  # raised inside it must survive AugmentedLagrange's inner optimizer's own catch-all.
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "augmented_lagrange",
+                   constraints = list(optim_constraint(function(p) stop("boom in the constraint"),
+                                                       value = 1, type = "le"))),
+    "boom in the constraint"
+  )
+})
+
+test_that("`multipliers` is absent for every unconstrained method", {
+  fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "bfgs")
+  expect_null(fit$multipliers)
+})
+
+test_that("print() shows only the multiplier sets the problem actually has", {
+  fit <- optim_minimize(
+    haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  )
+  out <- paste(capture.output(print(fit)), collapse = "\n")
+  expect_match(out, "less than multipliers")
+  expect_false(grepl("equality multipliers", out))
+  expect_false(grepl("greater than multipliers", out))
+  # An unconstrained result has no multiplier line at all.
+  plain <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                          method = "bfgs")
+  expect_false(grepl("multipliers", paste(capture.output(print(plain)), collapse = "\n")))
+})

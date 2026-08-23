@@ -49,6 +49,11 @@ static py::dict pack_optim(const tb::OptimResult& r) {
     out["status"] = r.status;
     out["hessian"] = r.hessian;
     out["hessian_dims"] = r.hessian_dims;
+    // The three Lagrange multiplier vectors, empty for every method except "augmented_lagrange";
+    // corehydropy.optim folds them into the single `multipliers` dict the user sees.
+    out["lambda"] = r.lambda;
+    out["mu"] = r.mu;
+    out["nu"] = r.nu;
     return out;
 }
 
@@ -61,7 +66,7 @@ void register_toolbox(py::module_& m) {
         },
         py::arg("group"), py::arg("method"), py::arg("data"), py::arg("options_json"));
 
-    // Runs one of the thirteen ported optimizers (corehydropy.optim) against a Python objective
+    // Runs one of the fourteen ported optimizers (corehydropy.optim) against a Python objective
     // function, converted by as_objective above. A non-scalar return raises the same "single
     // number" std::runtime_error the R glue raises. That raise (a plain C++ exception, not a Python
     // one) is still funneled through optimizer_runner.hpp's GuardedObjective exactly like a genuine
@@ -104,4 +109,24 @@ void register_toolbox(py::module_& m) {
             return pack_optim(tb::run_optimizer(spec_json, cbs));
         },
         py::arg("spec_json"), py::arg("objective"), py::arg("gradient"));
+
+    // The same, plus one Python callback per constraint: the "augmented_lagrange" method's
+    // constraint functions. A constraint has the same scalar shape as an objective, so it goes
+    // through the same as_objective conversion. The i-th element pairs POSITIONALLY with the i-th
+    // entry of the spec's `constraints` array (its type/value/tolerance half) -- corehydropy.optim
+    // splits each Constraint into those two halves in one pass, and the runner rejects a length
+    // mismatch by name. All the callbacks are guarded through ONE shared abort state inside the
+    // runner, so a Python exception in any constraint stops the objective and the other
+    // constraints from being re-entered.
+    m.def(
+        "optim_run_constrained",
+        [](const std::string& spec_json, py::function objective,
+           const std::vector<py::function>& constraints) {
+            tb::OptimCallbacks cbs;
+            cbs.objective = as_objective(objective);
+            cbs.constraints.reserve(constraints.size());
+            for (const py::function& c : constraints) cbs.constraints.push_back(as_objective(c));
+            return pack_optim(tb::run_optimizer(spec_json, cbs));
+        },
+        py::arg("spec_json"), py::arg("objective"), py::arg("constraints"));
 }

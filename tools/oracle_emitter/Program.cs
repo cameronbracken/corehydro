@@ -855,6 +855,43 @@ static double OptimizerTestSumOfPowerFunctions(double[] p)
     for (int i = 0; i < p.Length; i++) F += Math.Pow(Math.Abs(p[i]), i + 2d);
     return F;
 }
+// Test_AugmentedLagrange.cs's own inline objectives and constraint functions. Unlike everything
+// above, these do NOT come from TestFunctions.cs: the constrained tests define both inline in each
+// [TestMethod] body, so each is transcribed term for term in the C# expression order, with the two
+// accumulating ones spelled out as explicit loops (the real `Tools.Sum` is itself a plain loop over
+// `sum += values[i]`, and this emitter's catalog must evaluate what the other three catalogs do).
+static double OptimizerTestAL1Objective(double[] x)
+{
+    var NB = new double[3];
+    for (int i = 0; i < 3; i++) NB[i] = (20 * x[i] - x[i] * x[i] - 24) / Math.Pow(1.10, i);
+    double sum = 0d;
+    for (int i = 0; i < NB.Length; i++) sum += NB[i];
+    return -sum;
+}
+static double OptimizerTestAL2Objective(double[] x)
+{
+    var NB = new double[2];
+    NB[0] = 60 * x[0] - 0.5 * x[0] * x[0];
+    NB[1] = (64 * x[1] - 0.5 * x[1] * x[1]) / 1.5;
+    double sum = 0d;
+    for (int i = 0; i < NB.Length; i++) sum += NB[i];
+    return -sum;
+}
+static double OptimizerTestSumAll(double[] x)
+{
+    double sum = 0d;
+    for (int i = 0; i < x.Length; i++) sum += x[i];
+    return sum;
+}
+static double OptimizerTestHaimesPrimary(double[] x) =>
+    Math.Pow(x[0] - 2, 2) + Math.Pow(x[1] - 4, 2) + 5;
+static double OptimizerTestHaimesSecondary(double[] x) =>
+    Math.Pow(x[0] - 6, 2) + Math.Pow(x[1] - 10, 2) + 6;
+// NOT the same expression as OptimizerTestRosenbrock: the C# test writes the two-dimensional case
+// out by hand, `(1 - x)^2` FIRST and the 100-weighted term second.
+static double OptimizerTestRosenbrockDiskObjective(double[] x) =>
+    Math.Pow(1 - x[0], 2) + 100 * Math.Pow(x[1] - x[0] * x[0], 2);
+static double OptimizerTestDisk(double[] x) => (x[0] * x[0]) + (x[1] * x[1]);
 static Func<double[], double> OptimizerTestFunction(string name) => name switch
 {
     "FXYZ" => OptimizerTestFXYZ,
@@ -865,6 +902,19 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
     "Rosenbrock" => OptimizerTestRosenbrock,
     "Eggholder" => OptimizerTestEggholder,
     "SumOfPowerFunctions" => OptimizerTestSumOfPowerFunctions,
+    // A constraint has the same Func<double[], double> shape as an objective, so both roles resolve
+    // out of this one catalog; `Disk` really is used as both (its formula is Test_RosenbrockDisk's
+    // constraint and Test_MixedConstraints's objective, written identically upstream).
+    "AL1_Objective" => OptimizerTestAL1Objective,
+    "AL2_Objective" => OptimizerTestAL2Objective,
+    "SumAll" => OptimizerTestSumAll,
+    "Haimes_Primary" => OptimizerTestHaimesPrimary,
+    "Haimes_Secondary" => OptimizerTestHaimesSecondary,
+    "RosenbrockDisk_Objective" => OptimizerTestRosenbrockDiskObjective,
+    "Disk" => OptimizerTestDisk,
+    "SumXY" => p => p[0] + p[1],
+    "X0" => p => p[0],
+    "X1" => p => p[1],
     _ => throw new Exception($"unknown optimizer fixture objective: {name}")
 };
 
@@ -895,7 +945,7 @@ static Func<double[], double[]> OptimizerTestGradient(string name) => name switc
 };
 
 // Builds and configures the REAL C# optimizer an `optimizer`-kind construct names, mirroring
-// optimizer_runner.hpp's run_optimizer arm for arm: the same thirteen method names, the seed applied
+// optimizer_runner.hpp's run_optimizer arm for arm: the same fourteen method names, the seed applied
 // to whichever of the six stochastic classes was built, and every `control` key applied only when
 // present and only by the class that reads it (an absent key leaves the C# class default). Shared
 // by the "optimizer" and "toolbox_cross_language" branches below, which had carried two copies of
@@ -919,7 +969,61 @@ static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
     // catalog. A null delegate is exactly what "differentiate numerically" means to both classes.
     Func<double[], double[]>? gradient = construct.TryGetProperty("gradient", out var gradEl)
         ? OptimizerTestGradient(gradEl.GetString()!) : null;
+    JsonElement? control = construct.TryGetProperty("control", out var ctrlEl) ? ctrlEl : null;
 
+    // The one constrained method. It BORROWS an inner optimizer (built by the same BuildOne every
+    // unconstrained method goes through, so an "inner" sub-spec may name any of them, falling back
+    // to BFGS over the top-level vectors) and takes one constraint function per `constraints`
+    // entry, resolved out of the same catalog as the objective. Mirrors optimizer_runner.hpp's
+    // "augmented_lagrange" arm key for key.
+    if (method == "augmented_lagrange")
+    {
+        string innerMethod = "bfgs";
+        double[] il = lower, iu = upper, ii = initial;
+        int? iseed = null;
+        JsonElement? ictrl = null;
+        if (construct.TryGetProperty("inner", out var innerEl))
+        {
+            innerMethod = innerEl.GetProperty("method").GetString()!;
+            if (innerEl.TryGetProperty("lower", out var e1))
+                il = e1.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("upper", out var e2))
+                iu = e2.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("initial", out var e3))
+                ii = e3.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("seed", out var e4)) iseed = e4.GetInt32();
+            if (innerEl.TryGetProperty("control", out var e5)) ictrl = e5;
+        }
+        Optimizer inner = BuildOne(innerMethod, objective, il, iu, ii, iseed, ictrl, null);
+        var cons = new List<IConstraint>();
+        foreach (var c in construct.GetProperty("constraints").EnumerateArray())
+        {
+            string typeName = c.GetProperty("type").GetString()!;
+            ConstraintType ct = typeName switch
+            {
+                "eq" => ConstraintType.EqualTo,
+                "le" => ConstraintType.LesserThanOrEqualTo,
+                "ge" => ConstraintType.GreaterThanOrEqualTo,
+                _ => throw new Exception($"unknown constraint type: {typeName}")
+            };
+            double cValue = ParseNum(c.GetProperty("value"));
+            double cTol = c.TryGetProperty("tolerance", out var tolEl) ? ParseNum(tolEl) : 1E-8;
+            cons.Add(new Constraint(OptimizerTestFunction(c.GetProperty("function").GetString()!),
+                                    inner.NumberOfParameters, cValue, ct, cTol));
+        }
+        var al = new AugmentedLagrange(objective, inner, cons.ToArray());
+        ApplyOptimizerControls(al, control);
+        return al;
+    }
+    return BuildOne(method, objective, lower, upper, initial, seed, control, gradient);
+}
+
+// The per-method construction switch, split out of BuildOptimizerFromConstruct so the constrained
+// arm above can build its INNER optimizer through the identical path rather than a second copy.
+static Optimizer BuildOne(string method, Func<double[], double> objective, double[] lower,
+                          double[] upper, double[] initial, int? seed, JsonElement? control,
+                          Func<double[], double[]>? gradient)
+{
     Optimizer optimizer = method switch
     {
         "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
@@ -949,9 +1053,38 @@ static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
         else if (optimizer is SimulatedAnnealing saOptimizer) saOptimizer.PRNGSeed = seed.Value;
         else if (optimizer is MultiStart msOptimizer) msOptimizer.PRNGSeed = seed.Value;
     }
-    if (construct.TryGetProperty("control", out var controlEl))
+    ApplyOptimizerControls(optimizer, control);
+    return optimizer;
+}
+
+// Reads one Lagrange multiplier off a finished AugmentedLagrange run, for the `multiplier` fixture
+// assertion method. Named sets rather than one flat vector because the three are sized by COUNTING
+// the constraints of each type, so index 0 of "mu" is not index 0 of the constraint list.
+static double OptimizerMultiplier(Optimizer optimizer, JsonElement args)
+{
+    if (optimizer is not AugmentedLagrange al)
+        throw new Exception("the `multiplier` assertion only applies to augmented_lagrange");
+    string set = args[0].GetString()!;
+    int index = args[1].GetInt32();
+    return set switch
     {
-        foreach (var knob in controlEl.EnumerateObject())
+        "lambda" => al.Lambda[index],
+        "mu" => al.Mu[index],
+        "nu" => al.Nu[index],
+        _ => throw new Exception($"unknown multiplier set: {set}")
+    };
+}
+
+// Applies one `control` object's knobs to an already-constructed optimizer, only the keys present
+// and only on the class that reads each (an absent key leaves the C# class default). Split out
+// with BuildOne so the constrained arm can apply the OUTER control block to the AugmentedLagrange
+// itself. MultiStart sets MaxIterations in its CONSTRUCTOR, so this must stay after construction
+// exactly as the C++ runner's application does.
+static void ApplyOptimizerControls(Optimizer optimizer, JsonElement? control)
+{
+    if (control.HasValue)
+    {
+        foreach (var knob in control.Value.EnumerateObject())
         {
             switch (knob.Name)
             {
@@ -1012,7 +1145,6 @@ static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
             }
         }
     }
-    return optimizer;
 }
 
 // The callback surface, Task 1: the Test_Brent/Test_Differentiation formulas
@@ -5927,6 +6059,9 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
                     "iterations" => optimizer.Iterations,
                     "function_evaluations" => optimizer.FunctionEvaluations,
+                    // args: [set, index] -- "lambda"/"mu"/"nu", the three AugmentedLagrange
+                    // multiplier vectors in the class's own naming. Only that one class has them.
+                    "multiplier" => OptimizerMultiplier(optimizer, asrt.GetProperty("args")),
                     _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
                 };
                 if (Compare(actual, asrt)) pass++;

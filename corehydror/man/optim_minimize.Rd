@@ -12,10 +12,12 @@ optim_minimize(
   initial = NULL,
   method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
     "bfgs", "powell", "adam", "gradient_descent", "nelder_mead", "brent",
-    "golden_section"),
+    "golden_section", "augmented_lagrange"),
   seed = NULL,
   control = list(),
-  gradient = NULL
+  gradient = NULL,
+  constraints = NULL,
+  inner = NULL
 )
 
 optim_maximize(
@@ -25,10 +27,12 @@ optim_maximize(
   initial = NULL,
   method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
     "bfgs", "powell", "adam", "gradient_descent", "nelder_mead", "brent",
-    "golden_section"),
+    "golden_section", "augmented_lagrange"),
   seed = NULL,
   control = list(),
-  gradient = NULL
+  gradient = NULL,
+  constraints = NULL,
+  inner = NULL
 )
 }
 \arguments{
@@ -45,8 +49,8 @@ and \code{"nelder_mead"}.}
 
 \item{method}{one of \code{"de"} (differential evolution, the default), \code{"particle_swarm"}, \code{"sce"}
 (shuffled complex evolution), \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}, \code{"bfgs"},
-\code{"powell"}, \code{"adam"}, \code{"gradient_descent"}, \code{"nelder_mead"}, \code{"brent"}, or
-\code{"golden_section"}.}
+\code{"powell"}, \code{"adam"}, \code{"gradient_descent"}, \code{"nelder_mead"}, \code{"brent"}, \code{"golden_section"},
+or \code{"augmented_lagrange"} (the one constrained method).}
 
 \item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"particle_swarm"},
 \code{"sce"}, \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}); an error for any other method.}
@@ -73,21 +77,41 @@ caller passes \code{control = list(compute_hessian = FALSE)} to skip it.}
 derivative per parameter. Accepted only by \code{"adam"} and \code{"gradient_descent"}, an error for
 every other method. Omitted, both methods differentiate the objective numerically, exactly as
 the upstream C# classes do with a null gradient.}
+
+\item{constraints}{a list of \code{\link[=optim_constraint]{optim_constraint()}} objects. Required by, and accepted only by,
+\code{method = "augmented_lagrange"}.}
+
+\item{inner}{an optional named list describing the inner optimizer the augmented Lagrange
+method drives, with names \code{method}, \code{initial}, \code{lower}, \code{upper}, \code{seed} and \code{control}. Any
+vector left out falls back to the top-level one, so \code{list(method = "powell")} is enough.
+Accepted only by \code{method = "augmented_lagrange"}; omitted, the inner optimizer is \code{"bfgs"}
+over the top-level \code{initial}/\code{lower}/\code{upper}. The inner method may be any method except
+\code{"augmented_lagrange"} itself and the two standalone classes \code{"nelder_mead"}/\code{"brent"}.}
 }
 \value{
 a \code{corehydro_optim} list with \code{parameters}, \code{value} (the objective's own value at the
 optimum, in its own sign convention -- not negated for \code{optim_maximize()}), \code{iterations},
 \code{function_evaluations}, \code{status}, and \code{hessian} (populated by default for every
 \code{Optimizer}-base method; always \code{NULL} for \code{"nelder_mead"}/\code{"brent"}, or when
-\code{compute_hessian} was turned off).
+\code{compute_hessian} was turned off). For \code{"augmented_lagrange"} it additionally carries
+\code{multipliers}, a list of the three Lagrange multiplier vectors -- \code{equality}, \code{less_than} and
+\code{greater_than} -- each holding one entry per constraint of that type, in the order the
+constraints were given.
 }
 \description{
-Runs one of the thirteen ported Numerics optimizers over an R function. The optimizer's random
+Runs one of the fourteen ported Numerics optimizers over an R function. The optimizer's random
 number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 in corehydropy.
 }
 \examples{
 rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
 fit <- optim_minimize(rosenbrock, lower = c(-5, -5), upper = c(5, 5), seed = 42)
+round(fit$parameters, 3)
+
+# Constrained: minimize the same function on the unit disk.
+con <- optim_constraint(function(p) p[1]^2 + p[2]^2, value = 2, type = "le")
+fit <- optim_minimize(rosenbrock, initial = c(0, 0), lower = c(-1.5, -1.5),
+                      upper = c(1.5, 1.5), method = "augmented_lagrange",
+                      constraints = list(con))
 round(fit$parameters, 3)
 }

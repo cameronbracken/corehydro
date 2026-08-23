@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from corehydropy import optim_maximize, optim_minimize
+from corehydropy import Constraint, optim_maximize, optim_minimize
 
 
 _NEEDS_INITIAL = ("bfgs", "powell", "mlsl", "multi_start", "nelder_mead")
@@ -357,3 +357,130 @@ def test_seed_is_rejected_for_the_two_gradient_methods(method):
     with pytest.raises(ValueError, match="stochastic"):
         optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
                        method=method, seed=1)
+
+
+# --- the constrained surface (augmented Lagrange) -------------------------------------------
+#
+# Test_Haimes_5_2 from Test_AugmentedLagrange.cs, driven end to end through the public Python
+# surface: the objective and the constraint are both Python callables, so this exercises the two
+# host-language callbacks the arm guards, not just the C++ classes
+# core/tests/test_augmented_lagrange.cpp already covers. Every expected value below is that C#
+# test's own literal, at its own tolerance.
+def _haimes_primary(p):
+    return (p[0] - 2) ** 2 + (p[1] - 4) ** 2 + 5
+
+
+def _haimes_secondary(p):
+    return (p[0] - 6) ** 2 + (p[1] - 10) ** 2 + 6
+
+
+def test_augmented_lagrange_reproduces_haimes_5_2():
+    fit = optim_minimize(
+        _haimes_primary, initial=[5, 5], lower=[0, 0], upper=[10, 10],
+        method="augmented_lagrange",
+        constraints=[Constraint(_haimes_secondary, value=13.31, type="le")],
+    )
+    assert fit.parameters == pytest.approx([4.5, 7.75], abs=1e-2)
+    assert fit.value == pytest.approx(25.31, abs=1e-2)
+    assert fit.multipliers["less_than"][0] == pytest.approx(1.67, abs=1e-2)
+    # The other two multiplier sets exist and are empty: this problem has no equality or
+    # greater-than constraint, and the three vectors are sized by COUNTING each type.
+    assert len(fit.multipliers["equality"]) == 0
+    assert len(fit.multipliers["greater_than"]) == 0
+
+
+def test_an_explicit_inner_spec_drives_the_same_problem():
+    fit = optim_minimize(
+        _haimes_primary, initial=[5, 5], lower=[0, 0], upper=[10, 10],
+        method="augmented_lagrange",
+        constraints=[Constraint(_haimes_secondary, value=13.31, type="le")],
+        inner={"method": "bfgs", "initial": [5, 5], "lower": [0, 0], "upper": [10, 10]},
+    )
+    assert fit.parameters == pytest.approx([4.5, 7.75], abs=1e-2)
+
+
+def test_all_three_constraint_types_index_their_own_multiplier_vector():
+    # Test_MixedConstraints: minimize x^2 + y^2 subject to x + y = 4, x <= 3, y >= 0.5.
+    fit = optim_minimize(
+        lambda p: p[0] ** 2 + p[1] ** 2, initial=[1, 3], lower=[-10, -10], upper=[10, 10],
+        method="augmented_lagrange",
+        constraints=[
+            Constraint(lambda p: p[0] + p[1], value=4.0, type="eq"),
+            Constraint(lambda p: p[0], value=3.0, type="le"),
+            Constraint(lambda p: p[1], value=0.5, type="ge"),
+        ],
+    )
+    assert fit.parameters == pytest.approx([2.0, 2.0], abs=0.1)
+    assert fit.value == pytest.approx(8.0, abs=0.5)
+    assert len(fit.multipliers["equality"]) == 1
+    assert len(fit.multipliers["less_than"]) == 1
+    assert len(fit.multipliers["greater_than"]) == 1
+
+
+def test_constraints_and_inner_are_rejected_for_every_other_method():
+    con = [Constraint(_haimes_secondary, value=13.31, type="le")]
+    with pytest.raises(ValueError, match="augmented_lagrange"):
+        optim_minimize(_haimes_primary, lower=[0, 0], upper=[10, 10], method="de", seed=1,
+                       constraints=con)
+    with pytest.raises(ValueError, match="augmented_lagrange"):
+        optim_minimize(_haimes_primary, initial=[5, 5], lower=[0, 0], upper=[10, 10],
+                       method="bfgs", inner={"method": "bfgs"})
+
+
+@pytest.mark.parametrize("constraints", [None, []])
+def test_augmented_lagrange_requires_at_least_one_constraint(constraints):
+    with pytest.raises(ValueError, match="constraints"):
+        optim_minimize(_haimes_primary, initial=[5, 5], lower=[0, 0], upper=[10, 10],
+                       method="augmented_lagrange", constraints=constraints)
+
+
+def test_constraint_validates_its_own_arguments():
+    with pytest.raises(TypeError, match="callable"):
+        Constraint(1, value=1.0)
+    with pytest.raises(ValueError, match="type"):
+        Constraint(_haimes_secondary, value=1.0, type="lt")
+
+
+@pytest.mark.parametrize("method", ["nelder_mead", "brent", "augmented_lagrange"])
+def test_an_inner_method_that_cannot_be_an_inner_optimizer_is_rejected(method):
+    con = [Constraint(_haimes_secondary, value=13.31, type="le")]
+    with pytest.raises(Exception, match=method):
+        optim_minimize(_haimes_primary, initial=[5, 5], lower=[0, 0], upper=[10, 10],
+                       method="augmented_lagrange", constraints=con,
+                       inner={"method": method, "initial": [5, 5], "lower": [0, 0],
+                              "upper": [10, 10]})
+
+
+def test_an_error_inside_a_constraint_reaches_the_caller():
+    # The constraint is the third host-language callback the optimizer surface takes, guarded
+    # through the SAME abort state as the objective (see optimizer_runner.hpp) -- so a Python
+    # exception raised inside it must survive AugmentedLagrange's inner optimizer's own catch-all.
+    def boom(p):
+        raise RuntimeError("boom in the constraint")
+
+    with pytest.raises(RuntimeError, match="boom in the constraint"):
+        optim_minimize(_haimes_primary, initial=[5, 5], lower=[0, 0], upper=[10, 10],
+                       method="augmented_lagrange",
+                       constraints=[Constraint(boom, value=1.0, type="le")])
+
+
+def test_multipliers_is_none_for_every_unconstrained_method():
+    fit = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                         method="bfgs")
+    assert fit.multipliers is None
+
+
+def test_repr_shows_only_the_multiplier_sets_the_problem_has():
+    fit = optim_minimize(
+        _haimes_primary, initial=[5, 5], lower=[0, 0], upper=[10, 10],
+        method="augmented_lagrange",
+        constraints=[Constraint(_haimes_secondary, value=13.31, type="le")],
+    )
+    out = repr(fit)
+    assert "less than multipliers" in out
+    assert "equality multipliers" not in out
+    assert "greater than multipliers" not in out
+    # An unconstrained result has no multiplier line at all.
+    plain = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                           method="bfgs")
+    assert "multipliers" not in repr(plain)

@@ -400,6 +400,102 @@
       ]
     },
     {
+      "name": "augmented_lagrange_test1",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "AL1_Objective",
+        "initial": [7, 7, 8],
+        "lower": [-1.7976931348623157e+308, -1.7976931348623157e+308, -1.7976931348623157e+308],
+        "upper": [1.7976931348623157e+308, 1.7976931348623157e+308, 1.7976931348623157e+308],
+        "constraints": [{ "function": "SumAll", "type": "eq", "value": 22 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 7.583082, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "parameter", "args": [1], "expected": 7.341390, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "parameter", "args": [2], "expected": 7.075529, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "value", "expected": -188.5655, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1 -- the C# test asserts 188.5655 against -BestParameterSet.Fitness, because this objective returns a NEGATED net benefit; `value` reports the objective's own sign, so the literal is negated here and nowhere else" },
+        { "method": "multiplier", "args": ["lambda", 0], "expected": 4.833835, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_test2",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "AL2_Objective",
+        "initial": [50, 50],
+        "lower": [-1.7976931348623157e+308, -1.7976931348623157e+308],
+        "upper": [1.7976931348623157e+308, 1.7976931348623157e+308],
+        "constraints": [{ "function": "SumAll", "type": "eq", "value": 100 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 50.4, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2" },
+        { "method": "parameter", "args": [1], "expected": 49.6, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2" },
+        { "method": "value", "expected": -3050.133, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2 -- negated for the same reason as Test_1 above" },
+        { "method": "multiplier", "args": ["lambda", 0], "expected": 9.6, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_haimes",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "Haimes_Primary",
+        "initial": [5, 5], "lower": [0, 0], "upper": [10, 10],
+        "constraints": [{ "function": "Haimes_Secondary", "type": "le", "value": 13.31 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 4.5, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2" },
+        { "method": "parameter", "args": [1], "expected": 7.75, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2" },
+        { "method": "value", "expected": 25.31, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2" },
+        { "method": "multiplier", "args": ["mu", 0], "expected": 1.67, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2 -- the only upstream oracle on the \"lesser than\" multiplier set" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_rosenbrock_disk",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "RosenbrockDisk_Objective",
+        "initial": [0, 0], "lower": [-1.5, -1.5], "upper": [1.5, 1.5],
+        "constraints": [{ "function": "Disk", "type": "le", "value": 2 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk" },
+        { "method": "parameter", "args": [1], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk" },
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk" },
+        { "method": "multiplier", "args": ["mu", 0], "expected": 0.0, "mode": "abs", "tol": 0, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk -- the one upstream assertion with NO delta argument, so it is EXACT equality: the constraint never binds here, and an untouched multiplier is still the 0 the constructor set" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_mixed",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "Disk",
+        "initial": [1, 3], "lower": [-10, -10], "upper": [10, 10],
+        "constraints": [
+          { "function": "SumXY", "type": "eq", "value": 4.0 },
+          { "function": "X0", "type": "le", "value": 3.0 },
+          { "function": "X1", "type": "ge", "value": 0.5 }
+        ]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 2.0, "mode": "abs", "tol": 0.1, "source": "Test_AugmentedLagrange.Test_MixedConstraints -- the only upstream test using all three constraint types at once, and therefore the only one that indexes all three multiplier vectors. Its objective is written x[0]*x[0] + x[1]*x[1], the identical expression to Test_RosenbrockDisk's `Disk` constraint above, so one catalog entry serves both." },
+        { "method": "parameter", "args": [1], "expected": 2.0, "mode": "abs", "tol": 0.1, "source": "Test_AugmentedLagrange.Test_MixedConstraints" },
+        { "method": "value", "expected": 8.0, "mode": "abs", "tol": 0.5, "source": "Test_AugmentedLagrange.Test_MixedConstraints" },
+        { "method": "multiplier", "args": ["nu", 0], "expected": 0.0, "mode": "abs", "tol": 0, "source": "the greater-than constraint y >= 0.5 is slack at the solution y = 2, so its multiplier is never moved off the 0 the constructor set -- the assertion that the THIRD vector exists and was indexed on its own, which no upstream assertion reaches" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_haimes_inner_powell",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "Haimes_Primary",
+        "initial": [5, 5], "lower": [0, 0], "upper": [10, 10],
+        "constraints": [{ "function": "Haimes_Secondary", "type": "le", "value": 13.31 }],
+        "inner": { "method": "powell" }
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 5.4793811558833845, "mode": "abs", "tol": 1e-6, "source": "the REAL C# AugmentedLagrange over Test_Haimes_5_2 with the inner optimizer switched from the default BFGS to Powell, reproduced by the dotnet gate. No upstream test does this (all six construct a BFGS), and the switch is not cosmetic: a Powell inner converges to a DIFFERENT local solution, 28.3078 at (5.4794, 7.3469) instead of the 25.31 at (4.5, 7.75) the C# test asserts for a BFGS inner -- in C# and in the port alike, which is exactly why this case pins the C# numbers rather than that test's literals. What it adds is the only oracle on the `inner` sub-spec, including the fallback filling its omitted initial/lower/upper from the top-level ones. Tolerance 1e-6: the port reproduces the four C# values here to at worst 3.1e-8 (mu[0]: 3.5117858813163139 in C# against 3.5117858507355493 in the port), the fused-multiply-add residual core/tests/test_augmented_lagrange.cpp's header already measures for this class -- with -ffp-contract=off the port is bit-identical to C#." },
+        { "method": "parameter", "args": [1], "expected": 7.3468969075532176, "mode": "abs", "tol": 1e-6, "source": "the real C# AugmentedLagrange with a Powell inner" },
+        { "method": "value", "expected": 28.307812137705689, "mode": "abs", "tol": 1e-6, "source": "the real C# AugmentedLagrange with a Powell inner" },
+        { "method": "multiplier", "args": ["mu", 0], "expected": 3.5117858813163139, "mode": "abs", "tol": 1e-6, "source": "the real C# AugmentedLagrange with a Powell inner" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
       "name": "brent_fx_minimize",
       "construct": {
         "method": "brent", "objective": "FX",

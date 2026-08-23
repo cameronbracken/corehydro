@@ -85,16 +85,28 @@ static list pack_optim(const tb::OptimResult& r) {
     writable::integers hdims(static_cast<R_xlen_t>(r.hessian_dims.size()));
     for (std::size_t i = 0; i < r.hessian_dims.size(); ++i)
         hdims[static_cast<R_xlen_t>(i)] = r.hessian_dims[i];
+    // The three Lagrange multiplier vectors, empty for every method except "augmented_lagrange";
+    // R/optim.R folds them into the single `multipliers` list the user sees.
+    writable::doubles lambda(static_cast<R_xlen_t>(r.lambda.size()));
+    for (std::size_t i = 0; i < r.lambda.size(); ++i)
+        lambda[static_cast<R_xlen_t>(i)] = r.lambda[i];
+    writable::doubles mu(static_cast<R_xlen_t>(r.mu.size()));
+    for (std::size_t i = 0; i < r.mu.size(); ++i) mu[static_cast<R_xlen_t>(i)] = r.mu[i];
+    writable::doubles nu(static_cast<R_xlen_t>(r.nu.size()));
+    for (std::size_t i = 0; i < r.nu.size(); ++i) nu[static_cast<R_xlen_t>(i)] = r.nu[i];
     return writable::list({"parameters"_nm = params,
                            "value"_nm = writable::doubles({r.value}),
                            "iterations"_nm = writable::integers({r.iterations}),
                            "function_evaluations"_nm = writable::integers({r.function_evaluations}),
                            "status"_nm = writable::strings({r.status}),
                            "hessian"_nm = hess,
-                           "hessian_dims"_nm = hdims});
+                           "hessian_dims"_nm = hdims,
+                           "lambda"_nm = lambda,
+                           "mu"_nm = mu,
+                           "nu"_nm = nu});
 }
 
-// Runs one of the thirteen ported optimizers (R/optim.R) against an R objective function.
+// Runs one of the fourteen ported optimizers (R/optim.R) against an R objective function.
 [[cpp11::register]]
 list ch_optim_run_(std::string spec_json, function objective) {
     tb::OptimCallbacks cbs;
@@ -114,5 +126,23 @@ list ch_optim_run_grad_(std::string spec_json, function objective, function grad
     tb::OptimCallbacks cbs;
     cbs.objective = as_objective(objective);
     cbs.gradient = as_gradient(gradient);
+    return pack_optim(tb::run_optimizer(spec_json, cbs));
+}
+
+// The same, plus one R callback per constraint: the "augmented_lagrange" method's constraint
+// functions. A constraint has the same scalar shape as an objective, so it goes through the same
+// as_objective conversion. The i-th element here pairs POSITIONALLY with the i-th entry of the
+// spec's `constraints` array (its type/value/tolerance half) -- R/optim.R splits each
+// optim_constraint() object into those two halves in one pass, and the runner rejects a length
+// mismatch by name. All the callbacks are guarded through ONE shared abort state inside the
+// runner, so an R error in any constraint stops the objective and the other constraints from being
+// re-entered.
+[[cpp11::register]]
+list ch_optim_run_constrained_(std::string spec_json, function objective, list constraints) {
+    tb::OptimCallbacks cbs;
+    cbs.objective = as_objective(objective);
+    cbs.constraints.reserve(static_cast<std::size_t>(constraints.size()));
+    for (R_xlen_t i = 0; i < constraints.size(); ++i)
+        cbs.constraints.push_back(as_objective(function(constraints[i])));
     return pack_optim(tb::run_optimizer(spec_json, cbs));
 }

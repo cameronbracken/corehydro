@@ -18,7 +18,7 @@
 // `optim_minimize()`/`optim_maximize()` call always supplies the objective directly, in R or
 // Python, never by name.
 //
-// Two of the thirteen ported optimizers -- NelderMead and BrentSearch -- deliberately do NOT derive
+// Two of the fourteen ported optimizers -- NelderMead and BrentSearch -- deliberately do NOT derive
 // from the Optimizer base (see optimizer.hpp's file header); this runner handles that difference
 // explicitly rather than forcing a common base onto them. Their maximize()/minimize() have no
 // OptimizationStatus, no function_evaluations()/iterations() accessor, and (NelderMead only) no
@@ -35,8 +35,12 @@
 
 #include "corehydro/models/json_lite.hpp"
 #include "corehydro/numerics/math/optimization/adam.hpp"
+#include "corehydro/numerics/math/optimization/augmented_lagrange.hpp"
 #include "corehydro/numerics/math/optimization/bfgs.hpp"
 #include "corehydro/numerics/math/optimization/brent_search.hpp"
+#include "corehydro/numerics/math/optimization/constraint/constraint.hpp"
+#include "corehydro/numerics/math/optimization/constraint/constraint_type.hpp"
+#include "corehydro/numerics/math/optimization/constraint/i_constraint.hpp"
 #include "corehydro/numerics/math/optimization/differential_evolution.hpp"
 #include "corehydro/numerics/math/optimization/golden_section.hpp"
 #include "corehydro/numerics/math/optimization/gradient_descent.hpp"
@@ -72,12 +76,17 @@ using Objective = std::function<double(const std::vector<double>&)>;
 using Gradient = std::function<std::vector<double>(const std::vector<double>&)>;
 
 // Everything a run may need from the host language. `objective` is always required; `gradient` is
-// read only by the "adam"/"gradient_descent" methods. Every callback present is guarded, and all
-// the guards share ONE abort state, so a throw in any of them short-circuits the rest instead of
-// re-entering the host mid-unwind (see callback_guard.hpp's contract).
+// read only by the "adam"/"gradient_descent" methods, and `constraints` only by
+// "augmented_lagrange", whose spec's `constraints[i]` object pairs POSITIONALLY with
+// `constraints[i]` here (the serializable half of a constraint -- its type, value and tolerance --
+// travels in the spec; its function half travels here, because a constraint is a callable). Every
+// callback present is guarded, and all the guards share ONE abort state, so a throw in any of them
+// short-circuits the rest instead of re-entering the host mid-unwind (see callback_guard.hpp's
+// contract).
 struct OptimCallbacks {
     Objective objective;
     Gradient gradient;
+    std::vector<Objective> constraints;
 };
 
 // Flat result surface every binding and every fixture assertion reads. `hessian`/`hessian_dims`
@@ -92,6 +101,15 @@ struct OptimResult {
     std::string status = "None";
     std::vector<double> hessian;
     std::vector<int> hessian_dims;
+    // The three Lagrange multiplier vectors, in AugmentedLagrange's own naming: `lambda` for the
+    // equality constraints, `mu` for the "lesser than or equal to" ones, `nu` for the "greater
+    // than or equal to" ones. Each is sized by COUNTING the constraints of that type (see
+    // augmented_lagrange.hpp's transcription note 3), so a problem with no constraint of a type
+    // gets an empty vector for it. All three are empty for every method except
+    // "augmented_lagrange", which is the only one that has multipliers at all.
+    std::vector<double> lambda;
+    std::vector<double> mu;
+    std::vector<double> nu;
 };
 
 // Wraps the caller's objective so a host-language exception (an R error arriving as a
@@ -145,7 +163,7 @@ inline std::vector<double> spec_vector(const JsonValue& spec, const char* key) {
     return spec.at(key).as_double_vector();
 }
 
-// Applies the three tolerance/iteration knobs every one of the thirteen optimizer classes exposes
+// Applies the three tolerance/iteration knobs every one of the fourteen optimizer classes exposes
 // (max_iterations, absolute_tolerance, relative_tolerance), only when the spec's control object
 // carries the key -- an absent key leaves the ported class's own default untouched.
 template <typename TOpt>
@@ -167,6 +185,18 @@ inline opt::LocalMethod parse_local_method(const std::string& s) {
     if (s == "powell") return opt::LocalMethod::Powell;
     throw std::runtime_error("unknown local_method: " + s +
                              " (expected \"bfgs\", \"nelder_mead\" or \"powell\")");
+}
+
+// The short spec names for the three ConstraintType members, used by "augmented_lagrange"'s
+// `constraints[i].type`. Short rather than the C# enum spelling because they are what the R and
+// Python `optim_constraint()`/`Constraint` surfaces take, and those read as operators at the call
+// site ("le" for <=), not as class names.
+inline opt::ConstraintType parse_constraint_type(const std::string& s) {
+    if (s == "eq") return opt::ConstraintType::EqualTo;
+    if (s == "le") return opt::ConstraintType::LesserThanOrEqualTo;
+    if (s == "ge") return opt::ConstraintType::GreaterThanOrEqualTo;
+    throw std::runtime_error("unknown constraint type: " + s +
+                             " (expected \"eq\", \"le\" or \"ge\")");
 }
 
 // Applies the extra knobs only the real Optimizer subclasses (DE/ParticleSwarm/SCE/
@@ -208,17 +238,186 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
     }
 }
 
+// One optimizer's construction inputs, read off a spec object. "augmented_lagrange"'s `inner`
+// sub-spec has exactly the same shape as the top-level spec, so both are read by read_build() and
+// built by make_optimizer() below -- the reason the eleven Optimizer-subclass arms live in one
+// helper rather than inline in run_optimizer, where the constrained arm would have had to
+// duplicate all eleven to build its inner optimizer.
+struct OptimizerBuild {
+    std::string method;
+    std::vector<double> lower;
+    std::vector<double> upper;
+    std::vector<double> initial;
+    bool has_seed = false;
+    int seed = 0;
+    bool has_control = false;
+    JsonValue control;
+};
+
+inline OptimizerBuild read_build(const JsonValue& spec) {
+    OptimizerBuild b;
+    b.method = spec.at("method").as_string();
+    b.lower = spec_vector(spec, "lower");
+    b.upper = spec_vector(spec, "upper");
+    b.initial = spec_vector(spec, "initial");
+    b.has_seed = spec.contains("seed");
+    if (b.has_seed) b.seed = spec.at("seed").as_int();
+    b.has_control = spec.contains("control");
+    if (b.has_control) b.control = spec.at("control");
+    return b;
+}
+
+// Builds one fully configured optimizer from `b`, for the top-level dispatch AND for
+// augmented_lagrange's `inner` sub-spec. Returns NULL for the two standalone classes
+// ("nelder_mead"/"brent"), which do not derive from the Optimizer base at all (see the file
+// header) and therefore can be neither returned through this pointer nor used as an
+// AugmentedLagrange inner optimizer -- run_optimizer keeps its own arms for those two, and the
+// "augmented_lagrange" arm rejects them by name before ever calling this.
+//
+// `grad_fn` is the already-guarded analytic gradient, empty unless the caller supplied one; only
+// the "adam"/"gradient_descent" branches read it. The seed and every method-specific control key
+// are applied here on the DERIVED type (the base has neither); the six base-wide control keys are
+// applied at the bottom, after construction, because MultiStart's constructor sets max_iterations
+// to 100 itself and a caller-supplied value has to win.
+inline std::unique_ptr<opt::Optimizer> make_optimizer(const OptimizerBuild& b,
+                                                      const opt::Optimizer::Objective& adapted,
+                                                      const opt::ADAM::GradientFunction& grad_fn) {
+    const std::string& method = b.method;
+    const JsonValue& control = b.control;
+    const bool has_control = b.has_control;
+    const int Dl = static_cast<int>(b.lower.size());
+    const int Di = static_cast<int>(b.initial.size());
+    std::unique_ptr<opt::Optimizer> o;
+
+    if (method == "de") {
+        auto de = std::make_unique<opt::DifferentialEvolution>(adapted, Dl, b.lower, b.upper);
+        if (b.has_seed) de->prng_seed = b.seed;
+        if (has_control && control.contains("population_size"))
+            de->population_size = control.at("population_size").as_int();
+        o = std::move(de);
+    } else if (method == "particle_swarm") {
+        auto ps = std::make_unique<opt::ParticleSwarm>(adapted, Dl, b.lower, b.upper);
+        if (b.has_seed) ps->prng_seed = b.seed;
+        if (has_control && control.contains("population_size"))
+            ps->population_size = control.at("population_size").as_int();
+        o = std::move(ps);
+    } else if (method == "sce") {
+        auto sce = std::make_unique<opt::ShuffledComplexEvolution>(adapted, Dl, b.lower, b.upper);
+        if (b.has_seed) sce->prng_seed = b.seed;
+        if (has_control) {
+            if (control.contains("complexes")) sce->complexes = control.at("complexes").as_int();
+            // cce_iterations is a FIELD defaulting to 0 that the ctor sets to 2D + 1, so an absent
+            // key leaves the C# default in place exactly as every other control key does.
+            if (control.contains("cce_iterations"))
+                sce->cce_iterations = control.at("cce_iterations").as_int();
+            if (control.contains("tolerance_steps"))
+                sce->tolerance_steps = control.at("tolerance_steps").as_int();
+        }
+        o = std::move(sce);
+    } else if (method == "simulated_annealing") {
+        auto sa = std::make_unique<opt::SimulatedAnnealing>(adapted, Dl, b.lower, b.upper);
+        if (b.has_seed) sa->prng_seed = b.seed;
+        if (has_control) {
+            if (control.contains("initial_temperature"))
+                sa->initial_temperature = control.at("initial_temperature").as_double();
+            if (control.contains("min_temperature"))
+                sa->min_temperature = control.at("min_temperature").as_double();
+            if (control.contains("cooling_rate"))
+                sa->cooling_rate = control.at("cooling_rate").as_double();
+            if (control.contains("update_cycles"))
+                sa->update_cycles = control.at("update_cycles").as_int();
+            if (control.contains("temperature_cycles"))
+                sa->temperature_cycles = control.at("temperature_cycles").as_int();
+            // SimulatedAnnealing declares and validates tolerance_steps and then never reads it
+            // (see simulated_annealing.hpp's hazard 1); applied anyway so the class's own
+            // validation still sees what the caller asked for.
+            if (control.contains("tolerance_steps"))
+                sa->tolerance_steps = control.at("tolerance_steps").as_int();
+        }
+        o = std::move(sa);
+    } else if (method == "multi_start") {
+        auto ms = std::make_unique<opt::MultiStart>(adapted, Di, b.initial, b.lower, b.upper);
+        if (b.has_seed) ms->prng_seed = b.seed;
+        if (has_control) {
+            if (control.contains("local_method"))
+                ms->method = parse_local_method(control.at("local_method").as_string());
+            if (control.contains("local_absolute_tolerance"))
+                ms->local_absolute_tolerance = control.at("local_absolute_tolerance").as_double();
+            if (control.contains("local_relative_tolerance"))
+                ms->local_relative_tolerance = control.at("local_relative_tolerance").as_double();
+            if (control.contains("polish")) ms->polish = control.at("polish").as_bool();
+        }
+        o = std::move(ms);
+    } else if (method == "mlsl") {
+        auto mlsl = std::make_unique<opt::MLSL>(adapted, Di, b.initial, b.lower, b.upper);
+        if (b.has_seed) mlsl->prng_seed = b.seed;
+        if (has_control && control.contains("local_method"))
+            mlsl->method = parse_local_method(control.at("local_method").as_string());
+        o = std::move(mlsl);
+    } else if (method == "bfgs") {
+        o = std::make_unique<opt::BFGS>(adapted, Di, b.initial, b.lower, b.upper);
+    } else if (method == "powell") {
+        o = std::make_unique<opt::Powell>(adapted, Di, b.initial, b.lower, b.upper);
+    } else if (method == "adam" || method == "gradient_descent") {
+        // The only two methods that read `grad_fn`. Both mirror the same C# shape (a settable
+        // optional `Gradient` field; null means finite differences), so they share one branch --
+        // the classes differ only in ADAM's two extra decay factors. `alpha` is a CONSTRUCTOR
+        // argument in both, so it is read here rather than with the other control keys.
+        double alpha = 0.001;  // both ctors' own default
+        if (has_control && control.contains("alpha")) alpha = control.at("alpha").as_double();
+        if (method == "adam") {
+            auto adam =
+                std::make_unique<opt::ADAM>(adapted, Di, b.initial, b.lower, b.upper, alpha, grad_fn);
+            if (has_control) {
+                if (control.contains("beta1")) adam->beta1 = control.at("beta1").as_double();
+                if (control.contains("beta2")) adam->beta2 = control.at("beta2").as_double();
+            }
+            o = std::move(adam);
+        } else {
+            o = std::make_unique<opt::GradientDescent>(adapted, Di, b.initial, b.lower, b.upper,
+                                                       alpha, grad_fn);
+        }
+    } else if (method == "golden_section") {
+        if (b.lower.empty() || b.upper.empty())
+            throw std::runtime_error("optimizer 'golden_section' needs 'lower' and 'upper' bounds");
+        // The 1-D objective is built exactly as the "brent" arm's is, but GoldenSection IS an
+        // Optimizer subclass (unlike BrentSearch -- see the file header), so it carries the full
+        // best_parameter_set/iterations/function_evaluations/status/hessian surface and belongs
+        // here with the rest. `adapted` is captured BY VALUE so the built optimizer does not
+        // depend on this helper's argument outliving it.
+        o = std::make_unique<opt::GoldenSection>(
+            [adapted](double x) {
+                std::vector<double> v{x};
+                return adapted(v);
+            },
+            b.lower[0], b.upper[0]);
+    } else if (method == "nelder_mead" || method == "brent") {
+        return nullptr;
+    } else {
+        throw std::runtime_error("unknown optimizer method: " + method);
+    }
+
+    if (has_control) {
+        apply_common_controls(*o, control);
+        apply_optimizer_controls(*o, control);
+    }
+    return o;
+}
+
 }  // namespace detail
 
 // Runs the optimizer named by `spec_json["method"]` (one of "de", "particle_swarm", "sce",
 // "simulated_annealing", "multi_start", "mlsl", "bfgs", "powell", "adam", "gradient_descent",
-// "nelder_mead", "brent", "golden_section") against `callbacks.objective`, and returns a flat
-// OptimResult. Spec grammar:
+// "nelder_mead", "brent", "golden_section", "augmented_lagrange") against `callbacks.objective`,
+// and returns a flat OptimResult. Spec grammar:
 //
 //   {"method": "de|particle_swarm|sce|simulated_annealing|multi_start|mlsl|bfgs|powell|adam|
-//               gradient_descent|nelder_mead|brent|golden_section",
+//               gradient_descent|nelder_mead|brent|golden_section|augmented_lagrange",
 //    "lower": [...], "upper": [...], "initial": [...],
 //    "maximize": false, "seed": 12345,
+//    "constraints": [{"type": "eq|le|ge", "value": 22.0, "tolerance": 1e-8}],
+//    "inner": {"method": "bfgs", "initial": [...], "lower": [...], "upper": [...],
+//              "control": {...}},
 //    "control": {"max_iterations": 1000, "max_function_evaluations": 100000,
 //                "absolute_tolerance": 1e-8, "relative_tolerance": 1e-8,
 //                "report_failure": true, "compute_hessian": false,
@@ -244,6 +443,17 @@ void fill_optimizer_result(OptimResult& r, const TOpt& o, bool maximize) {
 // "alpha" is read by "adam" and "gradient_descent"; "beta1"/"beta2" by "adam" alone.
 // `callbacks.gradient` is likewise read only by those two methods -- absent, both fall back to the
 // ported NumericalDerivative.Gradient exactly as a null C# `Gradient` delegate does.
+//
+// "constraints" and "inner" belong to "augmented_lagrange" and to nothing else. Each
+// `constraints[i]` object carries the SERIALIZABLE half of one constraint (its type, the value it
+// is compared against, and the feasibility tolerance, default 1E-8); its FUNCTION half is
+// `callbacks.constraints[i]`, paired positionally. "inner" names the borrowed inner optimizer,
+// which may be any method except "augmented_lagrange" itself and the two standalone classes
+// ("nelder_mead"/"brent", which do not derive from the Optimizer base); each vector it omits falls
+// back to the top-level one, and an absent "inner" means BFGS over the top-level vectors, the
+// shape every upstream C# test uses. NOTE that AugmentedLagrange::optimize() always drives the
+// INNER optimizer through minimize(), whatever the outer request -- upstream behavior, mirrored,
+// not corrected.
 // Argument-shape validation beyond what the ported constructors
 // already do (missing bounds/initial, mismatched lengths) is deliberately NOT duplicated here --
 // see the file header on this being a thin dispatcher, and R/toolbox: optim_run()/
@@ -284,159 +494,17 @@ inline OptimResult run_optimizer(const std::string& spec_json, const OptimCallba
 
     OptimResult result;
 
-    if (method == "de") {
-        int D = static_cast<int>(lower.size());
-        opt::DifferentialEvolution de(adapted, D, lower, upper);
-        if (spec.contains("seed")) de.prng_seed = spec.at("seed").as_int();
-        if (has_control) {
-            detail::apply_common_controls(de, control);
-            detail::apply_optimizer_controls(de, control);
-            if (control.contains("population_size"))
-                de.population_size = control.at("population_size").as_int();
-        }
-        try {
-            if (maximize) de.maximize(); else de.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, de, maximize);
-    } else if (method == "particle_swarm") {
-        int D = static_cast<int>(lower.size());
-        opt::ParticleSwarm ps(adapted, D, lower, upper);
-        if (spec.contains("seed")) ps.prng_seed = spec.at("seed").as_int();
-        if (has_control) {
-            detail::apply_common_controls(ps, control);
-            detail::apply_optimizer_controls(ps, control);
-            if (control.contains("population_size"))
-                ps.population_size = control.at("population_size").as_int();
-        }
-        try {
-            if (maximize) ps.maximize(); else ps.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, ps, maximize);
-    } else if (method == "sce") {
-        int D = static_cast<int>(lower.size());
-        opt::ShuffledComplexEvolution sce(adapted, D, lower, upper);
-        if (spec.contains("seed")) sce.prng_seed = spec.at("seed").as_int();
-        if (has_control) {
-            detail::apply_common_controls(sce, control);
-            detail::apply_optimizer_controls(sce, control);
-            if (control.contains("complexes")) sce.complexes = control.at("complexes").as_int();
-            // cce_iterations is a FIELD defaulting to 0 that the ctor sets to 2D + 1, so an absent
-            // key leaves the C# default in place exactly as every other control key does.
-            if (control.contains("cce_iterations"))
-                sce.cce_iterations = control.at("cce_iterations").as_int();
-            if (control.contains("tolerance_steps"))
-                sce.tolerance_steps = control.at("tolerance_steps").as_int();
-        }
-        try {
-            if (maximize) sce.maximize(); else sce.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, sce, maximize);
-    } else if (method == "simulated_annealing") {
-        int D = static_cast<int>(lower.size());
-        opt::SimulatedAnnealing sa(adapted, D, lower, upper);
-        if (spec.contains("seed")) sa.prng_seed = spec.at("seed").as_int();
-        if (has_control) {
-            detail::apply_common_controls(sa, control);
-            detail::apply_optimizer_controls(sa, control);
-            if (control.contains("initial_temperature"))
-                sa.initial_temperature = control.at("initial_temperature").as_double();
-            if (control.contains("min_temperature"))
-                sa.min_temperature = control.at("min_temperature").as_double();
-            if (control.contains("cooling_rate"))
-                sa.cooling_rate = control.at("cooling_rate").as_double();
-            if (control.contains("update_cycles"))
-                sa.update_cycles = control.at("update_cycles").as_int();
-            if (control.contains("temperature_cycles"))
-                sa.temperature_cycles = control.at("temperature_cycles").as_int();
-            // SimulatedAnnealing declares and validates tolerance_steps and then never reads it
-            // (see simulated_annealing.hpp's hazard 1); applied anyway so the class's own
-            // validation still sees what the caller asked for.
-            if (control.contains("tolerance_steps"))
-                sa.tolerance_steps = control.at("tolerance_steps").as_int();
-        }
-        try {
-            if (maximize) sa.maximize(); else sa.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, sa, maximize);
-    } else if (method == "multi_start") {
+    // The eleven Optimizer-subclass methods all take the same shape: build and configure the
+    // class (detail::make_optimizer, shared with the "augmented_lagrange" arm's inner optimizer),
+    // drive it through ITS OWN minimize()/maximize(), and read the base's accessor surface.
+    // "nelder_mead" and "brent" are handled by their own arms below because neither derives from
+    // that base; "augmented_lagrange" has its own arm because it takes a borrowed inner optimizer
+    // and a set of constraint callbacks that no other method has.
+    if (method == "adam" || method == "gradient_descent") {
+        // The only two methods that take a SECOND host-language callback. Its guard shares the
+        // objective guard's abort state so a throw in either callback stops both, and so the
+        // single rethrow below covers both.
         int D = static_cast<int>(initial.size());
-        opt::MultiStart ms(adapted, D, initial, lower, upper);
-        if (spec.contains("seed")) ms.prng_seed = spec.at("seed").as_int();
-        if (has_control) {
-            // MultiStart's ctor sets max_iterations to 100 itself, so this must stay AFTER
-            // construction or a caller-supplied max_iterations would be silently overwritten.
-            detail::apply_common_controls(ms, control);
-            detail::apply_optimizer_controls(ms, control);
-            if (control.contains("local_method"))
-                ms.method = detail::parse_local_method(control.at("local_method").as_string());
-            if (control.contains("local_absolute_tolerance"))
-                ms.local_absolute_tolerance = control.at("local_absolute_tolerance").as_double();
-            if (control.contains("local_relative_tolerance"))
-                ms.local_relative_tolerance = control.at("local_relative_tolerance").as_double();
-            if (control.contains("polish")) ms.polish = control.at("polish").as_bool();
-        }
-        try {
-            if (maximize) ms.maximize(); else ms.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, ms, maximize);
-    } else if (method == "bfgs") {
-        int D = static_cast<int>(initial.size());
-        opt::BFGS bfgs(adapted, D, initial, lower, upper);
-        if (has_control) {
-            detail::apply_common_controls(bfgs, control);
-            detail::apply_optimizer_controls(bfgs, control);
-        }
-        try {
-            if (maximize) bfgs.maximize(); else bfgs.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, bfgs, maximize);
-    } else if (method == "powell") {
-        int D = static_cast<int>(initial.size());
-        opt::Powell powell(adapted, D, initial, lower, upper);
-        if (has_control) {
-            detail::apply_common_controls(powell, control);
-            detail::apply_optimizer_controls(powell, control);
-        }
-        try {
-            if (maximize) powell.maximize(); else powell.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, powell, maximize);
-    } else if (method == "adam" || method == "gradient_descent") {
-        // The only two methods that take a SECOND host-language callback. Both mirror the same C#
-        // shape (a settable optional `Gradient` field; null means finite differences), so they
-        // share one arm rather than duplicating the guard plumbing twice -- the classes differ only
-        // in ADAM's two extra decay factors and are constructed separately below.
-        int D = static_cast<int>(initial.size());
-        // Shares the objective guard's abort state so a throw in either callback stops both, and so
-        // the single guarded.rethrow_if_aborted() below covers both.
         GuardedGradient guarded_grad(callbacks.gradient, std::vector<double>{},
                                      guarded.abort_state());
         // The ported classes call the gradient unconditionally when the field is set, so the field
@@ -457,57 +525,132 @@ inline OptimResult run_optimizer(const std::string& spec_json, const OptimCallba
                 return g;
             };
         }
-        double alpha = 0.001;  // both ctors' own default
-        if (has_control && control.contains("alpha")) alpha = control.at("alpha").as_double();
-        if (method == "adam") {
-            opt::ADAM adam(adapted, D, initial, lower, upper, alpha, grad_fn);
-            if (has_control) {
-                detail::apply_common_controls(adam, control);
-                detail::apply_optimizer_controls(adam, control);
-                if (control.contains("beta1")) adam.beta1 = control.at("beta1").as_double();
-                if (control.contains("beta2")) adam.beta2 = control.at("beta2").as_double();
-            }
-            try {
-                if (maximize) adam.maximize(); else adam.minimize();
-            } catch (...) {
-                guarded.rethrow_if_aborted();
-                throw;
-            }
-            guarded.rethrow_if_aborted();
-            detail::fill_optimizer_result(result, adam, maximize);
-        } else {
-            opt::GradientDescent gd(adapted, D, initial, lower, upper, alpha, grad_fn);
-            if (has_control) {
-                detail::apply_common_controls(gd, control);
-                detail::apply_optimizer_controls(gd, control);
-            }
-            try {
-                if (maximize) gd.maximize(); else gd.minimize();
-            } catch (...) {
-                guarded.rethrow_if_aborted();
-                throw;
-            }
-            guarded.rethrow_if_aborted();
-            detail::fill_optimizer_result(result, gd, maximize);
-        }
-    } else if (method == "mlsl") {
-        int D = static_cast<int>(initial.size());
-        opt::MLSL mlsl(adapted, D, initial, lower, upper);
-        if (spec.contains("seed")) mlsl.prng_seed = spec.at("seed").as_int();
-        if (has_control) {
-            detail::apply_common_controls(mlsl, control);
-            detail::apply_optimizer_controls(mlsl, control);
-            if (control.contains("local_method"))
-                mlsl.method = detail::parse_local_method(control.at("local_method").as_string());
-        }
+        std::unique_ptr<opt::Optimizer> o =
+            detail::make_optimizer(detail::read_build(spec), adapted, grad_fn);
         try {
-            if (maximize) mlsl.maximize(); else mlsl.minimize();
+            if (maximize) o->maximize(); else o->minimize();
         } catch (...) {
             guarded.rethrow_if_aborted();
             throw;
         }
         guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, mlsl, maximize);
+        detail::fill_optimizer_result(result, *o, maximize);
+    } else if (method == "augmented_lagrange") {
+        // The constrained arm. Three things distinguish it from every other method:
+        //
+        //   1. It BORROWS an inner optimizer, whose objective AugmentedLagrange's constructor
+        //      replaces with the augmented Lagrangian (see augmented_lagrange.hpp's note 1). The
+        //      inner optimizer therefore has to outlive the solver, which the local unique_ptr
+        //      below gives it, and it is built by the same detail::make_optimizer the eleven
+        //      unconstrained methods go through -- so an "inner" sub-spec may name any of them.
+        //   2. It takes one host-language callback PER CONSTRAINT beside the objective. Each gets
+        //      its own GuardedObjective (a Constraint's function has the same const-ref scalar
+        //      shape as an objective) sharing the objective guard's abort state, so the first host
+        //      exception raised in any of them short-circuits all the rest.
+        //   3. Its result carries the three multiplier vectors, which nothing else has.
+        //
+        // The spec's `constraints[i]` object (type/value/tolerance) pairs POSITIONALLY with
+        // `callbacks.constraints[i]`; the two halves are split by the caller (R/optim.R,
+        // corehydropy/optim.py, the fixture runners) because one half is serializable and the
+        // other is a live function. That pairing is the contract, so a length mismatch is an
+        // error rather than a silent truncation.
+        if (!spec.contains("constraints") || spec.at("constraints").items().empty())
+            throw std::runtime_error(
+                "optimizer 'augmented_lagrange' needs at least one entry in 'constraints'");
+        const std::vector<JsonValue>& constraint_specs = spec.at("constraints").items();
+        if (constraint_specs.size() != callbacks.constraints.size())
+            throw std::runtime_error(
+                "'constraints' carries " +
+                std::to_string(static_cast<long long>(constraint_specs.size())) +
+                " entries but " +
+                std::to_string(static_cast<long long>(callbacks.constraints.size())) +
+                " constraint function(s) were supplied; the two pair positionally");
+
+        // The inner optimizer: the "inner" sub-spec when present, otherwise BFGS over the
+        // top-level vectors (the shape every upstream C# test uses). An "inner" sub-spec that
+        // omits a vector falls back to the top-level one, so naming only a method is enough.
+        detail::OptimizerBuild inner_build;
+        if (spec.contains("inner")) {
+            inner_build = detail::read_build(spec.at("inner"));
+            if (inner_build.lower.empty()) inner_build.lower = lower;
+            if (inner_build.upper.empty()) inner_build.upper = upper;
+            if (inner_build.initial.empty()) inner_build.initial = initial;
+        } else {
+            inner_build.method = "bfgs";
+            inner_build.lower = lower;
+            inner_build.upper = upper;
+            inner_build.initial = initial;
+        }
+        // Rejected by name BEFORE construction: AugmentedLagrange's own constructor rejects a
+        // nested one (its message names the argument, not the method), and the two standalone
+        // classes cannot be an inner optimizer at all because they do not derive from the
+        // Optimizer base -- make_optimizer returns null for them rather than throwing, so this is
+        // the one place that difference can be explained to the caller.
+        if (inner_build.method == "augmented_lagrange")
+            throw std::runtime_error(
+                "the inner optimizer cannot also be an augmented_lagrange optimizer");
+        if (inner_build.method == "nelder_mead" || inner_build.method == "brent")
+            throw std::runtime_error(
+                "optimizer '" + inner_build.method +
+                "' cannot be an augmented_lagrange inner optimizer: it does not derive from the "
+                "ported Optimizer base");
+        std::unique_ptr<opt::Optimizer> inner =
+            detail::make_optimizer(inner_build, adapted, nullptr);
+
+        // One guard per constraint, all sharing the objective guard's abort state. Held through
+        // unique_ptr so the lambdas below can capture a pointer that stays valid however the
+        // vector grows. The sentinel is NaN: unlike an objective there is no "worst" constraint
+        // value a ported consumer treats as rejected, and NaN is the one double that cannot be
+        // mistaken for a real constraint reading -- the run's result is discarded by the rethrow
+        // below in any case.
+        std::vector<std::unique_ptr<GuardedObjective>> constraint_guards;
+        std::vector<std::shared_ptr<opt::IConstraint>> constraints;
+        constraint_guards.reserve(constraint_specs.size());
+        constraints.reserve(constraint_specs.size());
+        for (std::size_t i = 0; i < constraint_specs.size(); ++i) {
+            const JsonValue& cs = constraint_specs[i];
+            opt::ConstraintType type = detail::parse_constraint_type(cs.at("type").as_string());
+            double value = cs.at("value").as_double();
+            double tolerance = cs.value_or("tolerance", 1E-8);
+            constraint_guards.push_back(std::make_unique<GuardedObjective>(
+                callbacks.constraints[i], std::numeric_limits<double>::quiet_NaN(),
+                guarded.abort_state()));
+            GuardedObjective* g = constraint_guards.back().get();
+            constraints.push_back(std::make_shared<opt::Constraint>(
+                [g](const std::vector<double>& x) { return (*g)(x); },
+                inner->number_of_parameters(), value, type, tolerance));
+        }
+
+        opt::AugmentedLagrange solver(adapted, *inner, constraints);
+        if (has_control) {
+            detail::apply_common_controls(solver, control);
+            detail::apply_optimizer_controls(solver, control);
+        }
+        try {
+            if (maximize) solver.maximize(); else solver.minimize();
+        } catch (...) {
+            // More than one guard is live here, so the abort state is asked directly rather than
+            // through whichever guard happens to be in scope -- see callback_guard.hpp's
+            // rethrow_if_aborted(state) on why picking one guard to stand in for a group is a trap.
+            support::rethrow_if_aborted(guarded.abort_state());
+            throw;
+        }
+        support::rethrow_if_aborted(guarded.abort_state());
+        detail::fill_optimizer_result(result, solver, maximize);
+        result.lambda = solver.lambda();
+        result.mu = solver.mu();
+        result.nu = solver.nu();
+    } else if (method != "nelder_mead" && method != "brent") {
+        std::unique_ptr<opt::Optimizer> o =
+            detail::make_optimizer(detail::read_build(spec), adapted, nullptr);
+        try {
+            if (maximize) o->maximize(); else o->minimize();
+        } catch (...) {
+            guarded.rethrow_if_aborted();
+            throw;
+        }
+        guarded.rethrow_if_aborted();
+        detail::fill_optimizer_result(result, *o, maximize);
     } else if (method == "nelder_mead") {
         int D = static_cast<int>(initial.size());
         if (static_cast<int>(lower.size()) != D || static_cast<int>(upper.size()) != D)
@@ -567,29 +710,6 @@ inline OptimResult run_optimizer(const std::string& spec_json, const OptimCallba
         result.value = maximize ? -brent.best_fitness() : brent.best_fitness();
         result.function_evaluations = guarded.call_count();
         result.status = "Success";
-    } else if (method == "golden_section") {
-        if (lower.empty() || upper.empty())
-            throw std::runtime_error("optimizer 'golden_section' needs 'lower' and 'upper' bounds");
-        // The 1-D objective is built exactly as the "brent" arm's is, but GoldenSection IS an
-        // Optimizer subclass (unlike BrentSearch -- see the file header), so it carries the full
-        // best_parameter_set/iterations/function_evaluations/status/hessian surface and goes
-        // through fill_optimizer_result like every other Optimizer-base method.
-        opt::GoldenSection gs(
-            [&guarded](double x) { return guarded(std::vector<double>{x}); }, lower[0], upper[0]);
-        if (has_control) {
-            detail::apply_common_controls(gs, control);
-            detail::apply_optimizer_controls(gs, control);
-        }
-        try {
-            if (maximize) gs.maximize(); else gs.minimize();
-        } catch (...) {
-            guarded.rethrow_if_aborted();
-            throw;
-        }
-        guarded.rethrow_if_aborted();
-        detail::fill_optimizer_result(result, gs, maximize);
-    } else {
-        throw std::runtime_error("unknown optimizer method: " + method);
     }
 
     return result;
@@ -598,7 +718,7 @@ inline OptimResult run_optimizer(const std::string& spec_json, const OptimCallba
 // The objective-only form, kept so every caller that needs no second callback -- which is every
 // method except "adam"/"gradient_descent" -- compiles and reads unchanged.
 inline OptimResult run_optimizer(const std::string& spec_json, const Objective& objective) {
-    return run_optimizer(spec_json, OptimCallbacks{objective, nullptr});
+    return run_optimizer(spec_json, OptimCallbacks{objective, nullptr, {}});
 }
 
 }  // namespace corehydro::numerics::support
