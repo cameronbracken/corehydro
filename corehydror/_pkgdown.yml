@@ -209,6 +209,13 @@ reference:
       - cross_correlation
       - dft
       - dft_real
+  - title: Hypothesis tests
+    desc: >
+      The twelve ported Numerics one- and two-sample parametric and nonparametric hypothesis
+      tests (t-tests, the F-test and its two-model form, Jarque-Bera, Wald-Wolfowitz, Ljung-Box,
+      Mann-Whitney, Mann-Kendall, the linear trend test).
+    contents:
+      - hypothesis_test
   - title: Interpolation and regression
     desc: >
       Histogram binning, one- and two-dimensional interpolation with optional axis transforms,

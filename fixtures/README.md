@@ -1825,6 +1825,30 @@ weights are `1/4/1/10` and pins the ORIGINAL-weight answer: honoring the weights
 defects are written up in `docs/upstream-csharp-issues.md`, and the user-facing `shortest_path()`
 verb in both packages calls `dijkstra`, never `network_solve_weights`.
 
+P4 "data and tests" (Task 3) added the `hypothesis` group, the sixteenth, over the twelve ported
+hypothesis tests (`numerics/data/hypothesis_tests.hpp`, itself a port of the C#
+`Numerics.Data.Statistics.HypothesisTests` static class). Every method but `f_models` reads one
+data vector (a one-sample test) or two (a two-sample test) and returns the 2-sided p-value with
+no `dims`/`names`, the same shape `correlation`'s methods use; `f_models` (the F-test comparing
+two nested regression models) takes NO data -- its four inputs
+(`sse_restricted`/`sse_full`/`df_restricted`/`df_full`) are all scalar options -- and returns a
+NAMED two-value result, `names = {"f_statistic", "p_value"}`, selected the same way
+`statistics.product_moments`/`l_moments` are. `one_sample_t` reads an optional `population_mean`
+option (default `0`); `ljung_box` reads an optional `lag_max` option (default `-1`, meaning "use
+the C# default rule").
+
+`fixtures/toolbox/hypothesis.json` carries one case per `Test_HypothesisTests.cs` `[TestMethod]`
+(`Test_UnimodalityTest`, `Test_GrubbsBeck`, and `Test_MultipleGrubbsBeck` excluded -- the first is
+a documented P4 severance, the other two exercise the already-ported `MultipleGrubbsBeckTest`, not
+this class). Every value is `Test_HypothesisTests.cs`'s own literal at its own tolerance; the
+`datasets` block reuses the arrays already transcribed (and independently verified byte-identical
+against the checked-out submodule) into `core/tests/test_hypothesis_tests.cpp`, including the
+69-value Harricana River record shared by `wald_wolfowitz` and `mann_kendall` and the 126-value
+noise series shared by `jarque_bera` and `ljung_box` (NOT 128 -- a documented correction to an
+earlier plan draft). Two expected values are EXPRESSIONS rather than literals in the C# source --
+Wald-Wolfowitz's `(1 - Normal.StandardCDF(1.167)) * 2` and Mann-Whitney's
+`(1 - Normal.StandardCDF(0.54)) * 2` -- each evaluated once here and pinned as a number, with the
+statistic and the expression recorded in the assertion's `source`.
 
 ### `optimizer`
 

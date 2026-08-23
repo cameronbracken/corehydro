@@ -51,6 +51,7 @@ __all__ = [
     "polynomial_eval",
     "univariate_function",
     "shortest_path",
+    "hypothesis_test",
 ]
 
 
@@ -1799,3 +1800,141 @@ def shortest_path(
     r = _toolbox_run("network", "dijkstra", [f, t, w, idx], options)
     values = np.asarray(r["values"], dtype=float)
     return values.reshape(int(r["dims"][0]), int(r["dims"][1]))
+
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# numerics/data/hypothesis_tests.hpp (a port of the C# `HypothesisTests` static class). Mirrors
+# corehydror's own hypothesis_test() verb; both packages share this signature and produce
+# identical error text so a change here is not one-sided.
+
+_HYPOTHESIS_METHODS = (
+    "one_sample_t", "equal_variance_t", "unequal_variance_t", "paired_t", "f", "f_models",
+    "jarque_bera", "wald_wolfowitz", "ljung_box", "mann_whitney", "mann_kendall", "linear_trend",
+)
+_HYPOTHESIS_TWO_SAMPLE = ("equal_variance_t", "unequal_variance_t", "paired_t", "f", "mann_whitney")
+
+
+def hypothesis_test(
+    x,
+    y=None,
+    method: str = "jarque_bera",
+    population_mean: float = 0.0,
+    lag_max: int | None = None,
+    index=None,
+    sse_restricted: float | None = None,
+    sse_full: float | None = None,
+    df_restricted: int | None = None,
+    df_full: int | None = None,
+) -> dict:
+    """Hypothesis tests.
+
+    Mirrors the C# ``HypothesisTests`` static class: twelve one- and two-sample parametric and
+    nonparametric hypothesis tests, reached through the shared ``hypothesis`` toolbox group.
+    Every method but ``"f_models"`` returns the 2-sided p-value of its test statistic;
+    ``"f_models"`` (the F-test comparing two nested regression models) additionally returns the
+    F statistic itself.
+
+    Argument use by method, and the C# guard each one inherits:
+
+    - ``"one_sample_t"``: ``x``, ``population_mean`` (default 0). Needs at least 2 observations.
+    - ``"equal_variance_t"`` / ``"unequal_variance_t"``: ``x``, ``y``. ``equal_variance_t``
+      needs a combined length of at least 3; ``unequal_variance_t`` has no length guard
+      (upstream has none either).
+    - ``"paired_t"``: ``x``, ``y``, which must be the same length.
+    - ``"f"``: ``x``, ``y``, each needing at least 2 observations.
+    - ``"f_models"``: ``sse_restricted``, ``sse_full``, ``df_restricted``, ``df_full`` (all
+      required; ``x`` and ``y`` are ignored). ``df_restricted`` must differ from ``df_full``,
+      and ``df_full`` must be positive.
+    - ``"jarque_bera"`` / ``"wald_wolfowitz"``: ``x``. No length guard.
+    - ``"ljung_box"``: ``x``, ``lag_max`` (default ``None``, meaning
+      ``floor(min(10 * log10(len(x)), len(x) - 1))``, the C# default rule).
+    - ``"mann_whitney"``: ``x``, ``y``. ``x`` must be no longer than ``y``, each must have more
+      than 3 observations, and the combined length must exceed 20.
+    - ``"mann_kendall"``: ``x``. Needs at least 10 observations.
+    - ``"linear_trend"``: ``x`` (the sample), ``index`` (default ``1..len(x)`` -- a VALUE the
+      regression is fit against, not an index into ``x``). ``index`` and ``x`` must be the same
+      length.
+
+    Parameters
+    ----------
+    x : array_like
+        The sample (the two-sample methods' first sample, or the response series for
+        ``"linear_trend"``). Ignored for ``"f_models"``.
+    y : array_like, optional
+        The second sample. Required for the two-sample methods listed above.
+    method : str
+        One of ``"one_sample_t"``, ``"equal_variance_t"``, ``"unequal_variance_t"``,
+        ``"paired_t"``, ``"f"``, ``"f_models"``, ``"jarque_bera"``, ``"wald_wolfowitz"``,
+        ``"ljung_box"``, ``"mann_whitney"``, ``"mann_kendall"``, ``"linear_trend"``.
+    population_mean : float
+        The hypothesized mean for ``"one_sample_t"``. Default 0.
+    lag_max : int, optional
+        The max lag for ``"ljung_box"``. Default ``None`` (use the C# default rule).
+    index : array_like, optional
+        The index (x-axis) vector for ``"linear_trend"``. Default ``None``, meaning
+        ``1..len(x)``.
+    sse_restricted, sse_full, df_restricted, df_full : float, optional
+        The four ``"f_models"`` inputs: the restricted and full models' sum of squared errors
+        and degrees of freedom.
+
+    Returns
+    -------
+    dict
+        ``{"p_value": ...}`` for every method but ``"f_models"``, which returns
+        ``{"f_statistic": ..., "p_value": ...}``.
+
+    Examples
+    --------
+    >>> from corehydropy import hypothesis_test
+    >>> round(
+    ...     hypothesis_test(
+    ...         [4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25], method="jarque_bera"
+    ...     )["p_value"],
+    ...     6,
+    ... )
+    0.592128
+    """
+    if method not in _HYPOTHESIS_METHODS:
+        known = ", ".join(f'"{m}"' for m in _HYPOTHESIS_METHODS)
+        raise ValueError(f'`method` must be one of {known}; got "{method}"')
+    if method in _HYPOTHESIS_TWO_SAMPLE and y is None:
+        raise ValueError(f'`y` is required for method "{method}"')
+
+    if method == "f_models":
+        if sse_restricted is None or sse_full is None or df_restricted is None or df_full is None:
+            raise ValueError(
+                "`sse_restricted`, `sse_full`, `df_restricted`, and `df_full` are all "
+                'required for method "f_models"'
+            )
+        r = _toolbox_run(
+            "hypothesis",
+            "f_models",
+            [],
+            {
+                "sse_restricted": float(sse_restricted),
+                "sse_full": float(sse_full),
+                "df_restricted": float(df_restricted),
+                "df_full": float(df_full),
+            },
+        )
+        return dict(zip(r["names"], r["values"]))
+
+    if method == "linear_trend":
+        xa = np.asarray(x, dtype=float).ravel()
+        idx = np.arange(1, xa.size + 1, dtype=float) if index is None else np.asarray(index, dtype=float).ravel()
+        r = _toolbox_run("hypothesis", "linear_trend", [idx, xa])
+        return {"p_value": r["values"][0]}
+
+    if method in _HYPOTHESIS_TWO_SAMPLE:
+        data = [np.asarray(x, dtype=float).ravel(), np.asarray(y, dtype=float).ravel()]
+    else:
+        data = [np.asarray(x, dtype=float).ravel()]
+
+    options: dict = {}
+    if method == "one_sample_t":
+        options = {"population_mean": float(population_mean)}
+    elif method == "ljung_box":
+        options = {"lag_max": float(-1 if lag_max is None else lag_max)}
+
+    r = _toolbox_run("hypothesis", method, data, options)
+    return {"p_value": r["values"][0]}

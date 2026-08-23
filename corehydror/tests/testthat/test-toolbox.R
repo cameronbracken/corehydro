@@ -829,3 +829,50 @@ test_that("shortest_path() rejects a node_count too small for the graph", {
     nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 5)), 5L
   )
 })
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# `numerics/data/hypothesis_tests.hpp`. The oracle values live in fixtures/toolbox/hypothesis.json;
+# the assertions below are the same C# literals scraped from
+# Test_Numerics/Data/Statistics/Test_HypothesisTests.cs and cover the binding surface (return
+# shape, the `index`/1-based default, argument validation) rather than re-pinning the tests.
+
+harricana69 <- c(
+  122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8,
+  149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161,
+  201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230,
+  158, 262, 154, 164, 182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173,
+  174
+)
+
+test_that("hypothesis_test() reproduces Test_MannKendall", {
+  r <- hypothesis_test(harricana69, method = "mann_kendall")
+  expect_equal(unname(r[["p_value"]]), 0.7757, tolerance = 1e-4)
+})
+
+test_that("hypothesis_test() method = 'f_models' returns a length-2 named result", {
+  r <- hypothesis_test(0, method = "f_models", sse_restricted = 1224.32, sse_full = 720.27,
+                       df_restricted = 49, df_full = 48)
+  expect_identical(names(r), c("f_statistic", "p_value"))
+  expect_equal(unname(r[["f_statistic"]]), 33.5899, tolerance = 1e-3)
+  expect_equal(unname(r[["p_value"]]), 0, tolerance = 1e-6)
+})
+
+test_that("hypothesis_test() method = 'linear_trend' defaults index to seq_along(x)", {
+  time <- 1:100
+  x <- cos(time)
+  r1 <- hypothesis_test(x, method = "linear_trend")
+  r2 <- hypothesis_test(x, method = "linear_trend", index = time)
+  expect_equal(unname(r1[["p_value"]]), unname(r2[["p_value"]]))
+  expect_equal(unname(r1[["p_value"]]), 0.9092, tolerance = 1e-4)
+})
+
+test_that("hypothesis_test() validates its arguments", {
+  expect_error(hypothesis_test(c(1, 2, 3), method = "equal_variance_t"),
+               "`y` is required")
+  expect_error(
+    hypothesis_test(0, method = "f_models", sse_restricted = 1224.32, df_restricted = 49,
+                    df_full = 48),
+    "sse_full"
+  )
+  expect_error(hypothesis_test(c(1, 2, 3), method = "not_a_method"), "must be one of")
+})

@@ -13,6 +13,7 @@ from corehydropy import (
     dft,
     gauss_jordan,
     histogram,
+    hypothesis_test,
     interpolate,
     interpolate_2d,
     joint_probability,
@@ -897,3 +898,50 @@ def test_shortest_path_rejects_a_node_count_too_small_for_the_graph():
     assert shortest_path(
         [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=5
     ).shape == (5, 3)
+
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# numerics/data/hypothesis_tests.hpp. The oracle values live in fixtures/toolbox/hypothesis.json;
+# the assertions below are the same C# literals scraped from
+# Test_Numerics/Data/Statistics/Test_HypothesisTests.cs and cover the binding surface (return
+# shape, the 1-based `index` default, argument validation) rather than re-pinning the tests.
+# Mirrors corehydror's test-toolbox.R assertion for assertion.
+
+HARRICANA69 = [
+    122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8,
+    149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161,
+    201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230,
+    158, 262, 154, 164, 182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173,
+    174,
+]
+
+
+def test_hypothesis_test_reproduces_test_mann_kendall():
+    r = hypothesis_test(HARRICANA69, method="mann_kendall")
+    assert r["p_value"] == pytest.approx(0.7757, abs=1e-4)
+
+
+def test_hypothesis_test_f_models_returns_a_length_2_named_result():
+    r = hypothesis_test(0, method="f_models", sse_restricted=1224.32, sse_full=720.27,
+                        df_restricted=49, df_full=48)
+    assert set(r.keys()) == {"f_statistic", "p_value"}
+    assert r["f_statistic"] == pytest.approx(33.5899, abs=1e-3)
+    assert r["p_value"] == pytest.approx(0, abs=1e-6)
+
+
+def test_hypothesis_test_linear_trend_defaults_index_to_1_based_range():
+    time = list(range(1, 101))
+    x = [np.cos(t) for t in time]
+    r1 = hypothesis_test(x, method="linear_trend")
+    r2 = hypothesis_test(x, method="linear_trend", index=time)
+    assert r1["p_value"] == pytest.approx(r2["p_value"])
+    assert r1["p_value"] == pytest.approx(0.9092, abs=1e-4)
+
+
+def test_hypothesis_test_validates_its_arguments():
+    with pytest.raises(ValueError, match="`y` is required"):
+        hypothesis_test([1, 2, 3], method="equal_variance_t")
+    with pytest.raises(ValueError, match="sse_full"):
+        hypothesis_test(0, method="f_models", sse_restricted=1224.32, df_restricted=49, df_full=48)
+    with pytest.raises(ValueError, match="must be one of"):
+        hypothesis_test([1, 2, 3], method="not_a_method")

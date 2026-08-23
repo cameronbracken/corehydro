@@ -5061,6 +5061,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return FunctionsDispatch(method, data, options, asrt);
         case "network":
             return NetworkDispatch(method, data, options, asrt);
+        case "hypothesis":
+            return HypothesisDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -5234,6 +5236,58 @@ static double SpecialDispatch(string method, List<double[]> data, JsonElement op
         return ToolboxSelectFlatNoDims(asrt, values);
     }
     throw new Exception($"unknown special method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/hypothesis.hpp's run_hypothesis arm against the real
+// Numerics.Data.Statistics.HypothesisTests. Every method but "f_models" reads its data vector(s)
+// (data[0] for a one-sample test, data[0]/data[1] for a two-sample test) and returns the scalar
+// p-value through ToolboxSelectFlatNoDims (mirroring detail::scalar); "f_models" takes NO data
+// (its four inputs are options) and reads index/label directly out of a two-element named
+// {f_statistic, p_value} array, exactly as StatisticsDispatch's product_moments/l_moments do.
+static double HypothesisDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "one_sample_t")
+    {
+        double populationMean = options.ValueKind == JsonValueKind.Object &&
+                                options.TryGetProperty("population_mean", out var pm)
+            ? pm.GetDouble() : 0d;
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.OneSampleTtest(data[0], populationMean) });
+    }
+    if (method == "equal_variance_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.EqualVarianceTtest(data[0], data[1]) });
+    if (method == "unequal_variance_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.UnequalVarianceTtest(data[0], data[1]) });
+    if (method == "paired_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.PairedTtest(data[0], data[1]) });
+    if (method == "f")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.Ftest(data[0], data[1]) });
+    if (method == "f_models")
+    {
+        double sseRestricted = options.GetProperty("sse_restricted").GetDouble();
+        double sseFull = options.GetProperty("sse_full").GetDouble();
+        int dfRestricted = options.GetProperty("df_restricted").GetInt32();
+        int dfFull = options.GetProperty("df_full").GetInt32();
+        HypothesisTests.FtestModels(sseRestricted, sseFull, dfRestricted, dfFull, out double fStat, out double pValue);
+        return ToolboxSelectNamed(asrt, new[] { "f_statistic", "p_value" }, new[] { fStat, pValue });
+    }
+    if (method == "jarque_bera")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.JarqueBeraTest(data[0]) });
+    if (method == "wald_wolfowitz")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.WaldWolfowitzTest(data[0]) });
+    if (method == "mann_kendall")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.MannKendallTest(data[0]) });
+    if (method == "ljung_box")
+    {
+        int lagMax = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("lag_max", out var lm)
+            ? lm.GetInt32() : -1;
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.LjungBoxTest(data[0], lagMax) });
+    }
+    if (method == "mann_whitney")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.MannWhitneyTest(data[0], data[1]) });
+    if (method == "linear_trend")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.LinearTrendTest(data[0], data[1]) });
+    throw new Exception($"unknown hypothesis method: {method}");
 }
 
 // Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor
