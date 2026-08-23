@@ -1756,6 +1756,34 @@ hand-computed formula over one shared `coeffs = [3, 5, 7]`, `x = 4` (`Test_Polyn
 covers the optional `n = 1` argument), asserted EXACTLY (`tol: 0`) since that arithmetic is
 integer-valued with no rounding.
 
+Task 11 added the `functions` group over the two non-tabular `IUnivariateFunction`
+implementations, `LinearFunction` and `PowerFunction` (`numerics/functions/`). `function` selects
+which to build (`"linear"` | `"power"`); `parameters` is a POSITIONAL array in
+`set_parameters`'s own order (linear: `[alpha, beta, sigma]`; power: `[alpha, beta, xi, sigma]`)
+-- unlike `link`'s named `parameters` object, both functions here take one fixed, ordered list, so
+a positional array is unambiguous. `is_inverse` (power-only, `PowerFunction.IsInverse`) is
+scope-checked exactly as `link`'s `inner` key is scoped to `"Centered"`: present for `"linear"`,
+the runner throws. `confidence_level`'s mere PRESENCE (not its value) switches the built function
+to non-deterministic before `parameters` is applied, mirroring every non-deterministic C#
+constructor overload (the one that takes `sigma`); its absence means deterministic. `evaluate`/
+`inverse` (`data: [x]`) both vectorize over `x` and return one value per element, the same shape
+`link`'s three methods use. The severed third implementation, `TabularFunction`, depends on the
+unported Paired Data subsystem and is not exposed here -- see `upstream/CLAUDE.md`.
+`fixtures/toolbox/univariate_functions.json` is the one file of this group: most cases transcribe
+`Test_Functions.cs`'s own literals directly (`Test_Linear_Function`/`Test_Power_Function`/
+`Test_InversePower_Function`'s `Function()` values, including their `ConfidenceLevel = 0.75`
+branches) or the intermediate `Function()` value the two `Test_*_Inverse` round-trip methods
+compute but never assert as a literal (only the final `InverseFunction(Function(x)) == x` identity
+is asserted there, so the intermediate is instead the same closed-form arithmetic the deterministic
+branch evaluates: `alpha + beta*x` for linear, `alpha*(x-xi)^beta` for power). The two
+`*_confidence_inverse` cases -- `InverseFunction()` under a set `ConfidenceLevel`, a combination
+`Test_Functions.cs` never asserts as a literal -- are curated via `oracle_emitter --dump` against
+the real C# classes, per the `bivariate_copula`/`multivariate_distribution` curation convention
+above; `power_confidence_inverse`'s dumped value coincides with `Test_InversePower_Function`'s own
+`y3` literal, because `PowerFunction.InverseFunction()`'s `IsInverse = false` branch is
+algebraically identical to `Function()`'s `IsInverse = true` branch for the same alpha/beta/xi/
+sigma/confidence/input.
+
 ### `optimizer`
 
 The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a

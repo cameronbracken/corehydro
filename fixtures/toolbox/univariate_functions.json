@@ -1,0 +1,136 @@
+{
+ "kind": "toolbox",
+ "group": "functions",
+ "source": "Numerics/Functions/LinearFunction.cs, PowerFunction.cs; Test_Numerics/Functions/Test_Functions.cs (Test_Linear_Function, Test_Linear_Function_Inverse, Test_Power_Function, Test_Power_Function_Inverse, Test_InversePower_Function, Test_InversePower_Function_Inverse).",
+ "reference": "Numerics @ 2a0357a. Every case whose \"source\" names a Test_Functions.cs method transcribes that method's own literal (or, for the two Test_*_Inverse round-trip methods, the intermediate Function() value computed by the SAME closed-form arithmetic the C# deterministic branch evaluates -- alpha + beta*x for linear, alpha*(x-xi)^beta for power -- since only the final round-trip identity, not the intermediate value, is a literal in the C# test). The two \"*_confidence_inverse\" cases exercise InverseFunction() under a set ConfidenceLevel, a combination Test_Functions.cs never asserts as a literal (it only asserts the Function()-then-InverseFunction() round trip recovers the original x, at ConfidenceLevel 0.75, for a DIFFERENT alpha/beta/sigma/xi than used here) -- curated via oracle_emitter --dump against the real C# LinearFunction/PowerFunction, per the fixtures/README.md bivariate_copula/multivariate_distribution curation convention.",
+ "cases": [
+  {
+   "name": "linear_default_deterministic",
+   "data": [[6]],
+   "options": {"function": "linear", "parameters": [0, 1, 0]},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 6, "mode": "equal", "source": "Test_Linear_Function (default ctor: alpha=0, beta=1)"}
+   ]
+  },
+  {
+   "name": "linear_evaluate",
+   "data": [[6]],
+   "options": {"function": "linear", "parameters": [-2, 5, 3]},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 28, "mode": "equal", "source": "Test_Linear_Function (valid1 = 5*6 + -2, func1/func2 with no ConfidenceLevel set)"}
+   ]
+  },
+  {
+   "name": "linear_confidence_evaluate",
+   "data": [[6]],
+   "options": {"function": "linear", "parameters": [-2, 5, 3], "confidence_level": 0.75},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 30.0234692505882, "mode": "abs", "tol": 1e-6, "source": "Test_Linear_Function (func2.ConfidenceLevel = 0.75; found using R's norminv())"}
+   ]
+  },
+  {
+   "name": "linear_round_trip_evaluate",
+   "data": [[400]],
+   "options": {"function": "linear", "parameters": [10, 0.5, 20]},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 210, "mode": "abs", "tol": 1e-9, "source": "Test_Linear_Function_Inverse (computed: alpha + beta*x = 10 + 0.5*400, the deterministic Function() value the test's own y is not itself asserted against)"}
+   ]
+  },
+  {
+   "name": "linear_round_trip_inverse",
+   "data": [[210]],
+   "options": {"function": "linear", "parameters": [10, 0.5, 20]},
+   "assertions": [
+    {"method": "inverse", "index": 0, "expected": 400, "mode": "abs", "tol": 1e-6, "source": "Test_Linear_Function_Inverse (InverseFunction(Function(400)) == 400)"}
+   ]
+  },
+  {
+   "name": "linear_confidence_inverse",
+   "data": [[6]],
+   "options": {"function": "linear", "parameters": [-2, 5, 3], "confidence_level": 0.75},
+   "assertions": [
+    {"method": "inverse", "index": 0, "expected": 1.195306149882351, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump (Test_Functions.cs never asserts InverseFunction() under a set ConfidenceLevel as a literal, only the round-trip identity at a different alpha/beta/sigma)"}
+   ]
+  },
+  {
+   "name": "power_default_deterministic",
+   "data": [[6]],
+   "options": {"function": "power", "parameters": [1, 1.5, 0, 0]},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 14.696938456699069, "mode": "abs", "tol": 1e-9, "source": "Test_Power_Function (default ctor: alpha=1, beta=1.5, xi=0; valid0 = 1*(6-0)^1.5)"}
+   ]
+  },
+  {
+   "name": "power_evaluate",
+   "data": [[6]],
+   "options": {"function": "power", "parameters": [5, 2, 0, 3]},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 180, "mode": "abs", "tol": 1e-9, "source": "Test_Power_Function (valid1 = alpha*(6-xi)^beta = 5*36, func1/func2 with no ConfidenceLevel set)"}
+   ]
+  },
+  {
+   "name": "power_confidence_evaluate",
+   "data": [[6]],
+   "options": {"function": "power", "parameters": [5, 2, 0, 3], "confidence_level": 0.75},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 1361.61408399941, "mode": "abs", "tol": 1e-6, "source": "Test_Power_Function (func2.ConfidenceLevel = 0.75; found using R's norminv())"}
+   ]
+  },
+  {
+   "name": "power_round_trip_evaluate",
+   "data": [[400]],
+   "options": {"function": "power", "parameters": [10, 2, 0, 0.1]},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 1600000, "mode": "abs", "tol": 1e-6, "source": "Test_Power_Function_Inverse (computed: alpha*(x-xi)^beta = 10*400^2, the deterministic Function() value the test's own y is not itself asserted against)"}
+   ]
+  },
+  {
+   "name": "power_round_trip_inverse",
+   "data": [[1600000]],
+   "options": {"function": "power", "parameters": [10, 2, 0, 0.1]},
+   "assertions": [
+    {"method": "inverse", "index": 0, "expected": 400, "mode": "abs", "tol": 1e-6, "source": "Test_Power_Function_Inverse (InverseFunction(Function(400)) == 400)"}
+   ]
+  },
+  {
+   "name": "power_confidence_inverse",
+   "data": [[6]],
+   "options": {"function": "power", "parameters": [5, 2, 0, 3], "confidence_level": 0.75},
+   "assertions": [
+    {"method": "inverse", "index": 0, "expected": 0.3982904177729973, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump; PowerFunction.InverseFunction()'s IsInverse=false branch is algebraically identical to Function()'s IsInverse=true branch (same alpha/beta/xi/sigma/confidence/6 as Test_InversePower_Function's y3, hence the near-identical value 0.398290417772997 there)"}
+   ]
+  },
+  {
+   "name": "power_inverse_flag_evaluate",
+   "data": [[6]],
+   "options": {"function": "power", "parameters": [5, 2, 0, 0], "is_inverse": true},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 1.0954451150103321, "mode": "abs", "tol": 1e-9, "source": "Test_InversePower_Function (valid = sqrt(6/alpha) + xi, func with IsInverse = true, no ConfidenceLevel)"}
+   ]
+  },
+  {
+   "name": "power_inverse_flag_confidence",
+   "data": [[6]],
+   "options": {"function": "power", "parameters": [5, 2, 0, 3], "is_inverse": true, "confidence_level": 0.75},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 0.398290417772997, "mode": "abs", "tol": 1e-6, "source": "Test_InversePower_Function (func2.ConfidenceLevel = 0.75; found using R's norminv())"}
+   ]
+  },
+  {
+   "name": "power_inverse_flag_round_trip_evaluate",
+   "data": [[6]],
+   "options": {"function": "power", "parameters": [10, 2, 0, 0.1], "is_inverse": true},
+   "assertions": [
+    {"method": "evaluate", "index": 0, "expected": 0.7745966692414834, "mode": "abs", "tol": 1e-9, "source": "Test_InversePower_Function_Inverse (computed: sqrt(x/alpha) = sqrt(6/10), the deterministic Function() value the test's own y is not itself asserted against)"}
+   ]
+  },
+  {
+   "name": "power_inverse_flag_round_trip_inverse",
+   "data": [[0.7745966692414834]],
+   "options": {"function": "power", "parameters": [10, 2, 0, 0.1], "is_inverse": true},
+   "assertions": [
+    {"method": "inverse", "index": 0, "expected": 6, "mode": "abs", "tol": 1e-6, "source": "Test_InversePower_Function_Inverse (InverseFunction(Function(6)) == 6)"}
+   ]
+  }
+ ]
+}

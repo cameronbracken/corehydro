@@ -4752,6 +4752,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return LinalgDispatch(method, data, options, asrt);
         case "special":
             return SpecialDispatch(method, data, options, asrt);
+        case "functions":
+            return FunctionsDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -5051,6 +5053,54 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
         return ToolboxSelectFlat(asrt, values, values.Length, 1);
     }
     throw new Exception($"unknown trend method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/functions.hpp's run_functions arm against the real
+// Numerics.Functions.LinearFunction/PowerFunction. `parameters` is a positional array (linear:
+// [alpha, beta, sigma]; power: [alpha, beta, xi, sigma]); `is_inverse` is PowerFunction-only and
+// scoped-checked exactly as the C++ arm does; `confidence_level`'s mere PRESENCE (not its value)
+// switches IsDeterministic to false before SetParameters runs, mirroring every non-deterministic
+// C# constructor overload (the one that takes sigma).
+static double FunctionsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    string fn = options.GetProperty("function").GetString()!;
+    double[] parameters = options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+    bool hasConfidence = options.TryGetProperty("confidence_level", out var clEl);
+    bool hasIsInverse = options.TryGetProperty("is_inverse", out var isInvEl);
+    if (hasIsInverse && fn != "power")
+        throw new Exception($"'is_inverse' is only valid for function 'power'; got function '{fn}'");
+
+    IUnivariateFunction f;
+    if (fn == "linear")
+    {
+        var lf = new LinearFunction();
+        lf.IsDeterministic = !hasConfidence;
+        lf.SetParameters(parameters);
+        if (hasConfidence) lf.ConfidenceLevel = clEl.GetDouble();
+        f = lf;
+    }
+    else if (fn == "power")
+    {
+        var pf = new PowerFunction();
+        pf.IsDeterministic = !hasConfidence;
+        pf.IsInverse = hasIsInverse && isInvEl.GetBoolean();
+        pf.SetParameters(parameters);
+        if (hasConfidence) pf.ConfidenceLevel = clEl.GetDouble();
+        f = pf;
+    }
+    else
+    {
+        throw new Exception($"unknown function type: {fn}");
+    }
+
+    double[] x = data[0];
+    var values = method switch
+    {
+        "evaluate" => x.Select(f.Function).ToArray(),
+        "inverse" => x.Select(f.InverseFunction).ToArray(),
+        _ => throw new Exception($"unknown functions method: {method}")
+    };
+    return ToolboxSelectFlat(asrt, values, values.Length, 1);
 }
 
 // Selects a value the way the fixture runners' client-side "select" logic does, generalized

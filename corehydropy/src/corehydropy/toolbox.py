@@ -47,6 +47,7 @@ __all__ = [
     "qr_decomposition",
     "qr_solve",
     "gauss_jordan",
+    "univariate_function",
 ]
 
 
@@ -1582,4 +1583,86 @@ def polynomial_eval(coefficients, x, variant: str = "standard", n: int | None = 
     xa = np.atleast_1d(np.asarray(x, dtype=float))
     options = {} if n is None else {"n": int(n)}
     r = _toolbox_run("special", method, [ca, xa], options)
+    return np.asarray(r["values"], dtype=float)
+
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
+# The severed third implementation, TabularFunction, depends on the unported Paired Data
+# subsystem (see upstream/CLAUDE.md) and is not exposed.
+
+
+def univariate_function(
+    type: str,
+    parameters,
+    x,
+    inverse: bool = False,
+    is_inverse: bool = False,
+    confidence_level: float | None = None,
+) -> np.ndarray:
+    """Evaluate a univariate function.
+
+    Mirrors the Numerics ``LinearFunction`` (``Y = alpha + beta*X + epsilon``) and
+    ``PowerFunction`` (``Y = alpha * (X - xi)**beta * epsilon``), both over optional normally
+    distributed noise (``epsilon ~ Normal(0, sigma)``) via ``confidence_level``. ``is_inverse``
+    (``PowerFunction``'s own ``IsInverse`` switch) selects which of the forward power law or its
+    algebraic inverse ``Function()``/``inverse=True`` evaluates -- an independent axis from
+    ``inverse`` itself, which picks ``Function()`` vs. ``InverseFunction()`` on whichever of the
+    two ``is_inverse`` selects.
+
+    Parameters
+    ----------
+    type : {"linear", "power"}
+        Matched case-insensitively.
+    parameters : array_like
+        ``[alpha, beta, sigma]`` for ``"linear"``; ``[alpha, beta, xi, sigma]`` for ``"power"``.
+        ``sigma`` is still required (e.g. 0) when ``confidence_level`` is ``None`` -- it only
+        enters the calculation on the non-deterministic path.
+    x : array_like
+        The values to evaluate the function at, or (when ``inverse=True``) the values to
+        evaluate the inverse function at.
+    inverse : bool, default False
+        If ``True``, evaluates the inverse function (``InverseFunction()``) instead of the
+        forward function (``Function()``).
+    is_inverse : bool, default False
+        ``"power"``-only: ``PowerFunction``'s own ``IsInverse`` property. An error for
+        ``type="linear"``.
+    confidence_level : float, optional
+        If given, evaluates the non-deterministic path at this quantile level; if ``None``
+        (default), evaluates deterministically.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import univariate_function
+    >>> univariate_function("linear", [0, 1, 0], [1, 2, 3])
+    array([1., 2., 3.])
+    >>> univariate_function("power", [5, 2, 0, 3], 6)
+    array([180.])
+    >>> univariate_function("power", [5, 2, 0, 3], 6, confidence_level=0.75)
+    array([1361.614084])
+    """
+    known = ("linear", "power")
+    match = [t for t in known if t == str(type).lower()]
+    if not match:
+        raise ValueError(f"unknown function type '{type}'; expected one of {', '.join(known)}")
+    ftype = match[0]
+    if is_inverse and ftype != "power":
+        raise ValueError(f"`is_inverse` is only used for type 'power'; got type '{ftype}'")
+    pa = np.atleast_1d(np.asarray(parameters, dtype=float))
+    if pa.size == 0:
+        raise ValueError("`parameters` must be a non-empty array")
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    if xa.size == 0:
+        raise ValueError("`x` must be a non-empty array")
+    options: dict = {"function": ftype, "parameters": pa.tolist()}
+    if ftype == "power":
+        options["is_inverse"] = bool(is_inverse)
+    if confidence_level is not None:
+        options["confidence_level"] = float(confidence_level)
+    method = "inverse" if inverse else "evaluate"
+    r = _toolbox_run("functions", method, [xa], options)
     return np.asarray(r["values"], dtype=float)

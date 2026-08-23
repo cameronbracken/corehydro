@@ -55,6 +55,7 @@ from .toolbox import (
     trend_names,
     trend_parameters,
     trend_predict,
+    univariate_function,
 )
 from .optim import OptimResult, optim_maximize, optim_minimize
 from .callback import (
@@ -204,6 +205,7 @@ __all__ = [
     "gauss_jordan",
     "debye",
     "polynomial_eval",
+    "univariate_function",
     "OptimResult",
     "optim_minimize",
     "optim_maximize",

@@ -956,3 +956,62 @@ polynomial_eval <- function(coefficients, x, variant = c("standard", "reverse", 
   opts <- if (is.null(n)) list() else list(n = as.integer(n))
   toolbox_run("special", method, list(as.double(coefficients), as.double(x)), opts)$values
 }
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
+# The severed third implementation, TabularFunction, depends on the unported Paired Data
+# subsystem (see upstream/CLAUDE.md) and is not exposed.
+
+#' Evaluate a univariate function
+#'
+#' Mirrors the Numerics `LinearFunction` (`Y = alpha + beta*X + epsilon`) and `PowerFunction`
+#' (`Y = alpha * (X - xi)^beta * epsilon`), both over optional normally distributed noise
+#' (`epsilon ~ Normal(0, sigma)`) via `confidence_level`. `is_inverse` (PowerFunction's own
+#' `IsInverse` switch) selects which of the forward power law or its algebraic inverse
+#' `Function()`/`inverse = TRUE` evaluates -- an independent axis from `inverse` itself, which
+#' picks `Function()` vs. `InverseFunction()` on whichever of the two `is_inverse` selects.
+#'
+#' @param type `"linear"` or `"power"`, matched case-insensitively.
+#' @param parameters a numeric vector: `c(alpha, beta, sigma)` for `"linear"`; `c(alpha, beta,
+#'   xi, sigma)` for `"power"`. `sigma` is still required (e.g. 0) when `confidence_level` is
+#'   `NULL` -- it only enters the calculation on the non-deterministic path.
+#' @param x a numeric vector: the values to evaluate the function at, or (when `inverse = TRUE`)
+#'   the values to evaluate the inverse function at.
+#' @param inverse if `TRUE`, evaluates the inverse function (`InverseFunction()`) instead of the
+#'   forward function (`Function()`).
+#' @param is_inverse `"power"`-only: `PowerFunction`'s own `IsInverse` property. An error for
+#'   `type = "linear"`.
+#' @param confidence_level if given, evaluates the non-deterministic path at this quantile level;
+#'   if `NULL` (default), evaluates deterministically.
+#' @return a numeric vector the same length as `x`.
+#' @examples
+#' univariate_function("linear", c(0, 1, 0), c(1, 2, 3))
+#' univariate_function("power", c(5, 2, 0, 3), 6)
+#' univariate_function("power", c(5, 2, 0, 3), 6, confidence_level = 0.75)
+#' @export
+univariate_function <- function(type, parameters, x, inverse = FALSE, is_inverse = FALSE,
+                                 confidence_level = NULL) {
+  known <- c("linear", "power")
+  hit <- match(tolower(type), known)
+  if (is.na(hit)) {
+    stop(sprintf("unknown function type \"%s\". Available: %s", type,
+                 paste(known, collapse = ", ")), call. = FALSE)
+  }
+  type <- known[hit]
+  if (isTRUE(is_inverse) && !identical(type, "power")) {
+    stop(sprintf("`is_inverse` is only used for type \"power\"; got type \"%s\"", type),
+         call. = FALSE)
+  }
+  if (!is.numeric(parameters) || length(parameters) == 0L) {
+    stop("`parameters` must be a non-empty numeric vector", call. = FALSE)
+  }
+  if (!is.numeric(x) || length(x) == 0L) {
+    stop("`x` must be a non-empty numeric vector", call. = FALSE)
+  }
+  opts <- list(parameters = as.double(parameters))
+  opts[["function"]] <- type
+  if (identical(type, "power")) opts$is_inverse <- isTRUE(is_inverse)
+  if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
+  method <- if (isTRUE(inverse)) "inverse" else "evaluate"
+  toolbox_run("functions", method, list(as.double(x)), opts)$values
+}

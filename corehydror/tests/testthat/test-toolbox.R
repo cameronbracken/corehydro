@@ -648,3 +648,74 @@ test_that("polynomial_eval() rejects n with a non-'reverse' variant", {
   expect_error(polynomial_eval(c(3, 5, 7), 4, variant = "standard", n = 1), "reverse")
   expect_error(polynomial_eval(c(3, 5, 7), 4, variant = "reverse_unit", n = 1), "reverse")
 })
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations. Literals transcribed from Test_Functions.cs.
+
+test_that("univariate_function() reproduces Test_Linear_Function", {
+  expect_equal(univariate_function("linear", c(0, 1, 0), 6), 6, tolerance = 1e-6)
+  expect_equal(univariate_function("linear", c(-2, 5, 3), 6), (5 * 6) + -2, tolerance = 1e-6)
+  expect_equal(
+    univariate_function("linear", c(-2, 5, 3), 6, confidence_level = 0.75),
+    30.0234692505882, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_Linear_Function_Inverse", {
+  y <- univariate_function("linear", c(10, 0.5, 20), 400)
+  expect_equal(univariate_function("linear", c(10, 0.5, 20), y, inverse = TRUE), 400,
+               tolerance = 1e-6)
+  yy <- univariate_function("linear", c(10, 0.5, 20), 400, confidence_level = 0.75)
+  expect_equal(
+    univariate_function("linear", c(10, 0.5, 20), yy, inverse = TRUE, confidence_level = 0.75),
+    400, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_Power_Function", {
+  expect_equal(univariate_function("power", c(1, 1.5, 0, 0), 6), 1 * (6 - 0)^1.5, tolerance = 1e-6)
+  expect_equal(univariate_function("power", c(5, 2, 0, 3), 6), 5 * (6 - 0)^2, tolerance = 1e-6)
+  expect_equal(
+    univariate_function("power", c(5, 2, 0, 3), 6, confidence_level = 0.75),
+    1361.61408399941, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_Power_Function_Inverse", {
+  y <- univariate_function("power", c(10, 2, 0, 0.1), 400)
+  expect_equal(univariate_function("power", c(10, 2, 0, 0.1), y, inverse = TRUE), 400,
+               tolerance = 1e-6)
+  yy <- univariate_function("power", c(10, 2, 0, 0.1), 400, confidence_level = 0.75)
+  expect_equal(
+    univariate_function("power", c(10, 2, 0, 0.1), yy, inverse = TRUE, confidence_level = 0.75),
+    400, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_InversePower_Function", {
+  valid <- sqrt(6 / 5) + 0
+  expect_equal(univariate_function("power", c(5, 2, 0, 0), 6, is_inverse = TRUE), valid,
+               tolerance = 1e-6)
+  expect_equal(univariate_function("power", c(5, 2, 0, 3), 6, is_inverse = TRUE), valid,
+               tolerance = 1e-6)
+  expect_equal(
+    univariate_function("power", c(5, 2, 0, 3), 6, is_inverse = TRUE, confidence_level = 0.75),
+    0.398290417772997, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_InversePower_Function_Inverse", {
+  y <- univariate_function("power", c(10, 2, 0, 0.1), 6, is_inverse = TRUE)
+  expect_equal(
+    univariate_function("power", c(10, 2, 0, 0.1), y, inverse = TRUE, is_inverse = TRUE),
+    6, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() rejects is_inverse for type = 'linear'", {
+  expect_error(univariate_function("linear", c(0, 1, 0), 6, is_inverse = TRUE), "power")
+})
+
+test_that("univariate_function() rejects an unknown type", {
+  expect_error(univariate_function("quadratic", c(1, 1), 1), "unknown function type")
+})

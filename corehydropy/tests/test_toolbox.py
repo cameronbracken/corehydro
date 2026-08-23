@@ -37,6 +37,7 @@ from corehydropy import (
     trend_names,
     trend_parameters,
     trend_predict,
+    univariate_function,
 )
 from corehydropy.models import trend
 
@@ -715,3 +716,87 @@ def test_polynomial_eval_rejects_n_with_a_non_reverse_variant():
         polynomial_eval([3, 5, 7], 4, variant="standard", n=1)
     with pytest.raises(ValueError, match="reverse"):
         polynomial_eval([3, 5, 7], 4, variant="reverse_unit", n=1)
+
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations. Literals transcribed from Test_Functions.cs.
+
+
+def test_univariate_function_reproduces_test_linear_function():
+    np.testing.assert_allclose(univariate_function("linear", [0, 1, 0], 6), [6], atol=1e-6)
+    np.testing.assert_allclose(
+        univariate_function("linear", [-2, 5, 3], 6), [(5 * 6) + -2], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("linear", [-2, 5, 3], 6, confidence_level=0.75),
+        [30.0234692505882], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_linear_function_inverse():
+    y = univariate_function("linear", [10, 0.5, 20], 400)
+    np.testing.assert_allclose(
+        univariate_function("linear", [10, 0.5, 20], y, inverse=True), [400], atol=1e-6
+    )
+    yy = univariate_function("linear", [10, 0.5, 20], 400, confidence_level=0.75)
+    np.testing.assert_allclose(
+        univariate_function("linear", [10, 0.5, 20], yy, inverse=True, confidence_level=0.75),
+        [400], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_power_function():
+    np.testing.assert_allclose(
+        univariate_function("power", [1, 1.5, 0, 0], 6), [1 * (6 - 0) ** 1.5], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6), [5 * (6 - 0) ** 2], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6, confidence_level=0.75),
+        [1361.61408399941], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_power_function_inverse():
+    y = univariate_function("power", [10, 2, 0, 0.1], 400)
+    np.testing.assert_allclose(
+        univariate_function("power", [10, 2, 0, 0.1], y, inverse=True), [400], atol=1e-6
+    )
+    yy = univariate_function("power", [10, 2, 0, 0.1], 400, confidence_level=0.75)
+    np.testing.assert_allclose(
+        univariate_function("power", [10, 2, 0, 0.1], yy, inverse=True, confidence_level=0.75),
+        [400], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_inverse_power_function():
+    valid = [(6 / 5) ** 0.5 + 0]
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 0], 6, is_inverse=True), valid, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6, is_inverse=True), valid, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6, is_inverse=True, confidence_level=0.75),
+        [0.398290417772997], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_inverse_power_function_inverse():
+    y = univariate_function("power", [10, 2, 0, 0.1], 6, is_inverse=True)
+    np.testing.assert_allclose(
+        univariate_function("power", [10, 2, 0, 0.1], y, inverse=True, is_inverse=True),
+        [6], atol=1e-6,
+    )
+
+
+def test_univariate_function_rejects_is_inverse_for_type_linear():
+    with pytest.raises(ValueError, match="power"):
+        univariate_function("linear", [0, 1, 0], 6, is_inverse=True)
+
+
+def test_univariate_function_rejects_an_unknown_type():
+    with pytest.raises(ValueError, match="unknown function type"):
+        univariate_function("quadratic", [1, 1], 1)
