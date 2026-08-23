@@ -8,7 +8,7 @@ authors = ["Cam Bracken <cameron.bracken@pm.me>"]
 channels = ["conda-forge"]
 name = "corehydro"
 platforms = ["osx-arm64", "osx-64", "linux-64"]
-version = "0.8.0"
+version = "0.9.0"
 
 [dependencies]
 python = ">=3.12,<3.15"

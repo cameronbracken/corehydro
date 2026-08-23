@@ -7,6 +7,68 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-22
+
+The last major slice of Numerics that is not a distribution, model, or estimator: root finding,
+integration, an ODE solver, spline and polynomial interpolation, linear algebra, and two small
+special-function/general-function groups, all reachable against a user-written R or Python
+function. This is the second step of the release arc laid out in
+`docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`, following the
+distribution-gaps release (0.8.0).
+
+### Added
+
+- **Root finding**, ported from `Numerics/Mathematics/RootFinding/`. `root_find()` gains a
+  `method` option over its existing bracketing interface -- `"brent"` (the default), `"bisection"`,
+  `"secant"`, and `"newton"` (which takes an optional analytic derivative `df`, falling back to a
+  numerical one) -- and a new export, `root_find_system()`, solves a vector-valued system with
+  multivariate Newton-Raphson given the system function, its Jacobian, and a starting vector.
+- **Integration**, ported from `Numerics/Mathematics/Integration/` (the seven integration classes)
+  plus the `Integration` statics. `quadrature()` gains a `method` option covering ten deterministic
+  rules: `"gauss_kronrod"` (the existing adaptive default), `"simpsons"`, `"trapezoidal"`,
+  `"adaptive_simpsons"`, `"gauss_lobatto"`, `"gauss_legendre"`, `"gauss_legendre20"`,
+  `"simpsons_fixed"`, `"trapezoidal_fixed"`, and `"midpoint"`. `quadrature_2d()` integrates a
+  two-argument function over a rectangle. `quadrature_nd()` integrates over an arbitrary-dimension
+  box with three seeded methods -- `"monte_carlo"`, `"miser"` (stratified, recursive), and
+  `"vegas"` (importance-sampled, with rare-event configuration).
+- **`ode_solve()`**, the ported `RungeKutta` solver (`"rk4"`, `"rk2"`, `"rkf"`, `"cash_karp"`) for
+  `dy/dt = f(t, y)` from an initial value, returning an array of length `time_steps` (not
+  `time_steps + 1`), matching the C# convention.
+- **Cubic spline and polynomial interpolation**, ported from `Numerics/Mathematics/Interpolation/`.
+  `interpolate()` gains `method = "cubic_spline"` and `method = "polynomial"` (the latter requiring
+  an `order`) beside the existing linear method; the `x_transform`/`y_transform`/`extrapolate`
+  arguments remain linear-only, an enforced guard rather than a silent no-op, matching the C#
+  `CubicSpline`/`Polynomial` classes, which expose neither a transform surface nor an
+  `Extrapolate()` method.
+- **A `linalg` toolbox group**: `qr_decomposition()` and `qr_solve()` (ported `QRDecomposition`),
+  and `gauss_jordan()` (ported `GaussJordanElimination`, an in-place row-reduction solve).
+- **A `special` toolbox group**: `debye()` (the Debye function) and `polynomial_eval()` (Horner's
+  method, with `variant` covering the standard, reverse, and reverse-unit coefficient
+  conventions), both ported from `Numerics/Mathematics/SpecialFunctions/Evaluate.cs`.
+- **A `functions` toolbox group**: `univariate_function()`, evaluating the ported
+  `Numerics.Functions.LinearFunction` and `PowerFunction` -- forward and inverse, and
+  `PowerFunction`'s own `IsInverse` switch -- over an optional normally-distributed noise path
+  selected by `confidence_level`. `TabularFunction`, the third `IUnivariateFunction`
+  implementation, depends on the still-unported Paired Data subsystem and is severed to a later
+  release rather than silently dropped; see `upstream/CLAUDE.md`.
+- The `toolbox_runner` dispatch grows from eleven groups to fourteen (`linalg`, `special`,
+  `functions` added); the `CallbackSet` used by the `math`-group callback surface grows two new
+  members, `scalar_deriv` and `vector_weight`, alongside the existing `scalar_xy`.
+- A worked example pair, **18, numerical methods**, walks the whole surface -- root finding,
+  quadrature (including the three Monte Carlo families), the ODE solver, spline/polynomial
+  interpolation, and the three new toolbox groups -- ending in an executable reproduction check.
+
+### Notes
+
+- **Two of the three seeded Monte Carlo integrators carry a measured, honestly documented rounding
+  difference at the current shipped build; no tolerance was loosened and no oracle was skipped.**
+  `"monte_carlo"`'s integral reproduces bit-for-bit across all four runners (C++, R, Python, and
+  the real C# library) and is pinned at zero tolerance. `"miser"` measured 1 ULP off C#, and
+  `"vegas"` measured 2-3 ULP between the actual installed R and Python packages, from
+  floating-point contraction differences in the variance/chi-squared accumulation. The affected
+  fixture cases assert the seeded evaluation counts and solver status instead of the integral
+  value, with the measurements recorded in the fixture and in worked example 18.
+
 ## [0.8.0] - 2026-08-21
 
 Two gaps the ten-phase port left open, closed. `GeneralizedNormal` was the one univariate family

@@ -1,3 +1,47 @@
+# corehydror 0.9.0
+
+The last unported slice of Numerics that is not a distribution, model, or estimator: root
+finding, integration, ODE solving, spline/polynomial interpolation, linear algebra, and two small
+special-function/general-function groups, all callable against a user-written R function. See
+`CHANGELOG.md` at the repository root for the full account.
+
+## New features
+
+* `root_find()` gains a `method` option (`"brent"`, the default, `"bisection"`, `"secant"`,
+  `"newton"`) over the existing bracketing interface, and `root_find_system()` solves a
+  vector-valued system with multivariate Newton-Raphson given `f`, its `jacobian`, and a
+  `first_guess`.
+* `quadrature()` gains a `method` option covering ten deterministic rules (`"gauss_kronrod"`, the
+  default adaptive rule, plus `"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`,
+  `"gauss_lobatto"`, `"gauss_legendre"`, `"gauss_legendre20"`, `"simpsons_fixed"`,
+  `"trapezoidal_fixed"`, `"midpoint"`). `quadrature_2d()` integrates over a rectangle, and
+  `quadrature_nd()` integrates over an arbitrary-dimensional box with three seeded Monte Carlo
+  families (`"monte_carlo"`, `"miser"`, `"vegas"`, the last with rare-event configuration).
+* `ode_solve()` -- the ported `RungeKutta` solver (`"rk4"`, `"rk2"`, `"rkf"`, `"cash_karp"`) for
+  `dy/dt = f(t, y)` from an initial value over a fixed number of time steps.
+* `interpolate()` gains `method = "cubic_spline"` and `method = "polynomial"` alongside the
+  existing linear method; the transform and extrapolation arguments remain linear-only, matching
+  the C# `CubicSpline`/`Polynomial` classes, which have neither.
+* Three small toolbox groups: `qr_decomposition()`, `qr_solve()`, and `gauss_jordan()` (linear
+  algebra); `debye()` and `polynomial_eval()` (special functions, the last with three literal
+  conventions -- standard, reverse, reverse-unit); and `univariate_function()`, evaluating the
+  ported `LinearFunction` and `PowerFunction` (forward, inverse, and the optional
+  normally-distributed noise path).
+* A worked example pair, 18, walks all of the above ending in an executable reproduction check.
+
+## Notes
+
+* `TabularFunction`, the third `IUnivariateFunction` implementation, depends on the still-unported
+  Paired Data subsystem and is not exposed; it is deferred, not silently dropped, and is tracked
+  for a later release.
+* Two of the three seeded Monte Carlo integrators in `quadrature_nd()` carry a measured, honestly
+  documented rounding difference at the current shipped build: `"monte_carlo"` reproduces
+  bit-for-bit against the real C# library and across R, Python, and C++; `"miser"` measured 1 ULP
+  off C#, and `"vegas"` 2-3 ULP between R and Python, from floating-point contraction in the
+  variance/chi-squared accumulation. No tolerance was loosened and no oracle was skipped to hide
+  this; the affected fixture cases assert the seeded evaluation counts and status instead of the
+  integral value, with the measurements recorded alongside them.
+
 # corehydror 0.8.0
 
 Two gaps the port left open, closed. `GeneralizedNormal` was the one univariate family named in

@@ -82,9 +82,10 @@ all reach both languages through this one pair of headers rather than per-family
 
 `core/include/corehydro/numerics/support/toolbox_runner.hpp` (siblings of `dist_runner.hpp` and
 `estimation/support/fit_runner.hpp`, likewise corehydro additions with no upstream C# counterpart)
-is the one place a general-purpose Numerics utility method is dispatched: eleven groups --
+is the one place a general-purpose Numerics utility method is dispatched: fourteen groups --
 `correlation`, `gof`, `statistics`, `spectra`, `histogram`, `interpolation`, `regression`,
-`sampling`, `probability`, `link`, `trend` -- each a standalone-compiling header under
+`sampling`, `probability`, `link`, `trend`, `linalg`, `special`, `functions` -- each a
+standalone-compiling header under
 `numerics/support/toolbox/` (plus `common.hpp` for the shared `ToolboxResult`/data-access
 helpers), holding that group's `detail::run_<group>` function. Bulk data travels as native double
 vectors (not JSON, unlike `dist_spec`'s construct grammar) since a goodness-of-fit call carrying
@@ -796,3 +797,35 @@ version bump to **0.8.0** records it. Final numbers: **ctest 90/90 (test_fixture
 oracle gate 5568 reproduced, 0 failed, 11 skipped; testthat 6344/0; pytest 1520**; `R CMD check
 --as-cran` holds at the same three NOTEs with no WARNING. No `oracle_skip` and no loosened
 tolerance was added anywhere in the phase.
+
+The math-extras phase (P2, branch `port-math-extras`, August 2026) closed the last major slice of
+Numerics that is not a distribution, model, or estimator, and is the second step of the release arc
+laid out in `docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`. **Root
+finding** (`Numerics/Mathematics/RootFinding/`) folded Bisection/Secant/Newton into `root_find()`'s
+existing bracketing interface as a `method` option beside the default Brent, and added
+`root_find_system()` for a vector-valued system via multivariate Newton-Raphson. **Integration**
+(`Numerics/Mathematics/Integration/`, the seven integration classes plus the `Integration` statics)
+widened `quadrature()` to ten deterministic methods, added `quadrature_2d()` for a rectangle, and
+added `quadrature_nd()` for an arbitrary-dimension box over three seeded methods -- Monte Carlo,
+Miser, and Vegas (the last with rare-event configuration). **RungeKutta** is `ode_solve()`.
+**CubicSpline/Polynomial** extend `interpolate(method =)` beside the existing linear method, with
+the transform/extrapolation arguments enforced as linear-only (a guard, not a silent no-op),
+matching the C# classes, which have neither. Three new toolbox groups -- `linalg`
+(`qr_decomposition()`/`qr_solve()`/`gauss_jordan()`), `special` (`debye()`/`polynomial_eval()`),
+and `functions` (`univariate_function()`, the ported `LinearFunction`/`PowerFunction`) -- widen
+`toolbox_runner`'s dispatch from eleven groups to fourteen, all on the same standalone-header
+pattern the eleven established; the `CallbackSet` gains `scalar_deriv` and `vector_weight` beside
+the existing `scalar_xy`. `TabularFunction`, the third `IUnivariateFunction` implementation, is
+severed to a later release rather than silently dropped: it depends on the still-unported Paired
+Data subsystem (see `upstream/CLAUDE.md`). One worked example pair, 18, exercises the whole surface
+ending in an executable reproduction check. The honest fidelity note (established precedent: state
+it, do not paper over): at the shipped seeds, `quadrature_nd()`'s `"monte_carlo"` integral
+reproduces bit-for-bit across C++, R, Python, and the real C# library and is pinned at zero
+tolerance; `"miser"` measured 1 ULP off C#, and `"vegas"` measured 2-3 ULP between the actual
+installed R and Python packages, from floating-point contraction differences in the
+variance/chi-squared accumulation -- the affected fixture cases assert seeded evaluation counts and
+solver status instead of the integral value, with the measurements documented, and no tolerance was
+loosened and no oracle was skipped anywhere in the phase. The version bump to **0.9.0** records it.
+Final numbers: **ctest 98/98 (test_fixtures 5762 checks); oracle gate 5751 reproduced, 0 failed, 11
+skipped; testthat 6622/0; pytest 1619**; `R CMD check --as-cran` holds at the same three NOTEs with
+no WARNING.
