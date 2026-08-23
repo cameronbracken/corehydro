@@ -49,6 +49,39 @@ test_that("percentile() rejects a non-numeric probs argument, naming it", {
   expect_error(percentile(c(1, 2, 3), probs = "half"), "probs")
 })
 
+test_that("correlation() with a matrix returns the p-by-p matrix, diagonal 1, symmetric, and off-diagonals matching the pairwise calls", {
+  c0 <- c(14, 8, 32, 7, 3, 15)
+  c1 <- c(10, 5, 7, 4, 3, 8)
+  c2 <- c(2, 9, 1, 6, 4, 11)
+  x <- cbind(a = c0, b = c1, c = c2)
+
+  m <- correlation(x)
+  expect_equal(dim(m), c(3L, 3L))
+  expect_equal(unname(diag(m)), c(1, 1, 1))
+  expect_true(isSymmetric(m))
+  expect_equal(m["a", "b"], correlation(c0, c1))
+  expect_equal(m["a", "c"], correlation(c0, c2))
+  expect_equal(m["b", "c"], correlation(c1, c2))
+  expect_equal(rownames(m), c("a", "b", "c"))
+  expect_equal(colnames(m), c("a", "b", "c"))
+
+  ms <- correlation(x, method = "spearman")
+  expect_equal(unname(diag(ms)), c(1, 1, 1))
+  expect_equal(ms["a", "b"], correlation(c0, c1, method = "spearman"))
+})
+
+test_that("correlation() accepts a data frame in matrix mode", {
+  x <- data.frame(a = c(14, 8, 32, 7, 3, 15), b = c(10, 5, 7, 4, 3, 8))
+  m <- correlation(x)
+  expect_equal(dim(m), c(2L, 2L))
+  expect_equal(m["a", "b"], correlation(x$a, x$b))
+})
+
+test_that("correlation() rejects method = 'kendall' for a matrix, naming the reason", {
+  x <- cbind(c(14, 8, 32, 7, 3, 15), c(10, 5, 7, 4, 3, 8))
+  expect_error(correlation(x, method = "kendall"), "kendall.*matrix")
+})
+
 test_that("running_covariance() chunked matches a single call, and round-trips through state", {
   x <- matrix(c(1, 2, 3, 4, 5, 1, 2, 3, 4, 5), ncol = 2)
   whole <- running_covariance(x)

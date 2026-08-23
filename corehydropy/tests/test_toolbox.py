@@ -8,6 +8,7 @@ from corehydropy import (
     RunningCovariance,
     RunningStatistics,
     autocorrelation,
+    correlation,
     cross_correlation,
     debye,
     dft,
@@ -99,6 +100,31 @@ def test_percentile_accepts_a_vector_of_probabilities():
 def test_percentile_rejects_a_non_numeric_probs_argument():
     with pytest.raises(ValueError, match="probs"):
         percentile([1, 2, 3], probs="half")
+
+
+def test_correlation_with_a_matrix_returns_the_p_by_p_matrix():
+    c0 = [14, 8, 32, 7, 3, 15]
+    c1 = [10, 5, 7, 4, 3, 8]
+    c2 = [2, 9, 1, 6, 4, 11]
+    x = np.column_stack([c0, c1, c2])
+
+    m = correlation(x)
+    assert m.shape == (3, 3)
+    np.testing.assert_array_equal(np.diag(m), [1, 1, 1])
+    np.testing.assert_allclose(m, m.T)
+    assert m[0, 1] == correlation(c0, c1)
+    assert m[0, 2] == correlation(c0, c2)
+    assert m[1, 2] == correlation(c1, c2)
+
+    ms = correlation(x, method="spearman")
+    np.testing.assert_array_equal(np.diag(ms), [1, 1, 1])
+    assert ms[0, 1] == correlation(c0, c1, method="spearman")
+
+
+def test_correlation_rejects_kendall_for_a_matrix():
+    x = np.column_stack([[14, 8, 32, 7, 3, 15], [10, 5, 7, 4, 3, 8]])
+    with pytest.raises(ValueError, match="kendall.*matrix"):
+        correlation(x, method="kendall")
 
 
 def test_running_covariance_chunked_matches_a_single_call():

@@ -74,22 +74,33 @@ def _check_pair(x, y, x_name: str = "x", y_name: str = "y"):
     return xa, ya
 
 
-def correlation(x, y, method: str = "pearson") -> float:
-    """Correlation between two samples.
+def correlation(x, y=None, method: str = "pearson"):
+    """Correlation between two samples, or a correlation matrix.
 
-    Mirrors the C# ``Correlation`` class of the Numerics library. Upstream's matrix overloads
-    are not ported, so only the paired-vector forms are available here.
+    Mirrors the C# ``Correlation`` class of the Numerics library: the paired-vector forms
+    (``Correlation.Pearson``/``Spearman``/``KendallsTau``, both ``IList<double>`` overloads) and
+    the Pearson/Spearman column-pairwise matrix overloads (``Pearson(double[,])``/
+    ``Spearman(double[,])``).
 
     Parameters
     ----------
-    x, y : array_like
-        Numeric vectors of equal length, at least two elements.
+    x : array_like
+        A numeric vector (paired-vector form, ``y`` required), or a 2D array-like (a NumPy
+        array, nested list, or pandas-style object coercible via ``numpy.asarray``) with one
+        column per variable (matrix form, ``y`` omitted).
+    y : array_like, optional
+        A numeric vector of the same length as ``x``, or ``None`` (the default) to compute the
+        correlation matrix of ``x``'s columns instead.
     method : {"pearson", "spearman", "kendall"}
-        Which coefficient to compute.
+        Which coefficient to compute. ``"kendall"`` is rejected when ``y`` is ``None``: upstream
+        has no ``KendallsTau(double[,])`` overload, so there is no Kendall matrix form to
+        compute.
 
     Returns
     -------
-    float
+    float or numpy.ndarray
+        With ``y`` given, a single correlation coefficient; with ``y`` ``None``, a
+        ``(p, p)`` array, ``p`` the number of columns of ``x``.
 
     Examples
     --------
@@ -99,6 +110,18 @@ def correlation(x, y, method: str = "pearson") -> float:
     """
     if method not in ("pearson", "spearman", "kendall"):
         raise ValueError(f"`method` must be one of 'pearson', 'spearman', 'kendall'; got {method!r}")
+    if y is None:
+        if method == "kendall":
+            raise ValueError(
+                "`method = \"kendall\"` has no matrix form; upstream Correlation has no "
+                "KendallsTau(double[,]) overload"
+            )
+        xa = np.asarray(x, dtype=float)
+        if xa.ndim != 2:
+            raise ValueError("`x` must be a 2D array (observations in rows, variables in columns)")
+        columns = [xa[:, j] for j in range(xa.shape[1])]
+        r = _toolbox_run("correlation", f"{method}_matrix", columns)
+        return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
     xa, ya = _check_pair(x, y)
     return float(_toolbox_run("correlation", method, [xa, ya])["values"][0])
 

@@ -99,8 +99,14 @@ The Sobol generator embeds `Properties/new-joe-kuo-6.21201` as a resource.
   `IList<double>` overloads are ported; the `TimeSeries` overloads remain a documented severance
   (see that header's own file comment). Its sibling `Correlation.cs`'s matrix overloads
   (`Correlation.Pearson(double[,])` / `Correlation.Spearman(double[,])`, column-pairwise
-  correlation matrices over an `[n, p]` table) remain unported -- no caller needs them yet (see
-  `numerics/data/correlation.hpp`'s own file comment).
+  correlation matrices over an `[n, p]` table) were ported in the P4 "data and tests" phase's
+  Task 4 (August 2026) as `pearson_matrix`/`spearman_matrix` in
+  `numerics/data/correlation.hpp`, reachable from R and Python via `correlation(x, y = NULL)`
+  (a matrix or data frame in `x`). Neither overload had an upstream test or in-library caller,
+  so every oracle value is curated via `oracle_emitter --dump` against the real
+  `Numerics.Data.Statistics.Correlation` rather than scraped from a C# test file. There is no
+  `KendallsTau(double[,])` overload upstream, so the matrix severance is now exactly that one
+  method -- rejected by name in both languages, not silently unavailable.
 
 ---
 

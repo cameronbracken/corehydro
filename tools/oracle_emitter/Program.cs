@@ -5026,13 +5026,7 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
     switch (group)
     {
         case "correlation":
-            return method switch
-            {
-                "pearson"  => Correlation.Pearson(data[0], data[1]),
-                "spearman" => Correlation.Spearman(data[0], data[1]),
-                "kendall"  => Correlation.KendallsTau(data[0], data[1]),
-                _ => throw new Exception($"unknown correlation method: {method}")
-            };
+            return CorrelationDispatch(method, data, asrt);
         case "gof":
             return GofDispatch(method, data, options, asrt);
         case "spectra":
@@ -5066,6 +5060,40 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Mirrors numerics/support/toolbox/correlation.hpp's run_correlation arm against the real
+// Numerics.Data.Statistics.Correlation. `pearson`/`spearman`/`kendall` are the pairwise scalar
+// methods (data[0]/data[1] are the two samples); `pearson_matrix`/`spearman_matrix` are the
+// column-pairwise matrix overloads -- `data` holds one array PER COLUMN (matching the toolbox
+// convention: every data vector is one column, not one flattened matrix like LinalgDispatch's
+// `rows`/`cols` convention below), reassembled here into the `double[,]` shape
+// Correlation.Pearson(double[,])/Spearman(double[,]) take, then flattened row-major with
+// ToolboxSelectFlat for the p-by-p result. There is no `kendall_matrix` arm: upstream's
+// Correlation class has no KendallsTau(double[,]) overload.
+static double CorrelationDispatch(string method, List<double[]> data, JsonElement asrt)
+{
+    if (method == "pearson_matrix" || method == "spearman_matrix")
+    {
+        int p = data.Count;
+        int n = data[0].Length;
+        var samples = new double[n, p];
+        for (int j = 0; j < p; j++)
+            for (int i = 0; i < n; i++)
+                samples[i, j] = data[j][i];
+        double[,] corr = method == "pearson_matrix" ? Correlation.Pearson(samples) : Correlation.Spearman(samples);
+        var flat = new double[p * p];
+        for (int j = 0; j < p; j++)
+            for (int k = 0; k < p; k++) flat[j * p + k] = corr[j, k];
+        return ToolboxSelectFlat(asrt, flat, p, p);
+    }
+    return method switch
+    {
+        "pearson"  => Correlation.Pearson(data[0], data[1]),
+        "spearman" => Correlation.Spearman(data[0], data[1]),
+        "kendall"  => Correlation.KendallsTau(data[0], data[1]),
+        _ => throw new Exception($"unknown correlation method: {method}")
+    };
 }
 
 // Mirrors numerics/support/toolbox/linalg.hpp's run_linalg arm against the real

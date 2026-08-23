@@ -24,23 +24,46 @@ check_pair <- function(x, y, x_name = "x", y_name = "y") {
   invisible(NULL)
 }
 
-#' Correlation between two samples
+#' Correlation between two samples, or a correlation matrix
 #'
-#' Mirrors the C# `Correlation` class of the Numerics library. Upstream's matrix overloads
-#' (`Pearson(double[,])`, `Spearman(double[,])`) are not ported, so only the paired-vector forms
-#' are available here.
+#' Mirrors the C# `Correlation` class of the Numerics library: the paired-vector forms
+#' (`Correlation.Pearson`/`Spearman`/`KendallsTau`, both `IList<double>` overloads) and the
+#' Pearson/Spearman column-pairwise matrix overloads (`Pearson(double[,])`/`Spearman(double[,])`).
 #'
-#' @param x,y numeric vectors of equal length, at least two elements.
-#' @param method one of `"pearson"` (the default), `"spearman"`, or `"kendall"`.
-#' @return a single numeric correlation coefficient.
+#' @param x a numeric vector (paired-vector form, `y` required), or a numeric matrix or data
+#'   frame (matrix form, `y` omitted) with one column per variable.
+#' @param y a numeric vector of the same length as `x`, or `NULL` (the default) to compute the
+#'   correlation matrix of `x`'s columns instead.
+#' @param method one of `"pearson"` (the default), `"spearman"`, or `"kendall"`. `"kendall"` is
+#'   rejected when `y` is `NULL`: upstream has no `KendallsTau(double[,])` overload, so there is
+#'   no Kendall matrix form to compute.
+#' @return with `y` given, a single numeric correlation coefficient; with `y` `NULL`, a numeric
+#'   `ncol(x)`-by-`ncol(x)` matrix, dimnamed from `x`'s columns when `x` has column names.
 #' @examples
 #' x <- c(14, 8, 32, 7, 3, 15)
 #' y <- c(10, 5, 7, 4, 3, 8)
 #' correlation(x, y)
 #' correlation(x, y, method = "kendall")
+#' correlation(cbind(x, y))
 #' @export
-correlation <- function(x, y, method = c("pearson", "spearman", "kendall")) {
+correlation <- function(x, y = NULL, method = c("pearson", "spearman", "kendall")) {
   method <- match.arg(method)
+  if (is.null(y)) {
+    if (method == "kendall") {
+      stop("`method = \"kendall\"` has no matrix form; upstream Correlation has no ",
+           "KendallsTau(double[,]) overload", call. = FALSE)
+    }
+    x <- as.matrix(x)
+    if (!is.numeric(x)) {
+      stop("`x` must be a numeric matrix or data frame when `y` is NULL", call. = FALSE)
+    }
+    p <- ncol(x)
+    data <- lapply(seq_len(p), function(j) x[, j])
+    r <- toolbox_run("correlation", paste0(method, "_matrix"), data)
+    m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+    dimnames(m) <- list(colnames(x), colnames(x))
+    return(m)
+  }
   check_pair(x, y)
   toolbox_run("correlation", method, list(x, y))$values[[1]]
 }

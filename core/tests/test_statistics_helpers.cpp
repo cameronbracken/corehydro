@@ -3,10 +3,13 @@
 // Percentile(IList<double>, IList<double>, bool) line 573, RanksInPlace(double[], out double[])
 // line 674) @ 2a0357a. P4 Task 1 -- the four small helpers HypothesisTests (P4 Task 2) needs and
 // this port had deliberately omitted; see the header notes in tools.hpp / statistics.hpp for the
-// full fidelity discussion.
+// full fidelity discussion. P4 Task 4 adds the Correlation.Pearson(double[,])/Spearman(double[,])
+// matrix overload tests (upstream/Numerics/Numerics/Data/Statistics/Correlation.cs @ 2a0357a,
+// lines 87/169); see correlation.hpp's own file header.
 #include <limits>
 #include <vector>
 
+#include "corehydro/numerics/data/correlation.hpp"
 #include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/tools.hpp"
 #include "check.hpp"
@@ -101,6 +104,108 @@ void test_ranks_in_place_ties_tolerance_discriminates() {
     CHECK_NEAR(ties[2], 0.0, 0.0);
 }
 
+// pearson_matrix/spearman_matrix on the Test_Correlation.cs "big" dataset (upstream
+// Test_Pearson_Big/Test_Spearman_Big), built as a 15-by-2 matrix (XArray column 0, YArray
+// column 1). The off-diagonal must equal the already-pinned pairwise oracle at 1e-10
+// (0.988054377242161 for Pearson, 1 for Spearman); the diagonal is exactly 1 (cov[j,j] is the
+// SAME dx*dx accumulation as ss[j], so corr[j,j] = ss[j] / sqrt(ss[j] * ss[j]) round-trips
+// exactly); and the matrix is symmetric bit-for-bit (cov[k,j] is a literal copy of cov[j,k], and
+// sqrt(ss[j] * ss[k]) == sqrt(ss[k] * ss[j]) since IEEE-754 multiplication is commutative).
+void test_pearson_matrix_big() {
+    const std::vector<double> x_array{230408, 288010, 345611, 403213,  460815,  518417, 576019,
+                                      633612, 691223, 748825, 806427,  864029,  921631, 1036834,
+                                      1152038};
+    const std::vector<double> y_array{1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4,
+                                      1530.9, 1533.2, 1534.7, 1535.9, 1538,   1541.3, 1547.7,
+                                      1552.7};
+    auto m = bfdata::pearson_matrix({x_array, y_array});
+    CHECK_EQ(m.size(), std::size_t{2});
+    CHECK_EQ(m[0].size(), std::size_t{2});
+    CHECK_EQ(m[1].size(), std::size_t{2});
+
+    CHECK_EQ(m[0][0], 1.0);
+    CHECK_EQ(m[1][1], 1.0);
+    CHECK_NEAR(m[0][1], 0.988054377242161, 1e-10);
+    CHECK_EQ(m[0][1], m[1][0]);
+}
+
+void test_spearman_matrix_big() {
+    const std::vector<double> x_array{230408, 288010, 345611, 403213,  460815,  518417, 576019,
+                                      633612, 691223, 748825, 806427,  864029,  921631, 1036834,
+                                      1152038};
+    const std::vector<double> y_array{1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4,
+                                      1530.9, 1533.2, 1534.7, 1535.9, 1538,   1541.3, 1547.7,
+                                      1552.7};
+    auto m = bfdata::spearman_matrix({x_array, y_array});
+    CHECK_EQ(m.size(), std::size_t{2});
+    CHECK_EQ(m[0][0], 1.0);
+    CHECK_EQ(m[1][1], 1.0);
+    CHECK_NEAR(m[0][1], 1.0, 1e-10);
+    CHECK_EQ(m[0][1], m[1][0]);
+}
+
+// A three-column case whose three off-diagonals each equal the corresponding pairwise call --
+// an identity check against the already-oracle-pinned pairwise pearson()/spearman(), not a new
+// oracle (mirrors test_mean_variance's identity-check style above).
+void test_pearson_matrix_three_column() {
+    const std::vector<double> c0{14, 8, 32, 7, 3, 15};
+    const std::vector<double> c1{10, 5, 7, 4, 3, 8};
+    const std::vector<double> c2{2, 9, 1, 6, 4, 11};
+
+    auto m = bfdata::pearson_matrix({c0, c1, c2});
+    CHECK_EQ(m.size(), std::size_t{3});
+    for (const auto& row : m) CHECK_EQ(row.size(), std::size_t{3});
+
+    CHECK_EQ(m[0][0], 1.0);
+    CHECK_EQ(m[1][1], 1.0);
+    CHECK_EQ(m[2][2], 1.0);
+    CHECK_NEAR(m[0][1], bfdata::pearson(c0, c1), 0.0);
+    CHECK_NEAR(m[0][2], bfdata::pearson(c0, c2), 0.0);
+    CHECK_NEAR(m[1][2], bfdata::pearson(c1, c2), 0.0);
+    CHECK_EQ(m[0][1], m[1][0]);
+    CHECK_EQ(m[0][2], m[2][0]);
+    CHECK_EQ(m[1][2], m[2][1]);
+}
+
+void test_spearman_matrix_three_column() {
+    const std::vector<double> c0{14, 8, 32, 7, 3, 15};
+    const std::vector<double> c1{10, 5, 7, 4, 3, 8};
+    const std::vector<double> c2{2, 9, 1, 6, 4, 11};
+
+    auto m = bfdata::spearman_matrix({c0, c1, c2});
+    CHECK_EQ(m.size(), std::size_t{3});
+
+    CHECK_EQ(m[0][0], 1.0);
+    CHECK_EQ(m[1][1], 1.0);
+    CHECK_EQ(m[2][2], 1.0);
+    CHECK_NEAR(m[0][1], bfdata::spearman(c0, c1), 0.0);
+    CHECK_NEAR(m[0][2], bfdata::spearman(c0, c2), 0.0);
+    CHECK_NEAR(m[1][2], bfdata::spearman(c1, c2), 0.0);
+    CHECK_EQ(m[0][1], m[1][0]);
+    CHECK_EQ(m[0][2], m[2][0]);
+    CHECK_EQ(m[1][2], m[2][1]);
+}
+
+// Upstream has no guard on an empty column list beyond the explicit "at least one column" throw
+// (Correlation.Pearson(double[,])/Spearman(double[,]), both lines ~93/183).
+void test_correlation_matrix_empty_columns_throws() {
+    bool threw = false;
+    try {
+        bfdata::pearson_matrix({});
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK_EQ(threw, true);
+
+    threw = false;
+    try {
+        bfdata::spearman_matrix({});
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK_EQ(threw, true);
+}
+
 }  // namespace
 
 int main() {
@@ -109,5 +214,10 @@ int main() {
     test_ranks_in_place_with_ties();
     test_ranks_in_place_ties_tolerance_discriminates();
     test_percentile_vector();
+    test_pearson_matrix_big();
+    test_spearman_matrix_big();
+    test_pearson_matrix_three_column();
+    test_spearman_matrix_three_column();
+    test_correlation_matrix_empty_columns_throws();
     return chtest::summary("test_statistics_helpers");
 }
