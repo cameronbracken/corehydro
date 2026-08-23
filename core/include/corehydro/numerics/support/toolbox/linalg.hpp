@@ -21,9 +21,10 @@
 namespace corehydro::numerics::support::detail {
 
 // Reassembles a row-major flattened matrix from a data vector plus its declared shape.
-inline math::linalg::Matrix to_matrix(const std::vector<double>& flat, int rows, int cols) {
+inline math::linalg::Matrix to_matrix(const std::string& method, const std::vector<double>& flat,
+                                      int rows, int cols) {
     if (static_cast<int>(flat.size()) != rows * cols)
-        throw std::runtime_error("toolbox method 'linalg' matrix data holds " +
+        throw std::runtime_error("toolbox method 'linalg." + method + "' matrix data holds " +
                                  std::to_string(flat.size()) + " values, expected " +
                                  std::to_string(rows) + " x " + std::to_string(cols));
     return math::linalg::Matrix(rows, cols, flat);
@@ -50,7 +51,7 @@ inline ToolboxResult run_linalg(const std::string& method,
     int rows = options.at("rows").as_int();
     int cols = options.at("cols").as_int();
     const std::vector<double>& a_flat = data_at(data, 0, "linalg", method);
-    math::linalg::Matrix A = to_matrix(a_flat, rows, cols);
+    math::linalg::Matrix A = to_matrix(method, a_flat, rows, cols);
 
     if (method == "qr_q") {
         math::linalg::QRDecomposition qr(A);
@@ -76,7 +77,7 @@ inline ToolboxResult run_linalg(const std::string& method,
             throw std::runtime_error("toolbox method 'linalg.qr_solve_matrix' needs a 'b_cols' option");
         int b_cols = options.at("b_cols").as_int();
         const std::vector<double>& b_flat = data_at(data, 1, "linalg", method);
-        math::linalg::Matrix B = to_matrix(b_flat, rows, b_cols);
+        math::linalg::Matrix B = to_matrix(method, b_flat, rows, b_cols);
         math::linalg::QRDecomposition qr(A);
         return matrix_result(qr.solve(B));
     }
@@ -86,7 +87,7 @@ inline ToolboxResult run_linalg(const std::string& method,
             throw std::runtime_error("toolbox method 'linalg." + method + "' needs a 'b_cols' option");
         int b_cols = options.at("b_cols").as_int();
         const std::vector<double>& b_flat = data_at(data, 1, "linalg", method);
-        math::linalg::Matrix B = to_matrix(b_flat, rows, b_cols);
+        math::linalg::Matrix B = to_matrix(method, b_flat, rows, b_cols);
         math::linalg::gauss_jordan_solve(A, B);  // in-place: A -> inverse, B -> solution set
         return matrix_result(method == "gauss_jordan_inverse" ? A : B);
     }

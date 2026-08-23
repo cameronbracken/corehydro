@@ -801,7 +801,7 @@ tolerance was added anywhere in the phase.
 The math-extras phase (P2, branch `port-math-extras`, August 2026) closed the last major slice of
 Numerics that is not a distribution, model, or estimator, and is the second step of the release arc
 laid out in `docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`. **Root
-finding** (`Numerics/Mathematics/RootFinding/`) folded Bisection/Secant/Newton into `root_find()`'s
+finding** (`Numerics/Mathematics/Root Finding/`) folded Bisection/Secant/Newton into `root_find()`'s
 existing bracketing interface as a `method` option beside the default Brent, and added
 `root_find_system()` for a vector-valued system via multivariate Newton-Raphson. **Integration**
 (`Numerics/Mathematics/Integration/`, the seven integration classes plus the `Integration` statics)

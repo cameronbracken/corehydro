@@ -492,10 +492,10 @@ callback_fixture_function <- function(name) {
     Quad2D_XPlusY = function(x, y) x + y,
     # Test_AdaptiveSimpsonsRule2D.Test_PI, upstream's Integrands.PI2D: the indicator of the unit
     # disc, whose integral over [-1, 1] x [-1, 1] approximates pi.
-    Quad2D_PI2D = function(x, y) if (x^2 + y^2 < 1) 1 else 0,
+    Quad2D_PI2D = function(x, y) if (x * x + y * y < 1) 1 else 0,
     # The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
     # [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
-    Ode_TestFunction = function(t, y) y - t^2 + 1,
+    Ode_TestFunction = function(t, y) y - t * t + 1,
     # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
     # sum in an explicit `for` loop rather than through sum(): R's sum() accumulates in extended
     # precision where C++, Python and C# accumulate in double, and a Markov chain turns one
@@ -810,11 +810,11 @@ callback_fixture_function <- function(name) {
     # Test_Numerics/Mathematics/Integration/Integrands.cs `PI(double[] vals)`, the indicator of the
     # unit disc read off the first two components -- always 2-dimensional regardless of how many
     # dimensions the case's own `min`/`max` carry, exactly as the C# function is.
-    Nd_PI = function(x) if (x[1]^2 + x[2]^2 < 1) 1 else 0,
+    Nd_PI = function(x) if (x[1] * x[1] + x[2] * x[2] < 1) 1 else 0,
     # Integrands.cs `GSL(double[] x)`: the GNU Scientific Library 3-dimensional test integrand,
     # A / (1 - cos(x0) cos(x1) cos(x2)) with A = 1 / pi^3.
     Nd_GSL = function(x) {
-      a <- 1 / pi^3
+      a <- 1 / (pi * pi * pi)
       a / (1 - cos(x[1]) * cos(x[2]) * cos(x[3]))
     },
     # Integrands.cs `SumOfNormals(double[] p)`, the 3-dimensional case (upstream's

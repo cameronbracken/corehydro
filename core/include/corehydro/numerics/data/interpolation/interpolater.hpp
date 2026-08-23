@@ -6,8 +6,11 @@
 // correlated-call memory that lets repeated nearby lookups reuse the hunt search's
 // exponential expansion.
 //
-// Only the pieces Linear/Bilinear actually need are ported: the standalone Search.cs
-// utility class, CubicSpline, and Polynomial interpolation are not part of this port.
+// CubicSpline and Polynomial interpolation (cubic_spline.hpp, polynomial.hpp) both derive
+// from this base too. The standalone Search.cs utility class is a separate, DIFFERENT
+// algorithm from the search machinery here (free functions with boundary-sentinel returns,
+// not member functions with correlated-call state); only the subset its callers need
+// (SNIS's Sequential overload, Histogram's Bisection overload) is ported, in search.hpp.
 //
 // Quirk transcribed verbatim (not "fixed"): `deltaStart = Math.Min(1, (int)Math.Pow(Count,
 // 0.25))` always evaluates to 1 for any Count >= 2 (pow(2, 0.25) already truncates to >= 1,

@@ -1808,7 +1808,7 @@ def _callback_fixture_function(name):
     # The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
     # [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
     if name == "Ode_TestFunction":
-        return lambda t, y: y - t ** 2 + 1.0
+        return lambda t, y: y - t * t + 1.0
     # The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only and
     # sum in an explicit loop rather than through sum(): a Markov chain turns one differing bit
     # into a different chain outright, so the four runners have to agree to the last bit for these
@@ -1945,7 +1945,7 @@ def _callback_fixture_function(name):
 
 
 def _nd_gsl(x):
-    a = 1.0 / (math.pi**3)
+    a = 1.0 / (math.pi * math.pi * math.pi)
     return a / (1.0 - math.cos(x[0]) * math.cos(x[1]) * math.cos(x[2]))
 
 

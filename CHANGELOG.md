@@ -18,10 +18,10 @@ distribution-gaps release (0.8.0).
 
 ### Added
 
-- **Root finding**, ported from `Numerics/Mathematics/RootFinding/`. `root_find()` gains a
+- **Root finding**, ported from `Numerics/Mathematics/Root Finding/`. `root_find()` gains a
   `method` option over its existing bracketing interface -- `"brent"` (the default), `"bisection"`,
-  `"secant"`, and `"newton"` (which takes an optional analytic derivative `df`, falling back to a
-  numerical one) -- and a new export, `root_find_system()`, solves a vector-valued system with
+  `"secant"`, and `"newton"` (which takes an analytic derivative `df` and a `first_guess` instead of
+  a bracket) -- and a new export, `root_find_system()`, solves a vector-valued system with
   multivariate Newton-Raphson given the system function, its Jacobian, and a starting vector.
 - **Integration**, ported from `Numerics/Mathematics/Integration/` (the seven integration classes)
   plus the `Integration` statics. `quadrature()` gains a `method` option covering ten deterministic
@@ -34,7 +34,7 @@ distribution-gaps release (0.8.0).
 - **`ode_solve()`**, the ported `RungeKutta` solver (`"rk4"`, `"rk2"`, `"rkf"`, `"cash_karp"`) for
   `dy/dt = f(t, y)` from an initial value, returning an array of length `time_steps` (not
   `time_steps + 1`), matching the C# convention.
-- **Cubic spline and polynomial interpolation**, ported from `Numerics/Mathematics/Interpolation/`.
+- **Cubic spline and polynomial interpolation**, ported from `Numerics/Data/Interpolation/`.
   `interpolate()` gains `method = "cubic_spline"` and `method = "polynomial"` (the latter requiring
   an `order`) beside the existing linear method; the `x_transform`/`y_transform`/`extrapolate`
   arguments remain linear-only, an enforced guard rather than a silent no-op, matching the C#
@@ -44,7 +44,8 @@ distribution-gaps release (0.8.0).
   and `gauss_jordan()` (ported `GaussJordanElimination`, an in-place row-reduction solve).
 - **A `special` toolbox group**: `debye()` (the Debye function) and `polynomial_eval()` (Horner's
   method, with `variant` covering the standard, reverse, and reverse-unit coefficient
-  conventions), both ported from `Numerics/Mathematics/SpecialFunctions/Evaluate.cs`.
+  conventions). `debye()` is ported from `Numerics/Mathematics/Special Functions/Debye.cs`, and
+  `polynomial_eval()` from `Numerics/Mathematics/Special Functions/Evaluate.cs`.
 - **A `functions` toolbox group**: `univariate_function()`, evaluating the ported
   `Numerics.Functions.LinearFunction` and `PowerFunction` -- forward and inverse, and
   `PowerFunction`'s own `IsInverse` switch -- over an optional normally-distributed noise path
@@ -58,6 +59,16 @@ distribution-gaps release (0.8.0).
   quadrature (including the three Monte Carlo families), the ODE solver, spline/polynomial
   interpolation, and the three new toolbox groups -- ending in an executable reproduction check.
 
+### Changed
+
+- **`root_find()`'s `tolerance` argument moved from positional slot 4 to slot 7.** The new
+  `method`, `df`, and `first_guess` arguments landed ahead of it to keep the bracketing arguments
+  together. A 0.8.0 caller passing `tolerance` positionally now gets a clear argument-validation
+  error instead of a value landing in the wrong parameter.
+- **`quadrature()` gained `method` between `upper` and `absolute_tolerance`.** Same effect: a
+  0.8.0 positional call shifts by one argument and now fails loudly rather than misbehaving
+  silently.
+
 ### Notes
 
 - **Two of the three seeded Monte Carlo integrators carry a measured, honestly documented rounding
@@ -68,6 +79,14 @@ distribution-gaps release (0.8.0).
   floating-point contraction differences in the variance/chi-squared accumulation. The affected
   fixture cases assert the seeded evaluation counts and solver status instead of the integral
   value, with the measurements recorded in the fixture and in worked example 18.
+
+### Validation
+
+ctest 98/98 (the fixture suite alone 5762 checks); oracle gate 5751 reproduced, 0 failed, 11
+skipped (the documented GEV standard-error set, unchanged); testthat 6622/0; pytest 1619 passed.
+`R CMD check --as-cran` holds at the same three NOTEs (the CRAN-incoming non-FOSS-license note,
+the long-path note listing vendored core headers, and a local HTML-tidy-version note) with no
+WARNING.
 
 ## [0.8.0] - 2026-08-21
 
