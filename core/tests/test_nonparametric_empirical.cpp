@@ -4,14 +4,14 @@
 //
 // Oracle is the upstream C# test class @ c2e6192:
 //   upstream/RMC-BestFit/src/RMC.BestFit.Tests/DataFrame/NonparametricEmpiricalTests.cs
-// Only the two GetNonparametricMoments*/duplicate-value cases are transcribed: the other
-// two C# tests (SummaryAndStandardizedValues_DuplicateValues_ReturnFiniteResults,
+// Only the two GetNonparametricMoments*/duplicate-value cases are transcribed here: the
+// other two C# tests (SummaryAndStandardizedValues_DuplicateValues_ReturnFiniteResults,
 // EmpiricalConsumers_AllValuesIdentical_ReportUnavailableResults) additionally exercise
-// SummaryStatisticsAllData/SetStandardizedValues, which are project-wide deferrals (see
-// data_frame.hpp's header -- "the summary-statistics / Q-Q surface ... need further
-// EmpiricalDistribution facades"); the degenerate-input half of the SECOND test
-// (all-identical values -> GetNonparametricMoments returns null/nullopt) is still covered
-// below since get_nonparametric_moments() itself IS ported.
+// SummaryStatisticsAllData/SetStandardizedValues, which are now ported (P4 Task 5) and
+// transcribed instead in test_data_frame_facades.cpp, alongside the exact-data
+// hypothesis-test facade; the degenerate-input half of the SECOND test (all-identical
+// values -> GetNonparametricMoments returns null/nullopt) is still covered below since
+// get_nonparametric_moments() itself IS ported (and was already, since B9).
 //
 // These checks are invariant-based (finite / null), not pinned to a specific C# oracle
 // literal -- GetNonparametricMoments has no fixture-dispatch surface (it is consumed only

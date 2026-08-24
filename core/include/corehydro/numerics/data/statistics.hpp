@@ -30,7 +30,12 @@
 // P1 adds `maximum()`, the plain `Statistics.Maximum(IList<double>)` overload
 // (Statistics.cs:90-105), for SpatialGEV::SetDefaultParameters (SpatialGEV.cs:480,487,494).
 // The C# `data == null` throw has no C++ analogue (a `const std::vector<double>&` is never
-// null); the `Minimum` overload is not ported -- no caller needs it yet.
+// null).
+//
+// P4 Task 5 adds `minimum()`, the plain `Statistics.Minimum(IList<double>)` overload
+// (Statistics.cs:63-82), for DataFrame::summary_statistics_exact_data_only. Same shape as
+// `maximum()` (seed at the opposite infinity, same NaN-propagation and empty-sequence
+// handling), and the same C# `data == null` throw has no C++ analogue.
 //
 // P4 Task 1 adds `mean_variance()` (Statistics.cs:262 -- literally `(Mean(data),
 // Variance(data))`, so nothing new to verify beyond the pair construction), the
@@ -83,6 +88,21 @@ inline double standard_deviation(const std::vector<double>& data) { return std::
 // is an identity over `mean()`/`variance()` above, not an independent computation.
 inline std::pair<double, double> mean_variance(const std::vector<double>& data) {
     return {mean(data), variance(data)};
+}
+
+// Returns the smallest value of the unsorted data array (mirrors Statistics.Minimum's
+// `IList<double>` overload; P4 Task 5, for DataFrame::summary_statistics_exact_data_only).
+// Returns NaN for an empty sequence or if any entry is NaN; the running min is seeded at
+// +inf and an all-empty result collapses back to NaN.
+inline double minimum(const std::vector<double>& data) {
+    if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
+
+    double min = std::numeric_limits<double>::infinity();
+    for (double x : data) {
+        if (std::isnan(x)) return std::numeric_limits<double>::quiet_NaN();
+        if (x < min) min = x;
+    }
+    return std::isinf(min) && min > 0.0 ? std::numeric_limits<double>::quiet_NaN() : min;
 }
 
 // Returns the largest value of the unsorted data array (mirrors Statistics.Maximum's

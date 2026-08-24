@@ -42,16 +42,28 @@
 // `public static` (access modifier only, per the ThresholdData::set_number_below
 // internal->public precedent) so the arm-by-arm shift is directly testable.
 //
-// Deliberately NOT ported:
-//   - the hypothesis-test facade (JarqueBera/LjungBox/EqualVarianceTtest/
-//     UnequalVarianceTtest/Ftest/LinearTrend/Unimodality/WaldWolfowitz/MannWhitney/
-//     MannKendall/SummaryHypothesisTest -- Numerics HypothesisTests is unported)
-//   - the summary-statistics / Q-Q surface (SummaryStatisticsExactDataOnly,
-//     SummaryStatisticsAllData, SetStandardizedValues -- they need further
-//     EmpiricalDistribution facades). GetNonparametricMoments and
-//     GetNonparametricMomentsROS were ported ADDITIVELY in B9 (Bulletin17CDistribution's
-//     SetInitialParameters/SetDefaultParameters call them); the C# `double[]?` null
-//     return maps to std::optional<std::vector<double>> (empty optional == C# null).
+// P4 TASK 5 (hypothesis-test and summary-statistics facades): nine of the eleven C#
+// `#region Hypothesis Testing` members are ported over the P4 Task 2 numerics::data::
+// hypothesis_tests free functions -- jarque_bera_test, ljung_box_test,
+// equal_variance_t_test, unequal_variance_t_test, f_test, linear_trend_test,
+// wald_wolfowitz_test, mann_whitney_test, mann_kendall_test -- and all three
+// `#region Summary Statistics` members that were previously deferred --
+// summary_statistics_exact_data_only, summary_statistics_all_data, and
+// set_standardized_values (GetNonparametricMoments/GetNonparametricMomentsROS were
+// already ported additively in B9; the two summary methods and set_standardized_values
+// share their `create_empirical_distribution_with_unique_values` private static tail).
+// Still NOT ported, both deferred to P5 together (a locked scope decision, not an
+// oversight): UnimodalityTest and SummaryHypothesisTest. Both need
+// Numerics.MachineLearning.GaussianMixtureModel, which is unported (see
+// numerics/data/hypothesis_tests.hpp's own header note on UnimodalityTest).
+// SummaryHypothesisTest is the more consequential of the two to defer correctly: it calls
+// all ten hypothesis-test facades (the nine above plus Unimodality) inside ONE try/catch
+// that NaNs the entire ten-key result dictionary if ANY single call throws -- so shipping
+// it with a throwing UnimodalityTest arm would silently NaN nine otherwise-working test
+// results rather than surface the real gap. Both wait for P5, when GaussianMixtureModel
+// lands and UnimodalityTest can be un-gated alongside SummaryHypothesisTest in one commit.
+//
+// Deliberately NOT ported (unrelated to the above):
 //   - CreateBlockSeries / CreatePeaksOverThresholdSeries (need the unported TimeSeries
 //     container), CreateFromUSGS + USGSRawText (network import)
 //   - XML (ToXElement / XElement constructor), INotifyPropertyChanged, and the
@@ -88,6 +100,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -107,8 +120,10 @@
 #include "corehydro/models/data_frame/data_types/threshold_data.hpp"
 #include "corehydro/models/data_frame/data_types/uncertain_data.hpp"
 #include "corehydro/models/support/validation_result.hpp"
+#include "corehydro/numerics/data/hypothesis_tests.hpp"
 #include "corehydro/numerics/data/multiple_grubbs_beck_test.hpp"
 #include "corehydro/numerics/data/regression/linear_regression.hpp"
+#include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
 #include "corehydro/numerics/distributions/binomial.hpp"
@@ -497,6 +512,173 @@ class DataFrame {
         }
     }
 
+    // --- Hypothesis-test facades (C# #region Hypothesis Testing, lines 927-1082; P4 Task
+    // 5). Every facade below reads ExactSeries ONLY -- no censoring filter, no threshold
+    // machinery -- and selects log10_value() vs value() on use_log10, exactly mirroring
+    // the C# `useLog10 ? ... Log10Value ... : ... Value` ternaries. The two-sample splits
+    // filter on Data::index() (matching C#'s `x.Index < index` / `x.Index >= index`), NOT
+    // on array position, so a non-contiguous or out-of-order index still splits correctly.
+    // UnimodalityTest and SummaryHypothesisTest are a locked P5 scope decision -- see the
+    // file header. ---
+
+    // Returns the sample of the exact series' Value or Log10Value column, in series order
+    // (the common `useLog10 ? Select(Log10Value) : Select(Value)` projection every
+    // single-sample facade below performs).
+    std::vector<double> exact_sample(bool use_log10) const {
+        std::vector<double> sample;
+        sample.reserve(exact_series_.count());
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            sample.push_back(use_log10 ? exact_series_[i].log10_value()
+                                       : exact_series_[i].value());
+        return sample;
+    }
+
+    // Splits the exact series' Value or Log10Value column into two samples at `index`,
+    // filtering on Data::index() -- `< index` goes to the first sample, `>= index` to the
+    // second (the common two-sample projection every two-sample facade below performs).
+    std::pair<std::vector<double>, std::vector<double>> split_exact_sample(
+        int index, bool use_log10) const {
+        std::vector<double> sample1;
+        std::vector<double> sample2;
+        for (std::size_t i = 0; i < exact_series_.count(); i++) {
+            double v = use_log10 ? exact_series_[i].log10_value() : exact_series_[i].value();
+            if (exact_series_[i].index() < index)
+                sample1.push_back(v);
+            else
+                sample2.push_back(v);
+        }
+        return {std::move(sample1), std::move(sample2)};
+    }
+
+    // The Jarque-Bera test for normality; exact data only (C# JarqueBeraTest, line 936).
+    double jarque_bera_test(bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        return numerics::data::hypothesis_tests::jarque_bera_test(exact_sample(use_log10));
+    }
+
+    // The Ljung-Box test for nonzero autocorrelation; exact data only (C# LjungBoxTest,
+    // line 949).
+    double ljung_box_test(int lag_max = -1, bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        return numerics::data::hypothesis_tests::ljung_box_test(exact_sample(use_log10),
+                                                                 lag_max);
+    }
+
+    // The equal-variance (Student's) t-test for a difference in two sample means; exact
+    // data only (C# EqualVarianceTtest, line 962). Throws "Invalid index." when the split
+    // at `index` leaves either side with fewer than 2 points.
+    double equal_variance_t_test(int index, bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        auto [sample1, sample2] = split_exact_sample(index, use_log10);
+        if (sample1.size() < 2 || sample2.size() < 2)
+            throw std::invalid_argument("Invalid index.");
+        return numerics::data::hypothesis_tests::equal_variance_t_test(sample1, sample2);
+    }
+
+    // The unequal-variance (Welch's) t-test for a difference in two sample means; exact
+    // data only (C# UnequalVarianceTtest, line 978). Throws "Invalid index." when the
+    // split at `index` leaves either side with fewer than 2 points.
+    double unequal_variance_t_test(int index, bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        auto [sample1, sample2] = split_exact_sample(index, use_log10);
+        if (sample1.size() < 2 || sample2.size() < 2)
+            throw std::invalid_argument("Invalid index.");
+        return numerics::data::hypothesis_tests::unequal_variance_t_test(sample1, sample2);
+    }
+
+    // The F-test for a difference in two sample variances; exact data only (C# Ftest,
+    // line 994). Throws "Invalid index." when the split at `index` leaves either side
+    // with fewer than 2 points.
+    double f_test(int index, bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        auto [sample1, sample2] = split_exact_sample(index, use_log10);
+        if (sample1.size() < 2 || sample2.size() < 2)
+            throw std::invalid_argument("Invalid index.");
+        return numerics::data::hypothesis_tests::f_test(sample1, sample2);
+    }
+
+    // The linear trend test for stationarity (trend); exact data only (C#
+    // LinearTrendTest, line 1010). NOTE (transcription note 1): the C# method does NOT
+    // call the equivalent `HypothesisTests.LinearTrendTest` static (which exists and is
+    // identical), instead inlining the LinearRegression + StudentT computation itself; it
+    // also computes a local `d` that is assigned but never used and then recomputes the
+    // identical expression inline in the `return`. Both oddities are mirrored here rather
+    // than "cleaned up" to a call through numerics::data::hypothesis_tests::linear_trend_test.
+    double linear_trend_test(bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        std::vector<double> indexes;
+        indexes.reserve(exact_series_.count());
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            indexes.push_back(static_cast<double>(exact_series_[i].index()));
+        std::vector<double> values = exact_sample(use_log10);
+
+        numerics::math::linalg::Matrix x_vals(static_cast<int>(indexes.size()), 1, indexes);
+        numerics::math::linalg::Vector y_vals(values);
+        numerics::data::regression::LinearRegression lm(x_vals, y_vals, true);
+        numerics::distributions::StudentT tdist(static_cast<double>(lm.degrees_of_freedom()));
+        double d = std::fabs(lm.parameters()[1] / lm.parameter_standard_errors()[1]);
+        (void)d;  // upstream computes this and never uses it -- see the note above.
+        return (1.0 - tdist.cdf(std::fabs(lm.parameters()[1] /
+                                          lm.parameter_standard_errors()[1]))) *
+               2.0;
+    }
+
+    // The Wald-Wolfowitz runs test for independence and stationarity; exact data only (C#
+    // WaldWolfowitzTest, line 1050).
+    double wald_wolfowitz_test(bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        return numerics::data::hypothesis_tests::wald_wolfowitz_test(exact_sample(use_log10));
+    }
+
+    // The Mann-Whitney U test for homogeneity and stationarity (jump); exact data only
+    // (C# MannWhitneyTest, line 1063). Requires at least 20 exact points (a distinct,
+    // higher floor than every other facade's 10) and throws "Invalid index." when the
+    // split at `index` leaves either side with fewer than 3 points. The smaller sample is
+    // always passed first, matching C#'s `sample1.Count <= sample2.Count` dispatch.
+    double mann_whitney_test(int index, bool use_log10 = false) const {
+        if (exact_series_.count() < 20)
+            throw std::invalid_argument(
+                "The exact data series must have at least 20 items before performing this "
+                "hypothesis test.");
+        auto [sample1, sample2] = split_exact_sample(index, use_log10);
+        if (sample1.size() < 3 || sample2.size() < 3)
+            throw std::invalid_argument("Invalid index.");
+        return sample1.size() <= sample2.size()
+                   ? numerics::data::hypothesis_tests::mann_whitney_test(sample1, sample2)
+                   : numerics::data::hypothesis_tests::mann_whitney_test(sample2, sample1);
+    }
+
+    // The Mann-Kendall test for homogeneity and stationarity (trend); exact data only (C#
+    // MannKendallTest, line 1078).
+    double mann_kendall_test(bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        return numerics::data::hypothesis_tests::mann_kendall_test(exact_sample(use_log10));
+    }
+
     // Computes nonparametric central moments [mean, stdDev, skewness, kurtosis] of the
     // data, optionally log10-transformed (C# GetNonparametricMoments, line 1659; ported
     // additively in B9). Combines exact, uncertain, and interval data with their
@@ -639,6 +821,272 @@ class DataFrame {
             create_empirical_distribution_with_unique_values(values, probs);
         if (!dist.has_value()) return std::nullopt;
         return dist->central_moments(1000);
+    }
+
+    // The twenty summary-dictionary keys, in insertion order (C# `Dictionary<string,
+    // double>` -- an ordered key/value list here since insertion order is oracle-visible
+    // and the R/Python glue selects by label). Shared by both summary methods below.
+    static const std::vector<std::string>& summary_statistics_keys() {
+        static const std::vector<std::string> keys = {
+            "Record Length",     "Events Per Index (λ)", "Low Outliers",
+            "Minimum",           "Maximum",                   "Mean",
+            "Std Dev",           "Skewness",                  "Kurtosis",
+            "Mean (of log)",     "Std Dev (of log)",          "Skewness (of log)",
+            "Kurtosis (of log)", "1%",                        "5%",
+            "25%",               "50%",                       "75%",
+            "95%",               "99%"};
+        return keys;
+    }
+
+    // The all-NaN summary result both summary methods below return when there are fewer
+    // than 10 exact points (C# lines 1789-1808 / 1849-1868).
+    std::vector<std::pair<std::string, double>> unavailable_summary_statistics() const {
+        std::vector<std::pair<std::string, double>> result;
+        result.reserve(summary_statistics_keys().size());
+        for (const std::string& key : summary_statistics_keys())
+            result.emplace_back(key, std::numeric_limits<double>::quiet_NaN());
+        return result;
+    }
+
+    // Returns summary statistics for exact data only (C# SummaryStatisticsExactDataOnly,
+    // line 1786; P4 Task 5). Reports NaN for all twenty keys when there are fewer than 10
+    // exact points. NOTE (transcription note 2): Kurtosis here is `moments[3] + 3` (raw
+    // excess kurtosis shifted back to Pearson's kurtosis); summary_statistics_all_data()
+    // below reports the SAME moments[3] slot with NO +3 -- the asymmetry is upstream's,
+    // not a port bug. NOTE (transcription note 5): the C# `ExactSeries.Count <= 2 ? ... :
+    // ...` moment/percentile guards below are dead code -- the outer `Count < 10` guard
+    // above has already returned by the time they run -- but are ported anyway for
+    // structural fidelity (a byte-for-byte mirror of the C# branch, not a "cleaned up"
+    // simplification), matching this codebase's standing convention of preserving
+    // upstream oddities rather than silently removing them.
+    std::vector<std::pair<std::string, double>> summary_statistics_exact_data_only() const {
+        if (exact_series_.count() < 10) return unavailable_summary_statistics();
+
+        std::vector<double> values = exact_sample(/*use_log10=*/false);
+        std::vector<double> log_values = exact_sample(/*use_log10=*/true);
+
+        constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+        std::vector<double> moments = exact_series_.count() <= 2
+                                          ? std::vector<double>{kNaN, kNaN, kNaN, kNaN}
+                                          : numerics::data::product_moments(values);
+        std::vector<double> log_moments = exact_series_.count() <= 2
+                                              ? std::vector<double>{kNaN, kNaN, kNaN, kNaN}
+                                              : numerics::data::product_moments(log_values);
+        std::vector<double> percentiles =
+            exact_series_.count() <= 2
+                ? std::vector<double>{kNaN, kNaN, kNaN, kNaN, kNaN, kNaN, kNaN}
+                : numerics::data::percentile(
+                      values, std::vector<double>{0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99});
+
+        std::vector<std::pair<std::string, double>> result;
+        result.reserve(summary_statistics_keys().size());
+        result.emplace_back("Record Length", static_cast<double>(exact_series_.count()));
+        result.emplace_back("Events Per Index (λ)", lambda_);
+        result.emplace_back("Low Outliers", static_cast<double>(number_of_low_outliers_));
+        result.emplace_back("Minimum", numerics::data::minimum(values));
+        result.emplace_back("Maximum", numerics::data::maximum(values));
+        result.emplace_back("Mean", moments[0]);
+        result.emplace_back("Std Dev", moments[1]);
+        result.emplace_back("Skewness", moments[2]);
+        result.emplace_back("Kurtosis", moments[3] + 3.0);
+        result.emplace_back("Mean (of log)", log_moments[0]);
+        result.emplace_back("Std Dev (of log)", log_moments[1]);
+        result.emplace_back("Skewness (of log)", log_moments[2]);
+        result.emplace_back("Kurtosis (of log)", log_moments[3] + 3.0);
+        result.emplace_back("1%", percentiles[0]);
+        result.emplace_back("5%", percentiles[1]);
+        result.emplace_back("25%", percentiles[2]);
+        result.emplace_back("50%", percentiles[3]);
+        result.emplace_back("75%", percentiles[4]);
+        result.emplace_back("95%", percentiles[5]);
+        result.emplace_back("99%", percentiles[6]);
+        return result;
+    }
+
+    // Returns summary statistics for all data, from a nonparametric distribution over the
+    // combined exact/uncertain/interval series (C# SummaryStatisticsAllData, line 1845;
+    // P4 Task 5). Reports NaN for all twenty keys when there are fewer than 10 exact
+    // points. NOTE (transcription note 3): `values`, `log_values`, and `probs` below are
+    // three INDEPENDENTLY sorted parallel arrays -- the same quirk
+    // create_empirical_distribution_with_unique_values() already documents, carried
+    // through unchanged from the two GetNonparametricMoments methods it shares this tail
+    // with (`probs` is `plotting_position_complements()`, the same private helper).
+    // Central moments use 1000 quadrature steps (transcription note 4: SetStandardizedValues
+    // below uses 200 -- different, on purpose). Kurtosis here is the RAW moments[3] slot
+    // with no +3 (see transcription note 2 on summary_statistics_exact_data_only() above).
+    std::vector<std::pair<std::string, double>> summary_statistics_all_data() const {
+        if (exact_series_.count() < 10) return unavailable_summary_statistics();
+
+        std::vector<double> values;
+        values.reserve(exact_series_.count() + uncertain_series_.count() +
+                       interval_series_.count());
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            values.push_back(exact_series_[i].value());
+        for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+            values.push_back(uncertain_series_[i].value());
+        for (std::size_t i = 0; i < interval_series_.count(); i++)
+            values.push_back(interval_series_[i].value());
+        std::sort(values.begin(), values.end());
+
+        std::vector<double> probs = plotting_position_complements();
+
+        std::vector<double> log_values;
+        log_values.reserve(exact_series_.count() + uncertain_series_.count() +
+                           interval_series_.count());
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            log_values.push_back(exact_series_[i].log10_value());
+        for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+            log_values.push_back(uncertain_series_[i].log10_value());
+        for (std::size_t i = 0; i < interval_series_.count(); i++)
+            log_values.push_back(interval_series_[i].log10_value());
+        std::sort(log_values.begin(), log_values.end());
+
+        constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+        std::optional<numerics::distributions::EmpiricalDistribution> dist =
+            create_empirical_distribution_with_unique_values(values, probs);
+        std::vector<double> moments =
+            dist.has_value() ? dist->central_moments(1000)
+                             : std::vector<double>{kNaN, kNaN, kNaN, kNaN};
+        std::optional<numerics::distributions::EmpiricalDistribution> log_dist =
+            create_empirical_distribution_with_unique_values(log_values, probs);
+        std::vector<double> log_moments =
+            log_dist.has_value() ? log_dist->central_moments(1000)
+                                 : std::vector<double>{kNaN, kNaN, kNaN, kNaN};
+
+        create_full_time_series();
+
+        std::vector<std::pair<std::string, double>> result;
+        result.reserve(summary_statistics_keys().size());
+        result.emplace_back("Record Length",
+                             static_cast<double>(full_time_series_.size()));
+        result.emplace_back("Events Per Index (λ)", lambda_);
+        result.emplace_back("Low Outliers", static_cast<double>(number_of_low_outliers_));
+        result.emplace_back("Minimum", numerics::data::minimum(values));
+        result.emplace_back("Maximum", numerics::data::maximum(values));
+        result.emplace_back("Mean", moments[0]);
+        result.emplace_back("Std Dev", moments[1]);
+        result.emplace_back("Skewness", moments[2]);
+        result.emplace_back("Kurtosis", moments[3]);
+        result.emplace_back("Mean (of log)", log_moments[0]);
+        result.emplace_back("Std Dev (of log)", log_moments[1]);
+        result.emplace_back("Skewness (of log)", log_moments[2]);
+        result.emplace_back("Kurtosis (of log)", log_moments[3]);
+        result.emplace_back("1%", dist.has_value() ? dist->inverse_cdf(0.01) : kNaN);
+        result.emplace_back("5%", dist.has_value() ? dist->inverse_cdf(0.05) : kNaN);
+        result.emplace_back("25%", dist.has_value() ? dist->inverse_cdf(0.25) : kNaN);
+        result.emplace_back("50%", dist.has_value() ? dist->inverse_cdf(0.5) : kNaN);
+        result.emplace_back("75%", dist.has_value() ? dist->inverse_cdf(0.75) : kNaN);
+        result.emplace_back("95%", dist.has_value() ? dist->inverse_cdf(0.95) : kNaN);
+        result.emplace_back("99%", dist.has_value() ? dist->inverse_cdf(0.99) : kNaN);
+        return result;
+    }
+
+    // Sets standardized values (for a Q-Q plot) on every exact/uncertain/interval item
+    // (C# SetStandardizedValues, line 2165; P4 Task 5). A no-op guard at fewer than 4
+    // exact points (a plain early return, NOT the 10-item / NaN-fill convention the two
+    // summary methods above use -- upstream's own inconsistency, mirrored here). NOTE
+    // (transcription note 3, continued): `values`, `log_values`, and `probs` are again
+    // three independently sorted parallel arrays. NOTE (transcription note 4): central
+    // moments here use 200 quadrature steps, not the 1000 the summary methods use --
+    // different, on purpose. Control flow mirrors C# exactly: if EITHER distribution is
+    // unavailable, BOTH standardized fields on every item are set to NaN and the method
+    // returns; otherwise StandardizedValue is set from a Normal(moments) fit (or set to
+    // NaN alone, if the real-space moments are non-finite) and StandardizedLog10Value is
+    // set independently from a Normal(log_moments) fit (or set to NaN alone) -- so a
+    // failure on one side does not touch the other side's already-written field.
+    void set_standardized_values() {
+        if (exact_series_.count() < 4) return;
+
+        std::vector<double> values;
+        values.reserve(exact_series_.count() + uncertain_series_.count() +
+                       interval_series_.count());
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            values.push_back(exact_series_[i].value());
+        for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+            values.push_back(uncertain_series_[i].value());
+        for (std::size_t i = 0; i < interval_series_.count(); i++)
+            values.push_back(interval_series_[i].value());
+        std::sort(values.begin(), values.end());
+
+        std::vector<double> probs = plotting_position_complements();
+
+        std::vector<double> log_values;
+        log_values.reserve(exact_series_.count() + uncertain_series_.count() +
+                           interval_series_.count());
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            log_values.push_back(exact_series_[i].log10_value());
+        for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+            log_values.push_back(uncertain_series_[i].log10_value());
+        for (std::size_t i = 0; i < interval_series_.count(); i++)
+            log_values.push_back(interval_series_[i].log10_value());
+        std::sort(log_values.begin(), log_values.end());
+
+        std::optional<numerics::distributions::EmpiricalDistribution> dist =
+            create_empirical_distribution_with_unique_values(values, probs);
+        std::optional<numerics::distributions::EmpiricalDistribution> log_dist =
+            create_empirical_distribution_with_unique_values(log_values, probs);
+
+        constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+        if (!dist.has_value() || !log_dist.has_value()) {
+            for (std::size_t i = 0; i < exact_series_.count(); i++) {
+                exact_series_[i].set_standardized_value(kNaN);
+                exact_series_[i].set_standardized_log10_value(kNaN);
+            }
+            for (std::size_t i = 0; i < uncertain_series_.count(); i++) {
+                uncertain_series_[i].set_standardized_value(kNaN);
+                uncertain_series_[i].set_standardized_log10_value(kNaN);
+            }
+            for (std::size_t i = 0; i < interval_series_.count(); i++) {
+                interval_series_[i].set_standardized_value(kNaN);
+                interval_series_[i].set_standardized_log10_value(kNaN);
+            }
+            return;
+        }
+
+        std::vector<double> moments = dist->central_moments(200);
+        std::vector<double> log_moments = log_dist->central_moments(200);
+
+        if (std::isnan(moments[0]) || std::isnan(moments[1])) {
+            for (std::size_t i = 0; i < exact_series_.count(); i++)
+                exact_series_[i].set_standardized_value(kNaN);
+            for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+                uncertain_series_[i].set_standardized_value(kNaN);
+            for (std::size_t i = 0; i < interval_series_.count(); i++)
+                interval_series_[i].set_standardized_value(kNaN);
+            return;
+        }
+
+        numerics::distributions::Normal normal(moments[0], moments[1]);
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            exact_series_[i].set_standardized_value(
+                normal.inverse_cdf(exact_series_[i].plotting_position_complement()));
+        for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+            uncertain_series_[i].set_standardized_value(
+                normal.inverse_cdf(uncertain_series_[i].plotting_position_complement()));
+        for (std::size_t i = 0; i < interval_series_.count(); i++)
+            interval_series_[i].set_standardized_value(
+                normal.inverse_cdf(interval_series_[i].plotting_position_complement()));
+
+        if (std::isnan(log_moments[0]) || std::isnan(log_moments[1])) {
+            for (std::size_t i = 0; i < exact_series_.count(); i++)
+                exact_series_[i].set_standardized_log10_value(kNaN);
+            for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+                uncertain_series_[i].set_standardized_log10_value(kNaN);
+            for (std::size_t i = 0; i < interval_series_.count(); i++)
+                interval_series_[i].set_standardized_log10_value(kNaN);
+            return;
+        }
+
+        numerics::distributions::Normal log_normal(log_moments[0], log_moments[1]);
+        for (std::size_t i = 0; i < exact_series_.count(); i++)
+            exact_series_[i].set_standardized_log10_value(
+                log_normal.inverse_cdf(exact_series_[i].plotting_position_complement()));
+        for (std::size_t i = 0; i < uncertain_series_.count(); i++)
+            uncertain_series_[i].set_standardized_log10_value(
+                log_normal.inverse_cdf(uncertain_series_[i].plotting_position_complement()));
+        for (std::size_t i = 0; i < interval_series_.count(); i++)
+            interval_series_[i].set_standardized_log10_value(
+                log_normal.inverse_cdf(interval_series_[i].plotting_position_complement()));
     }
 
     // Create a deep copy of the data frame (C# Clone, line 1907, which round-trips

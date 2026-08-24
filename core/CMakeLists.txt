@@ -120,6 +120,7 @@ set(BF_TESTS
   test_network_optimization
   test_statistics_helpers
   test_hypothesis_tests
+  test_data_frame_facades
 )
 
 # Sobol test takes the direction-number file as its sole argument.
