@@ -13,16 +13,15 @@
 // `std::out_of_range` convention the sibling link-function headers already use for
 // `ArgumentOutOfRangeException`.
 //
-// TWO implementations, not three: `LinearFunction` and `PowerFunction` below. The upstream third
-// implementation, `TabularFunction` (`Numerics/Functions/TabularFunction.cs`), is NOT ported --
-// it is built entirely on `UncertainOrderedPairedData`/`OrderedPairedData`/`Ordinate`/
-// `UncertainOrdinate` (the `Numerics.Data` "Paired Data" subsystem, `Numerics/Data/Paired Data/`),
-// which this repo has not ported. That subsystem is scheduled for Phase P4 (per
-// `docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`); TabularFunction
-// is deferred alongside it rather than ported against a stand-in container. See
-// `upstream/CLAUDE.md`'s "What is deliberately not ported" section for the matching severance
-// entry, and `core/tests/test_univariate_functions.cpp`'s header for why
-// `Test_Tabular_Function` (`Test_Numerics/Functions/Test_Functions.cs`) is not transcribed.
+// THREE implementations: `LinearFunction` and `PowerFunction` below, plus `TabularFunction`
+// (`numerics/functions/tabular_function.hpp`, ported P4 Task 9), built entirely on
+// `UncertainOrderedPairedData`/`OrderedPairedData`/`Ordinate`/`UncertainOrdinate` (the
+// `Numerics.Data` "Paired Data" subsystem, `Numerics/Data/Paired Data/`, ported across P4 Tasks
+// 7-9: Ordinate/LineSimplification, OrderedPairedData, then UncertainOrdinate/
+// UncertainOrderedPairedData/TabularFunction). `Test_Tabular_Function`
+// (`Test_Numerics/Functions/Test_Functions.cs`) is transcribed in
+// `core/tests/test_uncertain_paired_data.cpp` alongside the Paired Data subsystem's own tests,
+// not in `test_univariate_functions.cpp` (which still only carries LinearFunction/PowerFunction).
 #pragma once
 
 #include <vector>

@@ -123,6 +123,7 @@ set(BF_TESTS
   test_data_frame_facades
   test_ordinate
   test_ordered_paired_data
+  test_uncertain_paired_data
 )
 
 # Sobol test takes the direction-number file as its sole argument.
