@@ -1267,3 +1267,250 @@ hypothesis_test <- function(x, y = NULL, method = "jarque_bera", population_mean
   r <- toolbox_run("hypothesis", method, data, opts)
   stats::setNames(r$values, "p_value")
 }
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification (numerics/data/paired_data/, P4 Tasks 7-9), plus TabularFunction's
+# tabular/tabular_inverse arm on the "functions" group. Every curve verb below reads the same
+# strict_x/strict_y/order_x/order_y shape contract paired_data.hpp documents;
+# curve_interpolate() additionally reads x_transform/y_transform. Only five verbs are exported --
+# line_simplify, search, and is_valid are reachable through the fixture/oracle-gate surface but
+# are not given an R-facing wrapper by this task.
+
+# Internal: build a `distributions` list of corehydro_dist objects, recycling a single one across
+# every `x`. Shared by uncertain_curve_sample() and tabular_function(), which use identical
+# recycling and error text.
+paired_data_distributions <- function(distributions, x) {
+  if (inherits(distributions, "corehydro_dist")) distributions <- list(distributions)
+  if (!is.list(distributions) || length(distributions) == 0L ||
+      !all(vapply(distributions, inherits, logical(1), "corehydro_dist"))) {
+    stop("`distributions` must be a corehydro_dist or a list of corehydro_dist objects",
+         call. = FALSE)
+  }
+  if (length(distributions) == 1L && length(x) > 1L) {
+    distributions <- rep(distributions, length(x))
+  }
+  if (length(distributions) != length(x)) {
+    stop(sprintf("`distributions` must have length 1 or length(x) (%d); got %d",
+                 length(x), length(distributions)), call. = FALSE)
+  }
+  distributions
+}
+
+#' Interpolate a paired x-y curve
+#'
+#' Mirrors the C# `OrderedPairedData.GetYFromX`/`GetXFromY`: linear interpolation over a curve
+#' that keeps itself sorted/validated against a caller-chosen monotonicity contract, with
+#' optional per-axis transforms (log10 or the standard normal z-score) applied before/after
+#' interpolation. Exactly one of `xout`/`yout` must be supplied.
+#'
+#' @param x,y numeric vectors of equal length (at least two), the curve's ordinates.
+#' @param xout numeric vector of x positions to interpolate y at.
+#' @param yout numeric vector of y positions to interpolate x at.
+#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"`, or `"normal_z"`.
+#' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
+#' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
+#'   between consecutive ordinates. Default `TRUE`.
+#' @return a numeric vector, the same length as whichever of `xout`/`yout` was supplied.
+#' @examples
+#' curve_interpolate(c(50, 100, 150, 200, 250), c(100, 200, 300, 400, 500), xout = 75)
+#' @export
+curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
+                              x_transform = c("none", "logarithmic", "normal_z"),
+                              y_transform = c("none", "logarithmic", "normal_z"),
+                              order_x = c("ascending", "descending", "none"),
+                              order_y = c("ascending", "descending", "none"),
+                              strict_x = TRUE, strict_y = TRUE) {
+  check_pair(x, y)
+  if (is.null(xout) == is.null(yout)) {
+    stop("exactly one of `xout` or `yout` must be supplied", call. = FALSE)
+  }
+  x_transform <- match.arg(x_transform)
+  y_transform <- match.arg(y_transform)
+  order_x <- match.arg(order_x)
+  order_y <- match.arg(order_y)
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y,
+               x_transform = x_transform, y_transform = y_transform)
+  if (!is.null(xout)) {
+    if (!is.numeric(xout)) {
+      stop("`xout` must be numeric", call. = FALSE)
+    }
+    toolbox_run("paired_data", "interpolate_y", list(x, y, xout), opts)$values
+  } else {
+    if (!is.numeric(yout)) {
+      stop("`yout` must be numeric", call. = FALSE)
+    }
+    toolbox_run("paired_data", "interpolate_x", list(x, y, yout), opts)$values
+  }
+}
+
+#' Area under a paired x-y curve
+#'
+#' Mirrors the C# `OrderedPairedData.TrapezoidalAreaUnderY`/`TrapezoidalAreaUnderX`: the
+#' trapezoidal-rule area between the curve and the x-axis (`under = "y"`) or the y-axis
+#' (`under = "x"`). Requires x (for `under = "y"`) or y (for `under = "x"`) to be sorted
+#' ascending or descending -- `order_x`/`order_y = "none"` raises the same error the C# method
+#' does.
+#'
+#' @inheritParams curve_interpolate
+#' @param under one of `"y"` (default, area under the curve against the x-axis) or `"x"` (area
+#'   against the y-axis).
+#' @return a single number.
+#' @examples
+#' curve_area(c(1, 2, 3, 4), c(1, 4, 9, 16))
+#' @export
+curve_area <- function(x, y, under = c("y", "x"),
+                       order_x = c("ascending", "descending", "none"),
+                       order_y = c("ascending", "descending", "none"),
+                       strict_x = TRUE, strict_y = TRUE) {
+  check_pair(x, y)
+  under <- match.arg(under)
+  order_x <- match.arg(order_x)
+  order_y <- match.arg(order_y)
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y)
+  method <- if (identical(under, "y")) "area_under_y" else "area_under_x"
+  toolbox_run("paired_data", method, list(x, y), opts)$values[[1]]
+}
+
+#' Simplify a paired x-y curve
+#'
+#' Mirrors the C# `OrderedPairedData`'s three curve-simplification algorithms: Douglas-Peucker
+#' (`method = "rdp"`, needs `tolerance`), Visvalingam-Whyatt (`method = "visvalingam"`, needs
+#' `num_to_keep`), and Lang (`method = "lang"`, needs `tolerance` and `look_ahead`). NOTE: unlike
+#' `rdp`/`visvalingam`, which always keep the curve's first and last point, `lang` does not
+#' force-keep the trailing point -- a real, verified-against-the-real-C#-library upstream
+#' behavior (see `ordered_paired_data.hpp`'s sixth transcription note), not a port bug.
+#'
+#' @inheritParams curve_interpolate
+#' @param method one of `"rdp"` (default), `"visvalingam"`, or `"lang"`.
+#' @param tolerance perpendicular-distance tolerance; required for `method` `"rdp"` or `"lang"`.
+#' @param num_to_keep number of points to keep; required for `method = "visvalingam"`.
+#' @param look_ahead the Lang algorithm's look-ahead window; required for `method = "lang"`.
+#' @return a data frame with columns `x` and `y`.
+#' @examples
+#' x <- c(0, 1.57, 3.14, 4.71, 6.28)
+#' y <- c(0, 1, 0, -1, 0)
+#' curve_simplify(x, y, method = "rdp", tolerance = 0.01, strict_y = FALSE, order_y = "none")
+#' @export
+curve_simplify <- function(x, y, method = "rdp", tolerance = NULL, num_to_keep = NULL,
+                           look_ahead = NULL,
+                           order_x = c("ascending", "descending", "none"),
+                           order_y = c("ascending", "descending", "none"),
+                           strict_x = TRUE, strict_y = TRUE) {
+  check_pair(x, y)
+  if (!method %in% c("rdp", "visvalingam", "lang")) {
+    stop(sprintf("`method` must be one of \"rdp\", \"visvalingam\", \"lang\"; got \"%s\"", method),
+         call. = FALSE)
+  }
+  order_x <- match.arg(order_x)
+  order_y <- match.arg(order_y)
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y, algorithm = method)
+  if (identical(method, "rdp")) {
+    if (is.null(tolerance)) {
+      stop("`tolerance` is required when method = \"rdp\"", call. = FALSE)
+    }
+    opts$tolerance <- as.double(tolerance)
+  } else if (identical(method, "visvalingam")) {
+    if (is.null(num_to_keep)) {
+      stop("`num_to_keep` is required when method = \"visvalingam\"", call. = FALSE)
+    }
+    opts$num_to_keep <- as.integer(num_to_keep)
+  } else {
+    if (is.null(tolerance) || is.null(look_ahead)) {
+      stop("`tolerance` and `look_ahead` are both required when method = \"lang\"", call. = FALSE)
+    }
+    opts$tolerance <- as.double(tolerance)
+    opts$look_ahead <- as.integer(look_ahead)
+  }
+  r <- toolbox_run("paired_data", "simplify", list(x, y), opts)
+  m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+  data.frame(x = m[, 1], y = m[, 2])
+}
+
+#' Sample an uncertain paired curve
+#'
+#' Mirrors the C# `UncertainOrderedPairedData.CurveSample()`/`CurveSample(double)`: collapses a
+#' curve whose Y-coordinate is a whole distribution at each x down to a plain x-y curve, either
+#' at the distributions' means (`probability = NULL`, the default) or at a shared quantile
+#' (`probability` in `[0, 1]`).
+#'
+#' @param x numeric vector of x positions, at least one element.
+#' @param distributions a [distribution()] object, or a list of them the same length as `x` --
+#'   one distribution per x position. A single distribution is recycled across every `x`.
+#' @param probability quantile in `[0, 1]` to sample at; `NULL` (default) samples the mean.
+#' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
+#' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
+#'   between consecutive ordinates. Default `TRUE`.
+#' @return a data frame with columns `x` and `y`.
+#' @examples
+#' x <- c(1, 2, 3, 5)
+#' d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)),
+#'           distribution("Triangular", c(6, 8, 12)), distribution("Triangular", c(13, 19, 20)))
+#' uncertain_curve_sample(x, d, probability = 0.5)
+#' @export
+uncertain_curve_sample <- function(x, distributions, probability = NULL,
+                                   order_x = c("ascending", "descending", "none"),
+                                   order_y = c("ascending", "descending", "none"),
+                                   strict_x = TRUE, strict_y = TRUE) {
+  if (!is.numeric(x) || length(x) == 0L) {
+    stop("`x` must be a non-empty numeric vector", call. = FALSE)
+  }
+  distributions <- paired_data_distributions(distributions, x)
+  order_x <- match.arg(order_x)
+  order_y <- match.arg(order_y)
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y, distributions = distributions)
+  if (!is.null(probability)) opts$probability <- as.double(probability)
+  r <- toolbox_run("paired_data", "curve_sample", list(x), opts)
+  m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+  data.frame(x = m[, 1], y = m[, 2])
+}
+
+#' Evaluate a tabular function
+#'
+#' Mirrors the C# `TabularFunction`: builds an uncertain paired curve from `x` and
+#' `distributions`, samples it once (the mean curve, or `confidence_level` if given), and
+#' evaluates `Function()`/`InverseFunction()` at `at`. Unlike [curve_interpolate()] and friends,
+#' the underlying curve's shape contract is not configurable here -- `TabularFunction` is always
+#' built strict, ascending on both axes, matching every use in the ported C# test suite.
+#'
+#' @param x numeric vector, the curve's x positions, at least one element.
+#' @param distributions a [distribution()] object, or a list of them the same length as `x` --
+#'   one distribution per x position. A single distribution is recycled across every `x`.
+#' @param at numeric vector of points to evaluate at (or, when `inverse = TRUE`, points to
+#'   evaluate the inverse function at).
+#' @param inverse if `TRUE`, evaluates `InverseFunction()` instead of `Function()`.
+#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"`, or `"normal_z"`.
+#' @param confidence_level quantile in `[0, 1]` to sample the curve at; `NULL` (default) samples
+#'   the mean.
+#' @param allow_negative_y_values allow a negative or `NaN` result to pass through unmodified,
+#'   rather than clamping it to `0`. Default `FALSE` (clamp), matching every use in the ported
+#'   C# test suite -- the C# class default is `TRUE`.
+#' @return a numeric vector, the same length as `at`.
+#' @examples
+#' x <- c(50, 100, 150, 200, 250)
+#' d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
+#' tabular_function(x, d, at = 50, x_transform = "logarithmic")
+#' @export
+tabular_function <- function(x, distributions, at, inverse = FALSE,
+                             x_transform = c("none", "logarithmic", "normal_z"),
+                             y_transform = c("none", "logarithmic", "normal_z"),
+                             confidence_level = NULL, allow_negative_y_values = FALSE) {
+  if (!is.numeric(x) || length(x) == 0L) {
+    stop("`x` must be a non-empty numeric vector", call. = FALSE)
+  }
+  distributions <- paired_data_distributions(distributions, x)
+  if (!is.numeric(at) || length(at) == 0L) {
+    stop("`at` must be a non-empty numeric vector", call. = FALSE)
+  }
+  x_transform <- match.arg(x_transform)
+  y_transform <- match.arg(y_transform)
+  opts <- list(x = spec_array(as.double(x)), distributions = distributions,
+               x_transform = x_transform, y_transform = y_transform,
+               allow_negative_y_values = isTRUE(allow_negative_y_values))
+  if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
+  method <- if (isTRUE(inverse)) "tabular_inverse" else "tabular"
+  toolbox_run("functions", method, list(at), opts)$values
+}

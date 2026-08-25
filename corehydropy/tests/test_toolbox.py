@@ -5,11 +5,15 @@ import numpy as np
 import pytest
 
 from corehydropy import (
+    Distribution,
     RunningCovariance,
     RunningStatistics,
     autocorrelation,
     correlation,
     cross_correlation,
+    curve_area,
+    curve_interpolate,
+    curve_simplify,
     debye,
     dft,
     gauss_jordan,
@@ -37,9 +41,11 @@ from corehydropy import (
     sobol_sequence,
     stratify,
     summary_statistics,
+    tabular_function,
     trend_names,
     trend_parameters,
     trend_predict,
+    uncertain_curve_sample,
     univariate_function,
 )
 from corehydropy.models import trend
@@ -971,3 +977,91 @@ def test_hypothesis_test_validates_its_arguments():
         hypothesis_test(0, method="f_models", sse_restricted=1224.32, df_restricted=49, df_full=48)
     with pytest.raises(ValueError, match="must be one of"):
         hypothesis_test([1, 2, 3], method="not_a_method")
+
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
+# group. Oracle values are C# test literals transcribed verbatim into
+# core/tests/test_ordered_paired_data.cpp / test_uncertain_paired_data.cpp; see
+# fixtures/toolbox/paired_data.json for the full pinned set. Mirrors corehydror's
+# test-toolbox.R assertion for assertion.
+
+
+def test_curve_interpolate_reproduces_test_lin_and_test_loglin():
+    x = [50, 100, 150, 200, 250]
+    y = [100, 200, 300, 400, 500]
+    assert curve_interpolate(x, y, xout=75)[0] == pytest.approx(150.0, abs=1e-6)
+    assert curve_interpolate(x, y, xout=75, x_transform="logarithmic")[0] == pytest.approx(
+        158.496250072116, abs=1e-6
+    )
+
+
+def test_curve_area_reproduces_test_trapezoidal_area_dataset_1():
+    ctor_x = [230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+             691223, 748825, 806427, 864029, 921631, 1036834, 1152038]
+    ctor_y = [1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+             1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7]
+    assert curve_area(ctor_x, ctor_y) == pytest.approx(1413175623, abs=1)
+
+
+def test_curve_simplify_reproduces_the_three_algorithms_on_the_sin_curve():
+    x = [0, 1.57, 3.14, 4.71, 6.28]
+    y = [0, 1, 0, -1, 0]
+    rdp = curve_simplify(x, y, method="rdp", tolerance=0.01, strict_y=False, order_y="none")
+    vis = curve_simplify(x, y, method="visvalingam", num_to_keep=4, strict_y=False, order_y="none")
+    assert rdp.shape == (4, 2)
+    assert vis.shape == (4, 2)
+    assert rdp[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
+    assert vis[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
+
+    # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
+    # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here
+    # is THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test
+    # claims.
+    lang = curve_simplify(x, y, method="lang", tolerance=0.01, look_ahead=2, strict_y=False,
+                          order_y="none")
+    assert lang.shape == (3, 2)
+    assert lang[:, 0] == pytest.approx([0, 1.57, 4.71], abs=1e-6)
+    assert lang[:, 1] == pytest.approx([0, 1, -1], abs=1e-6)
+
+
+def test_uncertain_curve_sample_reproduces_test_curve_sample_probability():
+    x = [1, 2, 3, 5]
+    d = [
+        Distribution("Triangular", [1, 2, 3]),
+        Distribution("Triangular", [2, 4, 5]),
+        Distribution("Triangular", [6, 8, 12]),
+        Distribution("Triangular", [13, 19, 20]),
+    ]
+    r = uncertain_curve_sample(x, d, probability=0.5)
+    assert r[:, 0] == pytest.approx(x)
+    assert r[:, 1] == pytest.approx([2, 3.732051, 8.535898, 17.58258], abs=1e-5)
+
+
+def test_uncertain_curve_sample_recycles_a_single_distribution_across_x():
+    x = [1, 2, 3]
+    r = uncertain_curve_sample(x, Distribution("Triangular", [1, 2, 3]), probability=0.5)
+    assert r.shape == (3, 2)
+
+
+def test_tabular_function_reproduces_test_tabular_function():
+    x = [50, 100, 150, 200, 250]
+    d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
+    y = tabular_function(x, d, at=50, x_transform="logarithmic")
+    assert y[0] == pytest.approx(100.0, abs=1e-12)
+
+
+def test_paired_data_verbs_validate_their_arguments_identically_to_corehydror():
+    x = [50, 100, 150, 200, 250]
+    y = [100, 200, 300, 400, 500]
+    with pytest.raises(ValueError, match="exactly one of `xout` or `yout`"):
+        curve_interpolate(x, y, xout=75, yout=100)
+    with pytest.raises(ValueError, match="exactly one of `xout` or `yout`"):
+        curve_interpolate(x, y)
+    with pytest.raises(ValueError, match='must be one of "rdp", "visvalingam", "lang"'):
+        curve_simplify(x, y, method="not_a_method", tolerance=0.01)
+    d = [Distribution("Triangular", [1, 2, 3]), Distribution("Triangular", [2, 4, 5])]
+    with pytest.raises(ValueError, match=r"must have length 1 or length\(x\)"):
+        uncertain_curve_sample([1, 2, 3], d, probability=0.5)
+    with pytest.raises(ValueError, match=r"must have length 1 or length\(x\)"):
+        tabular_function([1, 2, 3], d, at=1)

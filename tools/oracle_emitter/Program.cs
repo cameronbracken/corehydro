@@ -5057,6 +5057,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return NetworkDispatch(method, data, options, asrt);
         case "hypothesis":
             return HypothesisDispatch(method, data, options, asrt);
+        case "paired_data":
+            return PairedDataDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -5577,6 +5579,30 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
 // C# constructor overload (the one that takes sigma).
 static double FunctionsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
+    if (method == "tabular" || method == "tabular_inverse")
+    {
+        double[] tabX = options.GetProperty("x").EnumerateArray().Select(ParseNum).ToArray();
+        var tabDists = options.GetProperty("distributions").EnumerateArray()
+            .Select(BuildSpecDistribution).ToArray();
+        if (tabDists.Length != tabX.Length)
+            throw new Exception(
+                $"toolbox method 'functions.{method}' needs one distribution per x value; " +
+                $"got {tabDists.Length} distributions for {tabX.Length} x values");
+        var tabUpd = new UncertainOrderedPairedData(tabX, tabDists, true, Numerics.Data.SortOrder.Ascending,
+            true, Numerics.Data.SortOrder.Ascending, tabDists[0].Type);
+        var tabFunc = new TabularFunction(tabUpd);
+        tabFunc.XTransform = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        tabFunc.YTransform = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        if (OptBool(options, "is_deterministic", false)) tabFunc.IsDeterministic = true;
+        if (options.TryGetProperty("confidence_level", out var clOpt)) tabFunc.ConfidenceLevel = clOpt.GetDouble();
+        tabFunc.AllowNegativeYValues = OptBool(options, "allow_negative_y_values", true);
+        double[] evalPoints = data[0];
+        var tvalues = method == "tabular"
+            ? evalPoints.Select(tabFunc.Function).ToArray()
+            : evalPoints.Select(tabFunc.InverseFunction).ToArray();
+        return ToolboxSelectFlat(asrt, tvalues, tvalues.Length, 1);
+    }
+
     string fn = options.GetProperty("function").GetString()!;
     double[] parameters = options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray();
     bool hasConfidence = options.TryGetProperty("confidence_level", out var clEl);
@@ -5719,6 +5745,177 @@ static Numerics.Data.SortOrder ParseSortOrder(string s) => s switch
     "descending" => Numerics.Data.SortOrder.Descending,
     _ => throw new Exception($"unknown sort order '{s}'; expected ascending or descending")
 };
+
+// Mirrors numerics/support/toolbox/paired_data.hpp's own paired_data_sort_order/
+// paired_data_transform: this group's spellings differ from ParseSortOrder/
+// ParseInterpolationTransform above (SortOrder.None is reachable here; the transform is
+// "logarithmic", not "log"), so it gets its own local parsers rather than reusing those.
+static Numerics.Data.SortOrder ParsePairedDataSortOrder(string s) => s switch
+{
+    "ascending" => Numerics.Data.SortOrder.Ascending,
+    "descending" => Numerics.Data.SortOrder.Descending,
+    "none" => Numerics.Data.SortOrder.None,
+    _ => throw new Exception($"unknown sort order '{s}'; expected ascending, descending, or none")
+};
+
+static Numerics.Data.Transform ParsePairedDataTransform(string s) => s switch
+{
+    "none" => Numerics.Data.Transform.None,
+    "logarithmic" => Numerics.Data.Transform.Logarithmic,
+    "normal_z" => Numerics.Data.Transform.NormalZ,
+    _ => throw new Exception($"unknown transform '{s}'; expected none, logarithmic, or normal_z")
+};
+
+// Mirrors numerics/support/toolbox/paired_data.hpp's run_paired_data: the real
+// Numerics.Data.OrderedPairedData / UncertainOrderedPairedData / LineSimplification driving the
+// same nine methods. `curve_sample`'s `distribution_type` is optional here too, defaulting to
+// the first built distribution's own .Type -- see the C++ header's file comment for why that
+// default is exact rather than a guess (CurveSample never consults IsValid/Distribution).
+static double PairedDataDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    OrderedPairedData BuildOpd(string m)
+    {
+        double[] x = data[0];
+        double[] y = data[1];
+        bool strictX = OptBool(options, "strict_x", true);
+        bool strictY = OptBool(options, "strict_y", true);
+        var orderX = ParsePairedDataSortOrder(OptString(options, "order_x", "ascending"));
+        var orderY = ParsePairedDataSortOrder(OptString(options, "order_y", "ascending"));
+        return new OrderedPairedData(x, y, strictX, orderX, strictY, orderY);
+    }
+
+    double[] CurveFlatFromOpd(OrderedPairedData opd)
+    {
+        var flat = new double[opd.Count * 2];
+        for (int i = 0; i < opd.Count; i++)
+        {
+            flat[2 * i] = opd[i].X;
+            flat[2 * i + 1] = opd[i].Y;
+        }
+        return flat;
+    }
+
+    double[] CurveFlatFromOrdinates(List<Ordinate> ords)
+    {
+        var flat = new double[ords.Count * 2];
+        for (int i = 0; i < ords.Count; i++)
+        {
+            flat[2 * i] = ords[i].X;
+            flat[2 * i + 1] = ords[i].Y;
+        }
+        return flat;
+    }
+
+    if (method == "interpolate_y")
+    {
+        var opd = BuildOpd(method);
+        double[] xout = data[2];
+        var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        var values = xout.Select(v => opd.GetYFromX(v, xt, yt)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+
+    if (method == "interpolate_x")
+    {
+        var opd = BuildOpd(method);
+        double[] yout = data[2];
+        var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        var values = yout.Select(v => opd.GetXFromY(v, xt, yt)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+
+    if (method == "area_under_y")
+        return ToolboxSelectFlatNoDims(asrt, new[] { BuildOpd(method).TrapezoidalAreaUnderY() });
+
+    if (method == "area_under_x")
+        return ToolboxSelectFlatNoDims(asrt, new[] { BuildOpd(method).TrapezoidalAreaUnderX() });
+
+    if (method == "simplify")
+    {
+        var opd = BuildOpd(method);
+        string algorithm = options.GetProperty("algorithm").GetString()!;
+        OrderedPairedData simplified = algorithm switch
+        {
+            "rdp" => opd.DouglasPeuckerSimplify(options.GetProperty("tolerance").GetDouble()),
+            "visvalingam" => opd.VisvaligamWhyattSimplify(options.GetProperty("num_to_keep").GetInt32()),
+            "lang" => opd.LangSimplify(options.GetProperty("tolerance").GetDouble(),
+                                       options.GetProperty("look_ahead").GetInt32()),
+            _ => throw new Exception($"unknown paired_data.simplify algorithm '{algorithm}'")
+        };
+        var flat = CurveFlatFromOpd(simplified);
+        return ToolboxSelectFlat(asrt, flat, simplified.Count, 2);
+    }
+
+    if (method == "line_simplify")
+    {
+        double[] x = data[0];
+        double[] y = data[1];
+        var ords = x.Zip(y, (xv, yv) => new Ordinate(xv, yv)).ToList();
+        var output = new List<Ordinate>();
+        LineSimplification.RamerDouglasPeucker(ords, options.GetProperty("epsilon").GetDouble(), ref output);
+        var flat = CurveFlatFromOrdinates(output);
+        return ToolboxSelectFlat(asrt, flat, output.Count, 2);
+    }
+
+    if (method == "search")
+    {
+        var opd = BuildOpd(method);
+        double value = options.GetProperty("value").GetDouble();
+        string axis = OptString(options, "axis", "x");
+        string algorithm = OptString(options, "algorithm", "smart");
+        int idx = (axis, algorithm) switch
+        {
+            ("x", "smart") => opd.SearchX(value),
+            ("x", "sequential") => opd.SequentialSearchX(value),
+            ("x", "bisection") => opd.BisectionSearchX(value),
+            ("x", "hunt") => opd.HuntSearchX(value),
+            ("x", "binary") => opd.BinarySearchX(value),
+            ("y", "smart") => opd.SearchY(value),
+            ("y", "sequential") => opd.SequentialSearchY(value),
+            ("y", "bisection") => opd.BisectionSearchY(value),
+            ("y", "hunt") => opd.HuntSearchY(value),
+            ("y", "binary") => opd.BinarySearchY(value),
+            _ => throw new Exception($"unknown paired_data.search axis/algorithm '{axis}'/'{algorithm}'")
+        };
+        return ToolboxSelectFlatNoDims(asrt, new double[] { idx });
+    }
+
+    if (method == "is_valid")
+    {
+        var opd = BuildOpd(method);
+        var names = new[] { "is_valid", "error_count" };
+        var values = new double[] { opd.IsValid ? 1.0 : 0.0, opd.IsValid ? 0 : opd.GetErrors().Count };
+        return ToolboxSelectNamed(asrt, names, values);
+    }
+
+    if (method == "curve_sample")
+    {
+        double[] x = data[0];
+        var dists = options.GetProperty("distributions").EnumerateArray()
+            .Select(BuildSpecDistribution).ToArray();
+        if (dists.Length != x.Length)
+            throw new Exception(
+                $"toolbox method 'paired_data.curve_sample' needs one distribution per x value; " +
+                $"got {dists.Length} distributions for {x.Length} x values");
+        bool strictX = OptBool(options, "strict_x", true);
+        bool strictY = OptBool(options, "strict_y", true);
+        var orderX = ParsePairedDataSortOrder(OptString(options, "order_x", "ascending"));
+        var orderY = ParsePairedDataSortOrder(OptString(options, "order_y", "ascending"));
+        var dtype = options.TryGetProperty("distribution_type", out var dtOpt)
+            ? Enum.Parse<UnivariateDistributionType>(dtOpt.GetString()!)
+            : dists[0].Type;
+        var uopd = new UncertainOrderedPairedData(x, dists, strictX, orderX, strictY, orderY, dtype);
+        var sampled = options.TryGetProperty("probability", out var probOpt)
+            ? uopd.CurveSample(probOpt.GetDouble())
+            : uopd.CurveSample();
+        var flat = CurveFlatFromOpd(sampled);
+        return ToolboxSelectFlat(asrt, flat, sampled.Count, 2);
+    }
+
+    throw new Exception($"unknown paired_data method: {method}");
+}
 
 static string OptString(JsonElement options, string key, string fallback) =>
     options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetString()! : fallback;

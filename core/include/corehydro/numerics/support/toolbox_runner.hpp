@@ -14,12 +14,12 @@
 //
 // Stateless by construction: one call builds whatever it needs, evaluates once, and drops it.
 //
-// The sixteen groups (correlation, gof, statistics, spectra, histogram, interpolation,
+// The seventeen groups (correlation, gof, statistics, spectra, histogram, interpolation,
 // regression, sampling, probability, link, trend, linalg, special, functions, network,
-// hypothesis) each live in their own header under numerics/support/toolbox/, holding that
-// group's detail::run_<group> function and any helper used only by it. Shared types and helpers
-// are in toolbox/common.hpp. This file includes all group headers and the run_toolbox dispatch
-// table.
+// hypothesis, paired_data) each live in their own header under numerics/support/toolbox/, holding
+// that group's detail::run_<group> function and any helper used only by it. Shared types and
+// helpers are in toolbox/common.hpp. This file includes all group headers and the run_toolbox
+// dispatch table.
 #pragma once
 
 #include "corehydro/numerics/support/toolbox/common.hpp"
@@ -43,6 +43,7 @@
 #include "corehydro/numerics/support/toolbox/functions.hpp"
 #include "corehydro/numerics/support/toolbox/network.hpp"
 #include "corehydro/numerics/support/toolbox/hypothesis.hpp"
+#include "corehydro/numerics/support/toolbox/paired_data.hpp"
 
 namespace corehydro::numerics::support {
 
@@ -66,6 +67,7 @@ inline ToolboxResult run_toolbox(const std::string& group, const std::string& me
     if (group == "functions") return detail::run_functions(method, data, options);
     if (group == "network") return detail::run_network(method, data, options);
     if (group == "hypothesis") return detail::run_hypothesis(method, data, options);
+    if (group == "paired_data") return detail::run_paired_data(method, data, options);
     throw std::runtime_error("unknown toolbox group: " + group);
 }
 

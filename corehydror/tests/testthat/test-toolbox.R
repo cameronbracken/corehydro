@@ -909,3 +909,82 @@ test_that("hypothesis_test() validates its arguments", {
   )
   expect_error(hypothesis_test(c(1, 2, 3), method = "not_a_method"), "must be one of")
 })
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
+# group. Oracle values are C# test literals transcribed verbatim into
+# core/tests/test_ordered_paired_data.cpp / test_uncertain_paired_data.cpp; see
+# fixtures/toolbox/paired_data.json for the full pinned set.
+
+test_that("curve_interpolate() reproduces Test_Lin and Test_LogLin", {
+  x <- c(50, 100, 150, 200, 250)
+  y <- c(100, 200, 300, 400, 500)
+  expect_equal(curve_interpolate(x, y, xout = 75), 150.0, tolerance = 1e-6)
+  expect_equal(curve_interpolate(x, y, xout = 75, x_transform = "logarithmic"),
+              158.496250072116, tolerance = 1e-6)
+})
+
+test_that("curve_area() reproduces Test_TrapezoidalArea (dataset 1, area under y)", {
+  ctor_x <- c(230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+             691223, 748825, 806427, 864029, 921631, 1036834, 1152038)
+  ctor_y <- c(1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+             1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7)
+  expect_equal(curve_area(ctor_x, ctor_y), 1413175623, tolerance = 1)
+})
+
+test_that("curve_simplify() reproduces the three simplification algorithms on the sin curve", {
+  x <- c(0, 1.57, 3.14, 4.71, 6.28)
+  y <- c(0, 1, 0, -1, 0)
+  rdp <- curve_simplify(x, y, method = "rdp", tolerance = 0.01, strict_y = FALSE, order_y = "none")
+  vis <- curve_simplify(x, y, method = "visvalingam", num_to_keep = 4, strict_y = FALSE,
+                        order_y = "none")
+  expect_equal(nrow(rdp), 4L)
+  expect_equal(nrow(vis), 4L)
+  expect_equal(rdp$y, c(0, 1, -1, 0), tolerance = 1e-6)
+  expect_equal(vis$y, c(0, 1, -1, 0), tolerance = 1e-6)
+
+  # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
+  # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here is
+  # THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test claims.
+  lang <- curve_simplify(x, y, method = "lang", tolerance = 0.01, look_ahead = 2,
+                         strict_y = FALSE, order_y = "none")
+  expect_equal(nrow(lang), 3L)
+  expect_equal(lang$x, c(0, 1.57, 4.71), tolerance = 1e-6)
+  expect_equal(lang$y, c(0, 1, -1), tolerance = 1e-6)
+})
+
+test_that("uncertain_curve_sample() reproduces Test_Curve_Sample_Probability", {
+  x <- c(1, 2, 3, 5)
+  d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)),
+           distribution("Triangular", c(6, 8, 12)), distribution("Triangular", c(13, 19, 20)))
+  r <- uncertain_curve_sample(x, d, probability = 0.5)
+  expect_equal(r$x, x)
+  expect_equal(r$y, c(2, 3.732051, 8.535898, 17.58258), tolerance = 1e-5)
+})
+
+test_that("uncertain_curve_sample() recycles a single distribution across x", {
+  x <- c(1, 2, 3)
+  r <- uncertain_curve_sample(x, distribution("Triangular", c(1, 2, 3)), probability = 0.5)
+  expect_equal(nrow(r), 3L)
+})
+
+test_that("tabular_function() reproduces Test_Tabular_Function", {
+  x <- c(50, 100, 150, 200, 250)
+  d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
+  y <- tabular_function(x, d, at = 50, x_transform = "logarithmic")
+  expect_equal(y, 100.0, tolerance = 1e-12)
+})
+
+test_that("paired_data verbs validate their arguments identically to corehydropy", {
+  x <- c(50, 100, 150, 200, 250)
+  y <- c(100, 200, 300, 400, 500)
+  expect_error(curve_interpolate(x, y, xout = 75, yout = 100),
+               "exactly one of `xout` or `yout`")
+  expect_error(curve_interpolate(x, y), "exactly one of `xout` or `yout`")
+  expect_error(curve_simplify(x, y, method = "not_a_method", tolerance = 0.01),
+               "must be one of")
+  d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)))
+  expect_error(uncertain_curve_sample(c(1, 2, 3), d, probability = 0.5),
+               "must have length 1 or length\\(x\\)")
+  expect_error(tabular_function(c(1, 2, 3), d, at = 1), "must have length 1 or length\\(x\\)")
+})

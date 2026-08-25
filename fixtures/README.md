@@ -1922,6 +1922,65 @@ Wald-Wolfowitz's `(1 - Normal.StandardCDF(1.167)) * 2` and Mann-Whitney's
 `(1 - Normal.StandardCDF(0.54)) * 2` -- each evaluated once here and pinned as a number, with the
 statistic and the expression recorded in the assertion's `source`.
 
+P4 "data and tests" (Task 10) added the `paired_data` group, the seventeenth, over the ported
+Paired Data subsystem (`numerics/data/paired_data/{ordered_paired_data,
+uncertain_ordered_paired_data,line_simplification}.hpp`, P4 Tasks 7-9). Every method that builds
+an `OrderedPairedData` reads the curve's shape contract from `data: [x, y]` plus four shared
+options -- `strict_x`/`strict_y` (bool, default `true`), `order_x`/`order_y` (the `SortOrder`
+names `"ascending"`/`"descending"`/`"none"`, default `"ascending"`) -- and, for
+`interpolate_y`/`interpolate_x` only, two more: `x_transform`/`y_transform` (the `Transform` names
+`"none"`/`"logarithmic"`/`"normal_z"`, default `"none"`). Nine methods:
+`interpolate_y`/`interpolate_x` (`data: [x, y, xout]`/`[x, y, yout]`) vectorize `GetYFromX`/
+`GetXFromY` over the third data vector, no `dims`; `area_under_y`/`area_under_x` are the two
+`TrapezoidalAreaUnder*` scalars; `simplify` (`options.algorithm` = `"rdp"` | `"visvalingam"` |
+`"lang"`, plus that algorithm's own `tolerance`/`num_to_keep`/`look_ahead`) returns the simplified
+curve flattened row-major with `dims = {n, 2}`, same for the standalone
+`line_simplify` (`options.epsilon`, no shape-contract options at all --
+`LineSimplification::RamerDouglasPeucker` takes a bare ordinate list); `search` (`options.value`,
+`axis` = `"x"`|`"y"`, `algorithm` = `"smart"`|`"sequential"`|`"bisection"`|`"hunt"`|`"binary"`)
+returns the found index as a scalar, built-searched-once-and-dropped (the C# search methods this
+un-gates mutate `XSearchStart`/`Xcorrelated` on the instance, so this group cannot and does not
+reproduce cross-call state); `is_valid` returns the NAMED two-value result
+`{"is_valid", "error_count"}` -- the C# `GetErrors()` message STRINGS do not cross this boundary
+(`ToolboxResult` carries doubles/names, not strings); `curve_sample` (`data: [x]`,
+`options.distributions` an array of `dist_spec` grammar objects, one per `x`, optional
+`options.probability`) builds an `UncertainOrderedPairedData` and returns
+`CurveSample()`/`CurveSample(probability)` flattened the same way, with `distribution_type`
+OPTIONAL despite the C# constructor having no default -- it falls back to the first built
+distribution's own type, which is exact rather than approximate because `CurveSample` never
+consults `IsValid`/`Distribution`. The `functions` group's `tabular`/`tabular_inverse` methods are
+this task's tenth surface, over the third `IUnivariateFunction`, `TabularFunction`: same
+`distributions` array plus `options.x` (the curve's domain, NOT part of `data` -- `data[0]` holds
+the evaluation points instead), the two transforms, `confidence_level`, `is_deterministic`, and
+`allow_negative_y_values`; unlike `paired_data`'s own methods, the underlying curve's shape
+contract is not configurable here (`TabularFunction` is always built strict/ascending on both
+axes, matching every C# test use), and `distribution_type` is never a settable option at all --
+only ever the first built distribution's own type.
+
+`fixtures/toolbox/paired_data.json` pins `Test_PairedData.cs`/`Test_PairedDataInterpolation.cs`/
+`Test_UncertainPairedData.cs` literals already transcribed and reviewer-verified into
+`core/tests/test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`: the four reservoir-
+curve sort-order datasets' `Test_GetY` sweep reduced to an 11-point representative subset (indices
+0, 7, 15, 23, 31, 39, 47, 55, 63, 71, 77 of the shared 78-point query array) plus two below/
+above-range clamp checks per dataset (the `GetYFromX` boundary guard itself, not a distinct C#
+literal) and both `TrapezoidalArea` values; the seven interpolation-transform combinations pinned
+in BOTH sort orders (14 tiny cases); `search`'s `871`/`127` on the shared 1000-point identity
+curve; and `curve_sample`'s two expectation vectors (the mean curve and the `probability = 0.5`
+curve) on the shared Triangular fixture. **THE ONE DELIBERATE CORRECTION TO AN UPSTREAM TEST
+in this file:** `curve_simplify`'s `lang` case pins **3** rows, not the 4 `rdp`/`visvalingam` pin --
+verified directly against the real C# library (not merely this port's own transcription):
+`LangSimplify(0.01, 2)` on the shared five-point sin curve returns `{(0,0), (1.57,1), (4.71,-1)}`,
+dropping `(6.28, 0)` -- see `ordered_paired_data.hpp`'s sixth transcription note for the full
+account of why `Test_LangSimplify.cs`'s own (weakly-asserted, length-bounded-loop) four-point
+claim does not hold. `line_simplify` and `is_valid` are exercised by the ctest suites
+(`test_ordinate.cpp`, `test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`'s own
+validity assertions) but carry no case in this file. `fixtures/toolbox/univariate_functions.json`
+gained four `tabular`/`tabular_inverse` cases transcribing `Test_Tabular_Function`'s own
+x = {50,100,150,200,250}, `Deterministic(100,200,300,400,500)`, `XTransform = Logarithmic` fixture
+-- the two boundary-clamp literals plus `Function(75)`/`InverseFunction(Function(75))` at the
+closed-form log-interpolation value the C# test itself computes rather than asserts as a separate
+literal.
+
 ### `optimizer`
 
 The fourteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated

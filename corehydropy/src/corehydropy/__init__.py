@@ -58,6 +58,11 @@ from .toolbox import (
     trend_parameters,
     trend_predict,
     univariate_function,
+    curve_interpolate,
+    curve_area,
+    curve_simplify,
+    uncertain_curve_sample,
+    tabular_function,
 )
 from .optim import Constraint, OptimResult, optim_maximize, optim_minimize
 from .callback import (
@@ -212,6 +217,11 @@ __all__ = [
     "univariate_function",
     "shortest_path",
     "hypothesis_test",
+    "curve_interpolate",
+    "curve_area",
+    "curve_simplify",
+    "uncertain_curve_sample",
+    "tabular_function",
     "OptimResult",
     "optim_minimize",
     "optim_maximize",

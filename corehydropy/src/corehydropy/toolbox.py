@@ -11,6 +11,7 @@ from importlib.resources import files
 import numpy as np
 
 from . import _core
+from .distributions import Distribution, _as_spec
 
 __all__ = [
     "correlation",
@@ -52,6 +53,11 @@ __all__ = [
     "univariate_function",
     "shortest_path",
     "hypothesis_test",
+    "curve_interpolate",
+    "curve_area",
+    "curve_simplify",
+    "uncertain_curve_sample",
+    "tabular_function",
 ]
 
 
@@ -1961,3 +1967,374 @@ def hypothesis_test(
 
     r = _toolbox_run("hypothesis", method, data, options)
     return {"p_value": r["values"][0]}
+
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification (numerics/data/paired_data/, P4 Tasks 7-9), plus TabularFunction's
+# tabular/tabular_inverse arm on the "functions" group. Mirrors corehydror's toolbox.R verb for
+# verb. Every curve verb below reads the same strict_x/strict_y/order_x/order_y shape contract
+# paired_data.hpp documents; curve_interpolate() additionally reads x_transform/y_transform. Only
+# five verbs are exported -- line_simplify, search, and is_valid are reachable through the
+# fixture/oracle-gate surface but are not given a Python-facing wrapper by this task.
+
+_SORT_ORDERS = ("ascending", "descending", "none")
+_PAIRED_TRANSFORMS = ("none", "logarithmic", "normal_z")
+
+
+def _check_sort_order(value: str, what: str) -> None:
+    if value not in _SORT_ORDERS:
+        raise ValueError(f"`{what}` must be one of {_SORT_ORDERS}; got {value!r}")
+
+
+def _check_paired_transform(value: str, what: str) -> None:
+    if value not in _PAIRED_TRANSFORMS:
+        raise ValueError(f"`{what}` must be one of {_PAIRED_TRANSFORMS}; got {value!r}")
+
+
+def _paired_data_shape_opts(strict_x: bool, strict_y: bool, order_x: str, order_y: str) -> dict:
+    _check_sort_order(order_x, "order_x")
+    _check_sort_order(order_y, "order_y")
+    return {
+        "strict_x": bool(strict_x),
+        "strict_y": bool(strict_y),
+        "order_x": order_x,
+        "order_y": order_y,
+    }
+
+
+def _paired_data_distributions(distributions, x) -> list:
+    """Internal: build a list of Distribution specs, recycling a single one across every `x`.
+
+    Shared by uncertain_curve_sample() and tabular_function(), which use identical recycling
+    and error text (see corehydror's paired_data_distributions()).
+    """
+    if isinstance(distributions, Distribution):
+        distributions = [distributions]
+    if (
+        not isinstance(distributions, (list, tuple))
+        or len(distributions) == 0
+        or not all(isinstance(d, Distribution) for d in distributions)
+    ):
+        raise ValueError("`distributions` must be a Distribution or a list of Distribution objects")
+    distributions = list(distributions)
+    if len(distributions) == 1 and len(x) > 1:
+        distributions = distributions * len(x)
+    if len(distributions) != len(x):
+        raise ValueError(
+            f"`distributions` must have length 1 or length(x) ({len(x)}); got {len(distributions)}"
+        )
+    return distributions
+
+
+def curve_interpolate(
+    x,
+    y,
+    xout=None,
+    yout=None,
+    x_transform: str = "none",
+    y_transform: str = "none",
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> np.ndarray:
+    """Interpolate a paired x-y curve.
+
+    Mirrors the C# ``OrderedPairedData.GetYFromX``/``GetXFromY``: linear interpolation over a
+    curve that keeps itself sorted/validated against a caller-chosen monotonicity contract, with
+    optional per-axis transforms (log10 or the standard normal z-score) applied before/after
+    interpolation. Exactly one of ``xout``/``yout`` must be supplied.
+
+    Parameters
+    ----------
+    x, y : array_like
+        Equal-length curve ordinates, at least two elements.
+    xout : array_like, optional
+        Positions to interpolate y at.
+    yout : array_like, optional
+        Positions to interpolate x at.
+    x_transform, y_transform : {"none", "logarithmic", "normal_z"}
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+        Require x/y to strictly increase/decrease (per ``order_x``/``order_y``) between
+        consecutive ordinates. Default ``True``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Same length as whichever of ``xout``/``yout`` was supplied.
+
+    Examples
+    --------
+    >>> from corehydropy import curve_interpolate
+    >>> curve_interpolate([50, 100, 150, 200, 250], [100, 200, 300, 400, 500], xout=75)
+    array([150.])
+    """
+    xa, ya = _check_pair(x, y)
+    if (xout is None) == (yout is None):
+        raise ValueError("exactly one of `xout` or `yout` must be supplied")
+    _check_paired_transform(x_transform, "x_transform")
+    _check_paired_transform(y_transform, "y_transform")
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    options["x_transform"] = x_transform
+    options["y_transform"] = y_transform
+    if xout is not None:
+        xouta = np.atleast_1d(np.asarray(xout, dtype=float))
+        r = _toolbox_run("paired_data", "interpolate_y", [xa, ya, xouta], options)
+    else:
+        youta = np.atleast_1d(np.asarray(yout, dtype=float))
+        r = _toolbox_run("paired_data", "interpolate_x", [xa, ya, youta], options)
+    return np.asarray(r["values"], dtype=float)
+
+
+def curve_area(
+    x,
+    y,
+    under: str = "y",
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> float:
+    """Area under a paired x-y curve.
+
+    Mirrors the C# ``OrderedPairedData.TrapezoidalAreaUnderY``/``TrapezoidalAreaUnderX``: the
+    trapezoidal-rule area between the curve and the x-axis (``under="y"``) or the y-axis
+    (``under="x"``). Requires x (for ``under="y"``) or y (for ``under="x"``) to be sorted
+    ascending or descending -- ``order_x``/``order_y="none"`` raises the same error the C#
+    method does.
+
+    Parameters
+    ----------
+    x, y : array_like
+        Equal-length curve ordinates, at least two elements.
+    under : {"y", "x"}
+        ``"y"`` (default) is the area against the x-axis; ``"x"`` is the area against the y-axis.
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+
+    Returns
+    -------
+    float
+
+    Examples
+    --------
+    >>> from corehydropy import curve_area
+    >>> curve_area([1, 2, 3, 4], [1, 4, 9, 16])
+    21.5
+    """
+    xa, ya = _check_pair(x, y)
+    if under not in ("y", "x"):
+        raise ValueError(f"`under` must be one of 'y', 'x'; got {under!r}")
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    method = "area_under_y" if under == "y" else "area_under_x"
+    r = _toolbox_run("paired_data", method, [xa, ya], options)
+    return float(r["values"][0])
+
+
+def curve_simplify(
+    x,
+    y,
+    method: str = "rdp",
+    tolerance: float | None = None,
+    num_to_keep: int | None = None,
+    look_ahead: int | None = None,
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> np.ndarray:
+    """Simplify a paired x-y curve.
+
+    Mirrors the C# ``OrderedPairedData``'s three curve-simplification algorithms:
+    Douglas-Peucker (``method="rdp"``, needs ``tolerance``), Visvalingam-Whyatt
+    (``method="visvalingam"``, needs ``num_to_keep``), and Lang (``method="lang"``, needs
+    ``tolerance`` and ``look_ahead``). NOTE: unlike ``rdp``/``visvalingam``, which always keep
+    the curve's first and last point, ``lang`` does not force-keep the trailing point -- a real,
+    verified-against-the-real-C#-library upstream behavior (see ``ordered_paired_data.hpp``'s
+    sixth transcription note), not a port bug.
+
+    Parameters
+    ----------
+    x, y : array_like
+        Equal-length curve ordinates, at least two elements.
+    method : {"rdp", "visvalingam", "lang"}
+    tolerance : float, optional
+        Perpendicular-distance tolerance; required for ``method`` ``"rdp"`` or ``"lang"``.
+    num_to_keep : int, optional
+        Number of points to keep; required for ``method="visvalingam"``.
+    look_ahead : int, optional
+        The Lang algorithm's look-ahead window; required for ``method="lang"``.
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+
+    Returns
+    -------
+    numpy.ndarray
+        An ``(n, 2)`` array with columns ``[x, y]``.
+
+    Examples
+    --------
+    >>> from corehydropy import curve_simplify
+    >>> x = [0, 1.57, 3.14, 4.71, 6.28]
+    >>> y = [0, 1, 0, -1, 0]
+    >>> curve_simplify(x, y, method="rdp", tolerance=0.01, strict_y=False, order_y="none")
+    array([[ 0.  ,  0.  ],
+           [ 1.57,  1.  ],
+           [ 4.71, -1.  ],
+           [ 6.28,  0.  ]])
+    """
+    xa, ya = _check_pair(x, y)
+    if method not in ("rdp", "visvalingam", "lang"):
+        raise ValueError(f'`method` must be one of "rdp", "visvalingam", "lang"; got "{method}"')
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    options["algorithm"] = method
+    if method == "rdp":
+        if tolerance is None:
+            raise ValueError('`tolerance` is required when method="rdp"')
+        options["tolerance"] = float(tolerance)
+    elif method == "visvalingam":
+        if num_to_keep is None:
+            raise ValueError('`num_to_keep` is required when method="visvalingam"')
+        options["num_to_keep"] = int(num_to_keep)
+    else:
+        if tolerance is None or look_ahead is None:
+            raise ValueError('`tolerance` and `look_ahead` are both required when method="lang"')
+        options["tolerance"] = float(tolerance)
+        options["look_ahead"] = int(look_ahead)
+    r = _toolbox_run("paired_data", "simplify", [xa, ya], options)
+    values = np.asarray(r["values"], dtype=float)
+    return values.reshape(r["dims"][0], r["dims"][1])
+
+
+def uncertain_curve_sample(
+    x,
+    distributions,
+    probability: float | None = None,
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> np.ndarray:
+    """Sample an uncertain paired curve.
+
+    Mirrors the C# ``UncertainOrderedPairedData.CurveSample()``/``CurveSample(double)``:
+    collapses a curve whose Y-coordinate is a whole distribution at each x down to a plain x-y
+    curve, either at the distributions' means (``probability=None``, the default) or at a
+    shared quantile (``probability`` in ``[0, 1]``).
+
+    Parameters
+    ----------
+    x : array_like
+        x positions, at least one element.
+    distributions : Distribution or list of Distribution
+        One distribution per element of ``x``, or a single distribution recycled across every
+        ``x``.
+    probability : float, optional
+        Quantile in ``[0, 1]`` to sample at; ``None`` (default) samples the mean.
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+
+    Returns
+    -------
+    numpy.ndarray
+        An ``(n, 2)`` array with columns ``[x, y]``.
+
+    Examples
+    --------
+    >>> from corehydropy import Distribution, uncertain_curve_sample
+    >>> x = [1, 2, 3, 5]
+    >>> d = [Distribution("Triangular", [1, 2, 3]), Distribution("Triangular", [2, 4, 5]),
+    ...      Distribution("Triangular", [6, 8, 12]), Distribution("Triangular", [13, 19, 20])]
+    >>> uncertain_curve_sample(x, d, probability=0.5)
+    array([[ 1.        ,  2.        ],
+           [ 2.        ,  3.732051  ],
+           [ 3.        ,  8.535898  ],
+           [ 5.        , 17.58258   ]])
+    """
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    if xa.size == 0:
+        raise ValueError("`x` must be a non-empty array")
+    dists = _paired_data_distributions(distributions, xa)
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    options["distributions"] = [_as_spec(d) for d in dists]
+    if probability is not None:
+        options["probability"] = float(probability)
+    r = _toolbox_run("paired_data", "curve_sample", [xa], options)
+    values = np.asarray(r["values"], dtype=float)
+    return values.reshape(r["dims"][0], r["dims"][1])
+
+
+def tabular_function(
+    x,
+    distributions,
+    at,
+    inverse: bool = False,
+    x_transform: str = "none",
+    y_transform: str = "none",
+    confidence_level: float | None = None,
+    allow_negative_y_values: bool = False,
+) -> np.ndarray:
+    """Evaluate a tabular function.
+
+    Mirrors the C# ``TabularFunction``: builds an uncertain paired curve from ``x`` and
+    ``distributions``, samples it once (the mean curve, or ``confidence_level`` if given), and
+    evaluates ``Function()``/``InverseFunction()`` at ``at``. Unlike :func:`curve_interpolate`
+    and friends, the underlying curve's shape contract is not configurable here --
+    ``TabularFunction`` is always built strict, ascending on both axes, matching every use in
+    the ported C# test suite.
+
+    Parameters
+    ----------
+    x : array_like
+        The curve's x positions, at least one element.
+    distributions : Distribution or list of Distribution
+        One distribution per element of ``x``, or a single distribution recycled across every
+        ``x``.
+    at : array_like
+        Points to evaluate at (or, when ``inverse=True``, points to evaluate the inverse
+        function at).
+    inverse : bool, default False
+        If ``True``, evaluates ``InverseFunction()`` instead of ``Function()``.
+    x_transform, y_transform : {"none", "logarithmic", "normal_z"}
+    confidence_level : float, optional
+        Quantile in ``[0, 1]`` to sample the curve at; ``None`` (default) samples the mean.
+    allow_negative_y_values : bool, default False
+        Allow a negative or NaN result to pass through unmodified, rather than clamping it to 0.
+        Default ``False`` (clamp), matching every use in the ported C# test suite -- the C#
+        class default is ``True``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Same length as ``at``.
+
+    Examples
+    --------
+    >>> from corehydropy import Distribution, tabular_function
+    >>> x = [50, 100, 150, 200, 250]
+    >>> d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
+    >>> tabular_function(x, d, at=50, x_transform="logarithmic")
+    array([100.])
+    """
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    if xa.size == 0:
+        raise ValueError("`x` must be a non-empty array")
+    dists = _paired_data_distributions(distributions, xa)
+    ata = np.atleast_1d(np.asarray(at, dtype=float))
+    if ata.size == 0:
+        raise ValueError("`at` must be a non-empty array")
+    _check_paired_transform(x_transform, "x_transform")
+    _check_paired_transform(y_transform, "y_transform")
+    options: dict = {
+        "x": xa.tolist(),
+        "distributions": [_as_spec(d) for d in dists],
+        "x_transform": x_transform,
+        "y_transform": y_transform,
+        "allow_negative_y_values": bool(allow_negative_y_values),
+    }
+    if confidence_level is not None:
+        options["confidence_level"] = float(confidence_level)
+    method = "tabular_inverse" if inverse else "tabular"
+    r = _toolbox_run("functions", method, [ata], options)
+    return np.asarray(r["values"], dtype=float)

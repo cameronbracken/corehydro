@@ -281,6 +281,18 @@ reference:
       - debye
       - polynomial_eval
       - univariate_function
+  - title: Paired-data curves
+    desc: >
+      The ported Paired Data subsystem (OrderedPairedData, UncertainOrderedPairedData) and its
+      third IUnivariateFunction implementation, TabularFunction: interpolation and area under a
+      curve, three simplification algorithms, sampling an uncertain curve at its mean or a
+      quantile, and evaluating a tabular function built from that curve.
+    contents:
+      - curve_interpolate
+      - curve_area
+      - curve_simplify
+      - uncertain_curve_sample
+      - tabular_function
   - title: The generator a callback is handed
     desc: >
       Drawing from the core's seeded random number generator inside a function you write, so
