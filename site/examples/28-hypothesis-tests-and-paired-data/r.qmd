@@ -272,7 +272,9 @@ stopifnot(
   isTRUE(tail(vis$x, 1) == tail(storage, 1)),
   isFALSE(tail(lang$x, 1) == tail(storage, 1)),   # the LangSimplify drop, reproduced on purpose
   jb_log > 0.5,                                    # log-space does not reject normality
-  near(mean_curve$y[1], median_curve$y[1] + (mean_curve$y[1] - median_curve$y[1]))
+  near(mean_curve$y[1], 1519.8999999999999),
+  near(median_curve$y[1], 1519.8607695154587),
+  near(mean_curve$y[1] - median_curve$y[1], 0.039230484541121768)
 )
 cat("All reproduction checks passed.\n")
 ```

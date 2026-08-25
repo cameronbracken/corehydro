@@ -124,7 +124,7 @@ The Sobol generator embeds `Properties/new-joe-kuo-6.21201` as a resource.
   and Python via the P4 Task 10 `curve_*`/`uncertain_curve_*`/`tabular_function` toolbox surface.
 - **`RMC.BestFit`'s `DataFrame.UnimodalityTest` and `DataFrame.SummaryHypothesisTest`** (both in
   `#region Hypothesis Testing`, `Models/DataFrame/DataFrame.cs`) are the two members the P4 "data
-  and tests" phase's Task 5 left deferred when it un-gated the other eleven `#region Hypothesis
+  and tests" phase's Task 5 left deferred when it un-gated the other twelve `#region Hypothesis
   Testing`/`#region Summary Statistics` facade members. Both need
   `Numerics.MachineLearning.GaussianMixtureModel`, which remains unported (see
   `core/include/corehydro/numerics/data/hypothesis_tests.hpp`'s own header note on

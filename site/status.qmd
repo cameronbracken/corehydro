@@ -47,7 +47,7 @@ fully ported; only its WPF desktop shell is out of scope.
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
 | `Estimation` (MLE, MAP, Bayesian, GMM) | Ported | Public | `fit_mle()`, `fit_map()`, `fit_bayesian()` and `fit_gmm()` over any `model_*()`, `fit_gmm_moments()` over moment conditions you write, plus the analysis functions and `estimation_diagnostics()` |
-| `Models` (data frame, censored data, trends, all model families) | Ported | Public | flood frequency, Bulletin 17C, mixtures, competing risks, point process, AR/MA/ARIMA/ARIMAX, spatial GEV, rating curves, bivariate; `analysis_data_hypothesis_test()`/`analysis_data_statistics()` expose eleven of the DataFrame's twelve hypothesis-test/summary-statistics facade members (`UnimodalityTest`/`SummaryHypothesisTest` need the still-unported `GaussianMixtureModel`) |
+| `Models` (data frame, censored data, trends, all model families) | Ported | Public | flood frequency, Bulletin 17C, mixtures, competing risks, point process, AR/MA/ARIMA/ARIMAX, spatial GEV, rating curves, bivariate; `analysis_data_hypothesis_test()`/`analysis_data_statistics()` expose twelve of the DataFrame's fourteen hypothesis-test/summary-statistics facade members (`UnimodalityTest`/`SummaryHypothesisTest` need the still-unported `GaussianMixtureModel`) |
 | `Analyses` (all orchestrators) | Ported | Public | the 19 analysis functions in each package |
 | `Diagnostics` (leverage, influence, prior influence, predictive checks) | Ported | Public | `estimation_diagnostics()`, `prior_predictive_check()`, `posterior_predictive_check()` |
 | Report generation | Not ported | -- | Not a planned porting target  |

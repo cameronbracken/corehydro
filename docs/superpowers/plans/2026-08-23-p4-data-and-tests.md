@@ -1439,7 +1439,7 @@ without Cam's go-ahead.
   `HypothesisTests.UnimodalityTest` and `DataFrame.SummaryHypothesisTest` need
   `GaussianMixtureModel`, which is P5's subject. Scope decision 1 gives the reasoning, both
   headers carry the severance note naming P5, and Task 12's release notes say so in prose. Twelve
-  of thirteen statics and eleven of twelve facade members ship.
+  of thirteen statics and twelve of fourteen facade members ship.
 - **Type consistency.** The `hypothesis` group's method names (Task 3) are reused verbatim as the
   `data_frame` kind's hypothesis method names (Task 6), so one vocabulary covers both surfaces.
   `ToolboxResult` is introduced by the existing `toolbox/common.hpp` and is what Task 6's

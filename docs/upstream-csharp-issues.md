@@ -425,7 +425,7 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   brief's assumption that CompetingRisks reaches "the MVN-backed joint path" (`JointProbabilityMVN`)
   and would need to worry about the C# `MultivariateNormal._MVNUNI` clock-seeded default (the
   concern Task 6's carry-forward note flagged for MultivariateStudentT/MultivariateNormal's own
-  `dimension >= 3` `CDF()`, a genuinely different code path). Governed here by "the actual C#
+  `dimension >= 3` `CDF()`, a different code path). Governed here by "the actual C#
   source over any brief or plan text" (this repo's standing rule): `core/include/corehydro/numerics/
   data/probability.hpp` ports `JointProbabilityHPCM`/`UnionPCM`, not `JointProbabilityMVN`/
   `UnionMVN`, which remain unported (no reachable caller).
@@ -2589,8 +2589,8 @@ a numbered transcription note at the call site citing the C# line numbers below.
 - **Port handling:** both formulas are transcribed independently and exactly as written --
   `OrderedPairedData::perpendicular_distance` (private, in `ordered_paired_data.hpp`) has no
   degenerate guard; `line_simplification::perpendicular_distance` (in `line_simplification.hpp`) has
-  the `mag > 0.0` guard. Neither is "unified" into the other, since they are genuinely different
-  upstream algorithms for two different classes, documented cross-referentially in both file headers.
+  the `mag > 0.0` guard. Neither is "unified" into the other, since they are separate upstream
+  algorithms for two different classes, documented cross-referentially in both file headers.
 - **Suggested C# fix:** either add the same `mag > 0.0`-style degenerate guard to
   `OrderedPairedData.PerpendicularDistance`, or document why a degenerate first/last pair cannot occur
   at that call site (its only caller, `DouglasPeuckerReduction`, guards `firstPoint != lastPoint - 1`
@@ -2649,8 +2649,8 @@ a numbered transcription note at the call site citing the C# line numbers below.
   `items.Count` iterations, instead of `OrdinateValid(i)` for each newly-inserted position in turn.
   Only the first inserted ordinate's monotonicity is ever actually checked; the rest are inserted
   unchecked. This directly computes `_isValid`, a real externally-observable value (unlike
-  `AddRange`'s analogous but genuinely inert `startIndex` off-by-one in the same class, which only
-  ever feeds the severed `CollectionChanged` event).
+  `AddRange`'s analogous but inert `startIndex` off-by-one in the same class, which only ever
+  feeds the severed `CollectionChanged` event).
 - **Evidence:** direct inspection of the loop body (`for (int i = index; i <= index + items.Count -
   1; i++) { if (IsValid) { if (!OrdinateValid(index)) IsValid = false; } }` -- note
   `OrdinateValid(index)`, not `OrdinateValid(i)`).
