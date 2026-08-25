@@ -107,6 +107,35 @@ The Sobol generator embeds `Properties/new-joe-kuo-6.21201` as a resource.
   `Numerics.Data.Statistics.Correlation` rather than scraped from a C# test file. There is no
   `KendallsTau(double[,])` overload upstream, so the matrix severance is now exactly that one
   method -- rejected by name in both languages, not silently unavailable.
+- The **Paired Data subsystem** (`Numerics/Data/Paired Data/`: `Ordinate`, `OrderedPairedData`,
+  `UncertainOrdinate`, `UncertainOrderedPairedData`, `LineSimplification`) and its consumer
+  **`Numerics/Functions/TabularFunction.cs`** were both unported through every prior phase; nothing
+  in scope needed a curve container until the P4 "data and tests" phase's Tasks 7-9 (August 2026)
+  ported the whole subsystem (`core/include/corehydro/numerics/data/paired_data/`) and
+  TabularFunction itself (`numerics/functions/tabular_function.hpp`), retiring both severances in
+  one pass -- TabularFunction could not have been ported earlier against a stand-in container
+  without losing fidelity to its `UncertainOrderedPairedData`-backed `IsDeterministic` toggle. The
+  same tasks also un-severed the six `OrderedPairedData`/`Ordinate` overloads of
+  `Numerics/Data/Interpolation/Support/Search.cs`'s `Sequential`/`Bisection`/`Hunt` (C# lines 167,
+  254, 444, 545, 782, 925) -- unported since Phase 2 because there was no `OrderedPairedData` to
+  search -- while the plain `IList<double>` `Hunt` overload (C# line 650) remains unported (no
+  caller in this port's scope needs a Hunt search over a bare array; see `search.hpp`'s own header
+  for the fidelity notes on both un-severed families). All three retirements are reachable from R
+  and Python via the P4 Task 10 `curve_*`/`uncertain_curve_*`/`tabular_function` toolbox surface.
+- **`RMC.BestFit`'s `DataFrame.UnimodalityTest` and `DataFrame.SummaryHypothesisTest`** (both in
+  `#region Hypothesis Testing`, `Models/DataFrame/DataFrame.cs`) are the two members the P4 "data
+  and tests" phase's Task 5 left deferred when it un-gated the other eleven `#region Hypothesis
+  Testing`/`#region Summary Statistics` facade members. Both need
+  `Numerics.MachineLearning.GaussianMixtureModel`, which remains unported (see
+  `core/include/corehydro/numerics/data/hypothesis_tests.hpp`'s own header note on
+  `UnimodalityTest`). Deferred together to **P5**, when `GaussianMixtureModel` lands, because
+  `SummaryHypothesisTest` calls all ten hypothesis-test facades (the nine already-ported ones plus
+  Unimodality) inside one `try`/`catch` that NaNs its entire ten-key result dictionary if any
+  single call throws -- shipping it with a throwing `UnimodalityTest` arm would silently NaN nine
+  otherwise-working results rather than surface the real gap. `docs/upstream-csharp-issues.md`
+  separately records a Mann-Whitney argument-selection pattern in `SummaryHypothesisTest` that
+  looks suspicious on a first read but was checked against the real ternary semantics and is not a
+  bug.
 
 ---
 

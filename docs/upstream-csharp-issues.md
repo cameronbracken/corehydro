@@ -2363,6 +2363,443 @@ J-statistic) are unchanged and still correct as written.
   re-evaluated fitness is an improvement, or re-evaluate the objective after the repair so the
   reported fitness always belongs to the reported point.
 
+---
+
+## Findings from the P4 "data and tests" phase (August 2026): HypothesisTests, Correlation matrix overloads, and the Paired Data subsystem
+
+The P4 phase ported the twelve Numerics `HypothesisTests` statics, the `Correlation` matrix
+overloads, the two `DataFrame` hypothesis-test/summary-statistics facades left deferred at Phase 5,
+and the entire (previously unported) Paired Data subsystem -- `Ordinate`, `OrderedPairedData`,
+`UncertainOrdinate`, `UncertainOrderedPairedData`, `LineSimplification`, and `TabularFunction`. All
+of the findings below surfaced while transcribing that subsystem method-for-method against the real
+C# source; each is reproduced on purpose in the corresponding C++ header rather than "fixed," with
+a numbered transcription note at the call site citing the C# line numbers below.
+
+## BUG — `OrderedPairedData.LangSimplify` never force-keeps the last point of a curve, silently dropping it
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, `LangSimplify` (line 1445)
+  and its private recursive helper `RecursiveTolerance` (~lines 1482-1518).
+- **What:** `DouglasPeuckerSimplify` and `VisvaligamWhyattSimplify`, the other two curve-
+  simplification algorithms in this class, both explicitly force-keep the first AND last ordinate of
+  the input curve (Douglas-Peucker seeds its kept-index set with `{firstPoint, lastPoint}`;
+  Visvaligam-Whyatt runs its removal loop only over the interior, `j` from 2 to `Count-2`, leaving
+  both ends untouched). `LangSimplify` has no equivalent guarantee. Its forward-jump loop advances an
+  index `i` by `RecursiveTolerance`'s returned offset; near the tail, once `i + lookAhead > count`,
+  `lookAhead` is clamped down to `count - i - 1`, and once that clamp reaches `0`,
+  `RecursiveTolerance`'s own `if (i + n < count)` guard is skipped for `n = 0` and the method always
+  returns `0` -- so no further point is ever appended and the loop simply walks `i` to `count` and
+  exits, having silently discarded the final ordinate.
+- **Evidence (reproduced against the real C# library, not merely inferred):** on the five-point sin
+  curve at `tolerance=0.01, lookAhead=2` -- the exact case upstream's own `Test_LangSimplify`
+  exercises -- `LangSimplify` returns 3 points, `{(0,0), (1.57,1), (4.71,-1)}`, dropping `(6.28,0)`
+  entirely. Confirmed with `dotnet run` against `upstream/Numerics @ 2a0357a` by three separate
+  agents independently, not merely by reading the port's own transcription.
+- **Why upstream's own test never catches this:** `Test_LangSimplify`'s assertion loop is bounded by
+  `test.Count` (the actual, possibly-short RESULT length), not the expected point count: with
+  `test.Count == 3` the loop only ever compares indices 0-2, and the missing fourth point is silently
+  never checked. This is a specific instance of a broader pattern worth naming on its own: several
+  tests across the simplification suite bound their comparison loop by the returned collection's own
+  length rather than by the caller's independently-known expected length, so an implementation that
+  returns too few elements still passes. This port's own test suite uses length-first assertions
+  throughout (asserting the retained-point COUNT before comparing contents) specifically as a
+  documented corehydro supplement to close that gap.
+- **Port handling:** mirrored faithfully -- `lang_simplify()` in
+  `core/include/corehydro/numerics/data/paired_data/ordered_paired_data.hpp` drops the final ordinate
+  on the same inputs. Pinned two ways: `core/tests/test_ordered_paired_data.cpp`'s
+  `test_lang_simplify` asserts the verified 3-point result (not a naively-expected 4-point one), and
+  `fixtures/toolbox/paired_data.json`'s `sin_curve_simplify_lang` case is reproduced against the real
+  C# library by the dotnet oracle gate at exact tolerance.
+- **Suggested C# fix:** after the main loop, if the last appended ordinate's index is not
+  `Count - 1`, append the final ordinate explicitly -- the same force-keep both sibling algorithms
+  already perform. Also fix `Test_LangSimplify` to bound its comparison loop by the expected point
+  count, not the actual result's `Count`, so a future regression here would be caught.
+
+## BUG — `OrderedPairedData.RemoveRange`'s off-by-one guard makes a trailing removal a silent no-op
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a,
+  `RemoveRange(int index, int count)` (line 453).
+- **What:** the bounds guard is `if (index < 0 || (index + count) >= Count) return;` -- using `>=`
+  where the off-by-one-free test `>` is correct. Removing a trailing run of elements that reaches the
+  very last element (`index + count == Count`) therefore hits the guard and returns without removing
+  anything, silently. A second, harmless defect sits in the same method: the loop that builds the
+  `items` list handed to the `CollectionChanged` event runs `for (i = index; i < count; i++)` rather
+  than `i < index + count` -- wrong, but inert, since that `items` list has no consumer once the
+  event itself fires.
+- **Evidence:** direct inspection of the guard; `Test_Indexing`'s own `RemoveRange(0, 3)` call on a
+  13-element collection is well clear of the boundary (`0 + 3 = 3 < 13`), so upstream's own test
+  never exercises the off-by-one.
+- **Port handling:** mirrored faithfully -- `remove_range(index, cnt)` in `ordered_paired_data.hpp`
+  keeps the `>=` guard (a trailing-run removal silently does nothing), documented at the call site.
+  The `CollectionChanged`-only loop-bound defect has no C++ counterpart to reproduce (the event
+  itself is severed project-wide; see the file's own header). Contrast the Uncertain twin
+  (`UncertainOrderedPairedData::remove_range`), whose C# source has NEITHER bug -- it relies on
+  `List<T>.RemoveRange`'s own correct `ArgumentOutOfRangeException` behavior -- so it is ported with
+  the CORRECT `index + count > Count` bound, throwing rather than silently no-opping.
+- **Suggested C# fix:** change the guard to `index + count > Count`, matching `List<T>.RemoveRange`'s
+  own contract (and the sibling `UncertainOrderedPairedData.RemoveRange`, which never had this bug).
+
+## BUG — `OrderedPairedData.SequentialSearchY` reads the X search-start field instead of Y's
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a,
+  `SequentialSearchY(double y)` (~line 1114), its third branch.
+- **What:** the method's third branch, which resets the search start to `0` when `y` has moved
+  outside the cached search window, reads `_ordinates[XSearchStart].Y` where
+  `_ordinates[YSearchStart].Y` is the field the X/Y-mirrored logic (and `SequentialSearchX`'s own
+  analogous branch) calls for.
+- **Evidence:** direct inspection; because both `XSearchStart` and `YSearchStart` start at `0` and
+  this port's transcribed ctest never diverges them before calling `sequential_search_y`, the results
+  agree with what the correct code would produce -- exactly why upstream's own `Test_Sequential`
+  passes despite the bug.
+- **Port handling:** mirrored faithfully -- `sequential_search_y()` in `ordered_paired_data.hpp`
+  reads `x_search_start_` at the equivalent branch, with an inline comment marking it "Bug
+  transcribed verbatim."
+- **Suggested C# fix:** change `_ordinates[XSearchStart].Y` to `_ordinates[YSearchStart].Y` in
+  `SequentialSearchY`'s third branch.
+
+## BUG — `OrderedPairedData`'s `XdeltaStart`/`YdeltaStart` are never assigned, so `UseSmartSearch`'s Hunt branch almost never fires
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, `XdeltaStart` (line 50) /
+  `YdeltaStart` (line 55), read in `SearchX` (line 934) / `SearchY` (line 955).
+- **What:** `XdeltaStart`/`YdeltaStart` are declared, initialized to `0`, and never assigned anywhere
+  else in the class. `SearchX`/`SearchY` set `Xcorrelated`/`Ycorrelated` to
+  `Math.Abs(start - XSearchStart) > XdeltaStart` (i.e. `> 0`), which is true almost every call -- so
+  `Xcorrelated`/`Ycorrelated` are true only when a search lands EXACTLY on the previous search-start
+  index. With `UseSmartSearch` true (the default), `SearchX`/`SearchY` therefore fall through to
+  `BisectionSearchX`/`Y` on nearly every call instead of ever taking the `HuntSearchX`/`Y` branch the
+  "smart search" is named for. Contrast the sibling `Interpolater.cs`, whose own
+  `deltaStart = Math.Min(1, (int)Math.Pow(Count, 0.25))` at least gives its correlated-search
+  machinery a (if degenerate -- see that file's own already-documented issue above) chance of firing.
+- **Evidence:** direct inspection of the field declarations and every assignment site in the class
+  (grep confirms zero writes to either field outside their `= 0` initializers).
+- **Port handling:** mirrored faithfully -- `x_delta_start_`/`y_delta_start_` in
+  `ordered_paired_data.hpp` are likewise never assigned past `0`, documented in the file header. Not
+  a correctness bug (Bisection always returns the right bracketing index; only the search's
+  asymptotic cost is affected), so no fixture specifically isolates it.
+- **Suggested C# fix:** assign `XdeltaStart`/`YdeltaStart` a real value (e.g. mirroring
+  `Interpolater.cs`'s `Math.Pow(Count, 0.25)` heuristic) so the Hunt branch is reachable as the
+  class's own naming and doc comments imply it should be.
+
+## CONSISTENCY — `OrderedPairedData.Add` can widen `IsValid` back to true; `UncertainOrderedPairedData.Add` cannot
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, `Add` (line 468) vs.
+  `Insert` (line 481); `Numerics/Data/Paired Data/UncertainOrderedPairedData.cs`, `Add`
+  (~lines 664-671).
+- **What:** `OrderedPairedData.Add` assigns `IsValid = OrdinateValid(Count - 1)` UNCONDITIONALLY --
+  `OrdinateValid` only inspects the newly-added point's immediate neighbor, not the whole series, so
+  appending one well-ordered point after an already-invalid collection can flip `IsValid` back to
+  `true` even though an earlier pair still violates the monotonicity contract. `Insert` on the same
+  class does not have this bug -- `if (IsValid) IsValid = OrdinateValid(index);` only ever NARROWS
+  validity (true -> possibly false), never widens it. `UncertainOrderedPairedData.Add` matches
+  `Insert`'s (correct) shape, not `Add`'s: `if (!OrdinateValid(Count - 1)) IsValid = false;` also
+  only narrows. The private `OrdinateValid(int)` helper mirrors the same asymmetry at its own
+  boundary: `OrderedPairedData`'s version returns `true` for an out-of-range index;
+  `UncertainOrderedPairedData`'s returns `false`.
+- **Evidence:** direct inspection of all four methods across both classes (not assumed parity between
+  the "twin" classes -- see the port's own header note on this).
+- **Port handling:** mirrored faithfully on both classes -- `add()` in `ordered_paired_data.hpp`
+  keeps the unconditional widening bug; `add()` in `uncertain_ordered_paired_data.hpp` only narrows,
+  matching its own C# source. Documented in both file headers as a DELIBERATE cross-class asymmetry,
+  not an inconsistency introduced by the port.
+- **Suggested C# fix:** change `OrderedPairedData.Add` to only narrow
+  (`if (IsValid) IsValid = OrdinateValid(Count - 1);`), matching `Insert` on the same class and
+  `Add`/`Insert` on the Uncertain twin.
+
+## CONSISTENCY — `OrderedPairedData.LangSimplify` returns an alias of the receiver on its guard path, unlike its two siblings
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a,
+  `LangSimplify(double tolerance, int lookAhead)` (line 1445), the
+  `if (lookAhead <= 1 || tolerance <= 0) return this;` guard.
+- **What:** `DouglasPeuckerSimplify` and `VisvaligamWhyattSimplify` both always return a freshly
+  constructed `OrderedPairedData`. `LangSimplify`'s guard instead returns `this` -- the SAME object
+  the caller already holds a reference to, not a copy -- so a caller that mutates the "simplified"
+  result under a trivial `lookAhead`/`tolerance` is silently mutating the original curve too.
+- **Port handling (a genuine port DECISION, no C# analogue is possible):** `lang_simplify()` in
+  `ordered_paired_data.hpp` has a value-returning signature (`OrderedPairedData`, not a reference), so
+  there is no C++ construct that aliases `*this` the way a C# reference-type return can --
+  `return *this;` by value already copies. This port returns `clone()` instead, matching the OTHER
+  two simplifiers' not-the-same-object contract, rather than fabricating aliasing behavior no other
+  value-returning method here has. `core/tests/test_ordered_paired_data.cpp`'s
+  `test_lang_simplify_guard` asserts the guarded return is content-equal to the original AND
+  independently mutable (proving it is a distinct object) -- the only choice a value-returning API
+  leaves open.
+- **Suggested C# fix:** return a clone (e.g. `this.Clone()`) from the guard, matching
+  `DouglasPeuckerSimplify`/`VisvaligamWhyattSimplify`'s contract.
+
+## BUG — `LineSimplification.RamerDouglasPeucker`'s output parameter is cleared in one branch but appended-to in the other
+
+- **Where:** `Numerics/Data/Paired Data/LineSimplification.cs` @ 2a0357a,
+  `RamerDouglasPeucker(List<Ordinate>, double, ref List<Ordinate> output)` (line 33).
+- **What:** the "keep both endpoints" branch (`dmax <= epsilon`) does
+  `output.Clear(); output.Add(...); output.Add(...);` -- replacing whatever the caller passed in. The
+  "recurse" branch (`dmax > epsilon`) does `output.AddRange(recResults1...); output.AddRange(
+  recResults2);` (lines 59-64) -- APPENDING to whatever the caller passed in, with no `Clear()`
+  first. For every call site actually reachable in this codebase the `ref` parameter is always a
+  fresh, empty list at each call (including each recursive call), so the two behaviors happen to
+  coincide; a caller handing a pre-populated list to the top-level call would see it replaced or
+  appended-to depending purely on which branch the top-level recursion takes, which the caller cannot
+  predict from the method's own signature.
+- **Evidence:** direct inspection of both branches; not exercised by any upstream test with a
+  non-empty pre-populated output list.
+- **Port handling:** mirrored faithfully -- `ramer_douglas_peucker()` in
+  `core/include/corehydro/numerics/data/paired_data/line_simplification.hpp` reproduces both shapes
+  (`output.clear()` + two `push_back`s in the "keep both endpoints" branch;
+  `output.insert(output.end(), ...)` with no clear in the "recurse" branch), documented in the file
+  header as intentional (every reachable call site hands a fresh empty vector, so the asymmetry is
+  currently invisible, but is preserved rather than normalized to "always clear first").
+- **Suggested C# fix:** call `output.Clear()` unconditionally at the top of the method, before either
+  branch, so the `ref` parameter's contract does not depend on which branch is taken.
+
+## CONSISTENCY (documented upstream quirk, not a bug) — `Ordinate.operator==` treats a NaN coordinate as equal to anything
+
+- **Where:** `Numerics/Data/Paired Data/Ordinate.cs` @ 2a0357a, `operator==` (line 317).
+- **What:** equality tests `Math.Abs(diff) > Tools.DoubleMachineEpsilon` per coordinate and returns
+  `false` only when that predicate is true. `Math.Abs(NaN - anything) > eps` is ALWAYS false (every
+  comparison involving NaN is false), so an ordinate holding a NaN coordinate compares EQUAL to every
+  other ordinate on that coordinate -- `Ordinate(NaN, 4) == Ordinate(2, 4)` is `true`.
+- **Evidence:** the C# source's own comment states this directly, and upstream's `Test_Construction`
+  asserts exactly `Ordinate(NaN, 4) == Ordinate(2, 4)` -- this is intentional (if surprising) upstream
+  behavior, not an oversight.
+- **Port handling:** pinned exactly the same way -- `operator==` in
+  `core/include/corehydro/numerics/data/paired_data/ordinate.hpp` uses
+  `std::fabs(l.x - r.x) > kDoubleMachineEpsilon`, which is likewise always false for a NaN operand;
+  documented in the file header as a "documented upstream quirk, not a bug" with the same test case
+  transcribed.
+- **Suggested action:** none -- flagged here only so a future reader isn't surprised by
+  `NaN == anything` and doesn't "fix" it without realizing it is asserted deliberately by an upstream
+  test.
+
+## CONSISTENCY — two independent, incompatible `PerpendicularDistance` implementations in the Paired Data subsystem
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, private
+  `PerpendicularDistance` (~lines 1376-1386, feeding `DouglasPeuckerReduction`) vs.
+  `Numerics/Data/Paired Data/LineSimplification.cs`, `PerpendicularDistance` (line 84, feeding the
+  free-function `RamerDouglasPeucker`).
+- **What:** these are two entirely independent formulas for the same named quantity, both shipped in
+  the same subsystem for two different Douglas-Peucker-family implementations. `OrderedPairedData`'s
+  version is triangle-area-over-base (`|cross product| / |base|`) and has NO guard against a
+  degenerate (zero-length) base segment -- a first/last pair that coincide divides `0.0/0.0`,
+  yielding `NaN`. `LineSimplification`'s version normalizes the segment direction to a unit vector
+  and explicitly guards the degenerate case with `if (mag > 0.0)`, falling back to the
+  point-to-line-start distance when the segment has zero length -- this is exactly the case
+  upstream's own `Test_EqualPoints` exercises for the free-function algorithm, but NOT for the
+  class-method one.
+- **Evidence:** direct inspection of both implementations; no test in either language constructs a
+  first/last pair that coincide for `OrderedPairedData`'s own `DouglasPeuckerSimplify`, so the
+  unguarded `NaN` path is unexercised on that side.
+- **Port handling:** both formulas are transcribed independently and exactly as written --
+  `OrderedPairedData::perpendicular_distance` (private, in `ordered_paired_data.hpp`) has no
+  degenerate guard; `line_simplification::perpendicular_distance` (in `line_simplification.hpp`) has
+  the `mag > 0.0` guard. Neither is "unified" into the other, since they are genuinely different
+  upstream algorithms for two different classes, documented cross-referentially in both file headers.
+- **Suggested C# fix:** either add the same `mag > 0.0`-style degenerate guard to
+  `OrderedPairedData.PerpendicularDistance`, or document why a degenerate first/last pair cannot occur
+  at that call site (its only caller, `DouglasPeuckerReduction`, guards `firstPoint != lastPoint - 1`
+  but not `Ordinates[firstPoint] != Ordinates[lastPoint]` when they are not the same index).
+
+## CONSISTENCY — `UncertainOrdinate.OrdinateValid` probes the mean while `OrdinateErrors` probes the median, so a curve can be reported invalid with no matching error message
+
+- **Where:** `Numerics/Data/Paired Data/UncertainOrdinate.cs` @ 2a0357a, `OrdinateValid` (line 153)
+  vs. `OrdinateErrors` (line 193).
+- **What:** both methods probe the same three points along each ordinate's Y distribution --
+  `minPercentile`, a central-tendency point, and `1 - minPercentile` -- to decide whether one ordinate
+  is a valid monotonic successor/predecessor of another. `OrdinateValid`'s central probe is the MEAN
+  (`GetOrdinate()`, no argument, line 173); `OrdinateErrors`'s is the MEDIAN (`GetOrdinate(0.5d)`,
+  line 226). For a skewed Y distribution the mean and median differ, so a pair of ordinates can fail
+  `OrdinateValid`'s mean probe (making the collection's `IsValid` false) while `OrdinateErrors`'s
+  median probe passes cleanly -- the diagnostic method silently omits the very error that made the
+  collection invalid.
+- **Evidence:** direct inspection of both methods; `minPercentile` is `0.05` when the distribution
+  type is `PertPercentile`/`PertPercentileZ`, `1e-5` otherwise, identically in both methods, so the
+  mismatch is specifically the mean-vs-median choice, not the tail percentiles.
+- **Port handling:** both probe sets are transcribed exactly as written --
+  `UncertainOrdinate::ordinate_valid` (in
+  `core/include/corehydro/numerics/data/paired_data/uncertain_ordinate.hpp`) calls `get_ordinate()`
+  (mean) at the central probe; `ordinate_errors` calls `get_ordinate(0.5)` (median) at the same
+  position. Documented in the file header as "a real, upstream mismatch, not a transcription slip."
+- **Suggested C# fix:** use the same central-tendency probe (mean or median, whichever is intended) in
+  both methods, so `GetErrors()` always explains every case where `IsValid` is false.
+
+## CONSISTENCY — `UncertainOrdinate.operator==` compares X exactly, unlike `Ordinate`'s epsilon tolerance
+
+- **Where:** `Numerics/Data/Paired Data/UncertainOrdinate.cs` @ 2a0357a, `operator==` (line 266), vs.
+  `Numerics/Data/Paired Data/Ordinate.cs`, `operator==` (line 317).
+- **What:** `Ordinate.operator==` compares each coordinate with `Tools.DoubleMachineEpsilon` slack
+  (see the NaN-compares-equal entry above for the consequence of that choice).
+  `UncertainOrdinate.operator==` compares `X` with EXACT inequality (`left.X != right.X`) -- no
+  epsilon at all -- before delegating `Y`-equality to the distribution's own comparison. Two X values
+  that would compare equal under `Ordinate`'s rule (differing by less than machine epsilon) compare
+  UNEQUAL here.
+- **Evidence:** direct inspection of both operators; the inconsistency is between two classes in the
+  same subsystem with the same conceptual "X coordinate," not an internal contradiction within either
+  class alone.
+- **Port handling:** transcribed exactly as written -- `operator==` for `UncertainOrdinate` in
+  `uncertain_ordinate.hpp` uses `l.x != r.x` (no tolerance); `operator==` for `Ordinate` in
+  `ordinate.hpp` uses the epsilon-tolerant comparison. Documented in `uncertain_ordinate.hpp`'s header
+  as transcription note 3.
+- **Suggested C# fix:** decide whether X-equality should be exact or tolerant across both classes, and
+  make `UncertainOrdinate.operator==` consistent with `Ordinate.operator==`'s choice (or document why
+  uncertain-Y ordinates need a stricter X test than certain ones).
+
+## BUG — `UncertainOrderedPairedData.InsertRange` narrows `IsValid` using the constant insertion index instead of each newly-inserted position
+
+- **Where:** `Numerics/Data/Paired Data/UncertainOrderedPairedData.cs` @ 2a0357a,
+  `InsertRange(int index, IList<UncertainOrdinate> items)` (~lines 716-731).
+- **What:** after inserting `items.Count` new ordinates starting at `index`, the `IsValid`-narrowing
+  loop calls `OrdinateValid(index)` -- the constant, FIRST inserted position -- on every one of its
+  `items.Count` iterations, instead of `OrdinateValid(i)` for each newly-inserted position in turn.
+  Only the first inserted ordinate's monotonicity is ever actually checked; the rest are inserted
+  unchecked. This directly computes `_isValid`, a real externally-observable value (unlike
+  `AddRange`'s analogous but genuinely inert `startIndex` off-by-one in the same class, which only
+  ever feeds the severed `CollectionChanged` event).
+- **Evidence:** direct inspection of the loop body (`for (int i = index; i <= index + items.Count -
+  1; i++) { if (IsValid) { if (!OrdinateValid(index)) IsValid = false; } }` -- note
+  `OrdinateValid(index)`, not `OrdinateValid(i)`).
+- **Port handling:** mirrored faithfully -- `insert_range()` in
+  `core/include/corehydro/numerics/data/paired_data/uncertain_ordered_paired_data.hpp` calls
+  `ordinate_valid(index)` on every pass of its loop over `i`, not `ordinate_valid(i)`, with an inline
+  comment marking it as an upstream defect with a real (not inert) consequence, ported exactly as C#
+  wrote it rather than "fixed."
+- **Suggested C# fix:** change `OrdinateValid(index)` to `OrdinateValid(i)` inside the loop, so every
+  newly-inserted ordinate is actually validated against its own neighbors.
+
+## ROBUSTNESS — `UncertainOrderedPairedData.Validate()` early-returns while `SuppressCollectionChanged` is set, leaving `IsValid` stale
+
+- **Where:** `Numerics/Data/Paired Data/UncertainOrderedPairedData.cs` @ 2a0357a, `Validate()`
+  (~lines 390-402).
+- **What:** every other use of `SuppressCollectionChanged` in this class guards a
+  `CollectionChanged?.Invoke` call -- pure observable-collection plumbing with no effect beyond
+  whether an event fires. `Validate()`'s own use is different: it early-returns before recomputing
+  `_isValid` at all, so `IsValid` can go stale (reflect data from before the suppressed mutations)
+  for as long as the flag is set -- a real, externally-observable difference in behavior, not merely
+  a suppressed event.
+- **Port handling:** preserved as a plain bool with the same early-return -- `validate()` in
+  `uncertain_ordered_paired_data.hpp` checks `suppress_collection_changed_` first, unlike every OTHER
+  `SuppressCollectionChanged` use in the class (all severed as pure event plumbing, per the
+  project-wide precedent). Documented in the file header as the one flag-read that survives the
+  plumbing cull.
+- **Suggested action:** none required -- this is arguably the intended contract (suppress
+  recomputation while a caller performs many mutations, then call `Validate()` once at the end with
+  the flag cleared); flagged here so a future reader understands why this one
+  `SuppressCollectionChanged` check has a C++ mirror when its siblings do not.
+
+## BUG — `Statistics.RanksInPlace(double[], out double[] ties)` never records the trailing tie run's length
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs` @ 2a0357a,
+  `RanksInPlace(double[] data, out double[] ties)` (line 674).
+- **What:** the method sorts a working copy, walks it once tallying consecutive near-equal runs (tie
+  test: `AlmostEquals(work[i], work[previousIndex], Tools.DoubleMachineEpsilon)`, i.e.
+  `|work[i]-work[previousIndex]| <= DoubleMachineEpsilon` -- NOT exact equality, unlike the sibling
+  no-`ties` overload of the same method), and writes each closed run's length into `ties[i - 1]`
+  inside the loop's own `else` branch. After the loop ends, a final
+  `RanksTies(ranks, index, previousIndex, work.Length)` call closes whatever run was still open --
+  correctly averaging that run's ranks -- but this closing call is OUTSIDE the loop and never writes
+  to `ties`. A tie run that ends at the very last element of `data` therefore has its rank-averaging
+  applied correctly but its run length silently never recorded in `ties`, leaving that slot at its
+  default `0`.
+- **Evidence:** direct inspection of the loop structure -- `ties[i - 1] = t;` appears only inside the
+  `for` loop's `else` branch, and the trailing `RanksTies(...)` call after the loop has no
+  `ties`-writing counterpart.
+- **Consequence downstream:** `ties` (a sparse "tie run length" array) feeds two hypothesis tests this
+  port ships: `MannWhitneyTest`'s tie correction term `T` (`sum((ties[i]^3 - ties[i]) /
+  (n*(n-1)))`) and `MannKendallTest`'s variance term `varS`
+  (`sum(ties[i]*(ties[i]-1)*(2*ties[i]+5))`). Both under-correct whenever the input's LARGEST-valued
+  elements are themselves tied, since that specific run is the one whose length silently drops out.
+- **Port handling:** mirrored faithfully -- the tolerance-based `ranks_in_place(data, ties)` overload
+  in `core/include/corehydro/numerics/data/statistics.hpp` reproduces all three fidelity points versus
+  its own exact-equality sibling overload: the `kDoubleMachineEpsilon`-tolerant tie test, the sparse
+  `ties` array indexed by run-closing position, and the never-written trailing run. Documented in the
+  file header as "a genuine upstream defect... It MUST be reproduced (not 'fixed') because it is the
+  input HypothesisTests' oracle-pinned callers were fit against."
+  `numerics::data::hypothesis_tests::mann_whitney_test`/`mann_kendall_test` (in
+  `numerics/data/hypothesis_tests.hpp`) consume it unchanged.
+- **Suggested C# fix:** move the tie-length write out of the loop's `else` branch (or duplicate it
+  after the final `RanksTies` call) so a trailing run's length is recorded like every other run's.
+
+## COSMETIC — `DataFrame.LinearTrendTest` computes a dead local and duplicates the expression, and does not call the identical `HypothesisTests.LinearTrendTest`
+
+- **Where:** `RMC.BestFit/src/RMC.BestFit/Models/DataFrame/DataFrame.cs` @ c2e6192,
+  `LinearTrendTest(bool useLog10 = false)` (line 1002).
+- **What:** `Numerics.Data.Statistics.HypothesisTests` already has a `LinearTrendTest` static that
+  performs the identical linear-regression + Student-t computation (this port's own
+  `numerics::data::hypothesis_tests::linear_trend_test`, ported in P4 Task 2).
+  `DataFrame.LinearTrendTest` does not call it -- it inlines the same `LinearRegression`/`StudentT`
+  construction itself. Within that inlined body it also computes
+  `double d = Math.Abs(lm.Parameters[1] / lm.ParameterStandardErrors[1]);` and never uses `d` -- the
+  `return` statement recomputes the identical expression
+  `Math.Abs(lm.Parameters[1] / lm.ParameterStandardErrors[1])` inline instead of reusing `d`.
+- **Evidence:** direct inspection; both oddities (the unused local and the duplicated expression) are
+  textually present in the shipped source.
+- **Port handling:** both mirrored exactly rather than "cleaned up" -- `DataFrame::linear_trend_test()`
+  in `core/include/corehydro/models/data_frame/data_frame.hpp` computes `d` and discards it with
+  `(void)d;`, then recomputes the identical expression in its own `return`, and does not delegate to
+  `numerics::data::hypothesis_tests::linear_trend_test` even though that free function already exists
+  and is identical. Documented as transcription note 1 in the file header.
+- **Suggested C# fix:** delete the dead `d` local, or use it in the return expression; separately,
+  have `DataFrame.LinearTrendTest` simply call `HypothesisTests.LinearTrendTest(indexes, values)`
+  instead of duplicating its body.
+
+## CONSISTENCY — `DataFrame`'s two summary-statistics methods disagree on `Kurtosis` vs `Kurtosis + 3`
+
+- **Where:** `RMC.BestFit/src/RMC.BestFit/Models/DataFrame/DataFrame.cs` @ c2e6192,
+  `SummaryStatisticsExactDataOnly` (line 1786) vs. `SummaryStatisticsAllData` (line 1850).
+- **What:** both methods report a `"Kurtosis"` (and `"Kurtosis (of log)"`) key computed from the same
+  underlying `moments[3]` central-moment slot. `SummaryStatisticsExactDataOnly` reports
+  `moments[3] + 3` -- raw excess kurtosis shifted back to Pearson's (non-excess) kurtosis convention,
+  where a Normal distribution reads `3`. `SummaryStatisticsAllData` reports the SAME `moments[3]` slot
+  with NO `+3` -- excess kurtosis, where a Normal distribution reads `0`. A caller comparing the
+  "Kurtosis" key across the two summary methods on the same underlying data is comparing two
+  different conventions without any indication in the key name. The same two methods also each build
+  their percentile/moment inputs as three INDEPENDENTLY sorted parallel arrays (`values`,
+  `log_values`, and the plotting-position `probs`, sorted separately rather than co-sorted as a single
+  tuple), a quirk carried through unchanged from the `GetNonparametricMoments` methods this pair
+  shares its private tail with; and `SummaryStatisticsAllData` computes central moments with
+  `CentralMoments(1000)` (fixed-step trapezoidal, matching the "int steps" overload documented
+  earlier in this file) where the unrelated `SetStandardizedValues` method uses `CentralMoments(200)`
+  -- different step counts for the same computation, on purpose, unremarked upon in either method.
+- **Evidence:** direct inspection of both methods' key-population code and the private tail they
+  share.
+- **Port handling:** mirrored exactly, as an upstream asymmetry rather than a port inconsistency --
+  `summary_statistics_exact_data_only()` in `core/include/corehydro/models/data_frame/data_frame.hpp`
+  emits `moments[3] + 3.0`; `summary_statistics_all_data()` emits the bare `moments[3]`; both use
+  `central_moments(1000)`. Documented as transcription notes 2 (Kurtosis), 3 (the three independently
+  sorted arrays), and 4 (the 1000-vs-200 step counts) in the file header.
+- **Suggested C# fix:** pick one convention (excess or Pearson's) and apply it in both methods, or
+  rename the keys to disambiguate (`"Excess Kurtosis"` vs `"Kurtosis"`); co-sort `values`/`log_values`
+  with `probs` as one tuple rather than three independent sorts; and either document why
+  `SetStandardizedValues` needs fewer quadrature steps than the summary methods, or use the same step
+  count in both.
+
+## VERIFIED, NOT A BUG — `DataFrame.SummaryHypothesisTest`'s Mann-Whitney argument-selection ternaries
+
+- **Where:** `RMC.BestFit/src/RMC.BestFit/Models/DataFrame/DataFrame.cs` @ c2e6192,
+  `SummaryHypothesisTest(int index = -1, bool useLog10 = false)` (line 1077), the call
+  `HypothesisTests.MannWhitneyTest(v1.Count <= v2.Count ? v1 : v2, v1.Count > v2.Count ? v1 : v2)`
+  (line 1114).
+- **What was suspected:** unlike the standalone `DataFrame.MannWhitneyTest(int index, ...)`
+  (line 1049), which wraps the WHOLE call in one ternary
+  (`sample1.Count <= sample2.Count ? MannWhitneyTest(sample1, sample2) :
+  MannWhitneyTest(sample2, sample1)`), `SummaryHypothesisTest` builds each of the two arguments with
+  its OWN separate ternary. That shape looks, on a quick read, like it could pass the same sample
+  object as both arguments when `v1.Count == v2.Count`.
+- **Checked against the actual source, not the suspicion:** the two conditions (`<=` and `>`) are
+  exact logical complements for integer counts, so the two separate ternaries are equivalent to the
+  single-ternary form at every possible count relationship, including equality. Worked through
+  explicitly: `v1.Count == v2.Count` gives `(v1.Count <= v2.Count) == true` so argument 1 is `v1`, and
+  `(v1.Count > v2.Count) == false` so argument 2 is `v2` -- the pair is `(v1, v2)`, not `(v1, v1)`.
+  `v1.Count < v2.Count` gives `(v1, v2)` (v1, the smaller, first). `v1.Count > v2.Count` gives
+  `(v2, v1)` (v2, the smaller, first). Every case matches the single-ternary form's contract of
+  "smaller-or-equal sample first."
+- **Why this is worth recording anyway:** the method itself (`SummaryHypothesisTest`) is deferred to
+  P5 alongside `UnimodalityTest` (both need the unported `GaussianMixtureModel`; see
+  `upstream/CLAUDE.md`), so this port has not yet shipped or fixture-tested this call site -- this
+  entry exists so whoever un-defers `SummaryHypothesisTest` in P5 does not need to re-derive this
+  truth table from scratch, and so a plausible-sounding suspicion about the argument order doesn't get
+  treated as a confirmed bug without being checked against the actual ternary semantics.
+- **Port handling:** none required -- not yet ported (P5).
+- **Suggested action:** none -- the C# is correct as written.
+
+---
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a
