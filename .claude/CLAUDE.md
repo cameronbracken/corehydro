@@ -82,10 +82,10 @@ all reach both languages through this one pair of headers rather than per-family
 
 `core/include/corehydro/numerics/support/toolbox_runner.hpp` (siblings of `dist_runner.hpp` and
 `estimation/support/fit_runner.hpp`, likewise corehydro additions with no upstream C# counterpart)
-is the one place a general-purpose Numerics utility method is dispatched: fifteen groups --
+is the one place a general-purpose Numerics utility method is dispatched: seventeen groups --
 `correlation`, `gof`, `statistics`, `spectra`, `histogram`, `interpolation`, `regression`,
-`sampling`, `probability`, `link`, `trend`, `linalg`, `special`, `functions`, `network` -- each a
-standalone-compiling header under
+`sampling`, `probability`, `link`, `trend`, `linalg`, `special`, `functions`, `network`,
+`hypothesis`, `paired_data` -- each a standalone-compiling header under
 `numerics/support/toolbox/` (plus `common.hpp` for the shared `ToolboxResult`/data-access
 helpers), holding that group's `detail::run_<group>` function. Bulk data travels as native double
 vectors (not JSON, unlike `dist_spec`'s construct grammar) since a goodness-of-fit call carrying
@@ -93,7 +93,16 @@ two arbitrary-length series has no business paying a JSON parse; scalars, enum n
 travel in a small `options_json`. The `network` group is the outlier in that list: its subject,
 `numerics/math/optimization/dynamic/` (BinaryHeap, Dijkstra, Network), is an optimization class
 whose input is a graph rather than a callable, so it joins the toolbox rather than the optimizer
-runner and reaches users as `shortest_path()`. `numerics/support/optimizer_runner.hpp` is the
+runner and reaches users as `shortest_path()`. `hypothesis` and `paired_data` are the P4 additions:
+`hypothesis` dispatches `numerics/data/hypothesis_tests.hpp` (twelve of the thirteen
+`Numerics.Data.Statistics.HypothesisTests` statics -- `UnimodalityTest` is deferred, needing the
+unported `GaussianMixtureModel`) and reaches users as `hypothesis_test()`; `paired_data`
+dispatches the whole `numerics/data/paired_data/` subsystem (`Ordinate`, `LineSimplification`,
+`OrderedPairedData`, `UncertainOrdinate`, `UncertainOrderedPairedData`) and reaches users as
+`curve_interpolate()`/`curve_area()`/`curve_simplify()`/`uncertain_curve_sample()`, with
+`numerics/functions/tabular_function.hpp` (the subsystem's one consumer, completing the
+`IUnivariateFunction` trio) dispatched through the existing `functions` group's `tabular` method as
+`tabular_function()`. `numerics/support/optimizer_runner.hpp` is the
 sibling for the fourteen ported optimizers (Differential Evolution, ParticleSwarm,
 ShuffledComplexEvolution, SimulatedAnnealing, MultiStart, MLSL, BFGS, Powell, ADAM,
 GradientDescent, Nelder-Mead, Brent, GoldenSection, AugmentedLagrange): unlike
@@ -167,7 +176,14 @@ series), `data_frame.hpp` (`DataFrame` -- FullTimeSeries threshold expansion,
 ProcessThresholdSeries, MGBT and explicit-threshold low outliers) with `data_frame_plotting.hpp`
 (the Hirsch-Stedinger plotting positions, including a faithful port of .NET's ArraySortHelper
 introsort because `List<T>.Sort` tie order is oracle-visible), and `threshold_diagnostics.hpp`
-(mean residual life + GPD parameter stability). `models/trend_functions/` holds the ten trend
+(mean residual life + GPD parameter stability). `data_frame.hpp` also carries the P4 hypothesis-
+test and summary-statistics facades (twelve of fourteen; `unimodality_test` and
+`summary_hypothesis_test` are deferred alongside `HypothesisTests::UnimodalityTest`), dispatched
+through `models/data_frame_runner.hpp`'s `run_data_frame` -- a fourth entry point beside
+`dist_runner.hpp`/`toolbox_runner.hpp`/`optimizer_runner.hpp`, returning the same `ToolboxResult`
+the toolbox groups return so all three fixture runners reuse the existing `toolbox_select` helper
+unchanged. It reaches users as `analysis_data_hypothesis_test()` and `analysis_data_statistics()`,
+and its oracle values live in the `data_frame` fixture kind. `models/trend_functions/` holds the ten trend
 models plus `general_linear_function.hpp` on the shared `support/` base
 (ITrendModel/TrendModelBase and the type enum). `models/univariate_distribution/` holds the four
 models: `univariate_distribution_model.hpp` (with its nonstationary companion
@@ -902,3 +918,37 @@ ending in an executable reproduction check. The version bump to **0.10.0** recor
 numbers: **ctest 102/102 (test_fixtures 5953 checks); oracle gate 5942 reproduced, 0 failed, 11
 skipped; testthat 6916/0; pytest 1711**; `R CMD check --as-cran` holds at the same three NOTEs with
 no WARNING. No `oracle_skip` and no loosened tolerance was added anywhere in the phase.
+
+The data-and-tests phase (P4, branch `port-data-and-tests`, August 2026) closed the data-and-
+testing layer that the earlier phases had left open, and is the fourth and last step of the release
+arc laid out in `docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`.
+**`HypothesisTests`** (`numerics/data/hypothesis_tests.hpp`) ports twelve of its thirteen public
+statics, reachable through the new `hypothesis` toolbox group as `hypothesis_test()`;
+`UnimodalityTest` is deferred to the next phase, since it trains a
+`Numerics.MachineLearning.GaussianMixtureModel` and the Machine Learning layer is unported. That
+deferral was the blocker on **the two severed RMC.BestFit `DataFrame` facades**, un-gated in this
+phase (`data_frame.hpp`, dispatched through the new `models/data_frame_runner.hpp` behind a
+`data_frame` fixture kind) as `analysis_data_hypothesis_test()` and `analysis_data_statistics()`:
+twelve of their fourteen combined members ship (nine of the Hypothesis Testing region's eleven,
+all three of the Summary Statistics region's), with `unimodality_test` and
+`summary_hypothesis_test` deferred alongside `UnimodalityTest` for the same reason.
+**`Correlation`'s matrix overloads** (`Pearson(double[,])`/`Spearman(double[,])`) join the existing
+`correlation` group as a matrix path with no Kendall equivalent, since upstream has none. **The
+whole Paired Data subsystem** -- `Ordinate`, `LineSimplification`, `OrderedPairedData`,
+`UncertainOrdinate`, `UncertainOrderedPairedData`, all under the new
+`numerics/data/paired_data/` directory -- lands with its one consumer,
+`numerics/functions/tabular_function.hpp`, completing the `IUnivariateFunction` trio, and the six
+previously-severed `Search.cs` paired-data overloads it needed un-severed alongside it. The
+subsystem reaches users through a new `paired_data` toolbox group (curve interpolation, area,
+simplification, and uncertain sampling) and the existing `functions` group's `tabular` method,
+taking `toolbox_runner.hpp` from fifteen groups to **seventeen**. Worked example **28** (examples
+20 through 27 shipped in earlier phases) exercises the whole layer end to end. The phase's headline
+upstream finding: `OrderedPairedData.LangSimplify` never force-keeps the last point of a curve, so
+it silently drops it, and upstream's own `Test_LangSimplify` cannot catch this because its
+assertion loop is bounded by the RESULT length rather than the expected length. Measured against
+the real, compiled C# library, and now pinned by ctest and by a fixture the dotnet oracle gate
+replays at exact tolerance -- one of seventeen new entries this phase adds to
+`docs/upstream-csharp-issues.md`. The version bump to **0.11.0** records it. Final numbers: **ctest
+108/108 (test_fixtures 6139 checks); oracle gate 6128 reproduced, 0 failed, 11 skipped; testthat
+7161/0; pytest 1795**; `R CMD check --as-cran` holds at the same three NOTEs with no WARNING. No
+`oracle_skip` and no loosened tolerance was added anywhere in the phase.

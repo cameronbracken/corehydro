@@ -19,9 +19,11 @@ parallel to \code{\link[=analysis_data_summary]{analysis_data_summary()}}'s \cod
 }
 \value{
 A named list. \code{value} holds the twenty summary statistics, named by
-\code{c("Record Length", "Events Per Index (λ)", "Low Outliers", "Minimum", "Maximum", "Mean", "Std Dev", "Skewness", "Kurtosis", "Mean (of log)", "Std Dev (of log)", "Skewness (of log)", "Kurtosis (of log)", "1\%", "5\%", "25\%", "50\%", "75\%", "95\%", "99\%")}. With
+\code{c("Record Length", "Events Per Index (lambda)", "Low Outliers", "Minimum", "Maximum", "Mean", "Std Dev", "Skewness", "Kurtosis", "Mean (of log)", "Std Dev (of log)", "Skewness (of log)", "Kurtosis (of log)", "1\%", "5\%", "25\%", "50\%", "75\%", "95\%", "99\%")}. With
 \code{standardized = TRUE}, \code{standardized_value} and \code{standardized_log10_value} are added: numeric
-vectors parallel to the exact series, in series order.
+vectors parallel to the exact series, in series order. (The second name's parenthetical is the
+Greek letter lambda, spelled out here rather than embedded literally so the PDF manual
+renders; the actual returned name carries the Greek character, matching the C# source.)
 }
 \description{
 Runs the \code{DataFrame} summary-statistics facades over the exact series of an \code{\link[=analysis_data]{analysis_data()}}

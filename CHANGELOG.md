@@ -7,6 +7,86 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-25
+
+The data-and-testing layer that closes out the port: `Numerics.Data.Statistics.HypothesisTests`,
+the two `RMC.BestFit.Models.DataFrame` facades that class was blocking, the `Correlation` matrix
+overloads, and the whole `Numerics.Data.Paired Data` subsystem -- `Ordinate`, `LineSimplification`,
+`OrderedPairedData`, `UncertainOrdinate`, `UncertainOrderedPairedData`, and their one consumer,
+`TabularFunction`, completing the `IUnivariateFunction` trio. This closes branch
+`port-data-and-tests` and its stack (P1-P4, `port-distribution-gaps` through this branch).
+
+### Added
+
+- **Twelve hypothesis tests**, ported from `Numerics/Data/Statistics/HypothesisTests.cs`, reachable
+  as `hypothesis_test(x, y = NULL, method = ...)`: `"one_sample_t"`, `"equal_variance_t"`,
+  `"unequal_variance_t"`, `"paired_t"`, `"f"`, `"f_models"` (returns a named
+  `f_statistic`/`p_value` pair rather than a bare p-value), `"jarque_bera"`, `"wald_wolfowitz"`,
+  `"ljung_box"`, `"mann_whitney"`, `"mann_kendall"`, and `"linear_trend"`. They dispatch through a
+  new `hypothesis` toolbox group, the sixteenth. **`UnimodalityTest`, the thirteenth C# method, is
+  deferred to the next phase**: it trains a `Numerics.MachineLearning.GaussianMixtureModel` at
+  k = 1 and k = 2, and the Machine Learning layer has no port yet.
+- **The two severed RMC.BestFit `DataFrame` facades**, un-gated now that `HypothesisTests` exists
+  under them, reachable as `analysis_data_hypothesis_test()` and `analysis_data_statistics()`
+  through a new `data_frame` fixture kind. Of the Hypothesis Testing region's eleven members, nine
+  ship: `jarque_bera_test`, `ljung_box_test`, `equal_variance_t_test`, `unequal_variance_t_test`,
+  `f_test`, `linear_trend_test`, `wald_wolfowitz_test`, `mann_whitney_test`, and
+  `mann_kendall_test`, every one reading the exact series only and splitting two-sample tests on
+  the data index rather than array position. The Summary Statistics region's three members all
+  ship: `summary_statistics_exact_data_only()` and `summary_statistics_all_data()` (each a
+  twenty-key ordered result -- record length, low-outlier count, the raw and log-space moments,
+  and seven exceedance-probability quantiles) and `set_standardized_values()`. **Twelve of
+  fourteen members ship**; `unimodality_test` and `summary_hypothesis_test` are deferred with
+  `UnimodalityTest`, since the latter calls the former inside a try/catch that would NaN nine
+  working results if it shipped alone.
+- **The `Correlation` matrix overloads**, ported from `Numerics/Data/Statistics/Correlation.cs`
+  (`Pearson(double[,])` and `Spearman(double[,])`), reachable through `correlation()`'s new matrix
+  path: called with a matrix or data frame and no `y`, it returns the full p-by-p correlation
+  matrix instead of one pairwise value. Upstream has no `KendallsTau(double[,])` overload, so
+  `method = "kendall"` combined with a matrix is a rejection naming the reason, not a silent
+  pairwise fallback.
+- **The Paired Data subsystem**, ported from `Numerics/Data/Paired Data/` in full: `Ordinate` and
+  `LineSimplification`, `OrderedPairedData` (with the six previously-severed `Search.cs` overloads
+  it needed un-severed alongside it), `UncertainOrdinate`, `UncertainOrderedPairedData`, and
+  `TabularFunction` (`Numerics/Functions/TabularFunction.cs`), the last of the three
+  `IUnivariateFunction` implementations. Reachable through a new `paired_data` toolbox group (the
+  seventeenth) as five verbs: `curve_interpolate()`, `curve_area()`, `curve_simplify()` (Douglas-
+  Peucker, Visvalingam-Whyatt, or Lang), `uncertain_curve_sample()` (a curve whose y-values are
+  distributions, sampled at a probability or at each distribution's mean), and
+  `tabular_function()`.
+- **A worked example pair, 28** (examples 20 through 27 shipped in earlier phases): the Harricana
+  River annual peaks through the independence, homogeneity, and normality tests, the same record
+  through `analysis_data()`, a correlation matrix over three series, and a reservoir stage-storage
+  curve interpolated in linear and log space, simplified by all three algorithms, and sampled
+  under uncertainty at its median and its mean.
+
+### Fixed
+
+- `Correlation`'s and `HypothesisTests`' four missing `Statistics`/`Tools` helpers
+  (`mean_variance`, the tie-returning `ranks_in_place` overload, the vector `percentile` overload,
+  and `tools::pow(double, int)`) are now ported, closing the last gap the P0-P3 phases had left in
+  `numerics/data/statistics.hpp`.
+
+### Notes
+
+- **`curve_simplify(method = "lang")` reproduces an upstream defect rather than fixing it.**
+  `OrderedPairedData.LangSimplify` never force-keeps a curve's last point the way its two sibling
+  algorithms do, so it can silently drop it -- on the `sin` curve at `tolerance = 0.01,
+  look_ahead = 2` (upstream's own `Test_LangSimplify` case), it returns three points and drops the
+  fourth, `(6.28, 0)`. Upstream's own test cannot detect this because its comparison loop is
+  bounded by the RESULT length rather than the expected length. Verified against the real,
+  compiled C# library, pinned by ctest and by a fixture the dotnet oracle gate replays at exact
+  tolerance. This and sixteen other new findings from this phase are recorded in
+  `docs/upstream-csharp-issues.md`.
+
+### Validation
+
+ctest 108/108 (the fixture suite alone 6139 checks); oracle gate 6128 reproduced, 0 failed, 11
+skipped (the documented GEV standard-error set, unchanged); testthat 7161/0; pytest 1795 passed.
+`R CMD check --as-cran` holds at the same three NOTEs
+(the CRAN-incoming non-FOSS-license note, the long-path note listing vendored core headers, and a
+local HTML-tidy-version note) with no WARNING.
+
 ## [0.10.0] - 2026-08-23
 
 The rest of the Numerics optimization layer. `optim_minimize()` grew from six methods to fourteen:

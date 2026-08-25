@@ -394,11 +394,13 @@ analysis_data_hypothesis_test <- function(data, method, index = NULL, lag_max = 
 #'   positions) and return the exact series' standardized values and standardized log10 values,
 #'   parallel to [analysis_data_summary()]'s `value`.
 #' @return A named list. `value` holds the twenty summary statistics, named by
-#'   `c("Record Length", "Events Per Index (λ)", "Low Outliers", "Minimum", "Maximum", "Mean",
+#'   `c("Record Length", "Events Per Index (lambda)", "Low Outliers", "Minimum", "Maximum", "Mean",
 #'   "Std Dev", "Skewness", "Kurtosis", "Mean (of log)", "Std Dev (of log)", "Skewness (of log)",
 #'   "Kurtosis (of log)", "1%", "5%", "25%", "50%", "75%", "95%", "99%")`. With
 #'   `standardized = TRUE`, `standardized_value` and `standardized_log10_value` are added: numeric
-#'   vectors parallel to the exact series, in series order.
+#'   vectors parallel to the exact series, in series order. (The second name's parenthetical is the
+#'   Greek letter lambda, spelled out here rather than embedded literally so the PDF manual
+#'   renders; the actual returned name carries the Greek character, matching the C# source.)
 #' @seealso [analysis_data_hypothesis_test()] for the hypothesis-test facades,
 #'   [analysis_data_summary()] for plotting positions and record diagnostics.
 #' @export
