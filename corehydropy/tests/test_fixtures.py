@@ -1693,6 +1693,19 @@ def _run_toolbox_case(group, case, datasets):
         _check(_toolbox_select(r, a, group), a)
 
 
+# data_frame [data, options; assertions carry method/index/label/select]: the twelve DataFrame
+# hypothesis-test / summary-statistics facades (P4 Task 6), through _core.data_frame_run. Modeled
+# directly on _run_toolbox_case above -- reuses _toolbox_case_data()/_toolbox_select() since
+# data_frame_run returns the SAME dict shape toolbox_run does.
+def _run_data_frame_case(case, datasets):
+    data = _toolbox_case_data(case, datasets)
+    data_frame_json = json.dumps(case["data_frame"]) if "data_frame" in case else ""
+    options = json.dumps(dict(case.get("options", {})))
+    for a in case["assertions"]:
+        r = _core.data_frame_run(a["method"], data, data_frame_json, options)
+        _check(_toolbox_select(r, a, "data_frame"), a)
+
+
 # optimizer [construct carries method/lower/upper/initial/maximize/seed/control; assertions carry
 # value/parameter/status]: the six ported optimizers (Task 8), run through _core.optim_run against
 # a NATIVE Python closure -- not _core.toolbox_run -- because an optimizer's input is a live
@@ -2550,6 +2563,7 @@ def _load_cases():
             "callback",
             "callback_cross_language",
             "toolbox_cross_language",
+            "data_frame",
         ):
             continue
         for case in spec["cases"]:
@@ -2572,6 +2586,10 @@ def test_fixture_case(kind, target, datasets, case):
 
     if kind == "toolbox":
         _run_toolbox_case(target, case, datasets)
+        return
+
+    if kind == "data_frame":
+        _run_data_frame_case(case, datasets)
         return
 
     if kind == "optimizer":

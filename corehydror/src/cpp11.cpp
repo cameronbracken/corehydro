@@ -152,6 +152,13 @@ extern "C" SEXP _corehydror_ch_threshold_diagnostics_(SEXP data, SEXP method, SE
     return cpp11::as_sexp(ch_threshold_diagnostics_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<double>>(u_min), cpp11::as_cpp<cpp11::decay_t<double>>(u_max), cpp11::as_cpp<cpp11::decay_t<int>>(n_thresholds), cpp11::as_cpp<cpp11::decay_t<double>>(confidence_level)));
   END_CPP11
 }
+// data.cpp
+list ch_data_frame_run_(std::string method, list data, std::string data_frame_json, std::string options_json);
+extern "C" SEXP _corehydror_ch_data_frame_run_(SEXP method, SEXP data, SEXP data_frame_json, SEXP options_json) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_data_frame_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<list>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(data_frame_json), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json)));
+  END_CPP11
+}
 // dist.cpp
 doubles ch_dist_moments_(std::string target, doubles params);
 extern "C" SEXP _corehydror_ch_dist_moments_(SEXP target, SEXP params) {
@@ -632,6 +639,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_cop_val_",                      (DL_FUNC) &_corehydror_ch_cop_val_,                       8},
     {"_corehydror_ch_copula_run_",                   (DL_FUNC) &_corehydror_ch_copula_run_,                    3},
     {"_corehydror_ch_cr_dependency_change_",         (DL_FUNC) &_corehydror_ch_cr_dependency_change_,         10},
+    {"_corehydror_ch_data_frame_run_",               (DL_FUNC) &_corehydror_ch_data_frame_run_,                4},
     {"_corehydror_ch_data_frame_summary_",           (DL_FUNC) &_corehydror_ch_data_frame_summary_,            2},
     {"_corehydror_ch_dirichlet_val_",                (DL_FUNC) &_corehydror_ch_dirichlet_val_,                 3},
     {"_corehydror_ch_dist_cdf_",                     (DL_FUNC) &_corehydror_ch_dist_cdf_,                      3},

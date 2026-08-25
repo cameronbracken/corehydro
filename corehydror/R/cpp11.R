@@ -84,6 +84,10 @@ ch_threshold_diagnostics_ <- function(data, method, u_min, u_max, n_thresholds, 
   .Call(`_corehydror_ch_threshold_diagnostics_`, data, method, u_min, u_max, n_thresholds, confidence_level)
 }
 
+ch_data_frame_run_ <- function(method, data, data_frame_json, options_json) {
+  .Call(`_corehydror_ch_data_frame_run_`, method, data, data_frame_json, options_json)
+}
+
 ch_dist_moments_ <- function(target, params) {
   .Call(`_corehydror_ch_dist_moments_`, target, params)
 }

@@ -1,0 +1,205 @@
+{
+  "kind": "data_frame",
+  "source": "src/RMC.BestFit/Models/DataFrame/DataFrame.cs @ c2e6192; hypothesis-test literals from src/RMC.BestFit.Tests/DataFrame/ExactDataHypothesisTests.cs, already transcribed in core/tests/test_data_frame_facades.cpp (P4 Task 5). Datasets are the SAME arrays fixtures/toolbox/hypothesis.json already carries (harricana69/noise126/jb_known13/data30a+data30b/data10a+data10b/trend_cos100), reused verbatim rather than re-transcribed a second time, since that file's arrays are independently verified byte-identical against the checked-out submodule. summary_exact/summary_all/standardized have NO upstream test literal (ExactDataHypothesisTests.cs and NonparametricEmpiricalTests.cs only assert finiteness/NaN patterns for those three methods, not exact values) -- curated with `python3 tools/verify_oracles.py --dump`, each such assertion says so in its own `source`.",
+  "datasets": {
+    "harricana": [
+      122, 244, 214, 173, 229, 156, 212, 263,
+      146, 183, 161, 205, 135, 331, 225, 174,
+      98.8, 149, 238, 262, 132, 235, 216, 240,
+      230, 192, 195, 172, 173, 172, 153, 142,
+      317, 161, 201, 204, 194, 164, 183, 161,
+      167, 179, 185, 117, 192, 337, 125, 166,
+      99.1, 202, 230, 158, 262, 154, 164, 182,
+      164, 183, 171, 250, 184, 205, 237, 177,
+      239, 187, 180, 173, 174
+    ],
+    "jb_data": [
+      -17.82175266, -2.33394663, 4.66366786, 6.77181741, 48.09893105, -28.26940615, -9.98265593, -0.87518792,
+      14.97758789, -0.54200675, 8.80374205, -3.40846222, -3.35109891, -12.98362149, -1.42481547, 18.5800533,
+      10.86238267, -13.65904345, 1.76995771, 13.91485418, 10.8528196, -11.69442361, -11.6048953, 5.89082943,
+      -13.20258835, 3.93329214, 2.62990935, -4.00680666, 18.4215721, 0.14773234, 10.20778973, -7.41284797,
+      8.42081407, 35.41116192, 59.37166512, 9.36721778, 22.37395361, 22.9971476, 13.47067667, -18.98066759,
+      -22.84094314, 16.7108515, 18.72618308, 29.97227498, -16.078326, -0.26901107, -0.05773469, 14.44571902,
+      -7.23727541, 18.87940528, -10.55665291, -0.40463948, 1.1599797, -9.47746043, -8.83651712, -0.1277879,
+      -7.43500345, 18.02267959, 10.38996171, 6.73008507, -0.78965999, -6.63662283, -0.26534812, -18.26597299,
+      10.68284417, 4.14715065, -22.73605154, 0.38107214, 17.99480125, 4.67217999, -7.55979566, -5.02964486,
+      10.07853161, -10.20580542, -3.83664015, -3.13645528, -4.30412819, 12.06651361, 16.46249676, -0.77303738,
+      10.72787315, 12.09162065, 8.22959713, 5.86544228, -11.14598952, 9.55434186, -4.24740884, -2.84574008,
+      -7.08625811, 0.80619592, 12.92545548, -3.22668772, -25.39204102, 9.92546076, -3.16982112, 18.60432604,
+      -14.00214643, 1.17374306, -13.04390662, 24.21704845, 3.82716675, -5.17619789, -8.06288031, 4.1033081,
+      -13.36564786, -15.91238602, -25.39452748, 18.80121063, 7.80923857, -6.8516946, 6.54494797, 26.80612853,
+      4.65921504, 23.73597901, 44.15782916, 2.64243694, -24.27815428, 40.02096079, 6.5730404, 25.71086816,
+      28.14206721, 55.47192889, -14.9762203, -10.03718017, 38.03084527, 7.20256442
+    ],
+    "jb_data2": [
+      4, 5, 5, 6, 9, 12, 13, 14,
+      14, 19, 22, 24, 25
+    ],
+    "variance_t_data": [
+      8.782932, 10.64199, -1.63955, -6.802458, 9.088312, -27.26934, 9.451478, -4.142762,
+      -4.262396, -13.78983, -1.743717, 27.259681, 5.559418, 7.803247, -11.25798, 12.253498,
+      -13.295363, -4.973664, 16.81069, 4.480855, 11.694329, 21.836776, -9.664926, -23.297061,
+      -23.965643, 27.076463, -7.22471, 9.305697, 9.181852, -2.434665, 34.3561954, 75.9050064,
+      71.4757101, 58.9733692, 17.6281358, 24.7356484, 0.2774026, -39.8615073, 63.0320155, 10.7740315,
+      43.855325, -61.4107418, -21.8079666, 38.1142162, 35.6335516, 53.8218821, -32.3929633, 27.0220976,
+      27.4956296, -29.203965, -6.2115822, 68.4307799, 11.6077081, 20.5498852, -10.1292962, 18.3386108,
+      30.7351382, 34.7138599, 74.3519506, -60.4083194
+    ],
+    "f_data": [
+      200.1, 190.9, 192.7, 213, 241.4, 196.9, 172.2, 185.5,
+      205.2, 193.7, 392.9, 393.2, 345.1, 393, 434, 427.9,
+      422, 383.9, 392.3, 352.2
+    ],
+    "cos_data": [
+      0.5403023058681398, -0.4161468365471424, -0.9899924966004454, -0.6536436208636119, 0.28366218546322625, 0.960170286650366, 0.7539022543433046, -0.14550003380861354,
+      -0.9111302618846769, -0.8390715290764524, 0.004425697988050785, 0.8438539587324921, 0.9074467814501962, 0.1367372182078336, -0.7596879128588213, -0.9576594803233847,
+      -0.27516333805159693, 0.6603167082440802, 0.9887046181866692, 0.408082061813392, -0.5477292602242684, -0.9999608263946371, -0.5328330203333975, 0.424179007336997,
+      0.9912028118634736, 0.6469193223286404, -0.2921388087338362, -0.9626058663135666, -0.7480575296890004, 0.15425144988758405, 0.9147423578045313, 0.8342233605065102,
+      -0.013276747223059479, -0.8485702747846052, -0.9036922050915067, -0.12796368962740468, 0.7654140519453434, 0.9550736440472949, 0.26664293235993725, -0.6669380616522619,
+      -0.9873392775238264, -0.39998531498835127, 0.5551133015206257, 0.9998433086476912, 0.5253219888177297, -0.4321779448847783, -0.9923354691509287, -0.6401443394691997,
+      0.3005925437436371, 0.9649660284921133, 0.7421541968137826, -0.16299078079570548, -0.9182827862121189, -0.8293098328631502, 0.022126756261955736, 0.8532201077225842,
+      0.8998668269691937, 0.11918013544881928, -0.7710802229758452, -0.9524129804151563, -0.25810163593826746, 0.6735071623235863, 0.9858965815825497, 0.39185723042955,
+      -0.562453851238172, -0.99964745596635, -0.5177697997895051, 0.4401430224960407, 0.9933903797222716, 0.6333192030862999, -0.3090227281660707, -0.9672505882738824,
+      -0.7361927182273159, 0.17171734183077755, 0.9217512697247493, 0.8243313311075577, -0.03097503173121646, -0.8578030932449878, -0.8959709467909631, -0.11038724383904756,
+      0.7766859820216312, 0.9496776978825432, 0.24954011797333814, -0.6800234955873388, -0.9843766433940419, -0.38369844494974187, 0.5697503342653119, 0.9993732836951247,
+      0.5101770449416689, -0.4480736161291702, -0.9943674609282015, -0.626444447910339, 0.31742870151970165, 0.9694593666699876, 0.7301735609948197, -0.18043044929108396,
+      -0.9251475365964139, -0.8192882452914593, 0.0398208803931389, 0.8623188722876839
+    ]
+  },
+  "cases": [
+    {
+      "name": "harricana_wald_wolfowitz",
+      "data": ["harricana"],
+      "assertions": [
+        { "method": "wald_wolfowitz", "expected": 0.24321036954250697, "mode": "abs", "tol": 1e-3,
+          "source": "ExactDataHypothesisTests.Test_WaldWolfowitz -- true_p = (1 - Normal.standard_cdf(1.167)) * 2" }
+      ]
+    },
+    {
+      "name": "harricana_mann_whitney",
+      "data": ["harricana"],
+      "options": { "index": 50 },
+      "assertions": [
+        { "method": "mann_whitney", "expected": 0.5891970324313962, "mode": "abs", "tol": 1e-2,
+          "source": "ExactDataHypothesisTests.Test_MannWhitney -- true_p = (1 - Normal.standard_cdf(0.54)) * 2" }
+      ]
+    },
+    {
+      "name": "harricana_mann_kendall",
+      "data": ["harricana"],
+      "assertions": [
+        { "method": "mann_kendall", "expected": 0.7757, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_MannKendall" }
+      ]
+    },
+    {
+      "name": "variance_t_equal",
+      "data": ["variance_t_data"],
+      "options": { "index": 30 },
+      "assertions": [
+        { "method": "equal_variance_t", "expected": 0.0185, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_EqualVarianceTtest" }
+      ]
+    },
+    {
+      "name": "variance_t_unequal",
+      "data": ["variance_t_data"],
+      "options": { "index": 30 },
+      "assertions": [
+        { "method": "unequal_variance_t", "expected": 0.02043, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_UnequalVarianceTtest" }
+      ]
+    },
+    {
+      "name": "f_test",
+      "data": ["f_data"],
+      "options": { "index": 10 },
+      "assertions": [
+        { "method": "f", "expected": 0.1825, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_Ftest" }
+      ]
+    },
+    {
+      "name": "jarque_bera_data1",
+      "data": ["jb_data"],
+      "assertions": [
+        { "method": "jarque_bera", "expected": 1.722e-05, "mode": "abs", "tol": 1e-5,
+          "source": "ExactDataHypothesisTests.Test_JarqueBera -- expected = 3.444e-05 / 2.0" }
+      ]
+    },
+    {
+      "name": "jarque_bera_data2",
+      "data": ["jb_data2"],
+      "assertions": [
+        { "method": "jarque_bera", "expected": 0.592128, "mode": "abs", "tol": 1e-6,
+          "source": "ExactDataHypothesisTests.Test_JarqueBera (second dataset)" }
+      ]
+    },
+    {
+      "name": "ljung_box_lag5",
+      "data": ["jb_data"],
+      "options": { "lag_max": 5 },
+      "assertions": [
+        { "method": "ljung_box", "expected": 0.2314, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_LjungBox (lagMax = 5)" }
+      ]
+    },
+    {
+      "name": "ljung_box_lag30",
+      "data": ["jb_data"],
+      "options": { "lag_max": 30 },
+      "assertions": [
+        { "method": "ljung_box", "expected": 0.7548, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_LjungBox (lagMax = 30)" }
+      ]
+    },
+    {
+      "name": "linear_trend",
+      "data": ["cos_data"],
+      "assertions": [
+        { "method": "linear_trend", "expected": 0.9092, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_LinearTrendTest" }
+      ]
+    },
+    {
+      "name": "harricana_summary_exact",
+      "data": ["harricana"],
+      "assertions": [
+        { "method": "summary_exact", "label": "Record Length", "expected": 69, "mode": "abs", "tol": 1e-9,
+          "source": "no upstream test literal; deterministic (ExactSeries.Count)" },
+        { "method": "summary_exact", "label": "Minimum", "expected": 98.8, "mode": "abs", "tol": 1e-9,
+          "source": "no upstream test literal; deterministic (minimum of the dataset)" },
+        { "method": "summary_exact", "label": "Mean", "expected": 191.3173913043478, "mode": "rel", "tol": 1e-9,
+          "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump`" },
+        { "method": "summary_exact", "label": "50%", "expected": 183, "mode": "rel", "tol": 1e-9,
+          "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump`" }
+      ]
+    },
+    {
+      "name": "harricana_summary_all",
+      "data": ["harricana"],
+      "assertions": [
+        { "method": "summary_all", "label": "Minimum", "expected": 98.8, "mode": "abs", "tol": 1e-9,
+          "source": "no upstream test literal; deterministic (minimum of the dataset)" },
+        { "method": "summary_all", "label": "Mean", "expected": 191.4146372581969, "mode": "rel", "tol": 1e-9,
+          "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump`" },
+        { "method": "summary_all", "label": "50%", "expected": 182.33319062866008, "mode": "rel", "tol": 1e-9,
+          "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump`" }
+      ]
+    },
+    {
+      "name": "harricana_standardized",
+      "data": ["harricana"],
+      "assertions": [
+        { "method": "standardized", "select": "rows", "expected": 69, "mode": "abs", "tol": 1e-9,
+          "source": "no upstream test literal; structural (row count == exact count)" },
+        { "method": "standardized", "select": "columns", "expected": 2, "mode": "abs", "tol": 1e-9,
+          "source": "no upstream test literal; structural (2 columns: standardized value, standardized log10 value)" },
+        { "method": "standardized", "index": 0, "expected": 113.86615032707175, "mode": "rel", "tol": 1e-9,
+          "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump` (standardized_value of harricana[0] = 122)" },
+        { "method": "standardized", "index": 1, "expected": 2.0952017964896457, "mode": "rel", "tol": 1e-9,
+          "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump` (standardized_log10_value of harricana[0] = 122)" }
+      ]
+    }
+  ]
+}

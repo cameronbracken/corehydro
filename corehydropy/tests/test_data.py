@@ -165,3 +165,73 @@ def test_the_frame_round_trips_through_its_json_spec():
         interval={"index": [15], "lower": [30000.0], "value": [35000.0], "upper": [40000.0]},
     )
     assert json.loads(d.to_json()) == d.spec
+
+
+# Harricana River annual peaks (Bobee & Ashkar 1991, Table 1.2, page 5); the oracle for
+# mann_kendall (0.7757) is ExactDataHypothesisTests.Test_MannKendall, also transcribed into
+# fixtures/data/data_frame_facades.json and core/tests/test_data_frame_facades.cpp.
+HARRICANA = [
+    122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225,
+    174, 98.8, 149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172,
+    153, 142, 317, 161, 201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192,
+    337, 125, 166, 99.1, 202, 230, 158, 262, 154, 164, 182, 164, 183, 171, 250,
+    184, 205, 237, 177, 239, 187, 180, 173, 174,
+]
+
+
+def test_analysis_data_hypothesis_test_reproduces_the_harricana_mann_kendall_oracle():
+    r = ch.analysis_data_hypothesis_test(HARRICANA, "mann_kendall")
+    assert r == {"mann_kendall": pytest.approx(0.7757, abs=1e-3)}
+
+
+def test_analysis_data_hypothesis_test_accepts_an_analysis_data_frame():
+    r_seq = ch.analysis_data_hypothesis_test(HARRICANA, "mann_kendall")
+    r_obj = ch.analysis_data_hypothesis_test(ch.analysis_data(HARRICANA), "mann_kendall")
+    assert r_seq == r_obj
+
+
+def test_analysis_data_hypothesis_test_runs_a_two_sample_test_given_an_index():
+    r = ch.analysis_data_hypothesis_test(HARRICANA, "mann_whitney", index=50)
+    assert r["mann_whitney"] == pytest.approx(0.5892, abs=1e-2)
+
+
+def test_analysis_data_hypothesis_test_validates_method_and_the_two_sample_index():
+    with pytest.raises(ValueError, match="unknown method"):
+        ch.analysis_data_hypothesis_test(HARRICANA, "not_a_method")
+    with pytest.raises(ValueError, match="requires .index."):
+        ch.analysis_data_hypothesis_test(HARRICANA, "equal_variance_t")
+
+
+def test_analysis_data_statistics_returns_the_twenty_named_summary_statistics():
+    s = ch.analysis_data_statistics(PEAKS)
+    assert len(s["value"]) == 20
+    assert list(s["value"].keys()) == [
+        "Record Length", "Events Per Index (λ)", "Low Outliers", "Minimum", "Maximum",
+        "Mean", "Std Dev", "Skewness", "Kurtosis", "Mean (of log)", "Std Dev (of log)",
+        "Skewness (of log)", "Kurtosis (of log)", "1%", "5%", "25%", "50%", "75%", "95%", "99%",
+    ]
+    assert math.isfinite(s["value"]["Mean"])  # PEAKS has 15 >= 10 exact points
+
+
+def test_analysis_data_statistics_all_data_uses_the_plotting_position_fit():
+    exact_only = ch.analysis_data_statistics(HARRICANA)
+    all_data = ch.analysis_data_statistics(HARRICANA, all_data=True)
+    assert exact_only["value"]["Record Length"] == 69
+    assert exact_only["value"]["Minimum"] == 98.8
+    assert all_data["value"]["Minimum"] == 98.8
+    # The two methods use different estimators, so their means need not agree even with no
+    # censored data in the frame.
+    assert exact_only["value"]["Mean"] != pytest.approx(all_data["value"]["Mean"])
+
+
+def test_analysis_data_statistics_standardized_adds_parallel_columns():
+    s = ch.analysis_data_statistics(HARRICANA, standardized=True)
+    assert len(s["standardized_value"]) == len(HARRICANA)
+    assert len(s["standardized_log10_value"]) == len(HARRICANA)
+    assert all(math.isfinite(v) for v in s["standardized_value"])
+    assert all(math.isfinite(v) for v in s["standardized_log10_value"])
+
+
+def test_analysis_data_statistics_reports_nan_for_a_short_record():
+    s = ch.analysis_data_statistics(HARRICANA[:9])
+    assert all(math.isnan(v) for v in s["value"].values())

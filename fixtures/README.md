@@ -1668,6 +1668,78 @@ argmin of a flat likelihood, port termination differs slightly from C#);
 `[sample_size, dimension, seed, row, col]` (element of the seeded Latin hypercube sample;
 stateless, locks the C# stream bit-for-bit).
 
+### `data_frame`
+
+P4 Task 6 (data and tests) added this kind for the twelve `DataFrame` facades Task 5 un-gated:
+the nine hypothesis-test methods (`jarque_bera`, `ljung_box`, `equal_variance_t`,
+`unequal_variance_t`, `f`, `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`) and
+the three summary methods (`summary_exact`, `summary_all`, `standardized`), reached through
+`corehydro::models::runner::run_data_frame` (`models/data_frame_runner.hpp`). Every one of these
+reads the EXACT series only -- no censoring filter, no threshold machinery -- so `run_data_frame`
+returns the SAME `numerics::support::ToolboxResult` the toolbox groups return, and every runner's
+`toolbox_select` (index / label / select: `"length"`/`"rows"`/`"columns"`) is reused verbatim; no
+new selection code exists anywhere for this kind.
+
+```jsonc
+{
+  "kind": "data_frame",
+  "datasets": { "harricana": [ ...69 numbers... ] },
+  "cases": [
+    {
+      "name": "harricana_mann_kendall",
+      "data": ["harricana"],        // dataset name or inline array; resolved exactly as the
+                                     // `toolbox` kind resolves its `data`. data[0] becomes the
+                                     // exact series, with sequential 0-based indexes -- the
+                                     // ExactSeries(std::vector<double>) constructor's own
+                                     // convention, and what the C# tests' own
+                                     // `ExactSeries = new ExactSeries(data)` produces too.
+      "options": { "use_log10": false },
+      "assertions": [
+        { "method": "mann_kendall", "expected": 0.7757, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_MannKendall" }
+      ]
+    }
+  ]
+}
+```
+
+A case may instead carry a `data_frame` object (the `model_spec.hpp` `data_frame` grammar --
+`exact`/`interval`/`threshold`/`uncertain` arrays of objects) in place of `data`, for the rarer
+censored-frame path `run_data_frame` also accepts; `data` must be empty when `data_frame` is
+given, and vice versa. No case in this file uses it -- these twelve facades read the exact series
+only, so a plain `data` array is what every case here needs -- but the three runners and the
+dotnet emitter all support it, for parity with `run_data_frame`'s own two-path contract (see that
+function's header comment in `models/data_frame_runner.hpp`).
+
+Options: `use_log10` (default `false`, every method); `index` (the two-sample split, required by
+`equal_variance_t`/`unequal_variance_t`/`f`/`mann_whitney`, an error if omitted); `lag_max`
+(`ljung_box` only, default `-1`, meaning "use the library's own default rule"). `summary_exact`
+and `summary_all` return the twenty-key named result (`values` parallel to `names`, selected by
+`label` or `index`); `standardized` returns the exact series' standardized values followed by its
+standardized log10 values, `dims = {n, 2}` (row-major: row `i` is
+`[standardized_value[i], standardized_log10_value[i]]`), selected by `index` or `select:
+"rows"`/`"columns"`. `run_data_frame` calls `calculate_plotting_positions()` before `summary_all`
+and `standardized` (the C# tests do this explicitly, and both methods read plotting-position
+complements) but NOT before the nine hypothesis facades or `summary_exact`, none of which read
+plotting positions.
+
+`fixtures/data/data_frame_facades.json` carries one or more cases per
+`ExactDataHypothesisTests.cs` `[TestMethod]` -- the SAME literals and datasets already
+transcribed into `core/tests/test_data_frame_facades.cpp` (P4 Task 5), reusing the exact dataset
+arrays `fixtures/toolbox/hypothesis.json` already carries (`harricana69`, `noise126`,
+`jb_known13`, `data30a`+`data30b`, `data10a`+`data10b`, `trend_cos100`) rather than
+re-transcribing them a second time. `summary_exact`, `summary_all`, and `standardized` have NO
+upstream test literal at all -- `NonparametricEmpiricalTests.cs`'s two DataFrame cases only assert
+finiteness/NaN patterns for these three methods, never a value -- so every one of their assertions
+is curated with `python3 tools/verify_oracles.py --dump` against the real C# `DataFrame`, and says
+so in its own `source`.
+
+The dotnet emitter's `data_frame` branch is the one branch that DOES honor `oracle_skip` (the
+`toolbox` branch above does not); this is a deliberate choice for consistency with the other kinds
+that carry it (`analysis`, `model_estimation`, ...), not a reflection of anything unreproducible
+here -- no assertion in this file uses `oracle_skip`, since every value here either reproduces a
+C# test literal or was curated directly against this same branch.
+
 ### `toolbox`
 
 The Numerics utility layer (Phase 4 of the docs/examples effort: correlation, goodness of fit,

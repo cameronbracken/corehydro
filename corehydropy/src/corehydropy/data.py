@@ -15,7 +15,14 @@ import numpy as np
 from . import _core
 from .distributions import Distribution
 
-__all__ = ["AnalysisData", "analysis_data", "analysis_data_summary", "threshold_diagnostics"]
+__all__ = [
+    "AnalysisData",
+    "analysis_data",
+    "analysis_data_summary",
+    "threshold_diagnostics",
+    "analysis_data_hypothesis_test",
+    "analysis_data_statistics",
+]
 
 
 def _values(x, what):
@@ -351,3 +358,158 @@ def threshold_diagnostics(
         int(n_thresholds),
         float(confidence_level),
     )
+
+
+def _exact_values(data) -> list:
+    """The exact-series values a data-layer facade reads, in series order.
+
+    Both :func:`analysis_data_hypothesis_test` and :func:`analysis_data_statistics` read the
+    exact series only, so an :class:`AnalysisData` object contributes just its ``exact`` values
+    (ignoring any interval/threshold/uncertain series it also carries); a plain sequence is used
+    as-is.
+    """
+    if isinstance(data, AnalysisData):
+        exact = data.spec.get("exact")
+        if exact is None:
+            raise ValueError(
+                "`data` has no exact series; analysis_data_hypothesis_test()/"
+                "analysis_data_statistics() read the exact series only"
+            )
+        return [float(e["value"]) for e in exact]
+    return [float(v) for v in np.asarray(data, dtype=float).ravel()]
+
+
+_HYPOTHESIS_METHODS = (
+    "jarque_bera",
+    "ljung_box",
+    "equal_variance_t",
+    "unequal_variance_t",
+    "f",
+    "linear_trend",
+    "wald_wolfowitz",
+    "mann_whitney",
+    "mann_kendall",
+)
+_TWO_SAMPLE_METHODS = ("equal_variance_t", "unequal_variance_t", "f", "mann_whitney")
+
+
+def analysis_data_hypothesis_test(
+    data,
+    method: str,
+    index: int | None = None,
+    lag_max: int | None = None,
+    use_log10: bool = False,
+) -> dict:
+    """A hypothesis test on an observation record.
+
+    Runs one of the nine ``DataFrame`` hypothesis-test facades over the exact series of an
+    :class:`AnalysisData` frame (or a plain sequence). The four two-sample tests split the record
+    at ``index``, comparing observations with a data index below it against those at or above it
+    -- the split is on the record's INDEX, not on array position, so it agrees with the split a
+    caller would get by re-running the test on a record whose observations were supplied out of
+    order.
+
+    Parameters
+    ----------
+    data : AnalysisData or array_like
+        The observations, or an :class:`AnalysisData` frame (only its exact series is read).
+    method : {"jarque_bera", "ljung_box", "equal_variance_t", "unequal_variance_t", "f",
+        "linear_trend", "wald_wolfowitz", "mann_whitney", "mann_kendall"}
+        Which facade to run: normality, autocorrelation, difference in means (Student's /
+        Welch's), difference in variances, trend, runs test for independence, homogeneity /
+        jump, and homogeneity / trend, respectively.
+    index : int, optional
+        The record index to split the sample at; required by ``"equal_variance_t"``,
+        ``"unequal_variance_t"``, ``"f"``, and ``"mann_whitney"``, ignored otherwise.
+    lag_max : int, optional
+        The maximum lag for ``"ljung_box"``; the default (``None``) uses the library's own
+        default rule. Ignored by every other method.
+    use_log10 : bool, default False
+        Test the log10-transformed values instead of the real-space values.
+
+    Returns
+    -------
+    dict
+        A single-key dict ``{method: p_value}``, the 2-sided p-value.
+
+    Examples
+    --------
+    >>> peaks = [122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205]
+    >>> analysis_data_hypothesis_test(peaks, "mann_kendall")
+    {'mann_kendall': ...}
+    """
+    if method not in _HYPOTHESIS_METHODS:
+        raise ValueError(
+            f"unknown method '{method}'; expected one of {', '.join(_HYPOTHESIS_METHODS)}"
+        )
+    values = _exact_values(data)
+    if method in _TWO_SAMPLE_METHODS and index is None:
+        raise ValueError(
+            f'method = "{method}" requires `index`, the record index to split the sample at'
+        )
+    options: dict = {"use_log10": bool(use_log10)}
+    if index is not None:
+        options["index"] = int(index)
+    if lag_max is not None:
+        options["lag_max"] = int(lag_max)
+    r = _core.data_frame_run(method, [values], "", json.dumps(options))
+    return {method: r["values"][0]}
+
+
+def analysis_data_statistics(data, all_data: bool = False, standardized: bool = False) -> dict:
+    """Summary statistics for an observation record.
+
+    Runs the ``DataFrame`` summary-statistics facades over the exact series of an
+    :class:`AnalysisData` frame (or a plain sequence): record length, low-outlier count,
+    min/max, the first four product moments in real space and log10 space, and seven
+    percentiles.
+
+    By default (``all_data=False``) the statistics are computed directly from the exact series
+    (``SummaryStatisticsExactDataOnly``). With ``all_data=True``, they instead come from a
+    nonparametric distribution fit through the Hirsch-Stedinger plotting positions of the
+    combined exact/interval/uncertain record (``SummaryStatisticsAllData``) -- the same fit
+    :func:`analysis_data_summary` uses -- so ``"Record Length"`` counts the full record (censored
+    series included) rather than the exact series alone, and the two methods can disagree even on
+    a frame with no censored data because their percentile and moment estimators differ. Both
+    report ``NaN`` for every value when the exact series has fewer than 10 points.
+
+    Parameters
+    ----------
+    data : AnalysisData or array_like
+        The observations, or an :class:`AnalysisData` frame (only its exact series is read).
+    all_data : bool, default False
+        Use ``SummaryStatisticsAllData`` (see above) instead of the default exact-series-only
+        statistics.
+    standardized : bool, default False
+        Also run ``SetStandardizedValues()`` (after computing plotting positions) and return the
+        exact series' standardized values and standardized log10 values, parallel to
+        :func:`analysis_data_summary`'s ``"value"``.
+
+    Returns
+    -------
+    dict
+        ``"value"`` holds the twenty summary statistics, keyed by ``"Record Length"``,
+        ``"Events Per Index (λ)"``, ``"Low Outliers"``, ``"Minimum"``, ``"Maximum"``,
+        ``"Mean"``, ``"Std Dev"``, ``"Skewness"``, ``"Kurtosis"``, ``"Mean (of log)"``,
+        ``"Std Dev (of log)"``, ``"Skewness (of log)"``, ``"Kurtosis (of log)"``, ``"1%"``,
+        ``"5%"``, ``"25%"``, ``"50%"``, ``"75%"``, ``"95%"``, ``"99%"``. With
+        ``standardized=True``, ``"standardized_value"`` and ``"standardized_log10_value"`` are
+        added: lists parallel to the exact series, in series order.
+
+    Examples
+    --------
+    >>> peaks = [12500, 15300, 8900, 22100, 18700, 14200, 9800, 28500, 17400, 11600]
+    >>> s = analysis_data_statistics(peaks)
+    >>> s["value"]["Mean"]
+    ...
+    """
+    values = _exact_values(data)
+    method = "summary_all" if all_data else "summary_exact"
+    r = _core.data_frame_run(method, [values], "", "{}")
+    out: dict = {"value": dict(zip(r["names"], r["values"]))}
+    if standardized:
+        rs = _core.data_frame_run("standardized", [values], "", "{}")
+        flat = rs["values"]
+        out["standardized_value"] = flat[0::2]
+        out["standardized_log10_value"] = flat[1::2]
+    return out

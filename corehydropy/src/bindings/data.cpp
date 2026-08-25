@@ -86,4 +86,26 @@ void register_data(py::module_& m) {
         out["shape_upper_ci"] = r.shape_upper_ci;
         return out;
     });
+
+    // The twelve DataFrame hypothesis-test / summary-statistics facades (P4 Task 6), behind one
+    // name-dispatched call: the nine hypothesis tests, summary_exact, summary_all, and
+    // standardized. `data` holds the exact-series values (data[0] becomes the exact series with
+    // sequential 0-based indexes); `data_frame_json`, when non-empty, instead builds the frame
+    // from a `data_frame` spec object and `data` must be empty -- exactly one of the two is
+    // required (see data_frame_runner.hpp's run_data_frame for why there are two paths). Packed
+    // exactly as toolbox_run's `pack()` does: values/names/dims/spec.
+    m.def(
+        "data_frame_run",
+        [](const std::string& method, const std::vector<std::vector<double>>& data,
+           const std::string& data_frame_json, const std::string& options_json) {
+            corehydro::numerics::support::ToolboxResult r =
+                runner::run_data_frame(method, data, data_frame_json, options_json);
+            py::dict out;
+            out["values"] = r.values;
+            out["names"] = r.names;
+            out["dims"] = r.dims;
+            out["spec"] = r.spec;
+            return out;
+        },
+        py::arg("method"), py::arg("data"), py::arg("data_frame_json"), py::arg("options_json"));
 }

@@ -2126,6 +2126,24 @@ test_that("oracle fixtures validate", {
       }
       next
     }
+    if (identical(spec$kind, "data_frame")) {
+      # P4 Task 6: the twelve DataFrame hypothesis-test / summary-statistics facades. Modeled
+      # directly on the toolbox block above -- reuses toolbox_case_data()/toolbox_select() since
+      # ch_data_frame_run_ returns the SAME ToolboxResult shape ch_toolbox_run_ does.
+      ns <- asNamespace("corehydror")
+      datasets <- spec$datasets
+      for (case in spec$cases) {
+        data <- toolbox_case_data(case, datasets)
+        df_json <- if (is.null(case$data_frame)) "" else ns$to_spec_json(case$data_frame)
+        opts_list <- if (is.null(case$options)) list() else case$options
+        opts <- if (length(opts_list) == 0L) "{}" else ns$to_spec_json(opts_list)
+        for (a in case$assertions) {
+          r <- ns$ch_data_frame_run_(a$method, data, df_json, opts)
+          check_assertion(toolbox_select(r, a, "data_frame"), a)
+        }
+      }
+      next
+    }
     if (identical(spec$kind, "optimizer")) {
       ns <- asNamespace("corehydror")
       for (case in spec$cases) {

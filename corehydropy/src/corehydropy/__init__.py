@@ -100,6 +100,8 @@ from .mvdist import (
 from .data import (
     AnalysisData,
     analysis_data,
+    analysis_data_hypothesis_test,
+    analysis_data_statistics,
     analysis_data_summary,
     threshold_diagnostics,
 )
@@ -297,6 +299,8 @@ __all__ = [
     "bootstrap_custom",
     "AnalysisData",
     "analysis_data",
+    "analysis_data_hypothesis_test",
+    "analysis_data_statistics",
     "analysis_data_summary",
     "threshold_diagnostics",
     "Model",

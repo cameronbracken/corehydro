@@ -112,6 +112,8 @@ quartodoc:
         - AnalysisData
         - analysis_data
         - analysis_data_summary
+        - analysis_data_hypothesis_test
+        - analysis_data_statistics
         - threshold_diagnostics
     - title: Models
       desc: >-

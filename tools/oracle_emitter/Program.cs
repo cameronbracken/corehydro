@@ -5062,6 +5062,73 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
     }
 }
 
+// Mirrors models/data_frame_runner.hpp's run_data_frame dispatch against a real
+// BestFitModels.DataFrame (P4 Task 6). The nine hypothesis facades and "summary_exact" return a
+// single scalar (no dims); "summary_all" returns the same twenty-key named result; "standardized"
+// flattens {StandardizedValue, StandardizedLog10Value} per exact-series item row-major, dims
+// {Count, 2}.
+static double DataFrameDispatch(string method, BestFitModels.DataFrame df, JsonElement options,
+                                JsonElement asrt)
+{
+    bool useLog10 = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("use_log10", out var ul) && ul.GetBoolean();
+    int OptIndex()
+    {
+        if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty("index", out var idx))
+            throw new Exception($"data_frame method '{method}' requires an 'index' option");
+        return idx.GetInt32();
+    }
+
+    switch (method)
+    {
+        case "jarque_bera":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.JarqueBeraTest(useLog10) });
+        case "ljung_box":
+        {
+            int lagMax = options.ValueKind == JsonValueKind.Object &&
+                        options.TryGetProperty("lag_max", out var lm) ? lm.GetInt32() : -1;
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LjungBoxTest(lagMax, useLog10) });
+        }
+        case "equal_variance_t":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.EqualVarianceTtest(OptIndex(), useLog10) });
+        case "unequal_variance_t":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.UnequalVarianceTtest(OptIndex(), useLog10) });
+        case "f":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.Ftest(OptIndex(), useLog10) });
+        case "linear_trend":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LinearTrendTest(useLog10) });
+        case "wald_wolfowitz":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.WaldWolfowitzTest(useLog10) });
+        case "mann_whitney":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.MannWhitneyTest(OptIndex(), useLog10) });
+        case "mann_kendall":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.MannKendallTest(useLog10) });
+        case "summary_exact":
+        {
+            var summary = df.SummaryStatisticsExactDataOnly();
+            return ToolboxSelectNamed(asrt, summary.Keys.ToArray(), summary.Values.ToArray());
+        }
+        case "summary_all":
+        {
+            var summary = df.SummaryStatisticsAllData();
+            return ToolboxSelectNamed(asrt, summary.Keys.ToArray(), summary.Values.ToArray());
+        }
+        case "standardized":
+        {
+            df.SetStandardizedValues();
+            var flat = new List<double>();
+            foreach (var e in df.ExactSeries)
+            {
+                flat.Add(e.StandardizedValue);
+                flat.Add(e.StandardizedLog10Value);
+            }
+            return ToolboxSelectFlat(asrt, flat.ToArray(), df.ExactSeries.Count, 2);
+        }
+        default:
+            throw new Exception($"unknown data_frame method: {method}");
+    }
+}
+
 // Mirrors numerics/support/toolbox/correlation.hpp's run_correlation arm against the real
 // Numerics.Data.Statistics.Correlation. `pearson`/`spearman`/`kendall` are the pairwise scalar
 // methods (data[0]/data[1] are the two samples); `pearson_matrix`/`spearman_matrix` are the
@@ -6153,6 +6220,80 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
 
                 double actual;
                 try { actual = ToolboxDispatch(group, method, data, options, asrt); }
+                catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- data_frame branch (P4 Task 6) -----------------------------------------------------
+    // The twelve DataFrame hypothesis-test / summary-statistics facades Task 5 un-gated,
+    // dispatched against a REAL BestFitModels.DataFrame built either from a case's flat `data`
+    // array (data[0] -> ExactSeries with sequential indices, mirroring
+    // models::runner::run_data_frame's plain-vector path and the C# tests' own
+    // `df.ExactSeries = new ExactSeries(data)` construction) or -- for parity with that runner's
+    // second path, unused by any case shipped today -- a `data_frame` spec object through the
+    // existing BuildSpecDataFrame helper. Mirrors the toolbox branch's shape (dataset
+    // resolution, --dump support, Compare). CalculatePlottingPositions() runs before
+    // "summary_all"/"standardized" only, matching run_data_frame's own contract (the nine
+    // hypothesis facades and "summary_exact" never read plotting positions).
+    //
+    // Unlike the toolbox branch above (which does not honor oracle_skip), this branch DOES: it
+    // is a documented choice, not an oversight, for consistency with the other kind branches
+    // (analysis, model_estimation, ...) that carry oracle_skip. No case in
+    // fixtures/data/data_frame_facades.json uses it -- every value here either reproduces a C#
+    // test literal or is curated fresh against this branch via --dump, so oracle_skip is
+    // available but never exercised in this fixture.
+    if (kindStr == "data_frame")
+    {
+        var dfSets = new Dictionary<string, double[]>();
+        if (root.TryGetProperty("datasets", out var dfDatasets))
+            foreach (var kv in dfDatasets.EnumerateObject())
+                dfSets[kv.Name] = kv.Value.EnumerateArray().Select(ParseNum).ToArray();
+
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            BestFitModels.DataFrame df;
+            if (c.TryGetProperty("data_frame", out var dfSpecEl))
+            {
+                df = BuildSpecDataFrame(dfSpecEl);
+            }
+            else
+            {
+                var firstData = c.GetProperty("data")[0];
+                double[] values = firstData.ValueKind == JsonValueKind.String
+                    ? dfSets[firstData.GetString()!]
+                    : firstData.EnumerateArray().Select(ParseNum).ToArray();
+                df = new BestFitModels.DataFrame { ExactSeries = new ExactSeries(values) };
+            }
+            JsonElement options = c.TryGetProperty("options", out var dfOptionsEl) ? dfOptionsEl : default;
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string method = asrt.GetProperty("method").GetString()!;
+                string where = $"data_frame/{caseName}/{method}";
+
+                if (method == "summary_all" || method == "standardized")
+                    df.CalculatePlottingPositions();
+
+                if (dump)
+                {
+                    DumpLine("data_frame", caseName, method, Array.Empty<JsonElement>(),
+                        () => (object)DataFrameDispatch(method, df, options, asrt));
+                    continue;
+                }
+
+                if (asrt.TryGetProperty("oracle_skip", out var dfSkipEl) && dfSkipEl.GetBoolean())
+                {
+                    skip++;
+                    continue;
+                }
+
+                double actual;
+                try { actual = DataFrameDispatch(method, df, options, asrt); }
                 catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
