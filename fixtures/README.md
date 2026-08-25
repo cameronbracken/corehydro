@@ -1966,15 +1966,22 @@ above-range clamp checks per dataset (the `GetYFromX` boundary guard itself, not
 literal) and both `TrapezoidalArea` values; the seven interpolation-transform combinations pinned
 in BOTH sort orders (14 tiny cases); `search`'s `871`/`127` on the shared 1000-point identity
 curve; and `curve_sample`'s two expectation vectors (the mean curve and the `probability = 0.5`
-curve) on the shared Triangular fixture. **THE ONE DELIBERATE CORRECTION TO AN UPSTREAM TEST
-in this file:** `curve_simplify`'s `lang` case pins **3** rows, not the 4 `rdp`/`visvalingam` pin --
-verified directly against the real C# library (not merely this port's own transcription):
-`LangSimplify(0.01, 2)` on the shared five-point sin curve returns `{(0,0), (1.57,1), (4.71,-1)}`,
-dropping `(6.28, 0)` -- see `ordered_paired_data.hpp`'s sixth transcription note for the full
-account of why `Test_LangSimplify.cs`'s own (weakly-asserted, length-bounded-loop) four-point
-claim does not hold. `line_simplify` and `is_valid` are exercised by the ctest suites
-(`test_ordinate.cpp`, `test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`'s own
-validity assertions) but carry no case in this file. `fixtures/toolbox/univariate_functions.json`
+curve) on the shared Triangular fixture; and, on the shared five-point sin curve
+`{(0,0), (3.14/2,1), (3.14,0), (3*3.14/2,-1), (2*3.14,0)}` (`strict_x = true`,
+`order_x = ascending`, `strict_y = false`, `order_y = none`), `simplify`'s `rdp` (tolerance 0.01)
+and `visvalingam` (`num_to_keep = 4`) cases (4 rows / 8 flattened coordinates each,
+`{(0,0), (1.57,1), (4.71,-1), (6.28,0)}`, `Test_DouglasPeuckerSimplify`/
+`Test_VisvaligamWhyattSimplify`) and the standalone `line_simplify` case (`epsilon = 0.1`, the
+same 4-point result at `Test_RamerDouglasPeucker`'s own 1e-6 tolerance, not exact like the two
+`OrderedPairedData` simplifiers). **THE ONE DELIBERATE CORRECTION TO AN UPSTREAM TEST
+in this file:** `simplify`'s `lang` case (tolerance 0.01, look_ahead 2) pins **3** rows, not the 4
+`rdp`/`visvalingam` pin -- verified directly against the real C# library (not merely this port's
+own transcription): `LangSimplify(0.01, 2)` on the shared five-point sin curve returns
+`{(0,0), (1.57,1), (4.71,-1)}`, dropping `(6.28, 0)` -- see `ordered_paired_data.hpp`'s sixth
+transcription note for the full account of why `Test_LangSimplify.cs`'s own (weakly-asserted,
+length-bounded-loop) four-point claim does not hold. `is_valid` is exercised by the ctest suites
+(`test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`'s own validity assertions) but
+carries no case in this file. `fixtures/toolbox/univariate_functions.json`
 gained four `tabular`/`tabular_inverse` cases transcribing `Test_Tabular_Function`'s own
 x = {50,100,150,200,250}, `Deterministic(100,200,300,400,500)`, `XTransform = Logarithmic` fixture
 -- the two boundary-clamp literals plus `Function(75)`/`InverseFunction(Function(75))` at the

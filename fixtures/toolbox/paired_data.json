@@ -2,7 +2,7 @@
  "kind": "toolbox",
  "group": "paired_data",
  "source": "Numerics/Data/Paired Data/OrderedPairedData.cs, UncertainOrderedPairedData.cs; every value scraped verbatim from Test_Numerics/Data/Paired Data/Test_PairedData.cs (Test_GetY, Test_TrapezoidalArea, Test_Sequential), Test_PairedDataInterpolation.cs (Test_Lin, Test_LinLog, Test_LogLin, Test_LogLog, Test_LinZ, Test_ZLin, Test_ZZ and their Rev counterparts), and Test_UncertainPairedData.cs (Test_CurveSample, Test_Curve_Sample_Probability), as already transcribed and reviewer-verified in core/tests/test_ordered_paired_data.cpp / test_uncertain_paired_data.cpp.",
- "reference": "Numerics @ 2a0357a. Every assertion here reproduces a C# test literal already transcribed into the ctest suites, EXCEPT the two below/above-range clamp assertions per reservoir dataset, which are the ported GetYFromX's own boundary guard (return the first/last ordinate's y outside the curve's x range) rather than a distinct C# test method -- deterministic and unambiguous, not curated via --dump. The 78-point Test_GetY/Test_GetX query array is reduced to a representative 11-point subset (indices 0,7,15,23,31,39,47,55,63,71,77 of the shared kQueryX/kExpectedY14/kExpectedY23 arrays), spread across the full range; the reservoir datasets' four sort-order combinations (Test_PairedData's own d1..d4) each get one case carrying that subset plus the two clamp checks plus both TrapezoidalArea values. The seven interpolation-transform combinations (none/none, none/log, log/none, log/log, none/z, z/none, z/z) are pinned in BOTH sort orders (14 tiny cases, `lin_*`/`z_*`), each a single-value assertion at Test_PairedDataInterpolation.cs's own 1e-6 tolerance. `search` reproduces Test_Sequential's 871/127 on the shared 1000-point identity curve (ascending and descending); bisection/hunt agree element-for-element per test_ordered_paired_data.cpp's own cross-check and are not separately pinned here. `curve_sample` reproduces Test_CurveSample (the mean) and Test_Curve_Sample_Probability (probability=0.5) on the shared Triangular(1,2,3)/(2,4,5)/(6,8,12)/(13,19,20) fixture at x={1,2,3,5}; `distribution_type` is supplied explicitly here (matching the C# UnivariateDistributionType.Triangular literal), since this is the one place the emitter/fixture surface pins a value the runner would otherwise default from the first built distribution. `line_simplify` and `is_valid` are exercised by the ctest suites (test_ordinate.cpp's Test_ramer_douglas_peucker, test_ordered_paired_data.cpp/test_uncertain_paired_data.cpp's own validity assertions) but carry no case in this file.",
+ "reference": "Numerics @ 2a0357a. Every assertion here reproduces a C# test literal already transcribed into the ctest suites, EXCEPT the two below/above-range clamp assertions per reservoir dataset, which are the ported GetYFromX's own boundary guard (return the first/last ordinate's y outside the curve's x range) rather than a distinct C# test method -- deterministic and unambiguous, not curated via --dump. The 78-point Test_GetY/Test_GetX query array is reduced to a representative 11-point subset (indices 0,7,15,23,31,39,47,55,63,71,77 of the shared kQueryX/kExpectedY14/kExpectedY23 arrays), spread across the full range; the reservoir datasets' four sort-order combinations (Test_PairedData's own d1..d4) each get one case carrying that subset plus the two clamp checks plus both TrapezoidalArea values. The seven interpolation-transform combinations (none/none, none/log, log/none, log/log, none/z, z/none, z/z) are pinned in BOTH sort orders (14 tiny cases, `lin_*`/`z_*`), each a single-value assertion at Test_PairedDataInterpolation.cs's own 1e-6 tolerance. `search` reproduces Test_Sequential's 871/127 on the shared 1000-point identity curve (ascending and descending); bisection/hunt agree element-for-element per test_ordered_paired_data.cpp's own cross-check and are not separately pinned here. `curve_sample` reproduces Test_CurveSample (the mean) and Test_Curve_Sample_Probability (probability=0.5) on the shared Triangular(1,2,3)/(2,4,5)/(6,8,12)/(13,19,20) fixture at x={1,2,3,5}; `distribution_type` is supplied explicitly here (matching the C# UnivariateDistributionType.Triangular literal), since this is the one place the emitter/fixture surface pins a value the runner would otherwise default from the first built distribution. `simplify` and `line_simplify` reproduce Test_DouglasPeuckerSimplify, Test_VisvaligamWhyattSimplify, Test_LangSimplify, and Test_RamerDouglasPeucker on the shared five-point sin curve `{(0,0), (3.14/2,1), (3.14,0), (3*3.14/2,-1), (2*3.14,0)}` (strict_x=true, order_x=ascending, strict_y=false, order_y=none): `rdp` (tolerance=0.01) and `visvalingam` (num_to_keep=4) each pin 4 rows / 8 flattened coordinates `{(0,0), (1.57,1), (4.71,-1), (6.28,0)}` at exact equality, matching the C# literals; `lang` (tolerance=0.01, look_ahead=2) pins 3 rows / 6 coordinates `{(0,0), (1.57,1), (4.71,-1)}` -- VERIFIED against the real C# library rather than upstream's own (weaker) assertion loop, since LangSimplify never force-keeps the trailing point and drops (6.28,0); see core/tests/test_ordered_paired_data.cpp's test_lang_simplify for the full transcription note. `line_simplify` (the standalone LineSimplification::ramer_douglas_peucker) pins the same 4-point result at epsilon=0.1 and Test_RamerDouglasPeucker's own 1e-6 tolerance (not exact, unlike the OrderedPairedData simplifiers). `is_valid` is exercised by the ctest suites (test_ordered_paired_data.cpp/test_uncertain_paired_data.cpp's own validity assertions) but carries no case in this file.",
  "datasets": {
   "reservoir_x": [
    230408,
@@ -3322,6 +3322,364 @@
      "mode": "abs",
      "tol": 1e-05,
      "source": "Test_Curve_Sample_Probability (probability = 0.5)"
+    }
+   ]
+  },
+  {
+   "name": "sin_curve_simplify_rdp",
+   "data": [
+    [
+     0,
+     1.57,
+     3.14,
+     4.71,
+     6.28
+    ],
+    [
+     0,
+     1,
+     0,
+     -1,
+     0
+    ]
+   ],
+   "options": {
+    "strict_x": true,
+    "order_x": "ascending",
+    "strict_y": false,
+    "order_y": "none",
+    "algorithm": "rdp",
+    "tolerance": 0.01
+   },
+   "assertions": [
+    {
+     "method": "simplify",
+     "select": "rows",
+     "expected": 4,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 0,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 1,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 2,
+     "expected": 1.57,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 3,
+     "expected": 1,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 4,
+     "expected": 4.71,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 5,
+     "expected": -1,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 6,
+     "expected": 6.28,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 7,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_DouglasPeuckerSimplify"
+    }
+   ]
+  },
+  {
+   "name": "sin_curve_simplify_visvalingam",
+   "data": [
+    [
+     0,
+     1.57,
+     3.14,
+     4.71,
+     6.28
+    ],
+    [
+     0,
+     1,
+     0,
+     -1,
+     0
+    ]
+   ],
+   "options": {
+    "strict_x": true,
+    "order_x": "ascending",
+    "strict_y": false,
+    "order_y": "none",
+    "algorithm": "visvalingam",
+    "num_to_keep": 4
+   },
+   "assertions": [
+    {
+     "method": "simplify",
+     "select": "rows",
+     "expected": 4,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 0,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 1,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 2,
+     "expected": 1.57,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 3,
+     "expected": 1,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 4,
+     "expected": 4.71,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 5,
+     "expected": -1,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 6,
+     "expected": 6.28,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    },
+    {
+     "method": "simplify",
+     "index": 7,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_VisvaligamWhyattSimplify"
+    }
+   ]
+  },
+  {
+   "name": "sin_curve_simplify_lang",
+   "data": [
+    [
+     0,
+     1.57,
+     3.14,
+     4.71,
+     6.28
+    ],
+    [
+     0,
+     1,
+     0,
+     -1,
+     0
+    ]
+   ],
+   "options": {
+    "strict_x": true,
+    "order_x": "ascending",
+    "strict_y": false,
+    "order_y": "none",
+    "algorithm": "lang",
+    "tolerance": 0.01,
+    "look_ahead": 2
+   },
+   "assertions": [
+    {
+     "method": "simplify",
+     "select": "rows",
+     "expected": 3,
+     "mode": "equal",
+     "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    },
+    {
+     "method": "simplify",
+     "index": 0,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    },
+    {
+     "method": "simplify",
+     "index": 1,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    },
+    {
+     "method": "simplify",
+     "index": 2,
+     "expected": 1.57,
+     "mode": "equal",
+     "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    },
+    {
+     "method": "simplify",
+     "index": 3,
+     "expected": 1,
+     "mode": "equal",
+     "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    },
+    {
+     "method": "simplify",
+     "index": 4,
+     "expected": 4.71,
+     "mode": "equal",
+     "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    },
+    {
+     "method": "simplify",
+     "index": 5,
+     "expected": -1,
+     "mode": "equal",
+     "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    }
+   ]
+  },
+  {
+   "name": "sin_curve_line_simplify",
+   "data": [
+    [
+     0,
+     1.57,
+     3.14,
+     4.71,
+     6.28
+    ],
+    [
+     0,
+     1,
+     0,
+     -1,
+     0
+    ]
+   ],
+   "options": {
+    "epsilon": 0.1
+   },
+   "assertions": [
+    {
+     "method": "line_simplify",
+     "select": "rows",
+     "expected": 4,
+     "mode": "equal",
+     "source": "Test_RamerDouglasPeucker"
+    },
+    {
+     "method": "line_simplify",
+     "index": 0,
+     "expected": 0,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
+    },
+    {
+     "method": "line_simplify",
+     "index": 1,
+     "expected": 0,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
+    },
+    {
+     "method": "line_simplify",
+     "index": 2,
+     "expected": 1.57,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
+    },
+    {
+     "method": "line_simplify",
+     "index": 3,
+     "expected": 1,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
+    },
+    {
+     "method": "line_simplify",
+     "index": 4,
+     "expected": 4.71,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
+    },
+    {
+     "method": "line_simplify",
+     "index": 5,
+     "expected": -1,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
+    },
+    {
+     "method": "line_simplify",
+     "index": 6,
+     "expected": 6.28,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
+    },
+    {
+     "method": "line_simplify",
+     "index": 7,
+     "expected": 0,
+     "mode": "abs",
+     "source": "Test_RamerDouglasPeucker",
+     "tol": 1e-06
     }
    ]
   }

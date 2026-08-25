@@ -5886,7 +5886,7 @@ static double PairedDataDispatch(string method, List<double[]> data, JsonElement
     {
         var opd = BuildOpd(method);
         var names = new[] { "is_valid", "error_count" };
-        var values = new double[] { opd.IsValid ? 1.0 : 0.0, opd.IsValid ? 0 : opd.GetErrors().Count };
+        var values = new double[] { opd.IsValid ? 1.0 : 0.0, opd.GetErrors().Count };
         return ToolboxSelectNamed(asrt, names, values);
     }
 
