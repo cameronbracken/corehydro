@@ -351,7 +351,10 @@ kDataTwoSampleMethods <- c("equal_variance_t", "unequal_variance_t", "f", "mann_
 #' analysis_data_hypothesis_test(peaks, "equal_variance_t", index = 6)
 analysis_data_hypothesis_test <- function(data, method, index = NULL, lag_max = NULL,
                                           use_log10 = FALSE) {
-  method <- match.arg(method, kDataHypothesisMethods)
+  # check_choice() rather than match.arg() (R/fit.R:22): match.arg accepts an unambiguous
+  # PREFIX, so `method = "jarque"` would silently run in R (resolving to "jarque_bera") and be
+  # an error in Python -- exactly the M3 finding from the P4 whole-branch review.
+  method <- check_choice(method, kDataHypothesisMethods, "method")
   values <- data_exact_values(data)
   if (method %in% kDataTwoSampleMethods && is.null(index)) {
     stop(sprintf("method = \"%s\" requires `index`, the record index to split the sample at", method),

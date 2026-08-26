@@ -28,12 +28,16 @@ overloads, and the whole `Numerics.Data.Paired Data` subsystem -- `Ordinate`, `L
   k = 1 and k = 2, and the Machine Learning layer has no port yet.
 - **The two severed RMC.BestFit `DataFrame` facades**, un-gated now that `HypothesisTests` exists
   under them, reachable as `analysis_data_hypothesis_test()` and `analysis_data_statistics()`
-  through a new `data_frame` fixture kind. Of the Hypothesis Testing region's eleven members, nine
-  ship: `jarque_bera_test`, `ljung_box_test`, `equal_variance_t_test`, `unequal_variance_t_test`,
-  `f_test`, `linear_trend_test`, `wald_wolfowitz_test`, `mann_whitney_test`, and
-  `mann_kendall_test`, every one reading the exact series only and splitting two-sample tests on
-  the data index rather than array position. The Summary Statistics region's three members all
-  ship: `summary_statistics_exact_data_only()` and `summary_statistics_all_data()` (each a
+  through a new `data_frame` fixture kind. Of the eleven Hypothesis Testing region members not
+  already ported in Phase 5 (the region's other three -- `ClearLowOutliers`,
+  `SetLowOutliersFromMGBT`, `SetLowOutliersFromThreshold` -- shipped there as the low-outlier
+  surface), nine ship: `jarque_bera_test`, `ljung_box_test`, `equal_variance_t_test`,
+  `unequal_variance_t_test`, `f_test`, `linear_trend_test`, `wald_wolfowitz_test`,
+  `mann_whitney_test`, and `mann_kendall_test`, every one reading the exact series only and
+  splitting two-sample tests on the data index rather than array position. The three remaining
+  Summary Statistics region members (the other two, `GetNonparametricMoments`/
+  `GetNonparametricMomentsROS`, were already ported additively in B9) all ship:
+  `summary_statistics_exact_data_only()` and `summary_statistics_all_data()` (each a
   twenty-key ordered result -- record length, low-outlier count, the raw and log-space moments,
   and seven exceedance-probability quantiles) and `set_standardized_values()`. **Twelve of
   fourteen members ship**; `unimodality_test` and `summary_hypothesis_test` are deferred with

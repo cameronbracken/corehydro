@@ -84,13 +84,25 @@
 // against the real C# library (`dotnet run` against upstream/Numerics @ 2a0357a, not just this
 // port's own transcription): unlike `douglas_peucker_simplify` and
 // `visvaligam_whyatt_simplify` -- both of which explicitly force-keep the first AND last
-// ordinate -- `lang_simplify` has NO such guarantee. Its forward-jump/offset loop can advance
-// `i` past the final index without ever revisiting it: once `i + look_ahead > count`
-// (approaching the tail), `look_ahead` is clamped down to `count - i - 1`, and once it reaches
-// 0 `recursive_tolerance` always returns 0 (its inner `if (i + n < count)` guard is simply
-// skipped for n = 0), so no further point is ever appended -- the loop just walks `i` to
-// `count` and exits. This is exactly what happens on the shared five-point sin curve at
-// tolerance=0.01, look_ahead=2 (the very case upstream's own Test_LangSimplify exercises):
+// ordinate -- `lang_simplify` has NO such guarantee. CORRECTED MECHANISM (P4 whole-branch-review
+// finding M7b -- the paragraph below used to misdescribe WHERE the point is lost; the loss
+// itself is real and unchanged, only the explanation was wrong): the loop's own look-ahead clamp
+// (`if (i + la > n) la = n - i - 1;`) uses a STRICT `>`, so at the exact-equality tail boundary
+// (`i + la == n`) it does NOT fire and `la` stays at its full, un-clamped value; on this curve
+// that happens at `i = 3` with `la` still 2. `recursive_tolerance`'s own inner guard
+// (`if (i + n < count())`, also strict `<`) then ALSO fails at that SAME exact equality
+// (`i + n == count()`) and is skipped entirely, so the call falls through to `return n;`
+// UNCHANGED rather than ever testing whether the angle condition should reduce it. Back in the
+// caller, this unreduced `offset` (2) points one past the last valid ordinate
+// (`i + offset == count()`), so the caller's own `(i + offset) < count()` check -- correctly,
+// given that oversized offset -- rejects the append, and the loop walks `i` to `count` and exits
+// without ever revisiting the final point. (Verified: changing the loop clamp's `>` to `>=`
+// -- so `la` clamps down to 1 at `i = 3`, `recursive_tolerance`'s guard then fires at `4 < 5`,
+// and the resulting smaller `offset` of 1 correctly targets the real last ordinate -- reproduces
+// the expected 4-point result against the real C# library; this is a candidate upstream fix, not
+// applied here per the "reproduce upstream, do not silently fix" rule.) This is exactly what
+// happens on the shared five-point sin curve at tolerance=0.01, look_ahead=2 (the very case
+// upstream's own Test_LangSimplify exercises):
 // `LangSimplify` returns 3 points, `{(0,0), (1.57,1), (4.71,-1)}`, dropping `(6.28,0)`
 // entirely -- verified directly against the real C# library, not inferred. Upstream's own test
 // NEVER catches this because its assertion loop is bounded by `test.Count` (the actual,
@@ -100,6 +112,22 @@
 // port's own length-first supplement (`test_lang_simplify` below asserts the CORRECT verified
 // 3-point result, not the brief's claimed 4-point one, which does not match either this port's
 // output or the real C# library's).
+//
+// Seventh finding (P4 whole-branch-review finding M1, CRITICAL): `visvaligam_whyatt_simplify`
+// (C# VisvaligamWhyattSimplify, lines ~1398-1424) reads `ords[j + 1]` up to `j == Count - 2` and
+// `ords[2]` unconditionally on every outer-loop iteration, exactly like every other C# List<T>
+// indexer in this file -- but C#'s indexer THROWS `ArgumentOutOfRangeException` the moment `Count`
+// drops below what the read needs, while the un-guarded C++ `std::vector::operator[]` this was
+// transcribed to just reads past the end: undefined behavior, not a deterministic exception. A
+// small `num_to_keep` (0, -1, ...) removes ordinates down past 3 while `remove_limit` is still
+// unclamped, so the very next iteration's `ords[2]` read is out of bounds; measured, this crashed
+// both R and Python outright (a bus error / SIGSEGV) for `num_to_keep` of 0 or -1, and for
+// `num_to_keep = 1` it did NOT crash -- it silently returned a value read from freed/adjacent
+// memory, which is worse than a crash because nothing signals the result is wrong. The fix below
+// throws `std::out_of_range` at the exact point C#'s indexer would (`Count < 3`, checked at the
+// top of the loop body before the `ords[2]` read), rather than clamping `remove_limit` or
+// otherwise changing what the algorithm computes for any `num_to_keep` that does NOT hit this
+// bound -- that part of the port is unaffected and unchanged.
 //
 // Also noted (not bugs, harmless-but-latent): `douglas_peucker_reduction`'s recursive helper
 // (C# private DouglasPeuckerReduction(int,int,double,ref List<int>)) guards its recursive split
@@ -670,11 +698,17 @@ class OrderedPairedData {
         return OrderedPairedData(ords, strict_x_, order_x_, strict_y_, order_y_);
     }
 
-    // C# VisvaligamWhyattSimplify (lines ~1398-1424).
+    // C# VisvaligamWhyattSimplify (lines ~1398-1424). See transcription note 7 above: the guard
+    // below throws where C#'s `List<T>` indexer would (`Count < 3`), rather than reading past the
+    // end of `ords` the way the un-guarded translation did.
     OrderedPairedData visvaligam_whyatt_simplify(int num_to_keep) const {
         std::vector<Ordinate> ords(ordinates_);
         int remove_limit = static_cast<int>(ords.size()) - num_to_keep;
         for (int i = 0; i < remove_limit; ++i) {
+            if (ords.size() < 3)
+                throw std::out_of_range(
+                    "visvaligam_whyatt_simplify: num_to_keep leaves fewer than 3 ordinates to "
+                    "triangulate (C# List<T> indexer throws ArgumentOutOfRangeException here)");
             int min_index = 1;
             double min_area = triangle_area(ords[0], ords[1], ords[2]);
             for (int j = 2; j <= static_cast<int>(ords.size()) - 2; ++j) {

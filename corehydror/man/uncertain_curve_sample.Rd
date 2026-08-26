@@ -8,8 +8,8 @@ uncertain_curve_sample(
   x,
   distributions,
   probability = NULL,
-  order_x = c("ascending", "descending", "none"),
-  order_y = c("ascending", "descending", "none"),
+  order_x = "ascending",
+  order_y = "ascending",
   strict_x = TRUE,
   strict_y = TRUE
 )
@@ -20,7 +20,9 @@ uncertain_curve_sample(
 \item{distributions}{a \code{\link[=distribution]{distribution()}} object, or a list of them the same length as \code{x} --
 one distribution per x position. A single distribution is recycled across every \code{x}.}
 
-\item{probability}{quantile in \verb{[0, 1]} to sample at; \code{NULL} (default) samples the mean.}
+\item{probability}{quantile in \verb{[0, 1]} to sample at; \code{NULL} (default) samples the mean.
+Values outside \verb{[0, 1]} are rejected -- the underlying C# \code{CurveSample(double)} silently
+clamps them instead, so this range check is enforced here rather than core-side.}
 
 \item{order_x, order_y}{one of \code{"ascending"} (default), \code{"descending"}, or \code{"none"}.}
 

@@ -7,9 +7,9 @@
 curve_area(
   x,
   y,
-  under = c("y", "x"),
-  order_x = c("ascending", "descending", "none"),
-  order_y = c("ascending", "descending", "none"),
+  under = "y",
+  order_x = "ascending",
+  order_y = "ascending",
   strict_x = TRUE,
   strict_y = TRUE
 )

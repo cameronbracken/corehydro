@@ -7,7 +7,7 @@
 // `true`) and `order_x`/`order_y` (the `SortOrder` names `"ascending"`/`"descending"`/`"none"`,
 // default `"ascending"`) -- and, where the method actually interpolates
 // (`interpolate_y`/`interpolate_x`), two more: `x_transform`/`y_transform` (the `Transform` names
-// `"none"`/`"logarithmic"`/`"normal_z"`, default `"none"`). `line_simplify` builds no
+// `"none"`/`"logarithmic"` (or its alias `"log"`)/`"normal_z"`, default `"none"`). `line_simplify` builds no
 // `OrderedPairedData` at all (`line_simplification::ramer_douglas_peucker` takes a bare ordinate
 // list plus an epsilon), so it reads none of these six.
 //
@@ -61,24 +61,14 @@ namespace corehydro::numerics::support::detail {
 
 namespace pd = corehydro::numerics::data::paired_data;
 
-// SortOrder/Transform name parsers local to this group -- see file header for the accepted
-// spellings. "none" is a valid SortOrder here, unlike interpolation.hpp's own parse_sort_order,
-// because OrderedPairedData's SortOrder::None is reachable and exercised (the shared five-point
-// sin curve's y-axis in the simplification tests uses it).
+// This group's SortOrder/Transform token parsing reuses toolbox/common.hpp's shared
+// parse_sort_order_token()/parse_transform_token() (see file header for the accepted spellings).
+// "none" is a valid SortOrder here, unlike interpolation.hpp's group (which never passes
+// allow_none = true), because OrderedPairedData's SortOrder::None is reachable and exercised (the
+// shared five-point sin curve's y-axis in the simplification tests uses it); this group's local
+// wrapper below just pins allow_none = true at every call site.
 inline corehydro::numerics::data::SortOrder paired_data_sort_order(const std::string& s) {
-    if (s == "ascending") return corehydro::numerics::data::SortOrder::Ascending;
-    if (s == "descending") return corehydro::numerics::data::SortOrder::Descending;
-    if (s == "none") return corehydro::numerics::data::SortOrder::None;
-    throw std::runtime_error("unknown sort order '" + s +
-                             "'; expected ascending, descending, or none");
-}
-
-inline corehydro::numerics::data::Transform paired_data_transform(const std::string& s) {
-    if (s == "none") return corehydro::numerics::data::Transform::None;
-    if (s == "logarithmic") return corehydro::numerics::data::Transform::Logarithmic;
-    if (s == "normal_z") return corehydro::numerics::data::Transform::NormalZ;
-    throw std::runtime_error("unknown transform '" + s +
-                             "'; expected none, logarithmic, or normal_z");
+    return parse_sort_order_token(s, /*allow_none=*/true);
 }
 
 // Builds an OrderedPairedData from data [x, y] and the four shape-flag options.
@@ -129,9 +119,9 @@ inline ToolboxResult run_paired_data(const std::string& method,
         pd::OrderedPairedData opd = paired_data_build_opd(data, options, method);
         const std::vector<double>& xout = data_at(data, 2, "paired_data", method);
         corehydro::numerics::data::Transform xt =
-            paired_data_transform(options.value_or("x_transform", "none"));
+            parse_transform_token(options.value_or("x_transform", "none"));
         corehydro::numerics::data::Transform yt =
-            paired_data_transform(options.value_or("y_transform", "none"));
+            parse_transform_token(options.value_or("y_transform", "none"));
         ToolboxResult r;
         for (double v : xout) r.values.push_back(opd.get_y_from_x(v, xt, yt));
         return r;
@@ -141,9 +131,9 @@ inline ToolboxResult run_paired_data(const std::string& method,
         pd::OrderedPairedData opd = paired_data_build_opd(data, options, method);
         const std::vector<double>& yout = data_at(data, 2, "paired_data", method);
         corehydro::numerics::data::Transform xt =
-            paired_data_transform(options.value_or("x_transform", "none"));
+            parse_transform_token(options.value_or("x_transform", "none"));
         corehydro::numerics::data::Transform yt =
-            paired_data_transform(options.value_or("y_transform", "none"));
+            parse_transform_token(options.value_or("y_transform", "none"));
         ToolboxResult r;
         for (double v : yout) r.values.push_back(opd.get_x_from_y(v, xt, yt));
         return r;
@@ -256,24 +246,7 @@ inline ToolboxResult run_paired_data(const std::string& method,
 
     if (method == "curve_sample") {
         const std::vector<double>& x = data_at(data, 0, "paired_data", method);
-        if (!options.contains("distributions"))
-            throw std::runtime_error(
-                "toolbox method 'paired_data.curve_sample' needs a 'distributions' option");
-        std::vector<std::unique_ptr<numerics::distributions::UnivariateDistributionBase>> dists;
-        std::vector<const numerics::distributions::UnivariateDistributionBase*> ptrs;
-        for (const JsonValue& spec : options.at("distributions").items()) {
-            dists.push_back(numerics::distributions::support::build_univariate(spec));
-            ptrs.push_back(dists.back().get());
-        }
-        if (dists.empty())
-            throw std::runtime_error(
-                "toolbox method 'paired_data.curve_sample' needs at least one distribution");
-        if (ptrs.size() != x.size())
-            throw std::runtime_error(
-                "toolbox method 'paired_data.curve_sample' needs one distribution per x value; "
-                "got " +
-                std::to_string(ptrs.size()) + " distributions for " + std::to_string(x.size()) +
-                " x values");
+        DistributionList dl = build_distributions_for_x(options, x.size(), "paired_data", method);
         bool strict_x = options.value_or("strict_x", true);
         bool strict_y = options.value_or("strict_y", true);
         corehydro::numerics::data::SortOrder order_x =
@@ -292,9 +265,10 @@ inline ToolboxResult run_paired_data(const std::string& method,
                     type_name + "' for 'distribution_type'");
             }
         } else {
-            dtype = dists.front()->type();
+            dtype = dl.dists.front()->type();
         }
-        pd::UncertainOrderedPairedData uopd(x, ptrs, strict_x, order_x, strict_y, order_y, dtype);
+        pd::UncertainOrderedPairedData uopd(x, dl.ptrs, strict_x, order_x, strict_y, order_y,
+                                             dtype);
         pd::OrderedPairedData sampled = options.contains("probability")
                                             ? uopd.curve_sample(options.at("probability").as_double())
                                             : uopd.curve_sample();

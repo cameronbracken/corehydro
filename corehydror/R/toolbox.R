@@ -57,6 +57,13 @@ correlation <- function(x, y = NULL, method = c("pearson", "spearman", "kendall"
     if (!is.numeric(x)) {
       stop("`x` must be a numeric matrix or data frame when `y` is NULL", call. = FALSE)
     }
+    # C4 (P4 whole-branch review): as.matrix() on a plain vector silently produces an n x 1
+    # matrix rather than erroring, so `correlation(x)` on a bare vector used to return a 1x1
+    # matrix of 1 (a vector's trivial self-correlation) instead of raising the way corehydropy
+    # does for the same 1D input.
+    if (ncol(x) < 2L) {
+      stop("`x` must be a 2D array (observations in rows, variables in columns)", call. = FALSE)
+    }
     p <- ncol(x)
     data <- lapply(seq_len(p), function(j) x[, j])
     r <- toolbox_run("correlation", paste0(method, "_matrix"), data)
@@ -388,13 +395,19 @@ histogram <- function(x, bins = NULL) {
 #' @param method `"linear"` (the default), `"cubic_spline"`, or `"polynomial"`.
 #' @param order the polynomial order -- there are `order + 1` terms for each polynomial
 #'   function. Required when `method = "polynomial"`; must be `NULL` otherwise.
-#' @param x_transform,y_transform one of `"none"` (the default), `"log"`, or `"normal_z"`.
+#' @param x_transform,y_transform one of `"none"` (the default), `"logarithmic"` (also accepted
+#'   as `"log"` -- both spellings are equivalent, see the note below), or `"normal_z"`.
 #'   Linear-only.
 #' @param sort_order `"ascending"` (the default) or `"descending"`, describing `x`.
 #' @param extrapolate whether to extend the end segments beyond the knots. Default `FALSE`,
 #'   which clamps to the end knot, matching the C# `Interpolate()` default; `TRUE` calls the C#
 #'   `Extrapolate()` method instead. Linear-only.
 #' @return a numeric vector the same length as `xout`.
+#' @note `x_transform`/`y_transform` accept both `"log"` and `"logarithmic"` for the same
+#'   `Transform::Logarithmic` value everywhere a transform argument appears in this package
+#'   ([curve_interpolate()], [tabular_function()], and here); `"logarithmic"` (matching the C#
+#'   enum member name `Transform.Logarithmic`) is the spelling used in this package's own
+#'   examples and documentation.
 #' @examples
 #' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5))
 #' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5), method = "cubic_spline")
@@ -402,8 +415,8 @@ histogram <- function(x, bins = NULL) {
 #' @export
 interpolate <- function(x, y, xout, method = c("linear", "cubic_spline", "polynomial"),
                         order = NULL,
-                        x_transform = c("none", "log", "normal_z"),
-                        y_transform = c("none", "log", "normal_z"),
+                        x_transform = c("none", "logarithmic", "log", "normal_z"),
+                        y_transform = c("none", "logarithmic", "log", "normal_z"),
                         sort_order = c("ascending", "descending"), extrapolate = FALSE) {
   check_pair(x, y)
   if (!is.numeric(xout)) {
@@ -444,17 +457,17 @@ interpolate <- function(x, y, xout, method = c("linear", "cubic_spline", "polyno
 #' @param y numeric matrix with `length(x1)` rows and `length(x2)` columns, `y[i, j]` the value
 #'   at `(x1[i], x2[j])`.
 #' @param x1out,x2out numeric vectors of equal length, positions to interpolate at.
-#' @param x1_transform,x2_transform,y_transform one of `"none"` (the default), `"log"`, or
-#'   `"normal_z"`.
+#' @param x1_transform,x2_transform,y_transform one of `"none"` (the default), `"logarithmic"`
+#'   (also accepted as `"log"`), or `"normal_z"`. See the note on [interpolate()].
 #' @param sort_order `"ascending"` (the default) or `"descending"`, describing `x1` and `x2`.
 #' @return a numeric vector the same length as `x1out`/`x2out`.
 #' @examples
 #' interpolate_2d(c(1, 2, 3), c(1, 2, 3), diag(3), c(1.5), c(1.5))
 #' @export
 interpolate_2d <- function(x1, x2, y, x1out, x2out,
-                           x1_transform = c("none", "log", "normal_z"),
-                           x2_transform = c("none", "log", "normal_z"),
-                           y_transform = c("none", "log", "normal_z"),
+                           x1_transform = c("none", "logarithmic", "log", "normal_z"),
+                           x2_transform = c("none", "logarithmic", "log", "normal_z"),
+                           y_transform = c("none", "logarithmic", "log", "normal_z"),
                            sort_order = c("ascending", "descending")) {
   if (!is.numeric(x1) || !is.numeric(x2)) {
     stop("`x1` and `x2` must be numeric vectors", call. = FALSE)
@@ -1185,6 +1198,12 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
 #' method but `"f_models"` returns the 2-sided p-value of its test statistic; `"f_models"` (the
 #' F-test comparing two nested regression models) additionally returns the F statistic itself.
 #'
+#' @details
+#' `HypothesisTests` has a thirteenth static, `UnimodalityTest`, that is NOT exposed here: it
+#' trains a `Numerics.MachineLearning.GaussianMixtureModel` at k = 1 and k = 2, and the Machine
+#' Learning layer has no port yet. It is deferred, not permanently out of scope -- see
+#' `site/status.qmd` for the tracking note.
+#'
 #' Argument use by method, and the C# guard each one inherits:
 #' * `"one_sample_t"`: `x`, `population_mean` (default 0). Needs at least 2 observations.
 #' * `"equal_variance_t"` / `"unequal_variance_t"`: `x`, `y`. `equal_variance_t` needs a
@@ -1207,7 +1226,9 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
 #'
 #' @param x numeric vector: the sample (the two-sample methods' first sample, or the response
 #'   series for `"linear_trend"`). Ignored for `"f_models"`.
-#' @param y numeric vector, the second sample. Required for the two-sample methods listed above.
+#' @param y numeric vector, the second sample. Required for the two-sample methods listed above,
+#'   and rejected (must be `NULL`) for every other method -- earlier versions silently discarded
+#'   a `y` supplied to a one-sample method instead of raising.
 #' @param method one of `"one_sample_t"`, `"equal_variance_t"`, `"unequal_variance_t"`,
 #'   `"paired_t"`, `"f"`, `"f_models"`, `"jarque_bera"`, `"wald_wolfowitz"`, `"ljung_box"`,
 #'   `"mann_whitney"`, `"mann_kendall"`, `"linear_trend"`.
@@ -1222,7 +1243,7 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
 #' @examples
 #' hypothesis_test(c(4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25), method = "jarque_bera")
 #' @export
-hypothesis_test <- function(x, y = NULL, method = "jarque_bera", population_mean = 0,
+hypothesis_test <- function(x = NULL, y = NULL, method = "jarque_bera", population_mean = 0,
                             lag_max = NULL, index = NULL, sse_restricted = NULL, sse_full = NULL,
                             df_restricted = NULL, df_full = NULL) {
   if (!method %in% .hypothesis_methods) {
@@ -1232,6 +1253,13 @@ hypothesis_test <- function(x, y = NULL, method = "jarque_bera", population_mean
   }
   if (method %in% .hypothesis_two_sample && is.null(y)) {
     stop(sprintf("`y` is required for method \"%s\"", method), call. = FALSE)
+  }
+  # C2 (P4 whole-branch review): a one-sample method silently DISCARDED a non-NULL `y` --
+  # `hypothesis_test(a, b)` at the default method equalled `hypothesis_test(a)`. Reject it
+  # instead, the way R/callback.R:1028 rejects a delegate that does not belong to the chosen
+  # sampler.
+  if (!method %in% .hypothesis_two_sample && !is.null(y)) {
+    stop(sprintf("`y` is not used by method \"%s\"; leave it NULL", method), call. = FALSE)
   }
 
   if (identical(method, "f_models")) {
@@ -1276,6 +1304,14 @@ hypothesis_test <- function(x, y = NULL, method = "jarque_bera", population_mean
 # line_simplify, search, and is_valid are reachable through the fixture/oracle-gate surface but
 # are not given an R-facing wrapper by this task.
 
+# The order_x/order_y/x_transform/y_transform choices every curve verb below validates against,
+# declared once. `"logarithmic"` (matching the C# enum member name `Transform.Logarithmic`) is
+# this package's documented spelling; `"log"` is accepted as an equivalent alias (both parse to
+# the same value core-side) so a value valid for interpolate()/interpolate_2d() is also valid
+# here -- see the P4 whole-branch-review finding M2.
+.paired_data_orders <- c("ascending", "descending", "none")
+.paired_data_transforms <- c("none", "logarithmic", "log", "normal_z")
+
 # Internal: build a `distributions` list of corehydro_dist objects, recycling a single one across
 # every `x`. Shared by uncertain_curve_sample() and tabular_function(), which use identical
 # recycling and error text.
@@ -1306,7 +1342,8 @@ paired_data_distributions <- function(distributions, x) {
 #' @param x,y numeric vectors of equal length (at least two), the curve's ordinates.
 #' @param xout numeric vector of x positions to interpolate y at.
 #' @param yout numeric vector of y positions to interpolate x at.
-#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"`, or `"normal_z"`.
+#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
+#'   `"log"`), or `"normal_z"`.
 #' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
 #' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
 #'   between consecutive ordinates. Default `TRUE`.
@@ -1315,19 +1352,21 @@ paired_data_distributions <- function(distributions, x) {
 #' curve_interpolate(c(50, 100, 150, 200, 250), c(100, 200, 300, 400, 500), xout = 75)
 #' @export
 curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
-                              x_transform = c("none", "logarithmic", "normal_z"),
-                              y_transform = c("none", "logarithmic", "normal_z"),
-                              order_x = c("ascending", "descending", "none"),
-                              order_y = c("ascending", "descending", "none"),
+                              x_transform = "none", y_transform = "none",
+                              order_x = "ascending", order_y = "ascending",
                               strict_x = TRUE, strict_y = TRUE) {
   check_pair(x, y)
   if (is.null(xout) == is.null(yout)) {
     stop("exactly one of `xout` or `yout` must be supplied", call. = FALSE)
   }
-  x_transform <- match.arg(x_transform)
-  y_transform <- match.arg(y_transform)
-  order_x <- match.arg(order_x)
-  order_y <- match.arg(order_y)
+  # check_choice() rather than match.arg(): see R/fit.R:22 and the P4 whole-branch-review
+  # finding M3 -- match.arg's prefix matching would silently accept "log" as a prefix of
+  # "logarithmic" rather than the (also valid) full "log" token, and would accept ANY
+  # unambiguous prefix Python does not.
+  x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
+  y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
   opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
                order_x = order_x, order_y = order_y,
                x_transform = x_transform, y_transform = y_transform)
@@ -1359,14 +1398,13 @@ curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
 #' @examples
 #' curve_area(c(1, 2, 3, 4), c(1, 4, 9, 16))
 #' @export
-curve_area <- function(x, y, under = c("y", "x"),
-                       order_x = c("ascending", "descending", "none"),
-                       order_y = c("ascending", "descending", "none"),
+curve_area <- function(x, y, under = "y",
+                       order_x = "ascending", order_y = "ascending",
                        strict_x = TRUE, strict_y = TRUE) {
   check_pair(x, y)
-  under <- match.arg(under)
-  order_x <- match.arg(order_x)
-  order_y <- match.arg(order_y)
+  under <- check_choice(under, c("y", "x"), "under")
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
   opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
                order_x = order_x, order_y = order_y)
   method <- if (identical(under, "y")) "area_under_y" else "area_under_x"
@@ -1385,7 +1423,9 @@ curve_area <- function(x, y, under = c("y", "x"),
 #' @inheritParams curve_interpolate
 #' @param method one of `"rdp"` (default), `"visvalingam"`, or `"lang"`.
 #' @param tolerance perpendicular-distance tolerance; required for `method` `"rdp"` or `"lang"`.
-#' @param num_to_keep number of points to keep; required for `method = "visvalingam"`.
+#' @param num_to_keep number of points to keep; required for `method = "visvalingam"`, and must be
+#'   at least 2 (the algorithm always keeps the curve's first and last point, and needs at least
+#'   3 ordinates to triangulate at every intermediate step).
 #' @param look_ahead the Lang algorithm's look-ahead window; required for `method = "lang"`.
 #' @return a data frame with columns `x` and `y`.
 #' @examples
@@ -1395,16 +1435,15 @@ curve_area <- function(x, y, under = c("y", "x"),
 #' @export
 curve_simplify <- function(x, y, method = "rdp", tolerance = NULL, num_to_keep = NULL,
                            look_ahead = NULL,
-                           order_x = c("ascending", "descending", "none"),
-                           order_y = c("ascending", "descending", "none"),
+                           order_x = "ascending", order_y = "ascending",
                            strict_x = TRUE, strict_y = TRUE) {
   check_pair(x, y)
   if (!method %in% c("rdp", "visvalingam", "lang")) {
     stop(sprintf("`method` must be one of \"rdp\", \"visvalingam\", \"lang\"; got \"%s\"", method),
          call. = FALSE)
   }
-  order_x <- match.arg(order_x)
-  order_y <- match.arg(order_y)
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
   opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
                order_x = order_x, order_y = order_y, algorithm = method)
   if (identical(method, "rdp")) {
@@ -1415,6 +1454,13 @@ curve_simplify <- function(x, y, method = "rdp", tolerance = NULL, num_to_keep =
   } else if (identical(method, "visvalingam")) {
     if (is.null(num_to_keep)) {
       stop("`num_to_keep` is required when method = \"visvalingam\"", call. = FALSE)
+    }
+    # Visvalingam-Whyatt always keeps the curve's first and last point, so it needs at least
+    # 3 ordinates to triangulate; below that the C++ layer throws (matching the C# List<T>
+    # indexer's ArgumentOutOfRangeException) rather than reading out of bounds. Checked here too
+    # so the caller gets one clear message instead of the runner's internal one.
+    if (!is.numeric(num_to_keep) || length(num_to_keep) != 1L || num_to_keep < 2) {
+      stop("`num_to_keep` must be a single integer of at least 2", call. = FALSE)
     }
     opts$num_to_keep <- as.integer(num_to_keep)
   } else {
@@ -1440,6 +1486,8 @@ curve_simplify <- function(x, y, method = "rdp", tolerance = NULL, num_to_keep =
 #' @param distributions a [distribution()] object, or a list of them the same length as `x` --
 #'   one distribution per x position. A single distribution is recycled across every `x`.
 #' @param probability quantile in `[0, 1]` to sample at; `NULL` (default) samples the mean.
+#'   Values outside `[0, 1]` are rejected -- the underlying C# `CurveSample(double)` silently
+#'   clamps them instead, so this range check is enforced here rather than core-side.
 #' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
 #' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
 #'   between consecutive ordinates. Default `TRUE`.
@@ -1451,18 +1499,27 @@ curve_simplify <- function(x, y, method = "rdp", tolerance = NULL, num_to_keep =
 #' uncertain_curve_sample(x, d, probability = 0.5)
 #' @export
 uncertain_curve_sample <- function(x, distributions, probability = NULL,
-                                   order_x = c("ascending", "descending", "none"),
-                                   order_y = c("ascending", "descending", "none"),
+                                   order_x = "ascending", order_y = "ascending",
                                    strict_x = TRUE, strict_y = TRUE) {
   if (!is.numeric(x) || length(x) == 0L) {
     stop("`x` must be a non-empty numeric vector", call. = FALSE)
   }
   distributions <- paired_data_distributions(distributions, x)
-  order_x <- match.arg(order_x)
-  order_y <- match.arg(order_y)
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
   opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
                order_x = order_x, order_y = order_y, distributions = distributions)
-  if (!is.null(probability)) opts$probability <- as.double(probability)
+  if (!is.null(probability)) {
+    # C3 (P4 whole-branch review): the core clamp (uncertain_ordered_paired_data.hpp) is a
+    # faithful port of C# CurveSample(double), which silently clamps an out-of-range quantile
+    # instead of raising -- `probability = 50` silently returned the 100% quantile. That core
+    # behavior is untouched; this host-layer range check is what actually rejects the mistake.
+    if (!is.numeric(probability) || length(probability) != 1L ||
+        probability < 0 || probability > 1) {
+      stop("`probability` must be a single number in [0, 1]", call. = FALSE)
+    }
+    opts$probability <- as.double(probability)
+  }
   r <- toolbox_run("paired_data", "curve_sample", list(x), opts)
   m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
   data.frame(x = m[, 1], y = m[, 2])
@@ -1482,7 +1539,8 @@ uncertain_curve_sample <- function(x, distributions, probability = NULL,
 #' @param at numeric vector of points to evaluate at (or, when `inverse = TRUE`, points to
 #'   evaluate the inverse function at).
 #' @param inverse if `TRUE`, evaluates `InverseFunction()` instead of `Function()`.
-#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"`, or `"normal_z"`.
+#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
+#'   `"log"`), or `"normal_z"`.
 #' @param confidence_level quantile in `[0, 1]` to sample the curve at; `NULL` (default) samples
 #'   the mean.
 #' @param allow_negative_y_values allow a negative or `NaN` result to pass through unmodified,
@@ -1495,8 +1553,7 @@ uncertain_curve_sample <- function(x, distributions, probability = NULL,
 #' tabular_function(x, d, at = 50, x_transform = "logarithmic")
 #' @export
 tabular_function <- function(x, distributions, at, inverse = FALSE,
-                             x_transform = c("none", "logarithmic", "normal_z"),
-                             y_transform = c("none", "logarithmic", "normal_z"),
+                             x_transform = "none", y_transform = "none",
                              confidence_level = NULL, allow_negative_y_values = FALSE) {
   if (!is.numeric(x) || length(x) == 0L) {
     stop("`x` must be a non-empty numeric vector", call. = FALSE)
@@ -1505,8 +1562,8 @@ tabular_function <- function(x, distributions, at, inverse = FALSE,
   if (!is.numeric(at) || length(at) == 0L) {
     stop("`at` must be a non-empty numeric vector", call. = FALSE)
   }
-  x_transform <- match.arg(x_transform)
-  y_transform <- match.arg(y_transform)
+  x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
+  y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
   opts <- list(x = spec_array(as.double(x)), distributions = distributions,
                x_transform = x_transform, y_transform = y_transform,
                allow_negative_y_values = isTRUE(allow_negative_y_values))

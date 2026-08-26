@@ -9,8 +9,8 @@ tabular_function(
   distributions,
   at,
   inverse = FALSE,
-  x_transform = c("none", "logarithmic", "normal_z"),
-  y_transform = c("none", "logarithmic", "normal_z"),
+  x_transform = "none",
+  y_transform = "none",
   confidence_level = NULL,
   allow_negative_y_values = FALSE
 )
@@ -26,7 +26,8 @@ evaluate the inverse function at).}
 
 \item{inverse}{if \code{TRUE}, evaluates \code{InverseFunction()} instead of \code{Function()}.}
 
-\item{x_transform, y_transform}{one of \code{"none"} (default), \code{"logarithmic"}, or \code{"normal_z"}.}
+\item{x_transform, y_transform}{one of \code{"none"} (default), \code{"logarithmic"} (also accepted as
+\code{"log"}), or \code{"normal_z"}.}
 
 \item{confidence_level}{quantile in \verb{[0, 1]} to sample the curve at; \code{NULL} (default) samples
 the mean.}

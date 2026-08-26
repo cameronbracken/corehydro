@@ -9,10 +9,10 @@ curve_interpolate(
   y,
   xout = NULL,
   yout = NULL,
-  x_transform = c("none", "logarithmic", "normal_z"),
-  y_transform = c("none", "logarithmic", "normal_z"),
-  order_x = c("ascending", "descending", "none"),
-  order_y = c("ascending", "descending", "none"),
+  x_transform = "none",
+  y_transform = "none",
+  order_x = "ascending",
+  order_y = "ascending",
   strict_x = TRUE,
   strict_y = TRUE
 )
@@ -24,7 +24,8 @@ curve_interpolate(
 
 \item{yout}{numeric vector of y positions to interpolate x at.}
 
-\item{x_transform, y_transform}{one of \code{"none"} (default), \code{"logarithmic"}, or \code{"normal_z"}.}
+\item{x_transform, y_transform}{one of \code{"none"} (default), \code{"logarithmic"} (also accepted as
+\code{"log"}), or \code{"normal_z"}.}
 
 \item{order_x, order_y}{one of \code{"ascending"} (default), \code{"descending"}, or \code{"none"}.}
 

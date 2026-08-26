@@ -2383,17 +2383,28 @@ a numbered transcription note at the call site citing the C# line numbers below.
   simplification algorithms in this class, both explicitly force-keep the first AND last ordinate of
   the input curve (Douglas-Peucker seeds its kept-index set with `{firstPoint, lastPoint}`;
   Visvaligam-Whyatt runs its removal loop only over the interior, `j` from 2 to `Count-2`, leaving
-  both ends untouched). `LangSimplify` has no equivalent guarantee. Its forward-jump loop advances an
-  index `i` by `RecursiveTolerance`'s returned offset; near the tail, once `i + lookAhead > count`,
-  `lookAhead` is clamped down to `count - i - 1`, and once that clamp reaches `0`,
-  `RecursiveTolerance`'s own `if (i + n < count)` guard is skipped for `n = 0` and the method always
-  returns `0` -- so no further point is ever appended and the loop simply walks `i` to `count` and
-  exits, having silently discarded the final ordinate.
+  both ends untouched). `LangSimplify` has no equivalent guarantee. CORRECTED MECHANISM (P4
+  whole-branch-review finding M7b -- the loss itself is real and confirmed below; this paragraph
+  used to misdescribe where it happens, claiming the loop's own guard fires and hands
+  `RecursiveTolerance` a `lookAhead` of 0, which is backwards): the loop's own look-ahead clamp
+  (line ~1460, `if (i + lookAhead > count) lookAhead = count - i - 1;`) uses a STRICT `>`, so at the
+  exact-equality tail boundary (`i + lookAhead == count`) it does NOT fire and `lookAhead` stays at
+  its full, un-clamped value; on the curve below that happens at `i = 3` with `lookAhead` still 2.
+  `RecursiveTolerance`'s own inner guard (`if (i + n < count)`, also strict `<`) then ALSO fails at
+  that SAME exact equality (`i + n == count`) and is skipped entirely, so the call falls through to
+  `return n;` UNCHANGED rather than ever testing whether the angle condition should reduce it. Back
+  in the caller, this unreduced offset (2) points one past the last valid ordinate
+  (`i + offset == count`), so the caller's own `(i + offset) < count` check -- correctly, given that
+  oversized offset -- rejects the append, and the loop walks `i` to `count` and exits without ever
+  revisiting the final point.
 - **Evidence (reproduced against the real C# library, not merely inferred):** on the five-point sin
   curve at `tolerance=0.01, lookAhead=2` -- the exact case upstream's own `Test_LangSimplify`
   exercises -- `LangSimplify` returns 3 points, `{(0,0), (1.57,1), (4.71,-1)}`, dropping `(6.28,0)`
-  entirely. Confirmed with `dotnet run` against `upstream/Numerics @ 2a0357a` by three separate
-  agents independently, not merely by reading the port's own transcription.
+  entirely. Confirmed with `dotnet run` against `upstream/Numerics @ 2a0357a`. Also confirmed: changing
+  line ~1460's clamp test from `>` to `>=` -- so `lookAhead` clamps down to 1 at `i = 3`,
+  `RecursiveTolerance`'s guard then fires (`4 < 5`), and the resulting smaller offset of 1 correctly
+  targets the real last ordinate -- reproduces the expected 4-point result against the real library;
+  see "Suggested C# fix" below.
 - **Why upstream's own test never catches this:** `Test_LangSimplify`'s assertion loop is bounded by
   `test.Count` (the actual, possibly-short RESULT length), not the expected point count: with
   `test.Count == 3` the loop only ever compares indices 0-2, and the missing fourth point is silently
@@ -2409,10 +2420,15 @@ a numbered transcription note at the call site citing the C# line numbers below.
   `test_lang_simplify` asserts the verified 3-point result (not a naively-expected 4-point one), and
   `fixtures/toolbox/paired_data.json`'s `sin_curve_simplify_lang` case is reproduced against the real
   C# library by the dotnet oracle gate at exact tolerance.
-- **Suggested C# fix:** after the main loop, if the last appended ordinate's index is not
-  `Count - 1`, append the final ordinate explicitly -- the same force-keep both sibling algorithms
-  already perform. Also fix `Test_LangSimplify` to bound its comparison loop by the expected point
-  count, not the actual result's `Count`, so a future regression here would be caught.
+- **Suggested C# fix:** two independent options, either sufficient on its own. (1) A targeted fix at
+  the actual mechanism identified above: change the loop's look-ahead clamp at line ~1460 from
+  `if (i + lookAhead > count)` to `>=`, which forces a smaller, in-range offset at the tail instead
+  of an unreduced one that overshoots `Count` -- measured to reproduce the expected 4-point result
+  against the real library. (2) A defensive, mechanism-agnostic fix: after the main loop, if the
+  last appended ordinate's index is not `Count - 1`, append the final ordinate explicitly -- the
+  same force-keep both sibling algorithms already perform. Also fix `Test_LangSimplify` to bound its
+  comparison loop by the expected point count, not the actual result's `Count`, so a future
+  regression here would be caught.
 
 ## BUG — `OrderedPairedData.RemoveRange`'s off-by-one guard makes a trailing removal a silent no-op
 

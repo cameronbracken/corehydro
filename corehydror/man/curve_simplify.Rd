@@ -11,8 +11,8 @@ curve_simplify(
   tolerance = NULL,
   num_to_keep = NULL,
   look_ahead = NULL,
-  order_x = c("ascending", "descending", "none"),
-  order_y = c("ascending", "descending", "none"),
+  order_x = "ascending",
+  order_y = "ascending",
   strict_x = TRUE,
   strict_y = TRUE
 )
@@ -24,7 +24,9 @@ curve_simplify(
 
 \item{tolerance}{perpendicular-distance tolerance; required for \code{method} \code{"rdp"} or \code{"lang"}.}
 
-\item{num_to_keep}{number of points to keep; required for \code{method = "visvalingam"}.}
+\item{num_to_keep}{number of points to keep; required for \code{method = "visvalingam"}, and must be
+at least 2 (the algorithm always keeps the curve's first and last point, and needs at least
+3 ordinates to triangulate at every intermediate step).}
 
 \item{look_ahead}{the Lang algorithm's look-ahead window; required for \code{method = "lang"}.}
 

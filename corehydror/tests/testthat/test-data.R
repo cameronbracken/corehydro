@@ -179,7 +179,11 @@ test_that("analysis_data_hypothesis_test runs a two-sample test given an index",
 })
 
 test_that("analysis_data_hypothesis_test validates method and the two-sample index", {
-  expect_error(analysis_data_hypothesis_test(harricana, "not_a_method"), "'arg' should be one of")
+  # M3 (P4 whole-branch review): check_choice() replaced match.arg() here, so the message is now
+  # "unknown method '...'" (identical to corehydropy's), not match.arg's own "'arg' should be
+  # one of" text -- and a value like "jarque" no longer silently PREFIX-RESOLVES to a real method.
+  expect_error(analysis_data_hypothesis_test(harricana, "not_a_method"), "unknown method")
+  expect_error(analysis_data_hypothesis_test(harricana, "jarque"), "unknown method")
   expect_error(analysis_data_hypothesis_test(harricana, "equal_variance_t"), "requires .index.")
 })
 

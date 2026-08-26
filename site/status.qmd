@@ -15,7 +15,10 @@ Status as of v0.8.0.
 
 The [Numerics](https://github.com/USACE-RMC/Numerics) library is the numerical
 foundation. The port targets its probability, sampling, and estimation layers; the
-general-purpose math, machine learning, and data-container layers are out of scope.
+general-purpose math and data-container layers are out of scope. The machine learning
+layer is not yet ported (planned for a future release, see the `MachineLearning` row
+below) -- it is what blocks `HypothesisTests.UnimodalityTest`, see the `Data.Statistics`
+row below.
 
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
@@ -25,7 +28,7 @@ general-purpose math, machine learning, and data-container layers are out of sco
 | `Sampling.MCMC` (8 samplers + R-hat / ESS) | Ported | Public | `mcmc_sample()` fits a built-in family; `mcmc_posterior()` takes a log-likelihood you write and reaches all eight samplers, Gibbs included, through the proposal callback it accepts; all drive the Bayesian analyses |
 | `Sampling` (Latin hypercube, Sobol, Stratify) | Ported | Public | `latin_hypercube()`, `sobol_sequence()`, `stratify()` |
 | `Sampling.Bootstrap` | Ported | Public | `bootstrap_analysis()` for a fitted distribution, `bootstrap_custom()` for a statistic you write, reaching all four upstream delegates (resample, fit, statistic, jackknife) and all five interval methods; `bootstrap_custom(run_type = "pivotal")` adds the covariance-aware pivotal workflow since v0.8.0 |
-| `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation (paired and, since this phase, the Pearson/Spearman matrix form), autocorrelation, goodness of fit, histogram binning, and joint probability all public; `hypothesis_test()` exposes all twelve `HypothesisTests` statics (one/two-sample t, F, Jarque-Bera, Wald-Wolfowitz, Ljung-Box, Mann-Whitney, Mann-Kendall, linear trend); single Grubbs-Beck and Jenks breaks not ported |
+| `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation (paired and, since this phase, the Pearson/Spearman matrix form), autocorrelation, goodness of fit, histogram binning, and joint probability all public; `hypothesis_test()` exposes twelve of the thirteen `HypothesisTests` statics (one/two-sample t, F, Jarque-Bera, Wald-Wolfowitz, Ljung-Box, Mann-Whitney, Mann-Kendall, linear trend) -- `UnimodalityTest`, the thirteenth, is deferred (it needs the unported `MachineLearning.GaussianMixtureModel`); single Grubbs-Beck, KS tests, and Jenks breaks not ported |
 | `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z); the Paired Data curve subsystem (`OrderedPairedData`/`Ordinate`/`UncertainOrderedPairedData`/`LineSimplification`) is public as `curve_interpolate()`, `curve_area()`, `curve_simplify()`, `uncertain_curve_sample()`, and `tabular_function()` |
 | `Data.Regression` | Ported | Public | `linear_regression()` -- ordinary least squares, returning a `corehydro_lm` / `LinearRegressionResult` with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict` |
 | `Data` (TimeSeries container) | Not ported | -- | a thin adapter exists for the time-series models; The additional functionality (file I/O, USGS download) may be implemented later |

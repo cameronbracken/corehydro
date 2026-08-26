@@ -133,6 +133,16 @@ def test_correlation_rejects_kendall_for_a_matrix():
         correlation(x, method="kendall")
 
 
+def test_correlation_rejects_a_1d_vector_in_matrix_mode():
+    # C4 (P4 whole-branch review): corehydropy already raised here; corehydror's as.matrix()
+    # coercion silently returned a 1x1 matrix of 1 for the same input instead. This pins the
+    # Python side of the parity fix.
+    with pytest.raises(
+        ValueError, match=r"`x` must be a 2D array \(observations in rows, variables in columns\)"
+    ):
+        correlation([14, 8, 32, 7, 3, 15])
+
+
 def test_running_covariance_chunked_matches_a_single_call():
     x = [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]]
     whole = running_covariance(x)
@@ -979,6 +989,24 @@ def test_hypothesis_test_validates_its_arguments():
         hypothesis_test([1, 2, 3], method="not_a_method")
 
 
+def test_hypothesis_test_f_models_is_callable_without_x():
+    # C1 (P4 whole-branch review): `x` is documented as ignored for "f_models". corehydror could
+    # already omit it (only by accident, via R's lazy evaluation never forcing an unused
+    # argument); Python required it since it had no default. `x` now defaults to None in both.
+    r = hypothesis_test(method="f_models", sse_restricted=1224.32, sse_full=720.27,
+                        df_restricted=49, df_full=48)
+    assert r["f_statistic"] == pytest.approx(33.5899, abs=1e-3)
+
+
+def test_hypothesis_test_rejects_a_non_none_y_for_a_one_sample_method():
+    # C2 (P4 whole-branch review): a one-sample method used to silently DISCARD `y` --
+    # hypothesis_test(a, b) at the default method equalled hypothesis_test(a).
+    a = [4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25]
+    b = [1, 2, 3]
+    with pytest.raises(ValueError, match=r'`y` is not used by method "jarque_bera"; leave it None'):
+        hypothesis_test(a, b, method="jarque_bera")
+
+
 # The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
 # LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
 # group. Oracle values are C# test literals transcribed verbatim into
@@ -1044,6 +1072,19 @@ def test_uncertain_curve_sample_recycles_a_single_distribution_across_x():
     assert r.shape == (3, 2)
 
 
+def test_uncertain_curve_sample_rejects_probability_outside_0_1():
+    # C3 (P4 whole-branch review): the core clamp (a faithful port of C# CurveSample(double)) is
+    # untouched -- probability=50 silently returned the 100% quantile core-side. This host-layer
+    # check is what actually rejects the mistake.
+    x = [1, 2, 3]
+    d = Distribution("Triangular", [1, 2, 3])
+    msg = r"`probability` must be a single number in \[0, 1\]"
+    with pytest.raises(ValueError, match=msg):
+        uncertain_curve_sample(x, d, probability=50)
+    with pytest.raises(ValueError, match=msg):
+        uncertain_curve_sample(x, d, probability=-3)
+
+
 def test_tabular_function_reproduces_test_tabular_function():
     x = [50, 100, 150, 200, 250]
     d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
@@ -1065,3 +1106,37 @@ def test_paired_data_verbs_validate_their_arguments_identically_to_corehydror():
         uncertain_curve_sample([1, 2, 3], d, probability=0.5)
     with pytest.raises(ValueError, match=r"must have length 1 or length\(x\)"):
         tabular_function([1, 2, 3], d, at=1)
+
+
+def test_curve_simplify_rejects_num_to_keep_below_2_for_visvalingam_instead_of_crashing():
+    # M1 (P4 whole-branch review): num_to_keep of 0 or -1 used to crash both R and Python
+    # outright (a bus error / SIGSEGV); 1 silently returned a value read out of bounds. All
+    # three are now rejected at the host layer with the identical message corehydror raises.
+    x = [0, 1.57, 3.14, 4.71, 6.28]
+    y = [0, 1, 0, -1, 0]
+    msg = r"`num_to_keep` must be a single integer of at least 2"
+    for bad in (0, -1, 1):
+        with pytest.raises(ValueError, match=msg):
+            curve_simplify(x, y, method="visvalingam", num_to_keep=bad)
+    # num_to_keep = 2 is the smallest value that succeeds.
+    ok = curve_simplify(x, y, method="visvalingam", num_to_keep=2, strict_y=False, order_y="none")
+    assert ok.shape[0] == 2
+
+
+def test_log_and_logarithmic_are_equivalent_everywhere_a_transform_argument_appears():
+    # M2 (P4 whole-branch review): interpolate()/interpolate_2d() only accepted "log" and
+    # curve_interpolate()/tabular_function() only accepted "logarithmic", so a value valid for
+    # one host verb raised ValueError on the other.
+    storage = [230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+               691223, 748825, 806427, 864029, 921631, 1036834, 1152038]
+    elevation = [1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+                 1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7]
+    a = curve_interpolate(storage, elevation, xout=500000, x_transform="log")
+    b = curve_interpolate(storage, elevation, xout=500000, x_transform="logarithmic")
+    assert a == pytest.approx(b)
+
+    x = [1, 2, 3, 4]
+    y = [10, 20, 30, 40]
+    ia = interpolate(x, y, [2.5], x_transform="log")
+    ib = interpolate(x, y, [2.5], x_transform="logarithmic")
+    assert ia == pytest.approx(ib)

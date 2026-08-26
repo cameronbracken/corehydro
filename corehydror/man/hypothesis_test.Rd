@@ -5,7 +5,7 @@
 \title{Hypothesis tests}
 \usage{
 hypothesis_test(
-  x,
+  x = NULL,
   y = NULL,
   method = "jarque_bera",
   population_mean = 0,
@@ -21,7 +21,9 @@ hypothesis_test(
 \item{x}{numeric vector: the sample (the two-sample methods' first sample, or the response
 series for \code{"linear_trend"}). Ignored for \code{"f_models"}.}
 
-\item{y}{numeric vector, the second sample. Required for the two-sample methods listed above.}
+\item{y}{numeric vector, the second sample. Required for the two-sample methods listed above,
+and rejected (must be \code{NULL}) for every other method -- earlier versions silently discarded
+a \code{y} supplied to a one-sample method instead of raising.}
 
 \item{method}{one of \code{"one_sample_t"}, \code{"equal_variance_t"}, \code{"unequal_variance_t"},
 \code{"paired_t"}, \code{"f"}, \code{"f_models"}, \code{"jarque_bera"}, \code{"wald_wolfowitz"}, \code{"ljung_box"},
@@ -48,6 +50,11 @@ method but \code{"f_models"} returns the 2-sided p-value of its test statistic; 
 F-test comparing two nested regression models) additionally returns the F statistic itself.
 }
 \details{
+\code{HypothesisTests} has a thirteenth static, \code{UnimodalityTest}, that is NOT exposed here: it
+trains a \code{Numerics.MachineLearning.GaussianMixtureModel} at k = 1 and k = 2, and the Machine
+Learning layer has no port yet. It is deferred, not permanently out of scope -- see
+\code{site/status.qmd} for the tracking note.
+
 Argument use by method, and the C# guard each one inherits:
 \itemize{
 \item \code{"one_sample_t"}: \code{x}, \code{population_mean} (default 0). Needs at least 2 observations.

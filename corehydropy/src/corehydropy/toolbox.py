@@ -628,8 +628,12 @@ def interpolate(x, y, xout, method: str = "linear", order: int | None = None,
     order : int, optional
         The polynomial order -- there are ``order + 1`` terms for each polynomial function.
         Required when ``method="polynomial"``; must be ``None`` otherwise.
-    x_transform, y_transform : {"none", "log", "normal_z"}
-        Linear-only.
+    x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        Linear-only. ``"logarithmic"`` and ``"log"`` are equivalent aliases for the same
+        ``Transform.Logarithmic`` value everywhere a transform argument appears in this module
+        (:func:`interpolate`, :func:`interpolate_2d`, :func:`curve_interpolate`,
+        :func:`tabular_function`); ``"logarithmic"`` (matching the C# enum member name) is the
+        spelling used in this package's own examples and documentation.
     sort_order : {"ascending", "descending"}
         Describes ``x``.
     extrapolate : bool
@@ -657,13 +661,15 @@ def interpolate(x, y, xout, method: str = "linear", order: int | None = None,
         raise ValueError(
             f"`method` must be one of 'linear', 'cubic_spline', 'polynomial'; got {method!r}"
         )
-    if x_transform not in ("none", "log", "normal_z"):
+    if x_transform not in ("none", "logarithmic", "log", "normal_z"):
         raise ValueError(
-            f"`x_transform` must be one of 'none', 'log', 'normal_z'; got {x_transform!r}"
+            "`x_transform` must be one of 'none', 'logarithmic', 'log', 'normal_z'; got "
+            f"{x_transform!r}"
         )
-    if y_transform not in ("none", "log", "normal_z"):
+    if y_transform not in ("none", "logarithmic", "log", "normal_z"):
         raise ValueError(
-            f"`y_transform` must be one of 'none', 'log', 'normal_z'; got {y_transform!r}"
+            "`y_transform` must be one of 'none', 'logarithmic', 'log', 'normal_z'; got "
+            f"{y_transform!r}"
         )
     if sort_order not in ("ascending", "descending"):
         raise ValueError(f"`sort_order` must be one of 'ascending', 'descending'; got {sort_order!r}")
@@ -706,7 +712,10 @@ def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_trans
         ``(x1[i], x2[j])``.
     x1out, x2out : array_like
         Equal-length positions to interpolate at.
-    x1_transform, x2_transform, y_transform : {"none", "log", "normal_z"}
+    x1_transform, x2_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        ``"logarithmic"`` and ``"log"`` are equivalent (see the module note on
+        :func:`interpolate`); ``"logarithmic"`` is the spelling used in this package's own
+        examples.
     sort_order : {"ascending", "descending"}
         Describes ``x1`` and ``x2``.
 
@@ -735,8 +744,10 @@ def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_trans
         raise ValueError("`x1out` and `x2out` must be the same length")
     for name, t in (("x1_transform", x1_transform), ("x2_transform", x2_transform),
                     ("y_transform", y_transform)):
-        if t not in ("none", "log", "normal_z"):
-            raise ValueError(f"`{name}` must be one of 'none', 'log', 'normal_z'; got {t!r}")
+        if t not in ("none", "logarithmic", "log", "normal_z"):
+            raise ValueError(
+                f"`{name}` must be one of 'none', 'logarithmic', 'log', 'normal_z'; got {t!r}"
+            )
     if sort_order not in ("ascending", "descending"):
         raise ValueError(f"`sort_order` must be one of 'ascending', 'descending'; got {sort_order!r}")
     options = {
@@ -1844,7 +1855,7 @@ _HYPOTHESIS_TWO_SAMPLE = ("equal_variance_t", "unequal_variance_t", "paired_t", 
 
 
 def hypothesis_test(
-    x,
+    x=None,
     y=None,
     method: str = "jarque_bera",
     population_mean: float = 0.0,
@@ -1862,6 +1873,11 @@ def hypothesis_test(
     Every method but ``"f_models"`` returns the 2-sided p-value of its test statistic;
     ``"f_models"`` (the F-test comparing two nested regression models) additionally returns the
     F statistic itself.
+
+    ``HypothesisTests`` has a thirteenth static, ``UnimodalityTest``, that is NOT exposed here:
+    it trains a ``Numerics.MachineLearning.GaussianMixtureModel`` at k = 1 and k = 2, and the
+    Machine Learning layer has no port yet. It is deferred, not permanently out of scope -- see
+    ``site/status.qmd`` for the tracking note.
 
     Argument use by method, and the C# guard each one inherits:
 
@@ -1890,7 +1906,9 @@ def hypothesis_test(
         The sample (the two-sample methods' first sample, or the response series for
         ``"linear_trend"``). Ignored for ``"f_models"``.
     y : array_like, optional
-        The second sample. Required for the two-sample methods listed above.
+        The second sample. Required for the two-sample methods listed above, and rejected (must
+        be ``None``) for every other method -- earlier versions silently discarded a ``y``
+        supplied to a one-sample method instead of raising.
     method : str
         One of ``"one_sample_t"``, ``"equal_variance_t"``, ``"unequal_variance_t"``,
         ``"paired_t"``, ``"f"``, ``"f_models"``, ``"jarque_bera"``, ``"wald_wolfowitz"``,
@@ -1928,6 +1946,11 @@ def hypothesis_test(
         raise ValueError(f'`method` must be one of {known}; got "{method}"')
     if method in _HYPOTHESIS_TWO_SAMPLE and y is None:
         raise ValueError(f'`y` is required for method "{method}"')
+    # C2 (P4 whole-branch review): a one-sample method silently DISCARDED a non-None `y` --
+    # `hypothesis_test(a, b)` at the default method equalled `hypothesis_test(a)`. Reject it
+    # instead, mirroring corehydror's own check.
+    if method not in _HYPOTHESIS_TWO_SAMPLE and y is not None:
+        raise ValueError(f'`y` is not used by method "{method}"; leave it None')
 
     if method == "f_models":
         if sse_restricted is None or sse_full is None or df_restricted is None or df_full is None:
@@ -1978,17 +2001,26 @@ def hypothesis_test(
 # fixture/oracle-gate surface but are not given a Python-facing wrapper by this task.
 
 _SORT_ORDERS = ("ascending", "descending", "none")
-_PAIRED_TRANSFORMS = ("none", "logarithmic", "normal_z")
+# "logarithmic" (matching the C# enum member name `Transform.Logarithmic`) is this package's
+# documented spelling; "log" is accepted as an equivalent alias (both parse to the same value
+# core-side) so a value valid for interpolate()/interpolate_2d() is also valid here -- see the P4
+# whole-branch-review finding M2.
+_PAIRED_TRANSFORMS = ("none", "logarithmic", "log", "normal_z")
 
 
 def _check_sort_order(value: str, what: str) -> None:
+    # Message format mirrors corehydror's check_choice() (R/fit.R:22) so the two languages raise
+    # textually identical text for the identical mistake -- see the P4 whole-branch-review
+    # finding M3.
     if value not in _SORT_ORDERS:
-        raise ValueError(f"`{what}` must be one of {_SORT_ORDERS}; got {value!r}")
+        raise ValueError(f"unknown {what} '{value}'; expected one of {', '.join(_SORT_ORDERS)}")
 
 
 def _check_paired_transform(value: str, what: str) -> None:
     if value not in _PAIRED_TRANSFORMS:
-        raise ValueError(f"`{what}` must be one of {_PAIRED_TRANSFORMS}; got {value!r}")
+        raise ValueError(
+            f"unknown {what} '{value}'; expected one of {', '.join(_PAIRED_TRANSFORMS)}"
+        )
 
 
 def _paired_data_shape_opts(strict_x: bool, strict_y: bool, order_x: str, order_y: str) -> dict:
@@ -2053,7 +2085,9 @@ def curve_interpolate(
         Positions to interpolate y at.
     yout : array_like, optional
         Positions to interpolate x at.
-    x_transform, y_transform : {"none", "logarithmic", "normal_z"}
+    x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
+        is the spelling used in this package's own examples.
     order_x, order_y : {"ascending", "descending", "none"}
     strict_x, strict_y : bool
         Require x/y to strictly increase/decrease (per ``order_x``/``order_y``) between
@@ -2125,7 +2159,7 @@ def curve_area(
     """
     xa, ya = _check_pair(x, y)
     if under not in ("y", "x"):
-        raise ValueError(f"`under` must be one of 'y', 'x'; got {under!r}")
+        raise ValueError(f"unknown under '{under}'; expected one of y, x")
     options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
     method = "area_under_y" if under == "y" else "area_under_x"
     r = _toolbox_run("paired_data", method, [xa, ya], options)
@@ -2162,7 +2196,9 @@ def curve_simplify(
     tolerance : float, optional
         Perpendicular-distance tolerance; required for ``method`` ``"rdp"`` or ``"lang"``.
     num_to_keep : int, optional
-        Number of points to keep; required for ``method="visvalingam"``.
+        Number of points to keep; required for ``method="visvalingam"``, and must be at least 2
+        (the algorithm always keeps the curve's first and last point, and needs at least 3
+        ordinates to triangulate at every intermediate step).
     look_ahead : int, optional
         The Lang algorithm's look-ahead window; required for ``method="lang"``.
     order_x, order_y : {"ascending", "descending", "none"}
@@ -2196,6 +2232,13 @@ def curve_simplify(
     elif method == "visvalingam":
         if num_to_keep is None:
             raise ValueError('`num_to_keep` is required when method="visvalingam"')
+        # Visvalingam-Whyatt always keeps the curve's first and last point, so it needs at
+        # least 3 ordinates to triangulate; below that the C++ layer throws (matching the C#
+        # List<T> indexer's ArgumentOutOfRangeException) rather than reading out of bounds.
+        # Checked here too so the caller gets one clear message instead of the runner's
+        # internal one.
+        if num_to_keep < 2:
+            raise ValueError("`num_to_keep` must be a single integer of at least 2")
         options["num_to_keep"] = int(num_to_keep)
     else:
         if tolerance is None or look_ahead is None:
@@ -2231,7 +2274,9 @@ def uncertain_curve_sample(
         One distribution per element of ``x``, or a single distribution recycled across every
         ``x``.
     probability : float, optional
-        Quantile in ``[0, 1]`` to sample at; ``None`` (default) samples the mean.
+        Quantile in ``[0, 1]`` to sample at; ``None`` (default) samples the mean. Values
+        outside ``[0, 1]`` are rejected -- the underlying C# ``CurveSample(double)`` silently
+        clamps them instead, so this range check is enforced here rather than core-side.
     order_x, order_y : {"ascending", "descending", "none"}
     strict_x, strict_y : bool
 
@@ -2259,6 +2304,13 @@ def uncertain_curve_sample(
     options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
     options["distributions"] = [_as_spec(d) for d in dists]
     if probability is not None:
+        # C3 (P4 whole-branch review): the core clamp (uncertain_ordered_paired_data.hpp) is a
+        # faithful port of C# CurveSample(double), which silently clamps an out-of-range
+        # quantile instead of raising -- `probability=50` silently returned the 100% quantile.
+        # That core behavior is untouched; this host-layer range check is what actually rejects
+        # the mistake.
+        if not (0.0 <= probability <= 1.0):
+            raise ValueError("`probability` must be a single number in [0, 1]")
         options["probability"] = float(probability)
     r = _toolbox_run("paired_data", "curve_sample", [xa], options)
     values = np.asarray(r["values"], dtype=float)
@@ -2296,7 +2348,9 @@ def tabular_function(
         function at).
     inverse : bool, default False
         If ``True``, evaluates ``InverseFunction()`` instead of ``Function()``.
-    x_transform, y_transform : {"none", "logarithmic", "normal_z"}
+    x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
+        is the spelling used in this package's own examples.
     confidence_level : float, optional
         Quantile in ``[0, 1]`` to sample the curve at; ``None`` (default) samples the mean.
     allow_negative_y_values : bool, default False

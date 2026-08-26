@@ -82,6 +82,14 @@ test_that("correlation() rejects method = 'kendall' for a matrix, naming the rea
   expect_error(correlation(x, method = "kendall"), "kendall.*matrix")
 })
 
+test_that("correlation() rejects a 1D vector in matrix mode instead of silently returning a 1x1 matrix (C4)", {
+  # C4 (P4 whole-branch review): as.matrix() on a plain vector silently coerces it to an n x 1
+  # matrix, so `correlation(x)` on a bare vector used to return a 1x1 matrix of 1 in R instead of
+  # raising the way corehydropy does for the same 1D input.
+  expect_error(correlation(c(14, 8, 32, 7, 3, 15)),
+               "`x` must be a 2D array (observations in rows, variables in columns)", fixed = TRUE)
+})
+
 test_that("running_covariance() chunked matches a single call, and round-trips through state", {
   x <- matrix(c(1, 2, 3, 4, 5, 1, 2, 3, 4, 5), ncol = 2)
   whole <- running_covariance(x)
@@ -910,6 +918,25 @@ test_that("hypothesis_test() validates its arguments", {
   expect_error(hypothesis_test(c(1, 2, 3), method = "not_a_method"), "must be one of")
 })
 
+test_that("hypothesis_test() method = 'f_models' is callable without `x` (C1)", {
+  # C1 (P4 whole-branch review): `x` is documented as ignored for "f_models", and corehydropy
+  # already defaulted it to None; R's default was missing (only worked by accident, via lazy
+  # evaluation never forcing an unused argument), so a call omitting `x` entirely used to work
+  # in R but raise in Python. `x` now defaults to NULL in both.
+  r <- hypothesis_test(method = "f_models", sse_restricted = 1224.32, sse_full = 720.27,
+                       df_restricted = 49, df_full = 48)
+  expect_equal(unname(r[["f_statistic"]]), 33.5899, tolerance = 1e-3)
+})
+
+test_that("hypothesis_test() rejects a non-NULL `y` for a one-sample method (C2)", {
+  # C2 (P4 whole-branch review): a one-sample method used to silently DISCARD `y` --
+  # hypothesis_test(a, b) at the default method equalled hypothesis_test(a).
+  a <- c(4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25)
+  b <- c(1, 2, 3)
+  expect_error(hypothesis_test(a, b, method = "jarque_bera"),
+               "`y` is not used by method \"jarque_bera\"; leave it NULL", fixed = TRUE)
+})
+
 # The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
 # LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
 # group. Oracle values are C# test literals transcribed verbatim into
@@ -968,6 +995,17 @@ test_that("uncertain_curve_sample() recycles a single distribution across x", {
   expect_equal(nrow(r), 3L)
 })
 
+test_that("uncertain_curve_sample() rejects probability outside [0, 1] instead of silently clamping (C3)", {
+  # C3 (P4 whole-branch review): the core clamp (a faithful port of C# CurveSample(double)) is
+  # untouched -- probability = 50 silently returned the 100% quantile core-side. This host-layer
+  # check is what actually rejects the mistake.
+  x <- c(1, 2, 3)
+  d <- distribution("Triangular", c(1, 2, 3))
+  msg <- "`probability` must be a single number in \\[0, 1\\]"
+  expect_error(uncertain_curve_sample(x, d, probability = 50), msg)
+  expect_error(uncertain_curve_sample(x, d, probability = -3), msg)
+})
+
 test_that("tabular_function() reproduces Test_Tabular_Function", {
   x <- c(50, 100, 150, 200, 250)
   d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
@@ -987,4 +1025,39 @@ test_that("paired_data verbs validate their arguments identically to corehydropy
   expect_error(uncertain_curve_sample(c(1, 2, 3), d, probability = 0.5),
                "must have length 1 or length\\(x\\)")
   expect_error(tabular_function(c(1, 2, 3), d, at = 1), "must have length 1 or length\\(x\\)")
+})
+
+test_that("curve_simplify() rejects num_to_keep below 2 for visvalingam instead of crashing", {
+  # M1 (P4 whole-branch review): num_to_keep of 0 or -1 used to crash both R and Python outright
+  # (a bus error / SIGSEGV); 1 silently returned a value read out of bounds. All three are now
+  # rejected at the host layer with the identical message corehydropy raises.
+  x <- c(0, 1.57, 3.14, 4.71, 6.28)
+  y <- c(0, 1, 0, -1, 0)
+  msg <- "`num_to_keep` must be a single integer of at least 2"
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = 0), msg, fixed = TRUE)
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = -1), msg, fixed = TRUE)
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = 1), msg, fixed = TRUE)
+  # num_to_keep = 2 is the smallest value that succeeds.
+  ok <- curve_simplify(x, y, method = "visvalingam", num_to_keep = 2, strict_y = FALSE,
+                       order_y = "none")
+  expect_equal(nrow(ok), 2L)
+})
+
+test_that("\"log\" and \"logarithmic\" are equivalent everywhere a transform argument appears", {
+  # M2 (P4 whole-branch review): interpolate()/interpolate_2d() only accepted "log" and
+  # curve_interpolate()/tabular_function() only accepted "logarithmic", so a value valid for one
+  # host verb was rejected (or, worse, silently PREFIX-MATCHED via match.arg) by the other.
+  storage <- c(230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+               691223, 748825, 806427, 864029, 921631, 1036834, 1152038)
+  elevation <- c(1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+                 1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7)
+  a <- curve_interpolate(storage, elevation, xout = 500000, x_transform = "log")
+  b <- curve_interpolate(storage, elevation, xout = 500000, x_transform = "logarithmic")
+  expect_equal(a, b)
+
+  x <- c(1, 2, 3, 4)
+  y <- c(10, 20, 30, 40)
+  ia <- interpolate(x, y, 2.5, x_transform = "log")
+  ib <- interpolate(x, y, 2.5, x_transform = "logarithmic")
+  expect_equal(ia, ib)
 })

@@ -538,6 +538,26 @@ void test_visvaligam_whyatt_simplify() {
     check_simplified(test, valid);
 }
 
+// Corehydro addition (P4 whole-branch-review finding M1): `num_to_keep` values that leave fewer
+// than 3 ordinates to triangulate at some point in the reduction now throw std::out_of_range
+// (matching the C# List<T> indexer's ArgumentOutOfRangeException) instead of reading past the end
+// of the working vector. `num_to_keep = 0` and `-1` crashed both R and Python outright before this
+// fix; `num_to_keep = 1` silently returned an out-of-bounds-read value (worse: no crash, wrong
+// answer). `num_to_keep = 2` is the smallest value that does NOT trip the guard on this five-point
+// curve (see the header's transcription note 7), so it is asserted here as the boundary that must
+// still succeed.
+void test_visvaligam_whyatt_simplify_out_of_range() {
+    auto data = sin_curve_data();
+    OrderedPairedData ordered_pair(data, true, SortOrder::Ascending, false, SortOrder::None);
+    CHECK_THROWS(ordered_pair.visvaligam_whyatt_simplify(0));
+    CHECK_THROWS(ordered_pair.visvaligam_whyatt_simplify(-1));
+    CHECK_THROWS(ordered_pair.visvaligam_whyatt_simplify(1));
+    // num_to_keep = 2 must NOT throw: the reduction reaches exactly 3 ordinates (the smallest
+    // valid triangulation) on its last successful iteration and never revisits ords[2] below that.
+    auto test = ordered_pair.visvaligam_whyatt_simplify(2);
+    CHECK_EQ(test.count(), 2);
+}
+
 // C# Test_LangSimplify. NOTE: the C# test's own `valid` array claims four points, matching
 // douglas_peucker/visvaligam_whyatt -- but LangSimplify does not force-keep the trailing point
 // (see ordered_paired_data.hpp's sixth transcription finding), and this is verified DIRECTLY
@@ -610,6 +630,7 @@ int main() {
     test_lin_list();
     test_douglas_peucker_simplify();
     test_visvaligam_whyatt_simplify();
+    test_visvaligam_whyatt_simplify_out_of_range();
     test_lang_simplify();
     test_lang_simplify_guard();
     return chtest::summary("test_ordered_paired_data");

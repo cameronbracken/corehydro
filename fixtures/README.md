@@ -1725,18 +1725,25 @@ plotting positions.
 
 `fixtures/data/data_frame_facades.json` carries one or more cases per
 `ExactDataHypothesisTests.cs` `[TestMethod]` -- the SAME literals and datasets already
-transcribed into `core/tests/test_data_frame_facades.cpp` (P4 Task 5), reusing the exact dataset
-arrays `fixtures/toolbox/hypothesis.json` already carries (`harricana69`, `noise126`,
-`jb_known13`, `data30a`+`data30b`, `data10a`+`data10b`, `trend_cos100`) rather than
-re-transcribing them a second time. `summary_exact`, `summary_all`, and `standardized` have NO
+transcribed into `core/tests/test_data_frame_facades.cpp` (P4 Task 5). These are the SAME
+underlying C# test datasets `fixtures/toolbox/hypothesis.json` already carries
+(`harricana69`, `noise126`, `jb_known13`, `data30a`+`data30b`, `data10a`+`data10b`,
+`trend_cos100`), but the arrays are DUPLICATED under this file's own keys (`harricana`,
+`jb_data`, `jb_data2`, `variance_t_data`, `f_data`, `cos_data`), not referenced or shared --
+there is no cross-file key aliasing in this fixture format. The values are byte-identical today
+by construction (both were transcribed from the same C# literal), but nothing enforces that they
+stay that way: a maintainer fixing a value in `hypothesis.json` must edit the corresponding array
+in `data_frame_facades.json` too, by hand, or the two gates will silently pin two different
+numbers for what is meant to be the same dataset. `summary_exact`, `summary_all`, and `standardized` have NO
 upstream test literal at all -- `NonparametricEmpiricalTests.cs`'s two DataFrame cases only assert
 finiteness/NaN patterns for these three methods, never a value -- so every one of their assertions
 is curated with `python3 tools/verify_oracles.py --dump` against the real C# `DataFrame`, and says
 so in its own `source`.
 
-The dotnet emitter's `data_frame` branch is the one branch that DOES honor `oracle_skip` (the
-`toolbox` branch above does not); this is a deliberate choice for consistency with the other kinds
-that carry it (`analysis`, `model_estimation`, ...), not a reflection of anything unreproducible
+The dotnet emitter's `data_frame` branch DOES honor `oracle_skip` (the `toolbox` branch above does
+not), joining several other kinds that also honor it (`analysis`, `model_estimation`, ...) --
+see `tools/oracle_emitter/Program.cs`'s own comment at the `data_frame` branch, which names this
+same list. This is a deliberate consistency choice, not a reflection of anything unreproducible
 here -- no assertion in this file uses `oracle_skip`, since every value here either reproduces a
 C# test literal or was curated directly against this same branch.
 
