@@ -396,7 +396,7 @@ _TWO_SAMPLE_METHODS = ("equal_variance_t", "unequal_variance_t", "f", "mann_whit
 def analysis_data_hypothesis_test(
     data,
     method: str,
-    index: int | None = None,
+    split_index: int | None = None,
     lag_max: int | None = None,
     use_log10: bool = False,
 ) -> dict:
@@ -404,10 +404,10 @@ def analysis_data_hypothesis_test(
 
     Runs one of the nine ``DataFrame`` hypothesis-test facades over the exact series of an
     :class:`AnalysisData` frame (or a plain sequence). The four two-sample tests split the record
-    at ``index``, comparing observations with a data index below it against those at or above it
-    -- the split is on the record's INDEX, not on array position, so it agrees with the split a
-    caller would get by re-running the test on a record whose observations were supplied out of
-    order.
+    at ``split_index``, comparing observations with a data index below it against those at or
+    above it -- the split is on the record's INDEX, not on array position, so it agrees with the
+    split a caller would get by re-running the test on a record whose observations were supplied
+    out of order.
 
     Parameters
     ----------
@@ -418,7 +418,7 @@ def analysis_data_hypothesis_test(
         Which facade to run: normality, autocorrelation, difference in means (Student's /
         Welch's), difference in variances, trend, runs test for independence, homogeneity /
         jump, and homogeneity / trend, respectively.
-    index : int, optional
+    split_index : int, optional
         The record index to split the sample at; required by ``"equal_variance_t"``,
         ``"unequal_variance_t"``, ``"f"``, and ``"mann_whitney"``, ignored otherwise.
     lag_max : int, optional
@@ -443,13 +443,13 @@ def analysis_data_hypothesis_test(
             f"unknown method '{method}'; expected one of {', '.join(_HYPOTHESIS_METHODS)}"
         )
     values = _exact_values(data)
-    if method in _TWO_SAMPLE_METHODS and index is None:
+    if method in _TWO_SAMPLE_METHODS and split_index is None:
         raise ValueError(
-            f'method = "{method}" requires `index`, the record index to split the sample at'
+            f'method = "{method}" requires `split_index`, the record index to split the sample at'
         )
     options: dict = {"use_log10": bool(use_log10)}
-    if index is not None:
-        options["index"] = int(index)
+    if split_index is not None:
+        options["index"] = int(split_index)
     if lag_max is not None:
         options["lag_max"] = int(lag_max)
     r = _core.data_frame_run(method, [values], "", json.dumps(options))

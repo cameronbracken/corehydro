@@ -18,7 +18,7 @@ per point. This page works through both, on a real flood record and a real reser
 - What four hypothesis tests answer about a flood-frequency record -- normality, independence,
   and homogeneity -- and how to read a p-value from each.
 - The `DataFrame` path through `analysis_data()`: the same tests over a censored-data-aware
-  container, the `use_log10` switch, and the two-sample `index` split.
+  container, the `use_log10` switch, and the two-sample `split_index` split.
 - `correlation()`'s matrix form over more than two series at once.
 - A reservoir stage-storage curve interpolated in linear and log space, and its trapezoidal area.
 - How the three curve-simplification algorithms differ on the same curve, including one that
@@ -70,7 +70,7 @@ large p-value agrees: no trend detected over these 69 years.
 Mann-Whitney tests the other kind of homogeneity, a jump: are the first and second halves of the
 record drawn from the same distribution? It is the one two-sample test above, so it needs both
 samples split out by hand when called directly (`analysis_data_hypothesis_test()` below does the
-split for you, from an `index`):
+split for you, from a `split_index`):
 
 ```{r}
 first_half <- harricana[1:34]
@@ -83,19 +83,19 @@ hypothesis_test(first_half, second_half, method = "mann_whitney")
 `analysis_data()` wraps a record the way an actual flood-frequency analysis would -- with room for
 censored observations the plain vector above has none of. Its own hypothesis-test and
 summary-statistics facades read the same twelve `HypothesisTests` statics, plus a `use_log10` switch
-and an index-based two-sample split:
+and a split-index-based two-sample split:
 
 ```{r}
 d <- analysis_data(harricana)
 d
 
 analysis_data_hypothesis_test(d, "mann_kendall")
-analysis_data_hypothesis_test(d, "mann_whitney", index = 34)
+analysis_data_hypothesis_test(d, "mann_whitney", split_index = 34)
 ```
 
-The `index` split is on the record's INDEX (0-based, so `index = 34` puts the observations with
-index below 34 -- the first 34 -- in the first sample and the rest in the second) -- matching the
-manual `harricana[1:34]`/`harricana[35:69]` split above exactly.
+The `split_index` split is on the record's INDEX (0-based, so `split_index = 34` puts the
+observations with index below 34 -- the first 34 -- in the first sample and the rest in the
+second) -- matching the manual `harricana[1:34]`/`harricana[35:69]` split above exactly.
 
 `use_log10 = TRUE` reruns the same test against log-space values. For a rank-based test like
 Mann-Kendall this changes nothing -- log10 is monotonic, so it cannot change which of two years'
@@ -231,7 +231,7 @@ number by mean instead of by median would hide.
 ## Key takeaways
 
 1. `hypothesis_test()` reaches all twelve `HypothesisTests` statics directly; `analysis_data_*()`
-   reaches nine of them through a `DataFrame`, with the censored-data and `use_log10`/`index`
+   reaches nine of them through a `DataFrame`, with the censored-data and `use_log10`/`split_index`
    machinery a raw vector does not have.
 2. `correlation()` without a second argument treats its input as a table and returns the whole
    pairwise matrix in one call.
@@ -255,7 +255,7 @@ other non-oracle value on this page is held to.
 near <- \(x, literal, tol = 1e-15) abs(x / literal - 1) < tol
 
 mk <- analysis_data_hypothesis_test(d, "mann_kendall")
-mw <- analysis_data_hypothesis_test(d, "mann_whitney", index = 34)
+mw <- analysis_data_hypothesis_test(d, "mann_whitney", split_index = 34)
 jb_log <- analysis_data_hypothesis_test(d, "jarque_bera", use_log10 = TRUE)
 
 stopifnot(

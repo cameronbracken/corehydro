@@ -173,18 +173,18 @@ test_that("analysis_data_hypothesis_test accepts a corehydro_data frame (exact s
   expect_equal(p_vec, p_obj)
 })
 
-test_that("analysis_data_hypothesis_test runs a two-sample test given an index", {
-  p <- analysis_data_hypothesis_test(harricana, "mann_whitney", index = 50)
+test_that("analysis_data_hypothesis_test runs a two-sample test given a split_index", {
+  p <- analysis_data_hypothesis_test(harricana, "mann_whitney", split_index = 50)
   expect_equal(unname(p), 0.5892, tolerance = 1e-2)
 })
 
-test_that("analysis_data_hypothesis_test validates method and the two-sample index", {
+test_that("analysis_data_hypothesis_test validates method and the two-sample split_index", {
   # M3 (P4 whole-branch review): check_choice() replaced match.arg() here, so the message is now
   # "unknown method '...'" (identical to corehydropy's), not match.arg's own "'arg' should be
   # one of" text -- and a value like "jarque" no longer silently PREFIX-RESOLVES to a real method.
   expect_error(analysis_data_hypothesis_test(harricana, "not_a_method"), "unknown method")
   expect_error(analysis_data_hypothesis_test(harricana, "jarque"), "unknown method")
-  expect_error(analysis_data_hypothesis_test(harricana, "equal_variance_t"), "requires .index.")
+  expect_error(analysis_data_hypothesis_test(harricana, "equal_variance_t"), "requires .split_index.")
 })
 
 test_that("analysis_data_statistics returns the twenty named summary statistics", {

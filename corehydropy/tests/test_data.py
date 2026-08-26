@@ -190,15 +190,15 @@ def test_analysis_data_hypothesis_test_accepts_an_analysis_data_frame():
     assert r_seq == r_obj
 
 
-def test_analysis_data_hypothesis_test_runs_a_two_sample_test_given_an_index():
-    r = ch.analysis_data_hypothesis_test(HARRICANA, "mann_whitney", index=50)
+def test_analysis_data_hypothesis_test_runs_a_two_sample_test_given_a_split_index():
+    r = ch.analysis_data_hypothesis_test(HARRICANA, "mann_whitney", split_index=50)
     assert r["mann_whitney"] == pytest.approx(0.5892, abs=1e-2)
 
 
-def test_analysis_data_hypothesis_test_validates_method_and_the_two_sample_index():
+def test_analysis_data_hypothesis_test_validates_method_and_the_two_sample_split_index():
     with pytest.raises(ValueError, match="unknown method"):
         ch.analysis_data_hypothesis_test(HARRICANA, "not_a_method")
-    with pytest.raises(ValueError, match="requires .index."):
+    with pytest.raises(ValueError, match="requires .split_index."):
         ch.analysis_data_hypothesis_test(HARRICANA, "equal_variance_t")
 
 

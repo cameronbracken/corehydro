@@ -325,9 +325,10 @@ kDataTwoSampleMethods <- c("equal_variance_t", "unequal_variance_t", "f", "mann_
 #'
 #' Runs one of the nine `DataFrame` hypothesis-test facades over the exact series of an
 #' [analysis_data()] frame (or a plain numeric vector). The four two-sample tests split the record
-#' at `index`, comparing observations with a data `index` below it against those at or above it --
-#' the split is on the record's INDEX, not on array position, so it agrees with the split a caller
-#' would get by re-running the test on a record whose observations were supplied out of order.
+#' at `split_index`, comparing observations with a data index below it against those at or above
+#' it -- the split is on the record's INDEX, not on array position, so it agrees with the split a
+#' caller would get by re-running the test on a record whose observations were supplied out of
+#' order.
 #'
 #' @param data a numeric vector of observations, or a `corehydro_data` object from
 #'   [analysis_data()] (only its exact series is read).
@@ -336,7 +337,7 @@ kDataTwoSampleMethods <- c("equal_variance_t", "unequal_variance_t", "f", "mann_
 #'   `"f"` (difference in variances), `"linear_trend"` (trend), `"wald_wolfowitz"` (runs test for
 #'   independence), `"mann_whitney"` (homogeneity / jump), or `"mann_kendall"` (homogeneity /
 #'   trend).
-#' @param index the record index to split the sample at; required by `"equal_variance_t"`,
+#' @param split_index the record index to split the sample at; required by `"equal_variance_t"`,
 #'   `"unequal_variance_t"`, `"f"`, and `"mann_whitney"`, ignored otherwise.
 #' @param lag_max the maximum lag for `"ljung_box"`; `NULL` (the default) uses the library's own
 #'   default rule. Ignored by every other method.
@@ -348,22 +349,22 @@ kDataTwoSampleMethods <- c("equal_variance_t", "unequal_variance_t", "f", "mann_
 #' @examples
 #' peaks <- c(122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205)
 #' analysis_data_hypothesis_test(peaks, "mann_kendall")
-#' analysis_data_hypothesis_test(peaks, "equal_variance_t", index = 6)
-analysis_data_hypothesis_test <- function(data, method, index = NULL, lag_max = NULL,
+#' analysis_data_hypothesis_test(peaks, "equal_variance_t", split_index = 6)
+analysis_data_hypothesis_test <- function(data, method, split_index = NULL, lag_max = NULL,
                                           use_log10 = FALSE) {
   # check_choice() rather than match.arg() (R/fit.R:22): match.arg accepts an unambiguous
   # PREFIX, so `method = "jarque"` would silently run in R (resolving to "jarque_bera") and be
   # an error in Python -- exactly the M3 finding from the P4 whole-branch review.
   method <- check_choice(method, kDataHypothesisMethods, "method")
   values <- data_exact_values(data)
-  if (method %in% kDataTwoSampleMethods && is.null(index)) {
-    stop(sprintf("method = \"%s\" requires `index`, the record index to split the sample at", method),
+  if (method %in% kDataTwoSampleMethods && is.null(split_index)) {
+    stop(sprintf("method = \"%s\" requires `split_index`, the record index to split the sample at", method),
       call. = FALSE
     )
   }
   opts <- list(use_log10 = isTRUE(use_log10))
-  if (!is.null(index)) {
-    opts$index <- as.integer(index)
+  if (!is.null(split_index)) {
+    opts$index <- as.integer(split_index)
   }
   if (!is.null(lag_max)) {
     opts$lag_max <- as.integer(lag_max)

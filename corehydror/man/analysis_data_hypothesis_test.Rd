@@ -7,7 +7,7 @@
 analysis_data_hypothesis_test(
   data,
   method,
-  index = NULL,
+  split_index = NULL,
   lag_max = NULL,
   use_log10 = FALSE
 )
@@ -22,7 +22,7 @@ analysis_data_hypothesis_test(
 independence), \code{"mann_whitney"} (homogeneity / jump), or \code{"mann_kendall"} (homogeneity /
 trend).}
 
-\item{index}{the record index to split the sample at; required by \code{"equal_variance_t"},
+\item{split_index}{the record index to split the sample at; required by \code{"equal_variance_t"},
 \code{"unequal_variance_t"}, \code{"f"}, and \code{"mann_whitney"}, ignored otherwise.}
 
 \item{lag_max}{the maximum lag for \code{"ljung_box"}; \code{NULL} (the default) uses the library's own
@@ -36,14 +36,15 @@ A named numeric vector of length 1, named \code{method}: the 2-sided p-value.
 \description{
 Runs one of the nine \code{DataFrame} hypothesis-test facades over the exact series of an
 \code{\link[=analysis_data]{analysis_data()}} frame (or a plain numeric vector). The four two-sample tests split the record
-at \code{index}, comparing observations with a data \code{index} below it against those at or above it --
-the split is on the record's INDEX, not on array position, so it agrees with the split a caller
-would get by re-running the test on a record whose observations were supplied out of order.
+at \code{split_index}, comparing observations with a data index below it against those at or above
+it -- the split is on the record's INDEX, not on array position, so it agrees with the split a
+caller would get by re-running the test on a record whose observations were supplied out of
+order.
 }
 \examples{
 peaks <- c(122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205)
 analysis_data_hypothesis_test(peaks, "mann_kendall")
-analysis_data_hypothesis_test(peaks, "equal_variance_t", index = 6)
+analysis_data_hypothesis_test(peaks, "equal_variance_t", split_index = 6)
 }
 \seealso{
 \code{\link[=analysis_data_statistics]{analysis_data_statistics()}} for the summary-statistics facades,
