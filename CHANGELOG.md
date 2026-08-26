@@ -63,13 +63,12 @@ overloads, and the whole `Numerics.Data.Paired Data` subsystem -- `Ordinate`, `L
   through `analysis_data()`, a correlation matrix over three series, and a reservoir stage-storage
   curve interpolated in linear and log space, simplified by all three algorithms, and sampled
   under uncertainty at its median and its mean.
-
-### Fixed
-
-- `Correlation`'s and `HypothesisTests`' four missing `Statistics`/`Tools` helpers
-  (`mean_variance`, the tie-returning `ranks_in_place` overload, the vector `percentile` overload,
-  and `tools::pow(double, int)`) are now ported, closing the last gap the P0-P3 phases had left in
-  `numerics/data/statistics.hpp`.
+- **Five previously-missing `Statistics` helpers**, ported because this phase's new callers need
+  them: `mean_variance`, `minimum` (the `IList<double>` overload, needed by
+  `DataFrame::summary_statistics_exact_data_only`), the tie-returning `ranks_in_place` overload,
+  the vector `percentile` overload, and `corehydro::numerics::pow(double, int)` (needed by
+  `HypothesisTests`). `numerics/data/statistics.hpp` still omits `FiveNumberSummary`/
+  `SevenNumberSummary` -- no caller has needed them through any phase so far.
 
 ### Notes
 

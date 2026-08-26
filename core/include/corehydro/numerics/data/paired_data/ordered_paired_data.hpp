@@ -3,8 +3,8 @@
 // P4 Task 8: the centrepiece of the Paired Data subsystem -- an x-y curve container that keeps
 // itself sorted/validated against a caller-chosen monotonicity contract (StrictX/OrderX,
 // StrictY/OrderY), plus linear interpolation with optional per-axis transforms, trapezoidal-rule
-// area, six search algorithms (three axes... no, six = {sequential,bisection,hunt} x {x,y}), and
-// three curve-simplification algorithms (Douglas-Peucker, Visvaligam-Whyatt, Lang). Builds on
+// area, six search algorithms ({sequential, bisection, hunt} x {x, y}), and three
+// curve-simplification algorithms (Douglas-Peucker, Visvaligam-Whyatt, Lang). Builds on
 // Task 7's Ordinate (ordinate.hpp) and LineSimplification (line_simplification.hpp, whose free
 // `ramer_douglas_peucker` is a DIFFERENT algorithm implementation from this class's own
 // `douglas_peucker_simplify` -- see ordinate.hpp's transcription note 2 and this file's own note

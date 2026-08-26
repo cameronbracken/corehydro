@@ -98,6 +98,7 @@ quartodoc:
         Direct density, distribution, quantile, moments, and fitting
         functions for the Generalized Extreme Value distribution.
       contents:
+        - GeneralizedExtremeValue
         - dgev
         - pgev
         - qgev
