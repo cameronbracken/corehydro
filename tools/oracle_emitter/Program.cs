@@ -6453,25 +6453,33 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         foreach (var c in root.GetProperty("cases").EnumerateArray())
         {
             string caseName = c.GetProperty("name").GetString()!;
-            BestFitModels.DataFrame df;
-            if (c.TryGetProperty("data_frame", out var dfSpecEl))
-            {
-                df = BuildSpecDataFrame(dfSpecEl);
-            }
-            else
-            {
-                var firstData = c.GetProperty("data")[0];
-                double[] values = firstData.ValueKind == JsonValueKind.String
-                    ? dfSets[firstData.GetString()!]
-                    : firstData.EnumerateArray().Select(ParseNum).ToArray();
-                df = new BestFitModels.DataFrame { ExactSeries = new ExactSeries(values) };
-            }
             JsonElement options = c.TryGetProperty("options", out var dfOptionsEl) ? dfOptionsEl : default;
 
             foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
             {
                 string method = asrt.GetProperty("method").GetString()!;
                 string where = $"data_frame/{caseName}/{method}";
+
+                // Rebuilt PER ASSERTION, not once per case: the other three runners (C++, R,
+                // Python) each build a fresh DataFrame per assertion, and DataFrame is mutable
+                // (CalculatePlottingPositions/SetStandardizedValues write state onto it), so
+                // reusing one instance across a case's assertions here would let an earlier
+                // assertion's mutation leak into a later one -- a lifetime this emitter alone
+                // used to get wrong (P4 whole-branch review finding C6; latent, since no shipped
+                // case mixes methods in a way that exposes it).
+                BestFitModels.DataFrame df;
+                if (c.TryGetProperty("data_frame", out var dfSpecEl))
+                {
+                    df = BuildSpecDataFrame(dfSpecEl);
+                }
+                else
+                {
+                    var firstData = c.GetProperty("data")[0];
+                    double[] values = firstData.ValueKind == JsonValueKind.String
+                        ? dfSets[firstData.GetString()!]
+                        : firstData.EnumerateArray().Select(ParseNum).ToArray();
+                    df = new BestFitModels.DataFrame { ExactSeries = new ExactSeries(values) };
+                }
 
                 if (method == "summary_all" || method == "standardized")
                     df.CalculatePlottingPositions();
@@ -7758,7 +7766,22 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         continue;
     }
 
-    if (kindStr != "univariate_distribution") continue;
+    // Every recognized `kind` is dispatched (and `continue`s past this point) above. Reaching
+    // here with anything other than "univariate_distribution" (the one kind with no explicit
+    // early branch -- it falls through to the dispatch below) means the fixture's `kind` matches
+    // NONE of them: a typo, or a new kind this emitter was never wired up for. That used to fall
+    // through silently, dropping the file from the oracle gate with zero warning and zero effect
+    // on the pass/fail counts (P4 whole-branch review finding C10). Fail loudly instead: this IS
+    // the oracle gate, so a fixture with no dispatcher reproducing nothing is exactly the failure
+    // this tool exists to catch.
+    if (kindStr != "univariate_distribution")
+    {
+        fail++;
+        failures.Add(
+            $"{file}: unrecognized fixture kind '{kindStr ?? "(missing)"}' -- no runner " +
+            "dispatched this file, so none of its assertions were reproduced");
+        continue;
+    }
 
     string target = root.GetProperty("target").GetString()!;
 

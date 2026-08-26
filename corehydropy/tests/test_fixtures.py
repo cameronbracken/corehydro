@@ -2565,6 +2565,13 @@ def _load_cases():
             "toolbox_cross_language",
             "data_frame",
         ):
+            # Every recognized kind is listed above (or handled as "special_function" before
+            # this check). A kind matching none of them -- a typo, or a new fixture kind this
+            # runner was never wired up for -- used to `continue` past silently, dropping the
+            # whole file from pytest coverage with no warning (P4 whole-branch review finding
+            # C10). Emit a case that FAILS instead, so the fixture is never silently invisible.
+            out.append(("_unrecognized_kind", kind if kind is not None else "(missing)",
+                        {}, {"name": fx.name}))
             continue
         for case in spec["cases"]:
             out.append((kind, spec.get("target", spec.get("group", kind)), spec.get("datasets", {}), case))
@@ -2578,6 +2585,12 @@ CASES = _load_cases()
     "kind,target,datasets,case", CASES, ids=[f"{k}:{t}:{c['name']}" for k, t, _, c in CASES]
 )
 def test_fixture_case(kind, target, datasets, case):
+    if kind == "_unrecognized_kind":
+        pytest.fail(
+            f"{case['name']}: unrecognized fixture kind '{target}' -- no runner dispatched "
+            "this file"
+        )
+
     if kind == "special_function":
         actual = _run_special_function_case(target, case["args"])
         for a in case["assertions"]:

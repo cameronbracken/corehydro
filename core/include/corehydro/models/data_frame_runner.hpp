@@ -28,7 +28,6 @@
 // Everything here returns plain structs of vectors and scalars: the packages hold no C++ object,
 // so a result crosses the boundary as data and nothing needs a finalizer.
 #pragma once
-#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -238,64 +237,60 @@ inline numerics::support::ToolboxResult run_data_frame(const std::string& method
     bool has_json = !data_frame_json.empty();
     bool has_data = !data.empty();
     if (has_json == has_data)
-        throw std::invalid_argument(
+        throw std::runtime_error(
             "run_data_frame requires exactly one of `data` or `data_frame_json`");
 
     DataFrame df;
     if (has_json) {
         df = build_data_frame_from_json(data_frame_json);
     } else {
-        if (data[0].empty())
-            throw std::invalid_argument("run_data_frame requires a non-empty data series");
-        df.set_exact_series(ExactSeries(data[0]));
+        const std::vector<double>& values =
+            numerics::support::detail::data_at(data, 0, "data_frame", method);
+        if (values.empty())
+            throw std::runtime_error("run_data_frame requires a non-empty data series");
+        df.set_exact_series(ExactSeries(values));
     }
 
     spec::JsonValue options = spec::parse_json(options_json.empty() ? "{}" : options_json);
     bool use_log10 = options.value_or("use_log10", false);
 
-    static const std::vector<std::string> one_sample_methods = {
-        "jarque_bera", "ljung_box", "linear_trend", "wald_wolfowitz", "mann_kendall"};
-    static const std::vector<std::string> two_sample_methods = {
-        "equal_variance_t", "unequal_variance_t", "f", "mann_whitney"};
-
-    bool is_one_sample =
-        std::find(one_sample_methods.begin(), one_sample_methods.end(), method) !=
-        one_sample_methods.end();
-    bool is_two_sample =
-        std::find(two_sample_methods.begin(), two_sample_methods.end(), method) !=
-        two_sample_methods.end();
-
-    if (is_one_sample || is_two_sample) {
-        double p = 0.0;
-        if (method == "jarque_bera") {
-            p = df.jarque_bera_test(use_log10);
-        } else if (method == "ljung_box") {
-            p = df.ljung_box_test(options.value_or("lag_max", -1), use_log10);
-        } else if (method == "linear_trend") {
-            p = df.linear_trend_test(use_log10);
-        } else if (method == "wald_wolfowitz") {
-            p = df.wald_wolfowitz_test(use_log10);
-        } else if (method == "mann_kendall") {
-            p = df.mann_kendall_test(use_log10);
-        } else {
-            if (!options.contains("index"))
-                throw std::invalid_argument("data_frame method '" + method +
-                                            "' requires an 'index' option");
-            int index = options.at("index").as_int();
-            if (method == "equal_variance_t") {
-                p = df.equal_variance_t_test(index, use_log10);
-            } else if (method == "unequal_variance_t") {
-                p = df.unequal_variance_t_test(index, use_log10);
-            } else if (method == "f") {
-                p = df.f_test(index, use_log10);
-            } else {  // mann_whitney
-                p = df.mann_whitney_test(index, use_log10);
-            }
+    // Single dispatch: each method is handled in exactly one place, so a method added here with
+    // no matching branch falls through to `matched = false` and the "unknown data_frame method"
+    // error below, rather than silently landing in another method's branch (P4 whole-branch
+    // review finding C7 -- the previous two-static-vector gate plus an independent if-chain could
+    // drift out of sync).
+    double p = 0.0;
+    bool matched = true;
+    if (method == "jarque_bera") {
+        p = df.jarque_bera_test(use_log10);
+    } else if (method == "ljung_box") {
+        p = df.ljung_box_test(options.value_or("lag_max", -1), use_log10);
+    } else if (method == "linear_trend") {
+        p = df.linear_trend_test(use_log10);
+    } else if (method == "wald_wolfowitz") {
+        p = df.wald_wolfowitz_test(use_log10);
+    } else if (method == "mann_kendall") {
+        p = df.mann_kendall_test(use_log10);
+    } else if (method == "equal_variance_t" || method == "unequal_variance_t" ||
+              method == "f" || method == "mann_whitney") {
+        if (!options.contains("index"))
+            throw std::runtime_error("data_frame method '" + method +
+                                     "' requires an 'index' option");
+        int index = options.at("index").as_int();
+        if (method == "equal_variance_t") {
+            p = df.equal_variance_t_test(index, use_log10);
+        } else if (method == "unequal_variance_t") {
+            p = df.unequal_variance_t_test(index, use_log10);
+        } else if (method == "f") {
+            p = df.f_test(index, use_log10);
+        } else {  // mann_whitney
+            p = df.mann_whitney_test(index, use_log10);
         }
-        ToolboxResult r;
-        r.values = {p};
-        return r;
+    } else {
+        matched = false;
     }
+
+    if (matched) return numerics::support::detail::scalar(p);
 
     if (method == "summary_exact") {
         ToolboxResult r;
@@ -330,7 +325,7 @@ inline numerics::support::ToolboxResult run_data_frame(const std::string& method
         return r;
     }
 
-    throw std::invalid_argument("unknown data_frame method: " + method);
+    throw std::runtime_error("unknown data_frame method: " + method);
 }
 
 }  // namespace corehydro::models::runner

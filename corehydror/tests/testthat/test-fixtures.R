@@ -2442,7 +2442,18 @@ test_that("oracle fixtures validate", {
       }
       next
     }
-    if (!identical(spec$kind, "univariate_distribution")) next
+    if (!identical(spec$kind, "univariate_distribution")) {
+      # Every recognized kind is dispatched (and `next`s) above. Reaching here with anything
+      # else means `spec$kind` matches NONE of them -- a typo, or a new fixture kind this
+      # runner was never wired up for -- which used to silently drop the whole file from
+      # testthat coverage with no warning (P4 whole-branch review finding C10). Fail loudly
+      # instead, matching the C++ runner and the dotnet emitter.
+      fail(sprintf(
+        "%s: unrecognized fixture kind '%s' -- no runner dispatched this file",
+        f, if (is.null(spec$kind)) "(missing)" else spec$kind
+      ))
+      next
+    }
     target <- spec$target
     datasets <- spec$datasets
     is_composite <- target %in% kCompositeTargets

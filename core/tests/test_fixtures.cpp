@@ -3709,6 +3709,15 @@ int main(int argc, char** argv) {
             run_model_estimation(spec);
         } else if (kind == "analysis") {
             run_analysis(spec);
+        } else {
+            // No runner is wired up for this kind (a typo, or a new fixture kind added to one
+            // runner and not the others): fail loudly rather than silently dropping the whole
+            // file from ctest coverage with no warning (P4 whole-branch review finding C10,
+            // originally raised against the emitter but sharing this exact if/else-chain shape
+            // here).
+            chtest::report_fail(__FILE__, __LINE__,
+                                entry.path().string() + ": unrecognized fixture kind '" + kind +
+                                    "' -- no runner dispatched this file");
         }
     }
     if (files == 0) {
