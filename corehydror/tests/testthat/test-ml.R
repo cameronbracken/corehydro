@@ -186,6 +186,8 @@ test_that("the ml verbs validate their arguments", {
 
   expect_error(ml_kmeans(letters, k = 2), "`x` must be numeric")
   expect_error(ml_jenks_breaks(letters, n_clusters = 2), "`x` must be numeric")
+  expect_error(ml_kmeans(array(1, dim = c(2, 2, 2)), k = 2),
+               "`x` must be one- or two-dimensional")
   expect_error(ml_decision_tree(x, y[1:5], newdata = 1),
                "`y` must be numeric with one value per row of `x`")
   expect_error(ml_decision_tree(x, y, newdata = cbind(1, 2)),

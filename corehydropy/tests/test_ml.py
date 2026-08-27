@@ -129,9 +129,8 @@ def test_ml_knn_reproduces_the_iris_classification_oracle_and_its_four_result_ki
     # Intervals: four ordered columns.
     band = ch.ml_knn(_iris_train(), _iris_species_train(), newdata=_iris_test_x()[:2], k=5,
                      what="intervals", seed=99, realizations=25)
-    assert band["columns"] == ["lower", "median", "upper", "mean"]
-    m = band["intervals"]
-    assert all(m[i, 0] <= m[i, 1] <= m[i, 2] for i in range(m.shape[0]))
+    assert band.shape == (2, 4)  # lower, median, upper, mean
+    assert all(band[i, 0] <= band[i, 1] <= band[i, 2] for i in range(band.shape[0]))
 
 
 def test_ml_decision_tree_and_random_forest_separate_a_clean_two_group_problem():
@@ -142,20 +141,18 @@ def test_ml_decision_tree_and_random_forest_separate_a_clean_two_group_problem()
     assert len(p) == 2
     assert p[0] < 50 and p[1] > 50
 
-    band = ch.ml_random_forest(x, y, newdata=[3, 104], seed=42, number_of_trees=25)
-    m = band["intervals"]
-    assert m.shape == (2, 4)
-    assert band["columns"] == ["lower", "median", "upper", "mean"]
+    m = ch.ml_random_forest(x, y, newdata=[3, 104], seed=42, number_of_trees=25)
+    assert m.shape == (2, 4)  # lower, median, upper, mean
     assert all(m[i, 0] <= m[i, 1] <= m[i, 2] for i in range(2))
     assert m[0, 2] < 50 and m[1, 0] > 50
 
     # A seeded forest is reproducible, including the mean column.
     again = ch.ml_random_forest(x, y, newdata=[3, 104], seed=42, number_of_trees=25)
-    assert m.tolist() == again["intervals"].tolist()
+    assert m.tolist() == again.tolist()
 
     # A classifier floors every column, including mean.
     clf = ch.ml_random_forest(x, [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1], newdata=[3, 104],
-                              seed=42, regression=False, number_of_trees=25)["intervals"]
+                              seed=42, regression=False, number_of_trees=25)
     assert clf.tolist() == np.floor(clf).tolist()
 
 
@@ -189,7 +186,8 @@ def test_ml_glm_reproduces_the_fpp3_simple_regression_oracle_across_links():
     # newdata adds a prediction and a three-column band.
     with_nd = ch.ml_glm(ds["fpp3_income"], ds["fpp3_consumption"], newdata=[0, 1, 2])
     assert len(with_nd["prediction"]) == 3
-    assert with_nd["prediction_interval_columns"] == ["lower", "mean", "upper"]
+    # Columns are lower, mean, upper -- so column 1 is the point prediction.
+    assert with_nd["prediction_intervals"].shape == (3, 3)
     assert with_nd["prediction_intervals"][:, 1].tolist() == with_nd["prediction"].tolist()
 
     # robust_se moves the standard errors but not the coefficients.
@@ -202,6 +200,10 @@ def test_the_ml_verbs_validate_their_arguments():
     x = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     y = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
+    with pytest.raises(ValueError, match="`x` must be numeric"):
+        ch.ml_kmeans(["a", "b", "c"], k=2)
+    with pytest.raises(ValueError, match="`x` must be one- or two-dimensional"):
+        ch.ml_kmeans(np.ones((2, 2, 2)), k=2)
     with pytest.raises(ValueError, match="`y` must be numeric with one value per row of `x`"):
         ch.ml_decision_tree(x, y[:5], newdata=[1])
     with pytest.raises(ValueError,

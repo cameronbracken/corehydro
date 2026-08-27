@@ -19,6 +19,11 @@ ml_matrix <- function(x, arg = "x") {
   if (!is.numeric(x)) {
     stop(sprintf("`%s` must be numeric", arg), call. = FALSE)
   }
+  # Reject three or more dimensions rather than silently flattening them into one column, which
+  # is what `matrix(as.double(x), ncol = 1)` would do. numpy rejects the same shape.
+  if (length(dim(x)) > 2L) {
+    stop(sprintf("`%s` must be one- or two-dimensional", arg), call. = FALSE)
+  }
   if (!is.matrix(x)) x <- matrix(as.double(x), ncol = 1L)
   storage.mode(x) <- "double"
   x

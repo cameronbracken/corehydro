@@ -27,8 +27,16 @@ __all__ = [
 
 
 def _ml_matrix(x, arg: str = "x") -> np.ndarray:
-    """Coerce a predictor argument to a 2-D float array with one row per observation."""
-    a = np.asarray(x, dtype=float)
+    """Coerce a predictor argument to a 2-D float array with one row per observation.
+
+    Raises the same message corehydror's `ml_matrix()` raises rather than letting numpy's own
+    "could not convert string to float" through, so a non-numeric argument reads the same way in
+    both languages.
+    """
+    try:
+        a = np.asarray(x, dtype=float)
+    except (TypeError, ValueError):
+        raise ValueError(f"`{arg}` must be numeric") from None
     if a.ndim == 1:
         a = a.reshape(-1, 1)
     if a.ndim != 2:
@@ -312,7 +320,7 @@ def ml_decision_tree(x, y, newdata, seed: int | None = None, regression: bool = 
 def ml_random_forest(x, y, newdata, seed: int | None = None, regression: bool = True,
                      features: int | None = None, minimum_split_size: int = 2,
                      max_depth: int = 100, number_of_trees: int = 1000,
-                     alpha: float = 0.1) -> dict:
+                     alpha: float = 0.1) -> np.ndarray:
     """Random forest regression or classification.
 
     Mirrors the C# ``RandomForest`` class: fits ``number_of_trees`` decision trees on bootstrap
@@ -350,16 +358,18 @@ def ml_random_forest(x, y, newdata, seed: int | None = None, regression: bool = 
 
     Returns
     -------
-    dict
-        ``intervals``, an array with one row per row of ``newdata`` and four columns, and
-        ``columns``, the column names ``["lower", "median", "upper", "mean"]``.
+    numpy.ndarray
+        One row per row of ``newdata``, with four columns in the order ``lower``, ``median``,
+        ``upper``, ``mean``. (The R twin returns the same table with those column names attached;
+        numpy arrays carry no dimnames, so the order is fixed and documented instead -- the same
+        convention :meth:`LinearRegressionResult.predict` already uses for its interval table.)
 
     Examples
     --------
     >>> from corehydropy import ml_random_forest
     >>> x = [1, 2, 3, 4, 5, 6, 100, 101, 102, 103, 104, 105]
     >>> y = [10, 11, 10, 11, 10, 11, 100, 101, 100, 101, 100, 101]
-    >>> ml_random_forest(x, y, newdata=[3, 104], seed=42, number_of_trees=25)["intervals"].shape
+    >>> ml_random_forest(x, y, newdata=[3, 104], seed=42, number_of_trees=25).shape
     (2, 4)
     """
     xa = _ml_matrix(x)
@@ -378,7 +388,7 @@ def ml_random_forest(x, y, newdata, seed: int | None = None, regression: bool = 
         options["features"] = int(features)
     r = _toolbox_run("ml", "random_forest_predict",
                      [_ml_flat(xa), [float(v) for v in ya], _ml_flat(nd)], options)
-    return {"intervals": _ml_reshape(r), "columns": list(r["names"])}
+    return _ml_reshape(r)
 
 
 def ml_knn(x, y, newdata, k: int, regression: bool = True, what: str = "prediction",
@@ -414,12 +424,12 @@ def ml_knn(x, y, newdata, k: int, regression: bool = True, what: str = "predicti
 
     Returns
     -------
-    numpy.ndarray or dict
+    numpy.ndarray
         For ``"prediction"`` and ``"bootstrap"``, a 1-D array. For ``"neighbors"``, a 2-D array
         of 0-BASED training-row indices with one row per row of ``newdata`` and ``k`` columns.
-        For ``"intervals"``, a dict with ``intervals`` and ``columns``
-        (``["lower", "median", "upper", "mean"]``) -- note ``"intervals"`` always reports
-        percentiles, even for a classifier, because upstream has no classification branch there.
+        For ``"intervals"``, a 2-D array with four columns in the order ``lower``, ``median``,
+        ``upper``, ``mean`` -- note ``"intervals"`` always reports percentiles, even for a
+        classifier, because upstream has no classification branch there.
 
     Examples
     --------
@@ -450,7 +460,7 @@ def ml_knn(x, y, newdata, k: int, regression: bool = True, what: str = "predicti
     if what == "neighbors":
         return _ml_reshape(r).astype(int)
     if what == "intervals":
-        return {"intervals": _ml_reshape(r), "columns": list(r["names"])}
+        return _ml_reshape(r)
     return np.asarray(r["values"])
 
 
@@ -560,9 +570,9 @@ def ml_glm(x, y, intercept: bool = True, link: str = "identity",
     -------
     dict
         ``coefficients``, ``standard_errors``, ``z_values``, ``p_values``, ``sigma``, ``df``,
-        ``n``, ``aic``, ``aicc``, ``bic``, ``vcov`` and ``residuals``; plus ``prediction``,
-        ``prediction_intervals`` and ``prediction_interval_columns``
-        (``["lower", "mean", "upper"]``) when ``newdata`` is supplied.
+        ``n``, ``aic``, ``aicc``, ``bic``, ``vcov`` and ``residuals``; plus ``prediction`` and
+        ``prediction_intervals`` when ``newdata`` is supplied. The interval table has three
+        columns in the order ``lower``, ``mean``, ``upper``.
 
     Examples
     --------
@@ -609,7 +619,7 @@ def ml_glm(x, y, intercept: bool = True, link: str = "identity",
         out["prediction"] = np.asarray(
             _toolbox_run("ml", "glm_predict", data3, options)["values"]
         )
-        pi = _toolbox_run("ml", "glm_predict_intervals", data3, options)
-        out["prediction_intervals"] = _ml_reshape(pi)
-        out["prediction_interval_columns"] = list(pi["names"])
+        out["prediction_intervals"] = _ml_reshape(
+            _toolbox_run("ml", "glm_predict_intervals", data3, options)
+        )
     return out
