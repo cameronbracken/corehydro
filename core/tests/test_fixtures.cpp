@@ -43,6 +43,7 @@
 #include "corehydro/estimation/support/fit_runner.hpp"
 #include "corehydro/models/data_frame/data_collections/exact_series.hpp"
 #include "corehydro/models/data_frame/data_frame.hpp"
+#include "corehydro/models/data_frame_runner.hpp"
 #include "corehydro/models/model_spec.hpp"
 #include "corehydro/models/support/model_base.hpp"
 #include "corehydro/models/support/simulatable.hpp"
@@ -1650,6 +1651,31 @@ static void run_toolbox_kind(const json& spec) {
             std::string where = "toolbox/" + group + "/" + name;
             auto r = tbx::run_toolbox(group, as["method"].get<std::string>(), data, options_str);
             check_value(toolbox_select(r, as, group), as, where);
+        }
+    }
+}
+
+// P4 Task 6: the twelve DataFrame hypothesis-test / summary-statistics facades, dispatched
+// through corehydro::models::runner::run_data_frame (data_frame_runner.hpp). Modeled directly
+// on run_toolbox_kind above -- reuses toolbox_data() for the `data` array (dataset names or
+// inline arrays -> data[0] becomes the exact series with sequential indices) and toolbox_select
+// for assertion selection, since run_data_frame returns the SAME ToolboxResult the toolbox
+// groups return. A case may instead carry a `data_frame` spec object (the model_spec.hpp
+// grammar) for the rarer censored-frame path; no fixture case here uses it, but the arm supports
+// it for parity with run_data_frame's own two-path contract.
+static void run_data_frame_kind(const json& spec) {
+    json datasets = spec.value("datasets", json::object());
+    for (const auto& c : spec["cases"]) {
+        std::string name = c["name"].get<std::string>();
+        auto data = toolbox_data(c, datasets);
+        std::string data_frame_json = c.contains("data_frame") ? c["data_frame"].dump() : "";
+        json options = c.contains("options") ? c["options"] : json::object();
+        std::string options_str = options.dump();
+        for (const auto& as : c["assertions"]) {
+            std::string where = "data_frame/" + name;
+            auto r = corehydro::models::runner::run_data_frame(
+                as["method"].get<std::string>(), data, data_frame_json, options_str);
+            check_value(toolbox_select(r, as, "data_frame"), as, where);
         }
     }
 }
@@ -3656,6 +3682,8 @@ int main(int argc, char** argv) {
             run_data_utility(spec);
         } else if (kind == "toolbox") {
             run_toolbox_kind(spec);
+        } else if (kind == "data_frame") {
+            run_data_frame_kind(spec);
         } else if (kind == "optimizer") {
             run_optimizer_kind(spec);
         } else if (kind == "callback") {
@@ -3681,6 +3709,15 @@ int main(int argc, char** argv) {
             run_model_estimation(spec);
         } else if (kind == "analysis") {
             run_analysis(spec);
+        } else {
+            // No runner is wired up for this kind (a typo, or a new fixture kind added to one
+            // runner and not the others): fail loudly rather than silently dropping the whole
+            // file from ctest coverage with no warning (P4 whole-branch review finding C10,
+            // originally raised against the emitter but sharing this exact if/else-chain shape
+            // here).
+            chtest::report_fail(__FILE__, __LINE__,
+                                entry.path().string() + ": unrecognized fixture kind '" + kind +
+                                    "' -- no runner dispatched this file");
         }
     }
     if (files == 0) {

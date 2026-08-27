@@ -31,6 +31,7 @@ from .toolbox import (
     dft_real,
     gauss_jordan,
     histogram,
+    hypothesis_test,
     interpolate,
     interpolate_2d,
     joint_probability,
@@ -57,6 +58,11 @@ from .toolbox import (
     trend_parameters,
     trend_predict,
     univariate_function,
+    curve_interpolate,
+    curve_area,
+    curve_simplify,
+    uncertain_curve_sample,
+    tabular_function,
 )
 from .optim import Constraint, OptimResult, optim_maximize, optim_minimize
 from .callback import (
@@ -99,6 +105,8 @@ from .mvdist import (
 from .data import (
     AnalysisData,
     analysis_data,
+    analysis_data_hypothesis_test,
+    analysis_data_statistics,
     analysis_data_summary,
     threshold_diagnostics,
 )
@@ -208,6 +216,12 @@ __all__ = [
     "polynomial_eval",
     "univariate_function",
     "shortest_path",
+    "hypothesis_test",
+    "curve_interpolate",
+    "curve_area",
+    "curve_simplify",
+    "uncertain_curve_sample",
+    "tabular_function",
     "OptimResult",
     "optim_minimize",
     "optim_maximize",
@@ -295,6 +309,8 @@ __all__ = [
     "bootstrap_custom",
     "AnalysisData",
     "analysis_data",
+    "analysis_data_hypothesis_test",
+    "analysis_data_statistics",
     "analysis_data_summary",
     "threshold_diagnostics",
     "Model",

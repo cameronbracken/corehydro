@@ -99,6 +99,8 @@ reference:
     contents:
       - analysis_data
       - analysis_data_summary
+      - analysis_data_hypothesis_test
+      - analysis_data_statistics
       - threshold_diagnostics
   - title: Models
     desc: >
@@ -209,6 +211,13 @@ reference:
       - cross_correlation
       - dft
       - dft_real
+  - title: Hypothesis tests
+    desc: >
+      The twelve ported Numerics one- and two-sample parametric and nonparametric hypothesis
+      tests (t-tests, the F-test and its two-model form, Jarque-Bera, Wald-Wolfowitz, Ljung-Box,
+      Mann-Whitney, Mann-Kendall, the linear trend test).
+    contents:
+      - hypothesis_test
   - title: Interpolation and regression
     desc: >
       Histogram binning, one- and two-dimensional interpolation with optional axis transforms,
@@ -272,6 +281,18 @@ reference:
       - debye
       - polynomial_eval
       - univariate_function
+  - title: Paired-data curves
+    desc: >
+      The ported Paired Data subsystem (OrderedPairedData, UncertainOrderedPairedData) and its
+      third IUnivariateFunction implementation, TabularFunction: interpolation and area under a
+      curve, three simplification algorithms, sampling an uncertain curve at its mean or a
+      quantile, and evaluating a tabular function built from that curve.
+    contents:
+      - curve_interpolate
+      - curve_area
+      - curve_simplify
+      - uncertain_curve_sample
+      - tabular_function
   - title: The generator a callback is handed
     desc: >
       Drawing from the core's seeded random number generator inside a function you write, so

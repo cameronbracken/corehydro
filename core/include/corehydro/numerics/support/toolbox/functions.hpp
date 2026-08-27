@@ -14,6 +14,30 @@
 // parameter-3/parameter-4 sigma validation applies) and then applies the level -- ABSENCE means
 // deterministic, matching every constructor overload in linear_function.hpp/power_function.hpp
 // that omits sigma.
+//
+// The `tabular`/`tabular_inverse` methods are the third `IUnivariateFunction`, TabularFunction
+// (P4 Task 10), and use an entirely different grammar (no `"function"` key): `options.x` is the
+// plain numeric array of the underlying UncertainOrderedPairedData's x-coordinates,
+// `options.distributions` an array of `dist_spec` grammar objects (see
+// `numerics/distributions/support/dist_spec.hpp`), one per `x` -- built and validated through
+// toolbox/common.hpp's shared `build_distributions_for_x()`, which also keeps `paired_data.hpp`'s
+// `curve_sample` from duplicating the same loop (P4 whole-branch-review finding C8: this group
+// used to be the only one including another group header, `paired_data.hpp`, just to reuse that
+// loop and its Transform parser -- both now live in common.hpp instead, so this header needs
+// neither). `x_transform`/`y_transform` (`"none"`/`"logarithmic"` (or its alias `"log"`)/
+// `"normal_z"`, default `"none"`), `confidence_level` (optional; its presence re-samples the curve
+// at that quantile instead of the mean, mirroring `TabularFunction::set_confidence_level`),
+// `is_deterministic` (optional bool, default `false`; `true` re-labels the underlying paired data
+// Deterministic WITHOUT converting the individual Y distributions -- see `tabular_function.hpp`'s
+// own header note, preserved here), and `allow_negative_y_values` (optional bool, default `true`,
+// matching the C# class default) round out the options. The curve's shape contract is NOT
+// configurable here (unlike `paired_data`'s own methods): `TabularFunction` is always built
+// strict/ascending on both axes, matching every use in the ported ctest. `data[0]` holds the
+// evaluation points -- `tabular` calls `Function()` at each, `tabular_inverse` calls
+// `InverseFunction()`. The distribution type `UncertainOrderedPairedData` needs is derived from
+// the FIRST built distribution's own `type()` (never a separate option): unlike
+// `paired_data.curve_sample`, no `distribution_type` override exists here, since the brief's
+// grammar for this method never lists one.
 #pragma once
 
 #include <memory>
@@ -21,9 +45,11 @@
 #include <string>
 #include <vector>
 
+#include "corehydro/numerics/distributions/support/dist_spec.hpp"
 #include "corehydro/numerics/functions/i_univariate_function.hpp"
 #include "corehydro/numerics/functions/linear_function.hpp"
 #include "corehydro/numerics/functions/power_function.hpp"
+#include "corehydro/numerics/functions/tabular_function.hpp"
 #include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
@@ -64,6 +90,29 @@ inline std::unique_ptr<numerics::functions::IUnivariateFunction> build_univariat
 inline ToolboxResult run_functions(const std::string& method,
                                    const std::vector<std::vector<double>>& data,
                                    const JsonValue& options) {
+    if (method == "tabular" || method == "tabular_inverse") {
+        const std::vector<double>& eval_points = data_at(data, 0, "functions", method);
+        if (!options.contains("x"))
+            throw std::runtime_error("toolbox method 'functions." + method + "' needs an 'x' option");
+        std::vector<double> x = options.at("x").as_double_vector();
+        DistributionList dl = build_distributions_for_x(options, x.size(), "functions", method);
+        namespace nd = numerics::data;
+        numerics::distributions::UnivariateDistributionType dtype = dl.dists.front()->type();
+        numerics::data::paired_data::UncertainOrderedPairedData upd(
+            x, dl.ptrs, true, nd::SortOrder::Ascending, true, nd::SortOrder::Ascending, dtype);
+        numerics::functions::TabularFunction f(std::move(upd));
+        f.set_x_transform(parse_transform_token(options.value_or("x_transform", "none")));
+        f.set_y_transform(parse_transform_token(options.value_or("y_transform", "none")));
+        if (options.value_or("is_deterministic", false)) f.set_is_deterministic(true);
+        if (options.contains("confidence_level"))
+            f.set_confidence_level(options.at("confidence_level").as_double());
+        f.set_allow_negative_y_values(options.value_or("allow_negative_y_values", true));
+        ToolboxResult r;
+        for (double v : eval_points)
+            r.values.push_back(method == "tabular" ? f.function(v) : f.inverse_function(v));
+        return r;
+    }
+
     if (!options.contains("function"))
         throw std::runtime_error(
             "toolbox group 'functions' needs a 'function' key in its options");

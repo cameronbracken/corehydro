@@ -1,3 +1,45 @@
+# corehydror 0.11.0
+
+The data-and-testing layer that closes out the port: the twelve hypothesis tests, the two
+severed DataFrame facades, the Correlation matrix overloads, and the whole Paired Data
+subsystem. See `CHANGELOG.md` at the repository root for the full account.
+
+## New features
+
+* `hypothesis_test(x, y = NULL, method = ...)` -- twelve statistical tests from
+  `Numerics.Data.Statistics.HypothesisTests`: `"one_sample_t"`, `"equal_variance_t"`,
+  `"unequal_variance_t"`, `"paired_t"`, `"f"`, `"f_models"`, `"jarque_bera"`,
+  `"wald_wolfowitz"`, `"ljung_box"`, `"mann_whitney"`, `"mann_kendall"`, `"linear_trend"`.
+  `method = "f_models"` returns a named `c(f_statistic =, p_value =)` pair; every other method
+  returns a single p-value. `UnimodalityTest`, the thirteenth C# method, is deferred: it fits a
+  `GaussianMixtureModel`, and the Machine Learning layer is unported.
+* `analysis_data_hypothesis_test()` and `analysis_data_statistics()` un-gate two RMC.BestFit
+  `DataFrame` facades that had been waiting on `HypothesisTests`. Between them they carry twelve
+  of the fourteen members of the two regions they cover -- nine of the eleven Hypothesis Testing
+  facades plus all three Summary Statistics facades. `unimodality_test` and
+  `summary_hypothesis_test` are deferred alongside `UnimodalityTest` for the same reason.
+* `correlation()` gains a matrix path: called with a matrix or data frame and no `y`, it returns
+  the full Pearson or Spearman correlation matrix rather than one pairwise value. Upstream has no
+  Kendall matrix overload, so `method = "kendall"` with a matrix is an error naming the reason.
+* The Paired Data subsystem, reachable as five new verbs: `curve_interpolate()` and `curve_area()`
+  over a curve's linear interpolation and trapezoidal area; `curve_simplify()` over the three
+  simplification algorithms (Douglas-Peucker, Visvalingam-Whyatt, Lang); `uncertain_curve_sample()`,
+  which samples a curve whose y-values are distributions rather than numbers, at a chosen
+  probability or at each distribution's mean; and `tabular_function()`, the last of the three
+  `IUnivariateFunction` implementations, interpolating a tabulated curve with optional log or
+  normal-score transforms on either axis.
+* A worked example pair, 28, walking the Harricana River annual peaks through the independence,
+  homogeneity and normality tests, the same record through `analysis_data()`, a correlation matrix
+  over three series, and a reservoir stage-storage curve interpolated, simplified, and sampled
+  under uncertainty.
+
+## Notes
+
+* `curve_simplify(method = "lang")` reproduces an upstream defect rather than fixing it: unlike
+  the other two algorithms, Lang does not force-keep a curve's last point, so it can silently drop
+  it. Measured against the real C# library and pinned by both a ctest and a fixture; see
+  `docs/upstream-csharp-issues.md`.
+
 # corehydror 0.10.0
 
 The rest of the Numerics optimization layer. `optim_minimize()` grew from six methods to

@@ -5,14 +5,20 @@ import numpy as np
 import pytest
 
 from corehydropy import (
+    Distribution,
     RunningCovariance,
     RunningStatistics,
     autocorrelation,
+    correlation,
     cross_correlation,
+    curve_area,
+    curve_interpolate,
+    curve_simplify,
     debye,
     dft,
     gauss_jordan,
     histogram,
+    hypothesis_test,
     interpolate,
     interpolate_2d,
     joint_probability,
@@ -35,9 +41,11 @@ from corehydropy import (
     sobol_sequence,
     stratify,
     summary_statistics,
+    tabular_function,
     trend_names,
     trend_parameters,
     trend_predict,
+    uncertain_curve_sample,
     univariate_function,
 )
 from corehydropy.models import trend
@@ -98,6 +106,41 @@ def test_percentile_accepts_a_vector_of_probabilities():
 def test_percentile_rejects_a_non_numeric_probs_argument():
     with pytest.raises(ValueError, match="probs"):
         percentile([1, 2, 3], probs="half")
+
+
+def test_correlation_with_a_matrix_returns_the_p_by_p_matrix():
+    c0 = [14, 8, 32, 7, 3, 15]
+    c1 = [10, 5, 7, 4, 3, 8]
+    c2 = [2, 9, 1, 6, 4, 11]
+    x = np.column_stack([c0, c1, c2])
+
+    m = correlation(x)
+    assert m.shape == (3, 3)
+    np.testing.assert_array_equal(np.diag(m), [1, 1, 1])
+    np.testing.assert_allclose(m, m.T)
+    assert m[0, 1] == correlation(c0, c1)
+    assert m[0, 2] == correlation(c0, c2)
+    assert m[1, 2] == correlation(c1, c2)
+
+    ms = correlation(x, method="spearman")
+    np.testing.assert_array_equal(np.diag(ms), [1, 1, 1])
+    assert ms[0, 1] == correlation(c0, c1, method="spearman")
+
+
+def test_correlation_rejects_kendall_for_a_matrix():
+    x = np.column_stack([[14, 8, 32, 7, 3, 15], [10, 5, 7, 4, 3, 8]])
+    with pytest.raises(ValueError, match="kendall.*matrix"):
+        correlation(x, method="kendall")
+
+
+def test_correlation_rejects_a_1d_vector_in_matrix_mode():
+    # C4 (P4 whole-branch review): corehydropy already raised here; corehydror's as.matrix()
+    # coercion silently returned a 1x1 matrix of 1 for the same input instead. This pins the
+    # Python side of the parity fix.
+    with pytest.raises(
+        ValueError, match=r"`x` must be a 2D array \(observations in rows, variables in columns\)"
+    ):
+        correlation([14, 8, 32, 7, 3, 15])
 
 
 def test_running_covariance_chunked_matches_a_single_call():
@@ -897,3 +940,203 @@ def test_shortest_path_rejects_a_node_count_too_small_for_the_graph():
     assert shortest_path(
         [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=5
     ).shape == (5, 3)
+
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# numerics/data/hypothesis_tests.hpp. The oracle values live in fixtures/toolbox/hypothesis.json;
+# the assertions below are the same C# literals scraped from
+# Test_Numerics/Data/Statistics/Test_HypothesisTests.cs and cover the binding surface (return
+# shape, the 1-based `index` default, argument validation) rather than re-pinning the tests.
+# Mirrors corehydror's test-toolbox.R assertion for assertion.
+
+HARRICANA69 = [
+    122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8,
+    149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161,
+    201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230,
+    158, 262, 154, 164, 182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173,
+    174,
+]
+
+
+def test_hypothesis_test_reproduces_test_mann_kendall():
+    r = hypothesis_test(HARRICANA69, method="mann_kendall")
+    assert r["p_value"] == pytest.approx(0.7757, abs=1e-4)
+
+
+def test_hypothesis_test_f_models_returns_a_length_2_named_result():
+    r = hypothesis_test(0, method="f_models", sse_restricted=1224.32, sse_full=720.27,
+                        df_restricted=49, df_full=48)
+    assert set(r.keys()) == {"f_statistic", "p_value"}
+    assert r["f_statistic"] == pytest.approx(33.5899, abs=1e-3)
+    assert r["p_value"] == pytest.approx(0, abs=1e-6)
+
+
+def test_hypothesis_test_linear_trend_defaults_index_to_1_based_range():
+    time = list(range(1, 101))
+    x = [np.cos(t) for t in time]
+    r1 = hypothesis_test(x, method="linear_trend")
+    r2 = hypothesis_test(x, method="linear_trend", index=time)
+    assert r1["p_value"] == pytest.approx(r2["p_value"])
+    assert r1["p_value"] == pytest.approx(0.9092, abs=1e-4)
+
+
+def test_hypothesis_test_validates_its_arguments():
+    with pytest.raises(ValueError, match="`y` is required"):
+        hypothesis_test([1, 2, 3], method="equal_variance_t")
+    with pytest.raises(ValueError, match="sse_full"):
+        hypothesis_test(0, method="f_models", sse_restricted=1224.32, df_restricted=49, df_full=48)
+    with pytest.raises(ValueError, match="must be one of"):
+        hypothesis_test([1, 2, 3], method="not_a_method")
+
+
+def test_hypothesis_test_f_models_is_callable_without_x():
+    # C1 (P4 whole-branch review): `x` is documented as ignored for "f_models". corehydror could
+    # already omit it (only by accident, via R's lazy evaluation never forcing an unused
+    # argument); Python required it since it had no default. `x` now defaults to None in both.
+    r = hypothesis_test(method="f_models", sse_restricted=1224.32, sse_full=720.27,
+                        df_restricted=49, df_full=48)
+    assert r["f_statistic"] == pytest.approx(33.5899, abs=1e-3)
+
+
+def test_hypothesis_test_rejects_a_non_none_y_for_a_one_sample_method():
+    # C2 (P4 whole-branch review): a one-sample method used to silently DISCARD `y` --
+    # hypothesis_test(a, b) at the default method equalled hypothesis_test(a).
+    a = [4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25]
+    b = [1, 2, 3]
+    with pytest.raises(ValueError, match=r'`y` is not used by method "jarque_bera"; leave it None'):
+        hypothesis_test(a, b, method="jarque_bera")
+
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
+# group. Oracle values are C# test literals transcribed verbatim into
+# core/tests/test_ordered_paired_data.cpp / test_uncertain_paired_data.cpp; see
+# fixtures/toolbox/paired_data.json for the full pinned set. Mirrors corehydror's
+# test-toolbox.R assertion for assertion.
+
+
+def test_curve_interpolate_reproduces_test_lin_and_test_loglin():
+    x = [50, 100, 150, 200, 250]
+    y = [100, 200, 300, 400, 500]
+    assert curve_interpolate(x, y, xout=75)[0] == pytest.approx(150.0, abs=1e-6)
+    assert curve_interpolate(x, y, xout=75, x_transform="logarithmic")[0] == pytest.approx(
+        158.496250072116, abs=1e-6
+    )
+
+
+def test_curve_area_reproduces_test_trapezoidal_area_dataset_1():
+    ctor_x = [230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+             691223, 748825, 806427, 864029, 921631, 1036834, 1152038]
+    ctor_y = [1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+             1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7]
+    assert curve_area(ctor_x, ctor_y) == pytest.approx(1413175623, abs=1)
+
+
+def test_curve_simplify_reproduces_the_three_algorithms_on_the_sin_curve():
+    x = [0, 1.57, 3.14, 4.71, 6.28]
+    y = [0, 1, 0, -1, 0]
+    rdp = curve_simplify(x, y, method="rdp", tolerance=0.01, strict_y=False, order_y="none")
+    vis = curve_simplify(x, y, method="visvalingam", num_to_keep=4, strict_y=False, order_y="none")
+    assert rdp.shape == (4, 2)
+    assert vis.shape == (4, 2)
+    assert rdp[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
+    assert vis[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
+
+    # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
+    # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here
+    # is THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test
+    # claims.
+    lang = curve_simplify(x, y, method="lang", tolerance=0.01, look_ahead=2, strict_y=False,
+                          order_y="none")
+    assert lang.shape == (3, 2)
+    assert lang[:, 0] == pytest.approx([0, 1.57, 4.71], abs=1e-6)
+    assert lang[:, 1] == pytest.approx([0, 1, -1], abs=1e-6)
+
+
+def test_uncertain_curve_sample_reproduces_test_curve_sample_probability():
+    x = [1, 2, 3, 5]
+    d = [
+        Distribution("Triangular", [1, 2, 3]),
+        Distribution("Triangular", [2, 4, 5]),
+        Distribution("Triangular", [6, 8, 12]),
+        Distribution("Triangular", [13, 19, 20]),
+    ]
+    r = uncertain_curve_sample(x, d, probability=0.5)
+    assert r[:, 0] == pytest.approx(x)
+    assert r[:, 1] == pytest.approx([2, 3.732051, 8.535898, 17.58258], abs=1e-5)
+
+
+def test_uncertain_curve_sample_recycles_a_single_distribution_across_x():
+    x = [1, 2, 3]
+    r = uncertain_curve_sample(x, Distribution("Triangular", [1, 2, 3]), probability=0.5)
+    assert r.shape == (3, 2)
+
+
+def test_uncertain_curve_sample_rejects_probability_outside_0_1():
+    # C3 (P4 whole-branch review): the core clamp (a faithful port of C# CurveSample(double)) is
+    # untouched -- probability=50 silently returned the 100% quantile core-side. This host-layer
+    # check is what actually rejects the mistake.
+    x = [1, 2, 3]
+    d = Distribution("Triangular", [1, 2, 3])
+    msg = r"`probability` must be a single number in \[0, 1\]"
+    with pytest.raises(ValueError, match=msg):
+        uncertain_curve_sample(x, d, probability=50)
+    with pytest.raises(ValueError, match=msg):
+        uncertain_curve_sample(x, d, probability=-3)
+
+
+def test_tabular_function_reproduces_test_tabular_function():
+    x = [50, 100, 150, 200, 250]
+    d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
+    y = tabular_function(x, d, at=50, x_transform="logarithmic")
+    assert y[0] == pytest.approx(100.0, abs=1e-12)
+
+
+def test_paired_data_verbs_validate_their_arguments_identically_to_corehydror():
+    x = [50, 100, 150, 200, 250]
+    y = [100, 200, 300, 400, 500]
+    with pytest.raises(ValueError, match="exactly one of `xout` or `yout`"):
+        curve_interpolate(x, y, xout=75, yout=100)
+    with pytest.raises(ValueError, match="exactly one of `xout` or `yout`"):
+        curve_interpolate(x, y)
+    with pytest.raises(ValueError, match='must be one of "rdp", "visvalingam", "lang"'):
+        curve_simplify(x, y, method="not_a_method", tolerance=0.01)
+    d = [Distribution("Triangular", [1, 2, 3]), Distribution("Triangular", [2, 4, 5])]
+    with pytest.raises(ValueError, match=r"must have length 1 or length\(x\)"):
+        uncertain_curve_sample([1, 2, 3], d, probability=0.5)
+    with pytest.raises(ValueError, match=r"must have length 1 or length\(x\)"):
+        tabular_function([1, 2, 3], d, at=1)
+
+
+def test_curve_simplify_rejects_num_to_keep_below_2_for_visvalingam_instead_of_crashing():
+    # M1 (P4 whole-branch review): num_to_keep of 0 or -1 used to crash both R and Python
+    # outright (a bus error / SIGSEGV); 1 silently returned a value read out of bounds. All
+    # three are now rejected at the host layer with the identical message corehydror raises.
+    x = [0, 1.57, 3.14, 4.71, 6.28]
+    y = [0, 1, 0, -1, 0]
+    msg = r"`num_to_keep` must be a single integer of at least 2"
+    for bad in (0, -1, 1):
+        with pytest.raises(ValueError, match=msg):
+            curve_simplify(x, y, method="visvalingam", num_to_keep=bad)
+    # num_to_keep = 2 is the smallest value that succeeds.
+    ok = curve_simplify(x, y, method="visvalingam", num_to_keep=2, strict_y=False, order_y="none")
+    assert ok.shape[0] == 2
+
+
+def test_log_and_logarithmic_are_equivalent_everywhere_a_transform_argument_appears():
+    # M2 (P4 whole-branch review): interpolate()/interpolate_2d() only accepted "log" and
+    # curve_interpolate()/tabular_function() only accepted "logarithmic", so a value valid for
+    # one host verb raised ValueError on the other.
+    storage = [230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+               691223, 748825, 806427, 864029, 921631, 1036834, 1152038]
+    elevation = [1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+                 1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7]
+    a = curve_interpolate(storage, elevation, xout=500000, x_transform="log")
+    b = curve_interpolate(storage, elevation, xout=500000, x_transform="logarithmic")
+    assert a == pytest.approx(b)
+
+    x = [1, 2, 3, 4]
+    y = [10, 20, 30, 40]
+    ia = interpolate(x, y, [2.5], x_transform="log")
+    ib = interpolate(x, y, [2.5], x_transform="logarithmic")
+    assert ia == pytest.approx(ib)

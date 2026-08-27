@@ -5026,13 +5026,7 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
     switch (group)
     {
         case "correlation":
-            return method switch
-            {
-                "pearson"  => Correlation.Pearson(data[0], data[1]),
-                "spearman" => Correlation.Spearman(data[0], data[1]),
-                "kendall"  => Correlation.KendallsTau(data[0], data[1]),
-                _ => throw new Exception($"unknown correlation method: {method}")
-            };
+            return CorrelationDispatch(method, data, asrt);
         case "gof":
             return GofDispatch(method, data, options, asrt);
         case "spectra":
@@ -5061,9 +5055,114 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return FunctionsDispatch(method, data, options, asrt);
         case "network":
             return NetworkDispatch(method, data, options, asrt);
+        case "hypothesis":
+            return HypothesisDispatch(method, data, options, asrt);
+        case "paired_data":
+            return PairedDataDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Mirrors models/data_frame_runner.hpp's run_data_frame dispatch against a real
+// BestFitModels.DataFrame (P4 Task 6). The nine hypothesis facades and "summary_exact" return a
+// single scalar (no dims); "summary_all" returns the same twenty-key named result; "standardized"
+// flattens {StandardizedValue, StandardizedLog10Value} per exact-series item row-major, dims
+// {Count, 2}.
+static double DataFrameDispatch(string method, BestFitModels.DataFrame df, JsonElement options,
+                                JsonElement asrt)
+{
+    bool useLog10 = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("use_log10", out var ul) && ul.GetBoolean();
+    int OptIndex()
+    {
+        if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty("index", out var idx))
+            throw new Exception($"data_frame method '{method}' requires an 'index' option");
+        return idx.GetInt32();
+    }
+
+    switch (method)
+    {
+        case "jarque_bera":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.JarqueBeraTest(useLog10) });
+        case "ljung_box":
+        {
+            int lagMax = options.ValueKind == JsonValueKind.Object &&
+                        options.TryGetProperty("lag_max", out var lm) ? lm.GetInt32() : -1;
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LjungBoxTest(lagMax, useLog10) });
+        }
+        case "equal_variance_t":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.EqualVarianceTtest(OptIndex(), useLog10) });
+        case "unequal_variance_t":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.UnequalVarianceTtest(OptIndex(), useLog10) });
+        case "f":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.Ftest(OptIndex(), useLog10) });
+        case "linear_trend":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LinearTrendTest(useLog10) });
+        case "wald_wolfowitz":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.WaldWolfowitzTest(useLog10) });
+        case "mann_whitney":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.MannWhitneyTest(OptIndex(), useLog10) });
+        case "mann_kendall":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.MannKendallTest(useLog10) });
+        case "summary_exact":
+        {
+            var summary = df.SummaryStatisticsExactDataOnly();
+            return ToolboxSelectNamed(asrt, summary.Keys.ToArray(), summary.Values.ToArray());
+        }
+        case "summary_all":
+        {
+            var summary = df.SummaryStatisticsAllData();
+            return ToolboxSelectNamed(asrt, summary.Keys.ToArray(), summary.Values.ToArray());
+        }
+        case "standardized":
+        {
+            df.SetStandardizedValues();
+            var flat = new List<double>();
+            foreach (var e in df.ExactSeries)
+            {
+                flat.Add(e.StandardizedValue);
+                flat.Add(e.StandardizedLog10Value);
+            }
+            return ToolboxSelectFlat(asrt, flat.ToArray(), df.ExactSeries.Count, 2);
+        }
+        default:
+            throw new Exception($"unknown data_frame method: {method}");
+    }
+}
+
+// Mirrors numerics/support/toolbox/correlation.hpp's run_correlation arm against the real
+// Numerics.Data.Statistics.Correlation. `pearson`/`spearman`/`kendall` are the pairwise scalar
+// methods (data[0]/data[1] are the two samples); `pearson_matrix`/`spearman_matrix` are the
+// column-pairwise matrix overloads -- `data` holds one array PER COLUMN (matching the toolbox
+// convention: every data vector is one column, not one flattened matrix like LinalgDispatch's
+// `rows`/`cols` convention below), reassembled here into the `double[,]` shape
+// Correlation.Pearson(double[,])/Spearman(double[,]) take, then flattened row-major with
+// ToolboxSelectFlat for the p-by-p result. There is no `kendall_matrix` arm: upstream's
+// Correlation class has no KendallsTau(double[,]) overload.
+static double CorrelationDispatch(string method, List<double[]> data, JsonElement asrt)
+{
+    if (method == "pearson_matrix" || method == "spearman_matrix")
+    {
+        int p = data.Count;
+        int n = data[0].Length;
+        var samples = new double[n, p];
+        for (int j = 0; j < p; j++)
+            for (int i = 0; i < n; i++)
+                samples[i, j] = data[j][i];
+        double[,] corr = method == "pearson_matrix" ? Correlation.Pearson(samples) : Correlation.Spearman(samples);
+        var flat = new double[p * p];
+        for (int j = 0; j < p; j++)
+            for (int k = 0; k < p; k++) flat[j * p + k] = corr[j, k];
+        return ToolboxSelectFlat(asrt, flat, p, p);
+    }
+    return method switch
+    {
+        "pearson"  => Correlation.Pearson(data[0], data[1]),
+        "spearman" => Correlation.Spearman(data[0], data[1]),
+        "kendall"  => Correlation.KendallsTau(data[0], data[1]),
+        _ => throw new Exception($"unknown correlation method: {method}")
+    };
 }
 
 // Mirrors numerics/support/toolbox/linalg.hpp's run_linalg arm against the real
@@ -5234,6 +5333,58 @@ static double SpecialDispatch(string method, List<double[]> data, JsonElement op
         return ToolboxSelectFlatNoDims(asrt, values);
     }
     throw new Exception($"unknown special method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/hypothesis.hpp's run_hypothesis arm against the real
+// Numerics.Data.Statistics.HypothesisTests. Every method but "f_models" reads its data vector(s)
+// (data[0] for a one-sample test, data[0]/data[1] for a two-sample test) and returns the scalar
+// p-value through ToolboxSelectFlatNoDims (mirroring detail::scalar); "f_models" takes NO data
+// (its four inputs are options) and reads index/label directly out of a two-element named
+// {f_statistic, p_value} array, exactly as StatisticsDispatch's product_moments/l_moments do.
+static double HypothesisDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "one_sample_t")
+    {
+        double populationMean = options.ValueKind == JsonValueKind.Object &&
+                                options.TryGetProperty("population_mean", out var pm)
+            ? pm.GetDouble() : 0d;
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.OneSampleTtest(data[0], populationMean) });
+    }
+    if (method == "equal_variance_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.EqualVarianceTtest(data[0], data[1]) });
+    if (method == "unequal_variance_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.UnequalVarianceTtest(data[0], data[1]) });
+    if (method == "paired_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.PairedTtest(data[0], data[1]) });
+    if (method == "f")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.Ftest(data[0], data[1]) });
+    if (method == "f_models")
+    {
+        double sseRestricted = options.GetProperty("sse_restricted").GetDouble();
+        double sseFull = options.GetProperty("sse_full").GetDouble();
+        int dfRestricted = options.GetProperty("df_restricted").GetInt32();
+        int dfFull = options.GetProperty("df_full").GetInt32();
+        HypothesisTests.FtestModels(sseRestricted, sseFull, dfRestricted, dfFull, out double fStat, out double pValue);
+        return ToolboxSelectNamed(asrt, new[] { "f_statistic", "p_value" }, new[] { fStat, pValue });
+    }
+    if (method == "jarque_bera")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.JarqueBeraTest(data[0]) });
+    if (method == "wald_wolfowitz")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.WaldWolfowitzTest(data[0]) });
+    if (method == "mann_kendall")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.MannKendallTest(data[0]) });
+    if (method == "ljung_box")
+    {
+        int lagMax = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("lag_max", out var lm)
+            ? lm.GetInt32() : -1;
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.LjungBoxTest(data[0], lagMax) });
+    }
+    if (method == "mann_whitney")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.MannWhitneyTest(data[0], data[1]) });
+    if (method == "linear_trend")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.LinearTrendTest(data[0], data[1]) });
+    throw new Exception($"unknown hypothesis method: {method}");
 }
 
 // Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor
@@ -5428,6 +5579,30 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
 // C# constructor overload (the one that takes sigma).
 static double FunctionsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
+    if (method == "tabular" || method == "tabular_inverse")
+    {
+        double[] tabX = options.GetProperty("x").EnumerateArray().Select(ParseNum).ToArray();
+        var tabDists = options.GetProperty("distributions").EnumerateArray()
+            .Select(BuildSpecDistribution).ToArray();
+        if (tabDists.Length != tabX.Length)
+            throw new Exception(
+                $"toolbox method 'functions.{method}' needs one distribution per x value; " +
+                $"got {tabDists.Length} distributions for {tabX.Length} x values");
+        var tabUpd = new UncertainOrderedPairedData(tabX, tabDists, true, Numerics.Data.SortOrder.Ascending,
+            true, Numerics.Data.SortOrder.Ascending, tabDists[0].Type);
+        var tabFunc = new TabularFunction(tabUpd);
+        tabFunc.XTransform = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        tabFunc.YTransform = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        if (OptBool(options, "is_deterministic", false)) tabFunc.IsDeterministic = true;
+        if (options.TryGetProperty("confidence_level", out var clOpt)) tabFunc.ConfidenceLevel = clOpt.GetDouble();
+        tabFunc.AllowNegativeYValues = OptBool(options, "allow_negative_y_values", true);
+        double[] evalPoints = data[0];
+        var tvalues = method == "tabular"
+            ? evalPoints.Select(tabFunc.Function).ToArray()
+            : evalPoints.Select(tabFunc.InverseFunction).ToArray();
+        return ToolboxSelectFlat(asrt, tvalues, tvalues.Length, 1);
+    }
+
     string fn = options.GetProperty("function").GetString()!;
     double[] parameters = options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray();
     bool hasConfidence = options.TryGetProperty("confidence_level", out var clEl);
@@ -5570,6 +5745,177 @@ static Numerics.Data.SortOrder ParseSortOrder(string s) => s switch
     "descending" => Numerics.Data.SortOrder.Descending,
     _ => throw new Exception($"unknown sort order '{s}'; expected ascending or descending")
 };
+
+// Mirrors numerics/support/toolbox/paired_data.hpp's own paired_data_sort_order/
+// paired_data_transform: this group's spellings differ from ParseSortOrder/
+// ParseInterpolationTransform above (SortOrder.None is reachable here; the transform is
+// "logarithmic", not "log"), so it gets its own local parsers rather than reusing those.
+static Numerics.Data.SortOrder ParsePairedDataSortOrder(string s) => s switch
+{
+    "ascending" => Numerics.Data.SortOrder.Ascending,
+    "descending" => Numerics.Data.SortOrder.Descending,
+    "none" => Numerics.Data.SortOrder.None,
+    _ => throw new Exception($"unknown sort order '{s}'; expected ascending, descending, or none")
+};
+
+static Numerics.Data.Transform ParsePairedDataTransform(string s) => s switch
+{
+    "none" => Numerics.Data.Transform.None,
+    "logarithmic" => Numerics.Data.Transform.Logarithmic,
+    "normal_z" => Numerics.Data.Transform.NormalZ,
+    _ => throw new Exception($"unknown transform '{s}'; expected none, logarithmic, or normal_z")
+};
+
+// Mirrors numerics/support/toolbox/paired_data.hpp's run_paired_data: the real
+// Numerics.Data.OrderedPairedData / UncertainOrderedPairedData / LineSimplification driving the
+// same nine methods. `curve_sample`'s `distribution_type` is optional here too, defaulting to
+// the first built distribution's own .Type -- see the C++ header's file comment for why that
+// default is exact rather than a guess (CurveSample never consults IsValid/Distribution).
+static double PairedDataDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    OrderedPairedData BuildOpd(string m)
+    {
+        double[] x = data[0];
+        double[] y = data[1];
+        bool strictX = OptBool(options, "strict_x", true);
+        bool strictY = OptBool(options, "strict_y", true);
+        var orderX = ParsePairedDataSortOrder(OptString(options, "order_x", "ascending"));
+        var orderY = ParsePairedDataSortOrder(OptString(options, "order_y", "ascending"));
+        return new OrderedPairedData(x, y, strictX, orderX, strictY, orderY);
+    }
+
+    double[] CurveFlatFromOpd(OrderedPairedData opd)
+    {
+        var flat = new double[opd.Count * 2];
+        for (int i = 0; i < opd.Count; i++)
+        {
+            flat[2 * i] = opd[i].X;
+            flat[2 * i + 1] = opd[i].Y;
+        }
+        return flat;
+    }
+
+    double[] CurveFlatFromOrdinates(List<Ordinate> ords)
+    {
+        var flat = new double[ords.Count * 2];
+        for (int i = 0; i < ords.Count; i++)
+        {
+            flat[2 * i] = ords[i].X;
+            flat[2 * i + 1] = ords[i].Y;
+        }
+        return flat;
+    }
+
+    if (method == "interpolate_y")
+    {
+        var opd = BuildOpd(method);
+        double[] xout = data[2];
+        var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        var values = xout.Select(v => opd.GetYFromX(v, xt, yt)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+
+    if (method == "interpolate_x")
+    {
+        var opd = BuildOpd(method);
+        double[] yout = data[2];
+        var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        var values = yout.Select(v => opd.GetXFromY(v, xt, yt)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+
+    if (method == "area_under_y")
+        return ToolboxSelectFlatNoDims(asrt, new[] { BuildOpd(method).TrapezoidalAreaUnderY() });
+
+    if (method == "area_under_x")
+        return ToolboxSelectFlatNoDims(asrt, new[] { BuildOpd(method).TrapezoidalAreaUnderX() });
+
+    if (method == "simplify")
+    {
+        var opd = BuildOpd(method);
+        string algorithm = options.GetProperty("algorithm").GetString()!;
+        OrderedPairedData simplified = algorithm switch
+        {
+            "rdp" => opd.DouglasPeuckerSimplify(options.GetProperty("tolerance").GetDouble()),
+            "visvalingam" => opd.VisvaligamWhyattSimplify(options.GetProperty("num_to_keep").GetInt32()),
+            "lang" => opd.LangSimplify(options.GetProperty("tolerance").GetDouble(),
+                                       options.GetProperty("look_ahead").GetInt32()),
+            _ => throw new Exception($"unknown paired_data.simplify algorithm '{algorithm}'")
+        };
+        var flat = CurveFlatFromOpd(simplified);
+        return ToolboxSelectFlat(asrt, flat, simplified.Count, 2);
+    }
+
+    if (method == "line_simplify")
+    {
+        double[] x = data[0];
+        double[] y = data[1];
+        var ords = x.Zip(y, (xv, yv) => new Ordinate(xv, yv)).ToList();
+        var output = new List<Ordinate>();
+        LineSimplification.RamerDouglasPeucker(ords, options.GetProperty("epsilon").GetDouble(), ref output);
+        var flat = CurveFlatFromOrdinates(output);
+        return ToolboxSelectFlat(asrt, flat, output.Count, 2);
+    }
+
+    if (method == "search")
+    {
+        var opd = BuildOpd(method);
+        double value = options.GetProperty("value").GetDouble();
+        string axis = OptString(options, "axis", "x");
+        string algorithm = OptString(options, "algorithm", "smart");
+        int idx = (axis, algorithm) switch
+        {
+            ("x", "smart") => opd.SearchX(value),
+            ("x", "sequential") => opd.SequentialSearchX(value),
+            ("x", "bisection") => opd.BisectionSearchX(value),
+            ("x", "hunt") => opd.HuntSearchX(value),
+            ("x", "binary") => opd.BinarySearchX(value),
+            ("y", "smart") => opd.SearchY(value),
+            ("y", "sequential") => opd.SequentialSearchY(value),
+            ("y", "bisection") => opd.BisectionSearchY(value),
+            ("y", "hunt") => opd.HuntSearchY(value),
+            ("y", "binary") => opd.BinarySearchY(value),
+            _ => throw new Exception($"unknown paired_data.search axis/algorithm '{axis}'/'{algorithm}'")
+        };
+        return ToolboxSelectFlatNoDims(asrt, new double[] { idx });
+    }
+
+    if (method == "is_valid")
+    {
+        var opd = BuildOpd(method);
+        var names = new[] { "is_valid", "error_count" };
+        var values = new double[] { opd.IsValid ? 1.0 : 0.0, opd.GetErrors().Count };
+        return ToolboxSelectNamed(asrt, names, values);
+    }
+
+    if (method == "curve_sample")
+    {
+        double[] x = data[0];
+        var dists = options.GetProperty("distributions").EnumerateArray()
+            .Select(BuildSpecDistribution).ToArray();
+        if (dists.Length != x.Length)
+            throw new Exception(
+                $"toolbox method 'paired_data.curve_sample' needs one distribution per x value; " +
+                $"got {dists.Length} distributions for {x.Length} x values");
+        bool strictX = OptBool(options, "strict_x", true);
+        bool strictY = OptBool(options, "strict_y", true);
+        var orderX = ParsePairedDataSortOrder(OptString(options, "order_x", "ascending"));
+        var orderY = ParsePairedDataSortOrder(OptString(options, "order_y", "ascending"));
+        var dtype = options.TryGetProperty("distribution_type", out var dtOpt)
+            ? Enum.Parse<UnivariateDistributionType>(dtOpt.GetString()!)
+            : dists[0].Type;
+        var uopd = new UncertainOrderedPairedData(x, dists, strictX, orderX, strictY, orderY, dtype);
+        var sampled = options.TryGetProperty("probability", out var probOpt)
+            ? uopd.CurveSample(probOpt.GetDouble())
+            : uopd.CurveSample();
+        var flat = CurveFlatFromOpd(sampled);
+        return ToolboxSelectFlat(asrt, flat, sampled.Count, 2);
+    }
+
+    throw new Exception($"unknown paired_data method: {method}");
+}
 
 static string OptString(JsonElement options, string key, string fallback) =>
     options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetString()! : fallback;
@@ -6071,6 +6417,88 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
 
                 double actual;
                 try { actual = ToolboxDispatch(group, method, data, options, asrt); }
+                catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
+    // --- data_frame branch (P4 Task 6) -----------------------------------------------------
+    // The twelve DataFrame hypothesis-test / summary-statistics facades Task 5 un-gated,
+    // dispatched against a REAL BestFitModels.DataFrame built either from a case's flat `data`
+    // array (data[0] -> ExactSeries with sequential indices, mirroring
+    // models::runner::run_data_frame's plain-vector path and the C# tests' own
+    // `df.ExactSeries = new ExactSeries(data)` construction) or -- for parity with that runner's
+    // second path, unused by any case shipped today -- a `data_frame` spec object through the
+    // existing BuildSpecDataFrame helper. Mirrors the toolbox branch's shape (dataset
+    // resolution, --dump support, Compare). CalculatePlottingPositions() runs before
+    // "summary_all"/"standardized" only, matching run_data_frame's own contract (the nine
+    // hypothesis facades and "summary_exact" never read plotting positions).
+    //
+    // Unlike the toolbox branch above (which does not honor oracle_skip), this branch DOES: it
+    // is a documented choice, not an oversight, for consistency with the other kind branches
+    // (analysis, model_estimation, ...) that carry oracle_skip. No case in
+    // fixtures/data/data_frame_facades.json uses it -- every value here either reproduces a C#
+    // test literal or is curated fresh against this branch via --dump, so oracle_skip is
+    // available but never exercised in this fixture.
+    if (kindStr == "data_frame")
+    {
+        var dfSets = new Dictionary<string, double[]>();
+        if (root.TryGetProperty("datasets", out var dfDatasets))
+            foreach (var kv in dfDatasets.EnumerateObject())
+                dfSets[kv.Name] = kv.Value.EnumerateArray().Select(ParseNum).ToArray();
+
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            JsonElement options = c.TryGetProperty("options", out var dfOptionsEl) ? dfOptionsEl : default;
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string method = asrt.GetProperty("method").GetString()!;
+                string where = $"data_frame/{caseName}/{method}";
+
+                // Rebuilt PER ASSERTION, not once per case: the other three runners (C++, R,
+                // Python) each build a fresh DataFrame per assertion, and DataFrame is mutable
+                // (CalculatePlottingPositions/SetStandardizedValues write state onto it), so
+                // reusing one instance across a case's assertions here would let an earlier
+                // assertion's mutation leak into a later one -- a lifetime this emitter alone
+                // used to get wrong (P4 whole-branch review finding C6; latent, since no shipped
+                // case mixes methods in a way that exposes it).
+                BestFitModels.DataFrame df;
+                if (c.TryGetProperty("data_frame", out var dfSpecEl))
+                {
+                    df = BuildSpecDataFrame(dfSpecEl);
+                }
+                else
+                {
+                    var firstData = c.GetProperty("data")[0];
+                    double[] values = firstData.ValueKind == JsonValueKind.String
+                        ? dfSets[firstData.GetString()!]
+                        : firstData.EnumerateArray().Select(ParseNum).ToArray();
+                    df = new BestFitModels.DataFrame { ExactSeries = new ExactSeries(values) };
+                }
+
+                if (method == "summary_all" || method == "standardized")
+                    df.CalculatePlottingPositions();
+
+                if (dump)
+                {
+                    DumpLine("data_frame", caseName, method, Array.Empty<JsonElement>(),
+                        () => (object)DataFrameDispatch(method, df, options, asrt));
+                    continue;
+                }
+
+                if (asrt.TryGetProperty("oracle_skip", out var dfSkipEl) && dfSkipEl.GetBoolean())
+                {
+                    skip++;
+                    continue;
+                }
+
+                double actual;
+                try { actual = DataFrameDispatch(method, df, options, asrt); }
                 catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
@@ -7338,7 +7766,22 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         continue;
     }
 
-    if (kindStr != "univariate_distribution") continue;
+    // Every recognized `kind` is dispatched (and `continue`s past this point) above. Reaching
+    // here with anything other than "univariate_distribution" (the one kind with no explicit
+    // early branch -- it falls through to the dispatch below) means the fixture's `kind` matches
+    // NONE of them: a typo, or a new kind this emitter was never wired up for. That used to fall
+    // through silently, dropping the file from the oracle gate with zero warning and zero effect
+    // on the pass/fail counts (P4 whole-branch review finding C10). Fail loudly instead: this IS
+    // the oracle gate, so a fixture with no dispatcher reproducing nothing is exactly the failure
+    // this tool exists to catch.
+    if (kindStr != "univariate_distribution")
+    {
+        fail++;
+        failures.Add(
+            $"{file}: unrecognized fixture kind '{kindStr ?? "(missing)"}' -- no runner " +
+            "dispatched this file, so none of its assertions were reproduced");
+        continue;
+    }
 
     string target = root.GetProperty("target").GetString()!;
 

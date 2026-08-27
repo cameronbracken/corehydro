@@ -10,9 +10,9 @@ interpolate_2d(
   y,
   x1out,
   x2out,
-  x1_transform = c("none", "log", "normal_z"),
-  x2_transform = c("none", "log", "normal_z"),
-  y_transform = c("none", "log", "normal_z"),
+  x1_transform = c("none", "logarithmic", "log", "normal_z"),
+  x2_transform = c("none", "logarithmic", "log", "normal_z"),
+  y_transform = c("none", "logarithmic", "log", "normal_z"),
   sort_order = c("ascending", "descending")
 )
 }
@@ -24,8 +24,8 @@ at \verb{(x1[i], x2[j])}.}
 
 \item{x1out, x2out}{numeric vectors of equal length, positions to interpolate at.}
 
-\item{x1_transform, x2_transform, y_transform}{one of \code{"none"} (the default), \code{"log"}, or
-\code{"normal_z"}.}
+\item{x1_transform, x2_transform, y_transform}{one of \code{"none"} (the default), \code{"logarithmic"}
+(also accepted as \code{"log"}), or \code{"normal_z"}. See the note on \code{\link[=interpolate]{interpolate()}}.}
 
 \item{sort_order}{\code{"ascending"} (the default) or \code{"descending"}, describing \code{x1} and \code{x2}.}
 }

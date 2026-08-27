@@ -1,8 +1,8 @@
 {
  "kind": "toolbox",
  "group": "functions",
- "source": "Numerics/Functions/LinearFunction.cs, PowerFunction.cs; Test_Numerics/Functions/Test_Functions.cs (Test_Linear_Function, Test_Linear_Function_Inverse, Test_Power_Function, Test_Power_Function_Inverse, Test_InversePower_Function, Test_InversePower_Function_Inverse).",
- "reference": "Numerics @ 2a0357a. Every case whose \"source\" names a Test_Functions.cs method transcribes that method's own literal (or, for the two Test_*_Inverse round-trip methods, the intermediate Function() value computed by the SAME closed-form arithmetic the C# deterministic branch evaluates -- alpha + beta*x for linear, alpha*(x-xi)^beta for power -- since only the final round-trip identity, not the intermediate value, is a literal in the C# test). The two \"*_confidence_inverse\" cases exercise InverseFunction() under a set ConfidenceLevel, a combination Test_Functions.cs never asserts as a literal (it only asserts the Function()-then-InverseFunction() round trip recovers the original x, at ConfidenceLevel 0.75, for a DIFFERENT alpha/beta/sigma/xi than used here) -- curated via oracle_emitter --dump against the real C# LinearFunction/PowerFunction, per the fixtures/README.md bivariate_copula/multivariate_distribution curation convention.",
+ "source": "Numerics/Functions/LinearFunction.cs, PowerFunction.cs, TabularFunction.cs; Test_Numerics/Functions/Test_Functions.cs (Test_Linear_Function, Test_Linear_Function_Inverse, Test_Power_Function, Test_Power_Function_Inverse, Test_InversePower_Function, Test_InversePower_Function_Inverse, Test_Tabular_Function).",
+ "reference": "Numerics @ 2a0357a. Every case whose \"source\" names a Test_Functions.cs method transcribes that method's own literal (or, for the two Test_*_Inverse round-trip methods, the intermediate Function() value computed by the SAME closed-form arithmetic the C# deterministic branch evaluates -- alpha + beta*x for linear, alpha*(x-xi)^beta for power -- since only the final round-trip identity, not the intermediate value, is a literal in the C# test). The two \"*_confidence_inverse\" cases exercise InverseFunction() under a set ConfidenceLevel, a combination Test_Functions.cs never asserts as a literal (it only asserts the Function()-then-InverseFunction() round trip recovers the original x, at ConfidenceLevel 0.75, for a DIFFERENT alpha/beta/sigma/xi than used here) -- curated via oracle_emitter --dump against the real C# LinearFunction/PowerFunction, per the fixtures/README.md bivariate_copula/multivariate_distribution curation convention. The four \"tabular_*\" cases (P4 Task 10) transcribe Test_Tabular_Function's own x = {50,100,150,200,250}, distributions = Deterministic(100,200,300,400,500), XTransform = Logarithmic, YTransform = None fixture -- Function(50) and InverseFunction(100) at the two boundary-clamp literals, and Function(75)/InverseFunction(Function(75)) at the intermediate closed-form value the C# test itself computes (100 + (200-100)/(ln(100)-ln(50))*(ln(75)-ln(50))) rather than asserting as its own separate literal.",
  "cases": [
   {
    "name": "linear_default_deterministic",
@@ -130,6 +130,62 @@
    "options": {"function": "power", "parameters": [10, 2, 0, 0.1], "is_inverse": true},
    "assertions": [
     {"method": "inverse", "index": 0, "expected": 6, "mode": "abs", "tol": 1e-6, "source": "Test_InversePower_Function_Inverse (InverseFunction(Function(6)) == 6)"}
+   ]
+  },
+  {
+   "name": "tabular_given_x",
+   "data": [[50]],
+   "options": {"x": [50, 100, 150, 200, 250],
+              "distributions": [{"family": "Deterministic", "parameters": [100]},
+                                {"family": "Deterministic", "parameters": [200]},
+                                {"family": "Deterministic", "parameters": [300]},
+                                {"family": "Deterministic", "parameters": [400]},
+                                {"family": "Deterministic", "parameters": [500]}],
+              "x_transform": "logarithmic"},
+   "assertions": [
+    {"method": "tabular", "index": 0, "expected": 100.0, "mode": "abs", "tol": 1e-9, "source": "Test_Tabular_Function (Function(50) == 100, the first ordinate)"}
+   ]
+  },
+  {
+   "name": "tabular_inverse_given_y",
+   "data": [[100]],
+   "options": {"x": [50, 100, 150, 200, 250],
+              "distributions": [{"family": "Deterministic", "parameters": [100]},
+                                {"family": "Deterministic", "parameters": [200]},
+                                {"family": "Deterministic", "parameters": [300]},
+                                {"family": "Deterministic", "parameters": [400]},
+                                {"family": "Deterministic", "parameters": [500]}],
+              "x_transform": "logarithmic"},
+   "assertions": [
+    {"method": "tabular_inverse", "index": 0, "expected": 50.0, "mode": "abs", "tol": 1e-12, "source": "Test_Tabular_Function (InverseFunction(100) == 50, the round trip the C# test's own copy-paste bug never actually checked -- see test_uncertain_paired_data.cpp's corehydro supplement)"}
+   ]
+  },
+  {
+   "name": "tabular_interpolated",
+   "data": [[75]],
+   "options": {"x": [50, 100, 150, 200, 250],
+              "distributions": [{"family": "Deterministic", "parameters": [100]},
+                                {"family": "Deterministic", "parameters": [200]},
+                                {"family": "Deterministic", "parameters": [300]},
+                                {"family": "Deterministic", "parameters": [400]},
+                                {"family": "Deterministic", "parameters": [500]}],
+              "x_transform": "logarithmic"},
+   "assertions": [
+    {"method": "tabular", "index": 0, "expected": 158.49625007211554, "mode": "abs", "tol": 1e-6, "source": "Test_Tabular_Function (Function(75), the closed-form log-interpolation value the C# test computes: 100 + (200-100)/(ln(100)-ln(50))*(ln(75)-ln(50)))"}
+   ]
+  },
+  {
+   "name": "tabular_inverse_round_trip",
+   "data": [[158.49625007211554]],
+   "options": {"x": [50, 100, 150, 200, 250],
+              "distributions": [{"family": "Deterministic", "parameters": [100]},
+                                {"family": "Deterministic", "parameters": [200]},
+                                {"family": "Deterministic", "parameters": [300]},
+                                {"family": "Deterministic", "parameters": [400]},
+                                {"family": "Deterministic", "parameters": [500]}],
+              "x_transform": "logarithmic"},
+   "assertions": [
+    {"method": "tabular_inverse", "index": 0, "expected": 75.0, "mode": "abs", "tol": 1e-6, "source": "Test_Tabular_Function (InverseFunction(Function(75)) == 75)"}
    ]
   }
  ]

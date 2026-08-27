@@ -65,6 +65,32 @@ inline double sign(double a, double b) {
     return b >= 0 ? (a >= 0 ? a : -a) : (a >= 0 ? -a : a);
 }
 
+// P4 Task 1 adds `pow` (Tools.Pow, Tools.cs:157-179), needed by HypothesisTests (P4 Task 2):
+// WaldWolfowitz's cubes and fourth powers, MannWhitney's and MannKendall's tie cubes. Upstream
+// is NOT Math.Pow: it is hand-written binary exponentiation with its own edge handling, and
+// substituting std::pow drifts by an ULP that the oracles see. Transcribed literally, including
+// the 1/result == inf arm for a == 0 with a negative exponent.
+inline double pow(double a, int b) {
+    if (b == 0) return 1.0;
+    if (a == 1.0) return 1.0;
+    if (a == -1.0) return (b & 1) == 0 ? 1.0 : -1.0;
+    bool neg = b < 0;
+    long long n = b;
+    if (neg) n = -n;
+    double result = 1.0;
+    double base_val = a;
+    while (n > 0) {
+        if ((n & 1LL) != 0) result *= base_val;
+        base_val *= base_val;
+        n >>= 1;
+    }
+    if (neg) {
+        if (result == 0.0) return std::numeric_limits<double>::infinity();
+        return 1.0 / result;
+    }
+    return result;
+}
+
 // Returns the sum product of two lists of values (mirrors Tools.SumProduct, Tools.cs:425;
 // added with B5 for BFGS's strong-Wolfe line search). Empty or length-mismatched inputs
 // return NaN, exactly as the C#.

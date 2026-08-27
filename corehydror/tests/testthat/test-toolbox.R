@@ -49,6 +49,47 @@ test_that("percentile() rejects a non-numeric probs argument, naming it", {
   expect_error(percentile(c(1, 2, 3), probs = "half"), "probs")
 })
 
+test_that("correlation() with a matrix returns the p-by-p matrix, diagonal 1, symmetric, and off-diagonals matching the pairwise calls", {
+  c0 <- c(14, 8, 32, 7, 3, 15)
+  c1 <- c(10, 5, 7, 4, 3, 8)
+  c2 <- c(2, 9, 1, 6, 4, 11)
+  x <- cbind(a = c0, b = c1, c = c2)
+
+  m <- correlation(x)
+  expect_equal(dim(m), c(3L, 3L))
+  expect_equal(unname(diag(m)), c(1, 1, 1))
+  expect_true(isSymmetric(m))
+  expect_equal(m["a", "b"], correlation(c0, c1))
+  expect_equal(m["a", "c"], correlation(c0, c2))
+  expect_equal(m["b", "c"], correlation(c1, c2))
+  expect_equal(rownames(m), c("a", "b", "c"))
+  expect_equal(colnames(m), c("a", "b", "c"))
+
+  ms <- correlation(x, method = "spearman")
+  expect_equal(unname(diag(ms)), c(1, 1, 1))
+  expect_equal(ms["a", "b"], correlation(c0, c1, method = "spearman"))
+})
+
+test_that("correlation() accepts a data frame in matrix mode", {
+  x <- data.frame(a = c(14, 8, 32, 7, 3, 15), b = c(10, 5, 7, 4, 3, 8))
+  m <- correlation(x)
+  expect_equal(dim(m), c(2L, 2L))
+  expect_equal(m["a", "b"], correlation(x$a, x$b))
+})
+
+test_that("correlation() rejects method = 'kendall' for a matrix, naming the reason", {
+  x <- cbind(c(14, 8, 32, 7, 3, 15), c(10, 5, 7, 4, 3, 8))
+  expect_error(correlation(x, method = "kendall"), "kendall.*matrix")
+})
+
+test_that("correlation() rejects a 1D vector in matrix mode instead of silently returning a 1x1 matrix (C4)", {
+  # C4 (P4 whole-branch review): as.matrix() on a plain vector silently coerces it to an n x 1
+  # matrix, so `correlation(x)` on a bare vector used to return a 1x1 matrix of 1 in R instead of
+  # raising the way corehydropy does for the same 1D input.
+  expect_error(correlation(c(14, 8, 32, 7, 3, 15)),
+               "`x` must be a 2D array (observations in rows, variables in columns)", fixed = TRUE)
+})
+
 test_that("running_covariance() chunked matches a single call, and round-trips through state", {
   x <- matrix(c(1, 2, 3, 4, 5, 1, 2, 3, 4, 5), ncol = 2)
   whole <- running_covariance(x)
@@ -828,4 +869,195 @@ test_that("shortest_path() rejects a node_count too small for the graph", {
   expect_equal(
     nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 5)), 5L
   )
+})
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# `numerics/data/hypothesis_tests.hpp`. The oracle values live in fixtures/toolbox/hypothesis.json;
+# the assertions below are the same C# literals scraped from
+# Test_Numerics/Data/Statistics/Test_HypothesisTests.cs and cover the binding surface (return
+# shape, the `index`/1-based default, argument validation) rather than re-pinning the tests.
+
+harricana69 <- c(
+  122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8,
+  149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161,
+  201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230,
+  158, 262, 154, 164, 182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173,
+  174
+)
+
+test_that("hypothesis_test() reproduces Test_MannKendall", {
+  r <- hypothesis_test(harricana69, method = "mann_kendall")
+  expect_equal(unname(r[["p_value"]]), 0.7757, tolerance = 1e-4)
+})
+
+test_that("hypothesis_test() method = 'f_models' returns a length-2 named result", {
+  r <- hypothesis_test(0, method = "f_models", sse_restricted = 1224.32, sse_full = 720.27,
+                       df_restricted = 49, df_full = 48)
+  expect_identical(names(r), c("f_statistic", "p_value"))
+  expect_equal(unname(r[["f_statistic"]]), 33.5899, tolerance = 1e-3)
+  expect_equal(unname(r[["p_value"]]), 0, tolerance = 1e-6)
+})
+
+test_that("hypothesis_test() method = 'linear_trend' defaults index to seq_along(x)", {
+  time <- 1:100
+  x <- cos(time)
+  r1 <- hypothesis_test(x, method = "linear_trend")
+  r2 <- hypothesis_test(x, method = "linear_trend", index = time)
+  expect_equal(unname(r1[["p_value"]]), unname(r2[["p_value"]]))
+  expect_equal(unname(r1[["p_value"]]), 0.9092, tolerance = 1e-4)
+})
+
+test_that("hypothesis_test() validates its arguments", {
+  expect_error(hypothesis_test(c(1, 2, 3), method = "equal_variance_t"),
+               "`y` is required")
+  expect_error(
+    hypothesis_test(0, method = "f_models", sse_restricted = 1224.32, df_restricted = 49,
+                    df_full = 48),
+    "sse_full"
+  )
+  expect_error(hypothesis_test(c(1, 2, 3), method = "not_a_method"), "must be one of")
+})
+
+test_that("hypothesis_test() method = 'f_models' is callable without `x` (C1)", {
+  # C1 (P4 whole-branch review): `x` is documented as ignored for "f_models", and corehydropy
+  # already defaulted it to None; R's default was missing (only worked by accident, via lazy
+  # evaluation never forcing an unused argument), so a call omitting `x` entirely used to work
+  # in R but raise in Python. `x` now defaults to NULL in both.
+  r <- hypothesis_test(method = "f_models", sse_restricted = 1224.32, sse_full = 720.27,
+                       df_restricted = 49, df_full = 48)
+  expect_equal(unname(r[["f_statistic"]]), 33.5899, tolerance = 1e-3)
+})
+
+test_that("hypothesis_test() rejects a non-NULL `y` for a one-sample method (C2)", {
+  # C2 (P4 whole-branch review): a one-sample method used to silently DISCARD `y` --
+  # hypothesis_test(a, b) at the default method equalled hypothesis_test(a).
+  a <- c(4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25)
+  b <- c(1, 2, 3)
+  expect_error(hypothesis_test(a, b, method = "jarque_bera"),
+               "`y` is not used by method \"jarque_bera\"; leave it NULL", fixed = TRUE)
+})
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
+# group. Oracle values are C# test literals transcribed verbatim into
+# core/tests/test_ordered_paired_data.cpp / test_uncertain_paired_data.cpp; see
+# fixtures/toolbox/paired_data.json for the full pinned set.
+
+test_that("curve_interpolate() reproduces Test_Lin and Test_LogLin", {
+  x <- c(50, 100, 150, 200, 250)
+  y <- c(100, 200, 300, 400, 500)
+  expect_equal(curve_interpolate(x, y, xout = 75), 150.0, tolerance = 1e-6)
+  expect_equal(curve_interpolate(x, y, xout = 75, x_transform = "logarithmic"),
+              158.496250072116, tolerance = 1e-6)
+})
+
+test_that("curve_area() reproduces Test_TrapezoidalArea (dataset 1, area under y)", {
+  ctor_x <- c(230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+             691223, 748825, 806427, 864029, 921631, 1036834, 1152038)
+  ctor_y <- c(1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+             1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7)
+  expect_equal(curve_area(ctor_x, ctor_y), 1413175623, tolerance = 1)
+})
+
+test_that("curve_simplify() reproduces the three simplification algorithms on the sin curve", {
+  x <- c(0, 1.57, 3.14, 4.71, 6.28)
+  y <- c(0, 1, 0, -1, 0)
+  rdp <- curve_simplify(x, y, method = "rdp", tolerance = 0.01, strict_y = FALSE, order_y = "none")
+  vis <- curve_simplify(x, y, method = "visvalingam", num_to_keep = 4, strict_y = FALSE,
+                        order_y = "none")
+  expect_equal(nrow(rdp), 4L)
+  expect_equal(nrow(vis), 4L)
+  expect_equal(rdp$y, c(0, 1, -1, 0), tolerance = 1e-6)
+  expect_equal(vis$y, c(0, 1, -1, 0), tolerance = 1e-6)
+
+  # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
+  # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here is
+  # THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test claims.
+  lang <- curve_simplify(x, y, method = "lang", tolerance = 0.01, look_ahead = 2,
+                         strict_y = FALSE, order_y = "none")
+  expect_equal(nrow(lang), 3L)
+  expect_equal(lang$x, c(0, 1.57, 4.71), tolerance = 1e-6)
+  expect_equal(lang$y, c(0, 1, -1), tolerance = 1e-6)
+})
+
+test_that("uncertain_curve_sample() reproduces Test_Curve_Sample_Probability", {
+  x <- c(1, 2, 3, 5)
+  d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)),
+           distribution("Triangular", c(6, 8, 12)), distribution("Triangular", c(13, 19, 20)))
+  r <- uncertain_curve_sample(x, d, probability = 0.5)
+  expect_equal(r$x, x)
+  expect_equal(r$y, c(2, 3.732051, 8.535898, 17.58258), tolerance = 1e-5)
+})
+
+test_that("uncertain_curve_sample() recycles a single distribution across x", {
+  x <- c(1, 2, 3)
+  r <- uncertain_curve_sample(x, distribution("Triangular", c(1, 2, 3)), probability = 0.5)
+  expect_equal(nrow(r), 3L)
+})
+
+test_that("uncertain_curve_sample() rejects probability outside [0, 1] instead of silently clamping (C3)", {
+  # C3 (P4 whole-branch review): the core clamp (a faithful port of C# CurveSample(double)) is
+  # untouched -- probability = 50 silently returned the 100% quantile core-side. This host-layer
+  # check is what actually rejects the mistake.
+  x <- c(1, 2, 3)
+  d <- distribution("Triangular", c(1, 2, 3))
+  msg <- "`probability` must be a single number in \\[0, 1\\]"
+  expect_error(uncertain_curve_sample(x, d, probability = 50), msg)
+  expect_error(uncertain_curve_sample(x, d, probability = -3), msg)
+})
+
+test_that("tabular_function() reproduces Test_Tabular_Function", {
+  x <- c(50, 100, 150, 200, 250)
+  d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
+  y <- tabular_function(x, d, at = 50, x_transform = "logarithmic")
+  expect_equal(y, 100.0, tolerance = 1e-12)
+})
+
+test_that("paired_data verbs validate their arguments identically to corehydropy", {
+  x <- c(50, 100, 150, 200, 250)
+  y <- c(100, 200, 300, 400, 500)
+  expect_error(curve_interpolate(x, y, xout = 75, yout = 100),
+               "exactly one of `xout` or `yout`")
+  expect_error(curve_interpolate(x, y), "exactly one of `xout` or `yout`")
+  expect_error(curve_simplify(x, y, method = "not_a_method", tolerance = 0.01),
+               "must be one of")
+  d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)))
+  expect_error(uncertain_curve_sample(c(1, 2, 3), d, probability = 0.5),
+               "must have length 1 or length\\(x\\)")
+  expect_error(tabular_function(c(1, 2, 3), d, at = 1), "must have length 1 or length\\(x\\)")
+})
+
+test_that("curve_simplify() rejects num_to_keep below 2 for visvalingam instead of crashing", {
+  # M1 (P4 whole-branch review): num_to_keep of 0 or -1 used to crash both R and Python outright
+  # (a bus error / SIGSEGV); 1 silently returned a value read out of bounds. All three are now
+  # rejected at the host layer with the identical message corehydropy raises.
+  x <- c(0, 1.57, 3.14, 4.71, 6.28)
+  y <- c(0, 1, 0, -1, 0)
+  msg <- "`num_to_keep` must be a single integer of at least 2"
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = 0), msg, fixed = TRUE)
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = -1), msg, fixed = TRUE)
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = 1), msg, fixed = TRUE)
+  # num_to_keep = 2 is the smallest value that succeeds.
+  ok <- curve_simplify(x, y, method = "visvalingam", num_to_keep = 2, strict_y = FALSE,
+                       order_y = "none")
+  expect_equal(nrow(ok), 2L)
+})
+
+test_that("\"log\" and \"logarithmic\" are equivalent everywhere a transform argument appears", {
+  # M2 (P4 whole-branch review): interpolate()/interpolate_2d() only accepted "log" and
+  # curve_interpolate()/tabular_function() only accepted "logarithmic", so a value valid for one
+  # host verb was rejected (or, worse, silently PREFIX-MATCHED via match.arg) by the other.
+  storage <- c(230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+               691223, 748825, 806427, 864029, 921631, 1036834, 1152038)
+  elevation <- c(1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+                 1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7)
+  a <- curve_interpolate(storage, elevation, xout = 500000, x_transform = "log")
+  b <- curve_interpolate(storage, elevation, xout = 500000, x_transform = "logarithmic")
+  expect_equal(a, b)
+
+  x <- c(1, 2, 3, 4)
+  y <- c(10, 20, 30, 40)
+  ia <- interpolate(x, y, 2.5, x_transform = "log")
+  ib <- interpolate(x, y, 2.5, x_transform = "logarithmic")
+  expect_equal(ia, ib)
 })

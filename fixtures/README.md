@@ -1668,6 +1668,85 @@ argmin of a flat likelihood, port termination differs slightly from C#);
 `[sample_size, dimension, seed, row, col]` (element of the seeded Latin hypercube sample;
 stateless, locks the C# stream bit-for-bit).
 
+### `data_frame`
+
+P4 Task 6 (data and tests) added this kind for the twelve `DataFrame` facades Task 5 un-gated:
+the nine hypothesis-test methods (`jarque_bera`, `ljung_box`, `equal_variance_t`,
+`unequal_variance_t`, `f`, `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`) and
+the three summary methods (`summary_exact`, `summary_all`, `standardized`), reached through
+`corehydro::models::runner::run_data_frame` (`models/data_frame_runner.hpp`). Every one of these
+reads the EXACT series only -- no censoring filter, no threshold machinery -- so `run_data_frame`
+returns the SAME `numerics::support::ToolboxResult` the toolbox groups return, and every runner's
+`toolbox_select` (index / label / select: `"length"`/`"rows"`/`"columns"`) is reused verbatim; no
+new selection code exists anywhere for this kind.
+
+```jsonc
+{
+  "kind": "data_frame",
+  "datasets": { "harricana": [ ...69 numbers... ] },
+  "cases": [
+    {
+      "name": "harricana_mann_kendall",
+      "data": ["harricana"],        // dataset name or inline array; resolved exactly as the
+                                     // `toolbox` kind resolves its `data`. data[0] becomes the
+                                     // exact series, with sequential 0-based indexes -- the
+                                     // ExactSeries(std::vector<double>) constructor's own
+                                     // convention, and what the C# tests' own
+                                     // `ExactSeries = new ExactSeries(data)` produces too.
+      "options": { "use_log10": false },
+      "assertions": [
+        { "method": "mann_kendall", "expected": 0.7757, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_MannKendall" }
+      ]
+    }
+  ]
+}
+```
+
+A case may instead carry a `data_frame` object (the `model_spec.hpp` `data_frame` grammar --
+`exact`/`interval`/`threshold`/`uncertain` arrays of objects) in place of `data`, for the rarer
+censored-frame path `run_data_frame` also accepts; `data` must be empty when `data_frame` is
+given, and vice versa. No case in this file uses it -- these twelve facades read the exact series
+only, so a plain `data` array is what every case here needs -- but the three runners and the
+dotnet emitter all support it, for parity with `run_data_frame`'s own two-path contract (see that
+function's header comment in `models/data_frame_runner.hpp`).
+
+Options: `use_log10` (default `false`, every method); `index` (the two-sample split, required by
+`equal_variance_t`/`unequal_variance_t`/`f`/`mann_whitney`, an error if omitted); `lag_max`
+(`ljung_box` only, default `-1`, meaning "use the library's own default rule"). `summary_exact`
+and `summary_all` return the twenty-key named result (`values` parallel to `names`, selected by
+`label` or `index`); `standardized` returns the exact series' standardized values followed by its
+standardized log10 values, `dims = {n, 2}` (row-major: row `i` is
+`[standardized_value[i], standardized_log10_value[i]]`), selected by `index` or `select:
+"rows"`/`"columns"`. `run_data_frame` calls `calculate_plotting_positions()` before `summary_all`
+and `standardized` (the C# tests do this explicitly, and both methods read plotting-position
+complements) but NOT before the nine hypothesis facades or `summary_exact`, none of which read
+plotting positions.
+
+`fixtures/data/data_frame_facades.json` carries one or more cases per
+`ExactDataHypothesisTests.cs` `[TestMethod]` -- the SAME literals and datasets already
+transcribed into `core/tests/test_data_frame_facades.cpp` (P4 Task 5). These are the SAME
+underlying C# test datasets `fixtures/toolbox/hypothesis.json` already carries
+(`harricana69`, `noise126`, `jb_known13`, `data30a`+`data30b`, `data10a`+`data10b`,
+`trend_cos100`), but the arrays are DUPLICATED under this file's own keys (`harricana`,
+`jb_data`, `jb_data2`, `variance_t_data`, `f_data`, `cos_data`), not referenced or shared --
+there is no cross-file key aliasing in this fixture format. The values are byte-identical today
+by construction (both were transcribed from the same C# literal), but nothing enforces that they
+stay that way: a maintainer fixing a value in `hypothesis.json` must edit the corresponding array
+in `data_frame_facades.json` too, by hand, or the two gates will silently pin two different
+numbers for what is meant to be the same dataset. `summary_exact`, `summary_all`, and `standardized` have NO
+upstream test literal at all -- `NonparametricEmpiricalTests.cs`'s two DataFrame cases only assert
+finiteness/NaN patterns for these three methods, never a value -- so every one of their assertions
+is curated with `python3 tools/verify_oracles.py --dump` against the real C# `DataFrame`, and says
+so in its own `source`.
+
+The dotnet emitter's `data_frame` branch DOES honor `oracle_skip` (the `toolbox` branch above does
+not), joining several other kinds that also honor it (`analysis`, `model_estimation`, ...) --
+see `tools/oracle_emitter/Program.cs`'s own comment at the `data_frame` branch, which names this
+same list. This is a deliberate consistency choice, not a reflection of anything unreproducible
+here -- no assertion in this file uses `oracle_skip`, since every value here either reproduces a
+C# test literal or was curated directly against this same branch.
+
 ### `toolbox`
 
 The Numerics utility layer (Phase 4 of the docs/examples effort: correlation, goodness of fit,
@@ -1825,6 +1904,96 @@ weights are `1/4/1/10` and pins the ORIGINAL-weight answer: honoring the weights
 defects are written up in `docs/upstream-csharp-issues.md`, and the user-facing `shortest_path()`
 verb in both packages calls `dijkstra`, never `network_solve_weights`.
 
+P4 "data and tests" (Task 3) added the `hypothesis` group, the sixteenth, over the twelve ported
+hypothesis tests (`numerics/data/hypothesis_tests.hpp`, itself a port of the C#
+`Numerics.Data.Statistics.HypothesisTests` static class). Every method but `f_models` reads one
+data vector (a one-sample test) or two (a two-sample test) and returns the 2-sided p-value with
+no `dims`/`names`, the same shape `correlation`'s methods use; `f_models` (the F-test comparing
+two nested regression models) takes NO data -- its four inputs
+(`sse_restricted`/`sse_full`/`df_restricted`/`df_full`) are all scalar options -- and returns a
+NAMED two-value result, `names = {"f_statistic", "p_value"}`, selected the same way
+`statistics.product_moments`/`l_moments` are. `one_sample_t` reads an optional `population_mean`
+option (default `0`); `ljung_box` reads an optional `lag_max` option (default `-1`, meaning "use
+the C# default rule").
+
+`fixtures/toolbox/hypothesis.json` carries one case per `Test_HypothesisTests.cs` `[TestMethod]`
+(`Test_UnimodalityTest`, `Test_GrubbsBeck`, and `Test_MultipleGrubbsBeck` excluded -- the first is
+a documented P4 severance, the other two exercise the already-ported `MultipleGrubbsBeckTest`, not
+this class). Every value is `Test_HypothesisTests.cs`'s own literal at its own tolerance; the
+`datasets` block reuses the arrays already transcribed (and independently verified byte-identical
+against the checked-out submodule) into `core/tests/test_hypothesis_tests.cpp`, including the
+69-value Harricana River record shared by `wald_wolfowitz` and `mann_kendall` and the 126-value
+noise series shared by `jarque_bera` and `ljung_box` (NOT 128 -- a documented correction to an
+earlier plan draft). Two expected values are EXPRESSIONS rather than literals in the C# source --
+Wald-Wolfowitz's `(1 - Normal.StandardCDF(1.167)) * 2` and Mann-Whitney's
+`(1 - Normal.StandardCDF(0.54)) * 2` -- each evaluated once here and pinned as a number, with the
+statistic and the expression recorded in the assertion's `source`.
+
+P4 "data and tests" (Task 10) added the `paired_data` group, the seventeenth, over the ported
+Paired Data subsystem (`numerics/data/paired_data/{ordered_paired_data,
+uncertain_ordered_paired_data,line_simplification}.hpp`, P4 Tasks 7-9). Every method that builds
+an `OrderedPairedData` reads the curve's shape contract from `data: [x, y]` plus four shared
+options -- `strict_x`/`strict_y` (bool, default `true`), `order_x`/`order_y` (the `SortOrder`
+names `"ascending"`/`"descending"`/`"none"`, default `"ascending"`) -- and, for
+`interpolate_y`/`interpolate_x` only, two more: `x_transform`/`y_transform` (the `Transform` names
+`"none"`/`"logarithmic"`/`"normal_z"`, default `"none"`). Nine methods:
+`interpolate_y`/`interpolate_x` (`data: [x, y, xout]`/`[x, y, yout]`) vectorize `GetYFromX`/
+`GetXFromY` over the third data vector, no `dims`; `area_under_y`/`area_under_x` are the two
+`TrapezoidalAreaUnder*` scalars; `simplify` (`options.algorithm` = `"rdp"` | `"visvalingam"` |
+`"lang"`, plus that algorithm's own `tolerance`/`num_to_keep`/`look_ahead`) returns the simplified
+curve flattened row-major with `dims = {n, 2}`, same for the standalone
+`line_simplify` (`options.epsilon`, no shape-contract options at all --
+`LineSimplification::RamerDouglasPeucker` takes a bare ordinate list); `search` (`options.value`,
+`axis` = `"x"`|`"y"`, `algorithm` = `"smart"`|`"sequential"`|`"bisection"`|`"hunt"`|`"binary"`)
+returns the found index as a scalar, built-searched-once-and-dropped (the C# search methods this
+un-gates mutate `XSearchStart`/`Xcorrelated` on the instance, so this group cannot and does not
+reproduce cross-call state); `is_valid` returns the NAMED two-value result
+`{"is_valid", "error_count"}` -- the C# `GetErrors()` message STRINGS do not cross this boundary
+(`ToolboxResult` carries doubles/names, not strings); `curve_sample` (`data: [x]`,
+`options.distributions` an array of `dist_spec` grammar objects, one per `x`, optional
+`options.probability`) builds an `UncertainOrderedPairedData` and returns
+`CurveSample()`/`CurveSample(probability)` flattened the same way, with `distribution_type`
+OPTIONAL despite the C# constructor having no default -- it falls back to the first built
+distribution's own type, which is exact rather than approximate because `CurveSample` never
+consults `IsValid`/`Distribution`. The `functions` group's `tabular`/`tabular_inverse` methods are
+this task's tenth surface, over the third `IUnivariateFunction`, `TabularFunction`: same
+`distributions` array plus `options.x` (the curve's domain, NOT part of `data` -- `data[0]` holds
+the evaluation points instead), the two transforms, `confidence_level`, `is_deterministic`, and
+`allow_negative_y_values`; unlike `paired_data`'s own methods, the underlying curve's shape
+contract is not configurable here (`TabularFunction` is always built strict/ascending on both
+axes, matching every C# test use), and `distribution_type` is never a settable option at all --
+only ever the first built distribution's own type.
+
+`fixtures/toolbox/paired_data.json` pins `Test_PairedData.cs`/`Test_PairedDataInterpolation.cs`/
+`Test_UncertainPairedData.cs` literals already transcribed and reviewer-verified into
+`core/tests/test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`: the four reservoir-
+curve sort-order datasets' `Test_GetY` sweep reduced to an 11-point representative subset (indices
+0, 7, 15, 23, 31, 39, 47, 55, 63, 71, 77 of the shared 78-point query array) plus two below/
+above-range clamp checks per dataset (the `GetYFromX` boundary guard itself, not a distinct C#
+literal) and both `TrapezoidalArea` values; the seven interpolation-transform combinations pinned
+in BOTH sort orders (14 tiny cases); `search`'s `871`/`127` on the shared 1000-point identity
+curve; and `curve_sample`'s two expectation vectors (the mean curve and the `probability = 0.5`
+curve) on the shared Triangular fixture; and, on the shared five-point sin curve
+`{(0,0), (3.14/2,1), (3.14,0), (3*3.14/2,-1), (2*3.14,0)}` (`strict_x = true`,
+`order_x = ascending`, `strict_y = false`, `order_y = none`), `simplify`'s `rdp` (tolerance 0.01)
+and `visvalingam` (`num_to_keep = 4`) cases (4 rows / 8 flattened coordinates each,
+`{(0,0), (1.57,1), (4.71,-1), (6.28,0)}`, `Test_DouglasPeuckerSimplify`/
+`Test_VisvaligamWhyattSimplify`) and the standalone `line_simplify` case (`epsilon = 0.1`, the
+same 4-point result at `Test_RamerDouglasPeucker`'s own 1e-6 tolerance, not exact like the two
+`OrderedPairedData` simplifiers). **THE ONE DELIBERATE CORRECTION TO AN UPSTREAM TEST
+in this file:** `simplify`'s `lang` case (tolerance 0.01, look_ahead 2) pins **3** rows, not the 4
+`rdp`/`visvalingam` pin -- verified directly against the real C# library (not merely this port's
+own transcription): `LangSimplify(0.01, 2)` on the shared five-point sin curve returns
+`{(0,0), (1.57,1), (4.71,-1)}`, dropping `(6.28, 0)` -- see `ordered_paired_data.hpp`'s sixth
+transcription note for the full account of why `Test_LangSimplify.cs`'s own (weakly-asserted,
+length-bounded-loop) four-point claim does not hold. `is_valid` is exercised by the ctest suites
+(`test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`'s own validity assertions) but
+carries no case in this file. `fixtures/toolbox/univariate_functions.json`
+gained four `tabular`/`tabular_inverse` cases transcribing `Test_Tabular_Function`'s own
+x = {50,100,150,200,250}, `Deterministic(100,200,300,400,500)`, `XTransform = Logarithmic` fixture
+-- the two boundary-clamp literals plus `Function(75)`/`InverseFunction(Function(75))` at the
+closed-form log-interpolation value the C# test itself computes rather than asserts as a separate
+literal.
 
 ### `optimizer`
 

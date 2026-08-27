@@ -49,6 +49,7 @@ here.
 | 25 | Estimation methods | [Python](25-estimation-methods/python.ipynb) | [R](25-estimation-methods/r.qmd) |
 | 26 | Copulas and joint frequency | [Python](26-copulas-and-joint-frequency/python.ipynb) | [R](26-copulas-and-joint-frequency/r.qmd) |
 | 27 | Composite distributions | [Python](27-composite-distributions/python.ipynb) | [R](27-composite-distributions/r.qmd) |
+| 28 | Hypothesis tests and paired data | [Python](28-hypothesis-tests-and-paired-data/python.ipynb) | [R](28-hypothesis-tests-and-paired-data/r.qmd) |
 
 Numbers 00-09 mirror the upstream notebooks; 20-22 are the upstream's three
 standalone scripts. Numbers 12 onward have no upstream counterpart: they cover

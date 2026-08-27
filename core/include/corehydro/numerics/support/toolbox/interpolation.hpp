@@ -1,8 +1,9 @@
 // corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
-// Holds the `interpolation` group's dispatch arms (Linear/Bilinear/CubicSpline/Polynomial)
-// plus the two enum parsers (transform, sort order) it needs. Includes toolbox/common.hpp,
-// which defines the shared ToolboxResult/data_at/scalar helpers used here.
+// Holds the `interpolation` group's dispatch arms (Linear/Bilinear/CubicSpline/Polynomial).
+// The transform/sort-order token parsers it needs (`parse_transform_token`/
+// `parse_sort_order_token`) are shared with the `paired_data` and `functions` groups and live in
+// toolbox/common.hpp, which also defines the ToolboxResult/data_at/scalar helpers used here.
 //
 // CubicSpline and Polynomial have neither a transform surface nor an Extrapolate() method in
 // C# (only Linear/Bilinear do), so `cubic_spline`/`polynomial` accept only `sort_order` (and,
@@ -23,19 +24,6 @@
 
 namespace corehydro::numerics::support::detail {
 
-inline numerics::data::Transform parse_transform(const std::string& s) {
-    if (s == "none") return numerics::data::Transform::None;
-    if (s == "log") return numerics::data::Transform::Logarithmic;
-    if (s == "normal_z") return numerics::data::Transform::NormalZ;
-    throw std::runtime_error("unknown transform '" + s + "'; expected none, log, or normal_z");
-}
-
-inline numerics::data::SortOrder parse_sort_order(const std::string& s) {
-    if (s == "ascending") return numerics::data::SortOrder::Ascending;
-    if (s == "descending") return numerics::data::SortOrder::Descending;
-    throw std::runtime_error("unknown sort order '" + s + "'; expected ascending or descending");
-}
-
 // Linear/Bilinear: mirrors Numerics.Data.Interpolation.Linear/Bilinear exactly, including their
 // x/y transforms (None/Logarithmic/NormalZ) and Linear's separate Extrapolate() surface (the
 // clamp-to-end-knot behavior of interpolate() vs. the linear extension of extrapolate() is a
@@ -44,15 +32,18 @@ inline ToolboxResult run_interpolation(const std::string& method,
                                        const std::vector<std::vector<double>>& data,
                                        const JsonValue& options) {
     namespace nd = numerics::data;
-    nd::SortOrder order = parse_sort_order(options.value_or("sort_order", "ascending"));
+    // Linear/Bilinear/CubicSpline/Polynomial never construct with SortOrder::None (they only
+    // ever branch on Ascending vs. Descending), so this group keeps rejecting "none" -- unlike
+    // paired_data's parse_sort_order_token(..., /*allow_none=*/true) call.
+    nd::SortOrder order = parse_sort_order_token(options.value_or("sort_order", "ascending"));
 
     if (method == "linear") {
         const std::vector<double>& x = data_at(data, 0, "interpolation", method);
         const std::vector<double>& y = data_at(data, 1, "interpolation", method);
         const std::vector<double>& xout = data_at(data, 2, "interpolation", method);
         nd::Linear interp(x, y, order);
-        interp.x_transform = parse_transform(options.value_or("x_transform", "none"));
-        interp.y_transform = parse_transform(options.value_or("y_transform", "none"));
+        interp.x_transform = parse_transform_token(options.value_or("x_transform", "none"));
+        interp.y_transform = parse_transform_token(options.value_or("y_transform", "none"));
         bool extrapolate = options.value_or("extrapolate", false);
         ToolboxResult r;
         for (double v : xout)
@@ -76,9 +67,9 @@ inline ToolboxResult run_interpolation(const std::string& method,
         for (std::size_t i = 0; i < x1.size(); ++i)
             for (std::size_t j = 0; j < x2.size(); ++j) y[i][j] = flat[i * x2.size() + j];
         nd::Bilinear interp(x1, x2, y, order);
-        interp.x1_transform = parse_transform(options.value_or("x1_transform", "none"));
-        interp.x2_transform = parse_transform(options.value_or("x2_transform", "none"));
-        interp.y_transform = parse_transform(options.value_or("y_transform", "none"));
+        interp.x1_transform = parse_transform_token(options.value_or("x1_transform", "none"));
+        interp.x2_transform = parse_transform_token(options.value_or("x2_transform", "none"));
+        interp.y_transform = parse_transform_token(options.value_or("y_transform", "none"));
         ToolboxResult r;
         for (std::size_t i = 0; i < x1out.size(); ++i)
             r.values.push_back(interp.interpolate(x1out[i], x2out[i]));
