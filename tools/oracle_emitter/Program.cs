@@ -15,6 +15,7 @@ using Numerics.Data;
 using Numerics.Data.Statistics;
 using Numerics.Distributions;
 using Numerics.Distributions.Copulas;
+using Numerics.MachineLearning;
 using Numerics.Mathematics;
 using Numerics.Mathematics.LinearAlgebra;
 using Numerics.Mathematics.Optimization;
@@ -5059,6 +5060,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return HypothesisDispatch(method, data, options, asrt);
         case "paired_data":
             return PairedDataDispatch(method, data, options, asrt);
+        case "ml":
+            return MLDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -5399,6 +5402,269 @@ static double HypothesisDispatch(string method, List<double[]> data, JsonElement
     if (method == "unimodality")
         return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.UnimodalityTest(data[0]) });
     throw new Exception($"unknown hypothesis method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/ml.hpp's run_ml arm against the real
+// Numerics.MachineLearning classes (P5). Same data layout as the `regression` group:
+// data[0] is the training predictor matrix flattened ROW-MAJOR, data[1] the response, data[2] the
+// optional new-data matrix, with `rows`/`columns`/`predict_rows` in options. `jenks_*` reads
+// data[0] as a plain vector.
+static double MLDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    int Opt(string key, int dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetInt32() : dflt;
+    double OptD(string key, double dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetDouble() : dflt;
+    bool OptB(string key, bool dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetBoolean() : dflt;
+    string OptS(string key, string dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetString()! : dflt;
+
+    double[,] Reshape(double[] flat, int rows, int cols)
+    {
+        if (rows <= 0) rows = cols > 0 ? flat.Length / cols : 0;
+        var m = new double[rows, cols];
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < cols; j++)
+                m[i, j] = flat[i * cols + j];
+        return m;
+    }
+    double[] Flatten(double[,] m)
+    {
+        var flat = new double[m.GetLength(0) * m.GetLength(1)];
+        int t = 0;
+        for (int i = 0; i < m.GetLength(0); i++)
+            for (int j = 0; j < m.GetLength(1); j++) flat[t++] = m[i, j];
+        return flat;
+    }
+
+    int cols = Opt("columns", 1);
+    int rows = Opt("rows", 0);
+    int predictRows = Opt("predict_rows", 0);
+
+    // --- Jenks natural breaks (one-dimensional) ---
+    if (method.StartsWith("jenks_"))
+    {
+        var jenks = new JenksNaturalBreaks(data[0], Opt("n_clusters", 2), OptB("is_data_sorted", false));
+        if (method == "jenks_breaks") return ToolboxSelectFlatNoDims(asrt, jenks.Breaks);
+        if (method == "jenks_gvf") return ToolboxSelectFlatNoDims(asrt, new[] { jenks.GoodnessOfVarianceFit });
+        if (method == "jenks_clusters")
+        {
+            var flat = new List<double>();
+            foreach (var c in jenks.Clusters)
+            {
+                flat.Add(c.StartIndex); flat.Add(c.EndIndex); flat.Add(c.Count);
+                flat.Add(c.MinValue); flat.Add(c.MaxValue); flat.Add(c.Sum);
+                flat.Add(c.Average); flat.Add(c.Variance);
+            }
+            var names = new[] { "start_index", "end_index", "count", "min", "max", "sum", "average", "variance" };
+            if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+            {
+                int col = Array.IndexOf(names, lbl.GetString()!);
+                if (col < 0) throw new Exception($"unknown label: {lbl.GetString()}");
+                int row = asrt.TryGetProperty("index", out var ix) ? ix.GetInt32() : 0;
+                return flat[row * 8 + col];
+            }
+            return ToolboxSelectFlat(asrt, flat.ToArray(), jenks.Clusters.Length, 8);
+        }
+        throw new Exception($"unknown ml method: {method}");
+    }
+
+    // --- k-Means ---
+    if (method.StartsWith("kmeans_"))
+    {
+        var kMeans = new KMeans(new Matrix(Reshape(data[0], rows, cols)), Opt("k", 2));
+        kMeans.MaxIterations = Opt("max_iterations", 1000);
+        kMeans.Train(Opt("seed", -1), OptB("kmeans_plus_plus", true));
+        if (method == "kmeans_means")
+            return ToolboxSelectFlat(asrt, Flatten(kMeans.Means),
+                                     kMeans.Means.GetLength(0), kMeans.Means.GetLength(1));
+        if (method == "kmeans_labels")
+            return ToolboxSelectFlatNoDims(asrt, kMeans.Labels.Select(v => (double)v).ToArray());
+        if (method == "kmeans_iterations")
+            return ToolboxSelectFlatNoDims(asrt, new[] { (double)kMeans.Iterations });
+        throw new Exception($"unknown ml method: {method}");
+    }
+
+    // --- Gaussian mixture model ---
+    if (method.StartsWith("gmm_"))
+    {
+        var gmm = new GaussianMixtureModel(new Matrix(Reshape(data[0], rows, cols)), Opt("k", 2));
+        gmm.MaxIterations = Opt("max_iterations", 1000);
+        gmm.Tolerance = OptD("tolerance", 1E-8);
+        gmm.Train(Opt("seed", -1), OptB("kmeans_plus_plus", true));
+        if (method == "gmm_means")
+            return ToolboxSelectFlat(asrt, Flatten(gmm.Means),
+                                     gmm.Means.GetLength(0), gmm.Means.GetLength(1));
+        if (method == "gmm_weights") return ToolboxSelectFlatNoDims(asrt, gmm.Weights);
+        if (method == "gmm_labels")
+            return ToolboxSelectFlatNoDims(asrt, gmm.Labels.Select(v => (double)v).ToArray());
+        if (method == "gmm_log_likelihood")
+            return ToolboxSelectFlatNoDims(asrt, new[] { gmm.LogLikelihood });
+        if (method == "gmm_iterations")
+            return ToolboxSelectFlatNoDims(asrt, new[] { (double)gmm.Iterations });
+        if (method == "gmm_sigmas")
+        {
+            int p = gmm.Dimension;
+            var flat = new List<double>();
+            foreach (var sig in gmm.Sigmas)
+                for (int i = 0; i < p; i++)
+                    for (int j = 0; j < p; j++) flat.Add(sig[i, j]);
+            return ToolboxSelectFlat(asrt, flat.ToArray(), gmm.K * p, p);
+        }
+        throw new Exception($"unknown ml method: {method}");
+    }
+
+    // --- Supervised: the response is data[1] ---
+    var X = new Matrix(Reshape(data[0], rows, cols));
+    var Y = new Vector(data[1]);
+    Matrix NewData() => new Matrix(Reshape(data[2], predictRows, cols));
+
+    if (method == "decision_tree_predict")
+    {
+        var tree = new DecisionTree(X, Y, Opt("seed", -1))
+        {
+            IsRegression = OptB("is_regression", true),
+            MinimumSplitSize = Opt("minimum_split_size", 2),
+            MaxDepth = Opt("max_depth", 100)
+        };
+        if (options.ValueKind == JsonValueKind.Object && options.TryGetProperty("features", out var f))
+            tree.Features = f.GetInt32();
+        tree.Train();
+        return ToolboxSelectFlatNoDims(asrt, tree.Predict(NewData())!);
+    }
+
+    if (method == "random_forest_predict")
+    {
+        var rf = new RandomForest(X, Y, Opt("seed", -1))
+        {
+            IsRegression = OptB("is_regression", true),
+            MinimumSplitSize = Opt("minimum_split_size", 2),
+            MaxDepth = Opt("max_depth", 100),
+            NumberOfTrees = Opt("number_of_trees", 1000)
+        };
+        if (options.ValueKind == JsonValueKind.Object && options.TryGetProperty("features", out var f))
+            rf.Features = f.GetInt32();
+        rf.Train();
+        var nd = NewData();
+        var pi = rf.Predict(nd, OptD("alpha", 0.1))!;
+        return ToolboxSelectNamedFlat(asrt, new[] { "lower", "median", "upper", "mean" },
+                                      Flatten(pi), nd.NumberOfRows, 4);
+    }
+
+    if (method.StartsWith("knn_"))
+    {
+        var knn = new KNearestNeighbors(X, Y, Opt("k", 1)) { IsRegression = OptB("is_regression", true) };
+        var nd = NewData();
+        if (method == "knn_neighbors")
+            return ToolboxSelectFlat(asrt, knn.GetNeighbors(nd)!.Select(v => (double)v).ToArray(),
+                                     nd.NumberOfRows, knn.K);
+        if (method == "knn_prediction_intervals")
+        {
+            var pi = knn.PredictionIntervals(nd, Opt("seed", -1), Opt("realizations", 1000), OptD("alpha", 0.1))!;
+            return ToolboxSelectNamedFlat(asrt, new[] { "lower", "median", "upper", "mean" },
+                                          Flatten(pi), nd.NumberOfRows, 4);
+        }
+        double[] pred = method == "knn_predict" ? knn.Predict(nd)!
+                                                : knn.BootstrapPredict(nd, Opt("seed", -1))!;
+        return ToolboxSelectFlatNoDims(asrt, pred);
+    }
+
+    if (method.StartsWith("naive_bayes_"))
+    {
+        var nb = new NaiveBayes(X, Y);
+        if (method == "naive_bayes_classes") return ToolboxSelectFlatNoDims(asrt, nb.Classes);
+        nb.Train();
+        if (method == "naive_bayes_means")
+            return ToolboxSelectFlat(asrt, Flatten(nb.Means), nb.Means.GetLength(0), nb.Means.GetLength(1));
+        if (method == "naive_bayes_sds")
+            return ToolboxSelectFlat(asrt, Flatten(nb.StandardDeviations),
+                                     nb.StandardDeviations.GetLength(0), nb.StandardDeviations.GetLength(1));
+        if (method == "naive_bayes_priors") return ToolboxSelectFlatNoDims(asrt, nb.Priors);
+        if (method == "naive_bayes_predict")
+            return ToolboxSelectFlatNoDims(asrt, nb.Predict(NewData())!);
+        throw new Exception($"unknown ml method: {method}");
+    }
+
+    if (method.StartsWith("glm_"))
+    {
+        var linkName = OptS("link", "identity");
+        var linkType = linkName switch
+        {
+            "identity" => LinkFunctionType.Identity,
+            "log" => LinkFunctionType.Log,
+            "logit" => LinkFunctionType.Logit,
+            "probit" => LinkFunctionType.Probit,
+            "complementary_log_log" => LinkFunctionType.ComplementaryLogLog,
+            _ => throw new Exception($"unknown glm link '{linkName}'")
+        };
+        var glm = new GeneralizedLinearModel(X, Y, OptB("intercept", true), linkType)
+        {
+            UseRobustSE = OptB("robust_se", false)
+        };
+        if (options.ValueKind == JsonValueKind.Object && options.TryGetProperty("local_method", out var lm))
+        {
+            var m = lm.GetString()! switch
+            {
+                "nelder_mead" => LocalMethod.NelderMead,
+                "bfgs" => LocalMethod.BFGS,
+                "powell" => LocalMethod.Powell,
+                "adam" => LocalMethod.ADAM,
+                "gradient_descent" => LocalMethod.GradientDescent,
+                _ => throw new Exception($"unknown local method '{lm.GetString()}'")
+            };
+            glm.SetOptimizer(m);
+        }
+        glm.Train();
+
+        if (method == "glm_covariance")
+            return ToolboxSelectFlat(asrt, Flatten(glm.Covariance.ToArray()),
+                                     glm.Covariance.NumberOfRows, glm.Covariance.NumberOfColumns);
+        if (method == "glm_residuals") return ToolboxSelectFlatNoDims(asrt, glm.Residuals);
+        if (method == "glm_predict") return ToolboxSelectFlatNoDims(asrt, glm.Predict(NewData()));
+        if (method == "glm_predict_intervals")
+        {
+            var nd = NewData();
+            var pi = glm.Predict(nd, OptD("alpha", 0.1));
+            return ToolboxSelectNamedFlat(asrt, new[] { "lower", "mean", "upper" },
+                                          Flatten(pi), nd.NumberOfRows, 3);
+        }
+        if (method == "glm_fit")
+        {
+            var names = new List<string>();
+            var values = new List<double>();
+            int p = glm.Parameters.Length;
+            for (int i = 0; i < p; i++) { names.Add($"beta_{i + 1}"); values.Add(glm.Parameters[i]); }
+            for (int i = 0; i < p; i++) { names.Add($"se_{i + 1}"); values.Add(glm.ParameterStandardErrors[i]); }
+            for (int i = 0; i < p; i++) { names.Add($"z_{i + 1}"); values.Add(glm.ParameterZScores[i]); }
+            for (int i = 0; i < p; i++) { names.Add($"p_{i + 1}"); values.Add(glm.ParameterPValues[i]); }
+            names.Add("sigma"); values.Add(glm.StandardError);
+            names.Add("df"); values.Add(glm.DegreesOfFreedom);
+            names.Add("n"); values.Add(glm.SampleSize);
+            names.Add("aic"); values.Add(glm.AIC);
+            names.Add("aicc"); values.Add(glm.AICc);
+            names.Add("bic"); values.Add(glm.BIC);
+            return ToolboxSelectNamed(asrt, names.ToArray(), values.ToArray());
+        }
+        throw new Exception($"unknown ml method: {method}");
+    }
+
+    throw new Exception($"unknown ml method: {method}");
+}
+
+// A flat matrix result that ALSO carries column names (the `ml` group's interval tables). A
+// `label` selects the column and `index` the row; otherwise the ToolboxSelectFlat grammar
+// applies unchanged.
+static double ToolboxSelectNamedFlat(JsonElement asrt, string[] colNames, double[] flat, int rows, int cols)
+{
+    if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))
+    {
+        int col = Array.IndexOf(colNames, lbl.GetString()!);
+        if (col < 0) throw new Exception($"unknown label: {lbl.GetString()}");
+        int row = asrt.TryGetProperty("index", out var ix) ? ix.GetInt32() : 0;
+        return flat[row * cols + col];
+    }
+    return ToolboxSelectFlat(asrt, flat, rows, cols);
 }
 
 // Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor

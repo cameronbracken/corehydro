@@ -2006,6 +2006,52 @@ x = {50,100,150,200,250}, `Deterministic(100,200,300,400,500)`, `XTransform = Lo
 closed-form log-interpolation value the C# test itself computes rather than asserts as a separate
 literal.
 
+P5 "machine learning" added the `ml` group, the eighteenth, over the whole ported
+`Numerics.MachineLearning` namespace (`numerics/machine_learning/`): the five supervised learners
+(DecisionTree, RandomForest, KNearestNeighbors, NaiveBayes, GeneralizedLinearModel) and the three
+unsupervised ones (KMeans, GaussianMixtureModel, JenksNaturalBreaks).
+
+Its DATA LAYOUT is the `regression` group's, not the "one vector per series" convention the other
+groups use, because these methods take a predictor MATRIX: `data[0]` is the training predictors
+flattened ROW-MAJOR, `data[1]` is the response (empty for the three unsupervised methods), and
+`data[2]` is the optional new-data matrix, with `rows`, `columns` and `predict_rows` in
+`options`. `jenks_*` is the one exception -- it classifies one dimension, so it reads `data[0]`
+as a plain vector.
+
+Twenty-seven methods, grouped by class: `kmeans_means`/`_labels`/`_iterations`;
+`gmm_means`/`_weights`/`_labels`/`_sigmas`/`_log_likelihood`/`_iterations`;
+`jenks_breaks`/`_gvf`/`_clusters`; `decision_tree_predict`; `random_forest_predict`;
+`knn_predict`/`_neighbors`/`_bootstrap_predict`/`_prediction_intervals`;
+`naive_bayes_means`/`_sds`/`_priors`/`_classes`/`_predict`; and
+`glm_fit`/`_covariance`/`_residuals`/`_predict`/`_predict_intervals`. `numerics/support/toolbox/
+ml.hpp`'s file header is the reference for each one's options and result shape. The two interval
+tables (`random_forest_predict`, `knn_prediction_intervals`) and `glm_predict_intervals` carry
+BOTH `dims` and column `names`, so an assertion may select a cell with `label` (the column) plus
+`index` (the row) -- the one place in this format where the two combine.
+
+EVERY METHOD RE-TRAINS its model; there is no fitted-object cache, exactly as the `regression`
+group's `fit`/`covariance`/`residuals` each rebuild their `LinearRegression`. Seeded training is
+deterministic, so two calls agree.
+
+`fixtures/ml/machine_learning.json` pins the C# test literals where they exist -- the twelve
+k-means means (`Test_KMeans_Iris`, 1e-6), the GMM weights and means (`Test_GMM_Iris`, 1e-2), the
+full naive-Bayes oracle (twelve means, twelve standard deviations, three priors and all sixty
+predictions, 1e-6), the sixty kNN classification predictions (`Test_kNN_Iris`), and the GLM
+identity and log fits (`Test_SimpleLinearRegression`, `Test_Log`) -- and curates the rest with
+`python3 tools/verify_oracles.py --dump`, saying so in each assertion's `source`. The
+DecisionTree and RandomForest C# tests assert only INEQUALITIES (an accuracy floor, an R-squared
+comparison), so they contribute no literal here; their behavior is pinned by
+`core/tests/test_decision_tree.cpp` and `test_random_forest.cpp` instead, including a
+C#-measured tree shape.
+
+The Jenks case uses a 30-value CURATED dataset rather than the C# oracle's. The three
+`Test_Jenks_*Classes` methods all run against one 7,889-value array whose R BAMMtools breaks are
+the correctness oracle; at roughly 90 KB of JSON that array would grow a fixtures directory that
+is symlinked into BOTH shipped packages and already counts against CRAN's tarball-size guidance.
+It lives in `core/tests/data/jenks_dataset.hpp` instead, which ships nowhere, and this file proves
+cross-language reproduction on a small case -- the same split the rest of this format already
+uses: ctest for correctness against the literature, fixtures for cross-language agreement.
+
 ### `optimizer`
 
 The fourteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
