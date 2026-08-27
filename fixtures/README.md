@@ -2052,6 +2052,19 @@ It lives in `core/tests/data/jenks_dataset.hpp` instead, which ships nowhere, an
 cross-language reproduction on a small case -- the same split the rest of this format already
 uses: ctest for correctness against the literature, fixtures for cross-language agreement.
 
+`fixtures/ml/ml_cross_language.json` is this layer's CROSS-LANGUAGE PROOF, the counterpart of
+`fixtures/estimation/fit_cross_language.json`, `fixtures/toolbox/toolbox_cross_language.json` and
+`fixtures/callback/callback_cross_language.json`. It carries the same `toolbox`/`ml` kind and
+group (unlike those three, this layer needs no nested kinds, so it needs no bespoke kind of its
+own), but every assertion is at ZERO tolerance and its job is the guarantee rather than the
+accuracy: three seeded fits covering the three ways randomness enters this layer -- k-means++
+initialization, the random forest's two-generator bootstrap, and kNN's
+resample-per-realization stream. Read its own `reference` field for the two deliberate omissions
+and the measurements behind them: the prediction-interval MEAN column (upstream's
+`Statistics.ParallelMean` is not reproducible against itself across machines) and one kNN lower
+bound (a measured 2 ULP FMA-contraction difference inside the shared core, which the shipped
+packages have too because they compile the core the same way).
+
 ### `optimizer`
 
 The fourteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
