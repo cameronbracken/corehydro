@@ -124,6 +124,9 @@ set(BF_TESTS
   test_ordinate
   test_ordered_paired_data
   test_uncertain_paired_data
+  test_ml_prerequisites
+  test_jenks_natural_breaks
+  test_k_means
 )
 
 # Sobol test takes the direction-number file as its sole argument.

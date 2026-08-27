@@ -23,6 +23,11 @@
 // file's own header note above ("Tools.cs function this port needs"): this port always
 // performs serial reductions by design (no `Parallel.For`/interlocked accumulation
 // anywhere in the C++ core), so `ParallelAdd` has no caller and stays out of scope.
+//
+// P5 ports `Tools.Standardize` (Tools.cs:351), but into
+// `numerics/data/statistics.hpp` rather than here: it calls `Statistics.MeanStandardDeviation`,
+// and statistics.hpp includes THIS header, so porting it here would be a circular include. It
+// is the one Tools.cs member that does not live in this file; see that header for the note.
 #pragma once
 #include <cmath>
 #include <cstddef>

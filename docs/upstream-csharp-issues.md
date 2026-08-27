@@ -2816,6 +2816,88 @@ a numbered transcription note at the call site citing the C# line numbers below.
 - **Port handling:** none required -- not yet ported (P5).
 - **Suggested action:** none -- the C# is correct as written.
 
+## BUG — `Statistics.ParallelMean` is not reproducible against itself across machines
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs` @ 2a0357a, `ParallelMean(IList<double>)`
+  (line 143): `double sum = data.AsParallel().Sum(); return sum / data.Count;`.
+- **What:** PLINQ splits the source across partitions, sums each independently, and adds the
+  partial sums. Floating-point addition is not associative, so the result depends on how many
+  partitions the runtime chooses -- which is a function of `Environment.ProcessorCount`. Two
+  machines running the same build on the same data get different last bits. There is no
+  `WithDegreeOfParallelism` or ordered-accumulation constraint to pin it.
+- **Evidence (measured against the real library, this machine, `Environment.ProcessorCount = 10`,
+  `new Random(42)` uniforms scaled to [0, 1000), ULP difference of `ParallelMean` against a serial
+  left-to-right sum):**
+
+  | n | 16 | 32 | 50 | 64 | 100 | 128 | 200 | 256 | 300 | 400 | 500 | 600 | 800 | 1000 | 100000 |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | ULP | -1 | -1 | 0 | -1 | 1 | 2 | -1 | -1 | -3 | -4 | -5 | -7 | 0 | 5 | -29 |
+
+  Note there is no safe small-`n` threshold: PLINQ already partitions at n = 16. `Statistics.Mean`
+  (the serial overload) agrees with the serial sum exactly at every size, as expected.
+- **Why it matters for this port:** two ported call sites read it, both the "mean" column of a
+  prediction-interval table -- `RandomForest.Predict` (over `NumberOfTrees` tree predictions,
+  default 1000) and `KNearestNeighbors.PredictionIntervals` (over `realizations` bootstrap
+  predictions, default 1000). Every other column of both tables (`lower`/`median`/`upper`) comes
+  from `Statistics.Percentile` on a sorted array and is exactly reproducible.
+- **Port handling (intentional divergence, P5 Task 1):** `numerics/data/statistics.hpp`'s
+  `parallel_mean` sums SERIALLY, making it exactly `mean`. There is nothing else it could
+  faithfully do: upstream has no single value to be faithful to. The consequence is stated at the
+  call sites and the affected fixture assertions carry a relative tolerance with this measurement
+  named in their `source` string, rather than an `oracle_skip` mask.
+- **Suggested C# fix:** either sum serially (the arrays reaching this method are small enough that
+  the parallel overhead is unlikely to pay for itself) or, if the parallelism is wanted, make the
+  reduction deterministic -- fix the partition count and accumulate the partial sums in partition
+  order, or use a compensated (Kahan/Neumaier) sum so the partition split stops mattering.
+
+## BUG — `KMeans` with `k = 1` reports a random observation as the cluster mean
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/KMeans.cs` @ 2a0357a, `Train(int seed, bool
+  kMeansPlusPlus)`.
+- **What:** `Labels` is zero-initialized by the constructor, and `Train` runs the E-step, compares
+  the new labels against the old ones, and `break`s BEFORE the M-step when nothing changed. With
+  `k = 1` every point is assigned label 0 on the first E-step, which already matches the
+  zero-initialized array, so the loop exits on iteration 1 having never computed a centroid. The
+  reported `Means[0, *]` is whatever the initializer picked -- with k-means++ that is one randomly
+  chosen DATA POINT, not the mean of the data.
+- **Evidence (measured against the real library):** `new KMeans(new double[] {1, 2, 3, 10, 11,
+  12}, 1)` then `Train(7)` reports `Means[0, 0] = 10` and `Iterations = 1`. The sample mean is
+  6.5. The same input at `k = 2` converges correctly (`Means = {11, 2}`, `Iterations = 2`), so the
+  defect is specific to the single-cluster case.
+- **Related, and NOT a defect:** for `k > 1` the same break-before-M-step ordering means a
+  converged fit's `Means` are one M-step behind its `Labels`. That is harmless -- convergence is
+  defined as "the E-step changed nothing", so recomputing the centroids from the final labels
+  reproduces the reported means exactly (pinned in `test_k_means.cpp`). Only `k = 1` degenerates,
+  because there the E-step can never change anything.
+- **Port handling:** mirrored, and pinned by `test_k_means.cpp` against the C#-measured values.
+  `k_means.hpp` carries the ordering as a numbered transcription note.
+- **Suggested C# fix:** initialize `Labels` to `-1` rather than 0, so the first E-step always
+  counts as a change; or run one M-step unconditionally before the convergence test.
+
+## BUG — `JenksNaturalBreaks` throws `IndexOutOfRangeException` when every input value is identical
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/JenksNaturalBreaks.cs` @ 2a0357a,
+  `Estimate()` (the cluster-construction block at the end) into
+  `Support/JenksCluster.cs`'s constructor.
+- **What:** With all values equal, every candidate split has variance 0, so the dynamic program's
+  `>=` update leaves `lowerClassLimits[l, j]` at its smallest recorded start index. Walking the
+  limits back then produces `kclass[0] = lowerClassLimits[k, 2] - 2 = -1`, and
+  `new JenksCluster(SortedData, 0, -1)` immediately evaluates `data[endIndex]` = `data[-1]`.
+- **Evidence (measured against the real library):** `new JenksNaturalBreaks(new double[20] filled
+  with 3.5, 3)` throws `IndexOutOfRangeException: Index was outside the bounds of the array.` The
+  constructor's four documented guards (null, empty, `k <= 0`, `k > n`) all pass, so the failure
+  surfaces from inside the fitted algorithm rather than from validation.
+- **Note on scope:** this is the degenerate case only. Heavily tied data is fine -- upstream's own
+  7,889-value test dataset contains long runs of exact zeros and all three of its 5/7/9-class
+  oracles reproduce.
+- **Port handling:** mirrored. `JenksCluster`'s C++ constructor range-checks and throws
+  `std::out_of_range` (the port's standard mapping for a C# index exception) instead of reading
+  out of bounds, so the failure is the same failure with defined behavior;
+  `test_jenks_natural_breaks.cpp` pins the throw.
+- **Suggested C# fix:** detect `SortedData[0] == SortedData[^1]` (or a variance of 0) up front and
+  either return a single-class fit or throw a described `ArgumentException`, rather than letting a
+  negative index reach `JenksCluster`.
+
 ---
 
 ## How to work this list later
