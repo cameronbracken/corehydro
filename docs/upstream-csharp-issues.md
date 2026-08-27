@@ -2850,6 +2850,51 @@ a numbered transcription note at the call site citing the C# line numbers below.
   reduction deterministic -- fix the partition count and accumulate the partial sums in partition
   order, or use a compensated (Kahan/Neumaier) sum so the partition split stops mattering.
 
+## BUG — `GaussianMixtureModel.MStep`'s positive-definite repair is a no-op (the return value is discarded)
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a, the last
+  line of `MStep()`: `MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`.
+- **What:** `MakeSymmetricPositiveDefinite` is `public static Matrix
+  MakeSymmetricPositiveDefinite(Matrix M)` (`Mathematics/Linear Algebra/MatrixRegularization.cs`
+  line 111) and is PURE -- it builds `S = 0.5 * (M + M.Transpose())`, clones it, adds a
+  trace-scaled ridge, and RETURNS the clone. It never writes through its argument. The GMM
+  discards the return value, so neither the symmetrization nor the ridge ever reaches
+  `Sigmas[k]`, despite the four-line comment above the call explaining why they are needed.
+- **What actually keeps the fit alive:** the diagonal floor a few lines earlier
+  (`Sigmas[k][d, d] = Math.Max(Sigmas[k][d, d], 1E-6 * colVar)`), which is applied by assignment
+  and does work. The M-step's covariance is also symmetric by construction, so the symmetrization
+  has nothing to repair in practice; the missing piece is the off-diagonal ridge that would
+  protect a near-singular component from failing Cholesky in the next E-step.
+- **Port handling:** mirrored, with the call kept and its result explicitly discarded
+  (`(void)...`) so the upstream diff keeps mapping line-for-line, and a numbered transcription
+  note in `gaussian_mixture_model.hpp` saying why assigning it would be a silent behavior change
+  against every oracle.
+- **Suggested C# fix:** `Sigmas[k] = MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`
+  — but note this CHANGES the fitted covariances (and therefore every downstream oracle,
+  including `HypothesisTests.UnimodalityTest`'s p-values), so it needs re-pinned test literals.
+
+## BUG — `GaussianMixtureModel.LogLikelihood` omits the multivariate-normal normalizing constant
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a,
+  `EStep()`: `LikelihoodMatrix[i, k] = -0.5 * (sum + logDet[k]) + Math.Log(Weights[k]);`.
+- **What:** the multivariate normal log density is `-0.5 * (D*log(2*pi) + logDet(Sigma) +
+  quadform)`. The `D*log(2*pi)` term is missing, so the accumulated `LogLikelihood` is short of
+  the true mixture log-likelihood by exactly `n * D/2 * log(2*pi)`.
+- **Evidence (measured):** a one-component fit on the 150 iris sepal-length values reports
+  `LogLikelihood = -46.198986426940849`; the properly normalized Gaussian log-likelihood at the
+  same fitted mean and variance is `-184.03976640764171`. The difference is
+  `150 * 0.5 * log(2*pi) = 137.8407...` to the last bit.
+- **Impact:** none on the fit (a constant offset cannot change which parameters maximize EM) and
+  none on the one upstream consumer: `HypothesisTests.UnimodalityTest` forms
+  `2 * (logLH2 - logLH1)` over two fits of the SAME sample, so the constant cancels exactly. It
+  does matter to a user treating `LogLikelihood` as a comparable model-selection score across
+  datasets of different size or dimension, or feeding it to AIC/BIC.
+- **Port handling:** mirrored, pinned in `test_gaussian_mixture_model.cpp` by asserting the
+  reported value against `normalized + n * D/2 * log(2*pi)` (so the test states the size of the
+  omission rather than hiding it), with a transcription note in the header.
+- **Suggested C# fix:** subtract `0.5 * Dimension * Math.Log(2 * Math.PI)` in the E-step. Every
+  `LogLikelihood` oracle would move by a known constant; the unimodality p-values would not.
+
 ## BUG — `KMeans` with `k = 1` reports a random observation as the cluster mean
 
 - **Where:** `Numerics/Machine Learning/Unsupervised/KMeans.cs` @ 2a0357a, `Train(int seed, bool
