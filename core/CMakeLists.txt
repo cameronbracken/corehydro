@@ -129,6 +129,8 @@ set(BF_TESTS
   test_k_means
   test_gaussian_mixture_model
   test_decision_tree
+  test_random_forest
+  test_k_nearest_neighbors
 )
 
 # Sobol test takes the direction-number file as its sole argument.

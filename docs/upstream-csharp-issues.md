@@ -2850,6 +2850,29 @@ a numbered transcription note at the call site citing the C# line numbers below.
   reduction deterministic -- fix the partition count and accumulate the partial sums in partition
   order, or use a compensated (Kahan/Neumaier) sum so the partition split stops mattering.
 
+## BUG — `KNearestNeighbors.kNN`'s shape guard is a tautology, so `GetNeighbors` never validates its query
+
+- **Where:** `Numerics/Machine Learning/Supervised/KNearestNeighbors.cs` @ 2a0357a, the private
+  `kNN(Matrix xTrain, Vector yTrain, Matrix xTest)` (line 243): `if (NumberOfFeatures !=
+  xTrain.NumberOfColumns) return null!;`.
+- **What:** `NumberOfFeatures` is defined as `X.NumberOfColumns` and `xTrain` is always
+  `this.X`, so the condition is always false. The guard was clearly meant to check the TEST
+  matrix -- which is what the sibling `kNNPredict` does correctly (`xTest.NumberOfColumns !=
+  xTrain.NumberOfColumns`). So all three public `GetNeighbors` overloads accept any query shape.
+- **What happens then:** `Tools.Distance(IList<double> x, IList<double> y)` loops over `x.Count`,
+  the QUERY row. A query with FEWER columns than the training matrix therefore silently computes
+  a partial-dimension distance and returns plausible-looking neighbors computed from a subset of
+  the features; a query with MORE columns indexes past the end of each training row and throws
+  `IndexOutOfRangeException` from inside the distance helper.
+- **Port handling:** the tautological guard is kept for structural fidelity (and does nothing, as
+  upstream); the narrower-query behavior is reproduced exactly, since that is a returned answer a
+  caller could depend on; and the wider-query case throws `std::out_of_range` -- the port's
+  standard mapping for a C# index exception -- rather than reading out of bounds, which would be
+  undefined behavior in C++ rather than a catchable exception. Pinned in
+  `test_k_nearest_neighbors.cpp`.
+- **Suggested C# fix:** `if (xTest.NumberOfColumns != xTrain.NumberOfColumns) return null!;`,
+  matching `kNNPredict`.
+
 ## ROBUSTNESS — a default `DecisionTree` regression fit always recurses to one observation per leaf
 
 - **Where:** `Numerics/Machine Learning/Supervised/DecisionTree.cs` @ 2a0357a, `GrowTree`.
