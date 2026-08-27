@@ -1,7 +1,7 @@
 {
  "kind": "toolbox",
  "group": "hypothesis",
- "source": "Numerics/Data/Statistics/HypothesisTests.cs; values scraped verbatim from Test_Numerics/Data/Statistics/Test_HypothesisTests.cs (one case per [TestMethod], Test_UnimodalityTest/Test_GrubbsBeck/Test_MultipleGrubbsBeck excluded -- see hypothesis_tests.hpp's file header).",
+ "source": "Numerics/Data/Statistics/HypothesisTests.cs; values scraped verbatim from Test_Numerics/Data/Statistics/Test_HypothesisTests.cs (one case per [TestMethod], Test_GrubbsBeck/Test_MultipleGrubbsBeck excluded -- they exercise MultipleGrubbsBeckTest, not this class). Test_UnimodalityTest was excluded at P4 as a documented severance and joined in P5 as two cases, one per sample, once GaussianMixtureModel landed.",
  "reference": "Numerics @ 2a0357a. Datasets reused verbatim from core/tests/test_hypothesis_tests.cpp, itself verified byte-identical against the checked-out submodule by scripted extraction.",
  "datasets": {
   "data30a": [
@@ -596,6 +596,70 @@
    -0.8192882452914593,
    0.0398208803931389,
    0.8623188722876839
+  ],
+  "unimodal30": [
+   4.5,
+   5.2,
+   5.1,
+   4.9,
+   5.0,
+   5.3,
+   5.4,
+   4.8,
+   4.7,
+   5.2,
+   5.1,
+   4.6,
+   5.0,
+   5.3,
+   5.1,
+   4.9,
+   5.2,
+   5.0,
+   4.8,
+   5.3,
+   4.9,
+   5.1,
+   5.2,
+   4.8,
+   5.0,
+   5.1,
+   5.2,
+   4.7,
+   5.3,
+   5.0
+  ],
+  "bimodal30": [
+   3.8,
+   3.9,
+   4.0,
+   3.9,
+   4.0,
+   4.1,
+   4.0,
+   3.8,
+   3.9,
+   4.0,
+   4.1,
+   4.0,
+   3.9,
+   4.0,
+   4.0,
+   4.3,
+   4.4,
+   4.4,
+   4.5,
+   4.4,
+   4.3,
+   4.4,
+   4.5,
+   4.4,
+   4.3,
+   4.4,
+   4.4,
+   4.5,
+   4.4,
+   4.3
   ]
  },
  "cases": [
@@ -864,6 +928,36 @@
      "mode": "abs",
      "tol": 0.0001,
      "source": "Test_LinearTrendTest"
+    }
+   ]
+  },
+  {
+   "name": "unimodality_unimodal",
+   "data": [
+    "unimodal30"
+   ],
+   "assertions": [
+    {
+     "method": "unimodality",
+     "expected": 0.4142441,
+     "mode": "abs",
+     "tol": 0.0001,
+     "source": "Test_UnimodalityTest (R 'mclust'); P5 un-gated with GaussianMixtureModel"
+    }
+   ]
+  },
+  {
+   "name": "unimodality_bimodal",
+   "data": [
+    "bimodal30"
+   ],
+   "assertions": [
+    {
+     "method": "unimodality",
+     "expected": 2.55425752131444e-05,
+     "mode": "abs",
+     "tol": 1e-09,
+     "source": "Test_UnimodalityTest (R 'mclust'); the C# tolerance here is 1E-9, not 1E-4"
     }
    ]
   }

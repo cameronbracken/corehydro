@@ -293,6 +293,22 @@ reference:
       - curve_simplify
       - uncertain_curve_sample
       - tabular_function
+  - title: Machine learning
+    desc: >
+      The ported Numerics.MachineLearning layer: three unsupervised methods (k-means, Gaussian
+      mixture models, Jenks natural breaks) and five supervised ones (decision trees, random
+      forests, k-nearest neighbors, Gaussian naive Bayes, and generalized linear models). Each
+      trains and answers in one call; a seeded fit is reproducible and agrees bit for bit with
+      the identical call in Python.
+    contents:
+      - ml_kmeans
+      - ml_gaussian_mixture
+      - ml_jenks_breaks
+      - ml_decision_tree
+      - ml_random_forest
+      - ml_knn
+      - ml_naive_bayes
+      - ml_glm
   - title: The generator a callback is handed
     desc: >
       Drawing from the core's seeded random number generator inside a function you write, so

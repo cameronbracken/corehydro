@@ -440,5 +440,29 @@ int main() {
     CHECK_THROWS_MSG(
         tb::run_toolbox("trend", "nope", {{0.0}}, "{\"trend\":{\"type\":\"Constant\"}}"), "nope");
 
+    // --- ml (P5) ------------------------------------------------------------------------
+    //
+    // The full surface is covered by fixtures/ml/*.json and the per-class ctest suites; what is
+    // checked here is the group's DISPATCH, which those cannot reach: an unknown method must
+    // report itself rather than surfacing a data-shape complaint from the training-data read
+    // that used to happen first (the same single-dispatch discipline the P4 whole-branch review
+    // gave models/data_frame_runner.hpp).
+    CHECK_THROWS_MSG(tb::run_toolbox("ml", "nope", {{1.0}}, "{}"), "unknown ml method: nope");
+    CHECK_THROWS_MSG(tb::run_toolbox("ml", "kmeans_nope", {{1.0}}, "{}"), "unknown ml method");
+    CHECK_THROWS_MSG(tb::run_toolbox("ml", "gmm_nope", {{1.0}}, "{}"), "unknown ml method");
+    CHECK_THROWS_MSG(tb::run_toolbox("ml", "jenks_nope", {{1.0, 2.0}}, "{}"), "unknown ml method");
+    // A supervised method with no response vector names the missing data, not the method.
+    CHECK_THROWS_MSG(tb::run_toolbox("ml", "glm_fit", {{1.0}}, "{\"rows\":1,\"columns\":1}"),
+                     "data vector");
+    // The two option parsers reject an unknown name rather than failing later.
+    CHECK_THROWS_MSG(
+        tb::run_toolbox("ml", "glm_fit", {{1.0, 2.0, 3.0}, {1.0, 2.0, 3.0}},
+                        "{\"rows\":3,\"columns\":1,\"link\":\"nope\"}"),
+        "unknown glm link");
+    CHECK_THROWS_MSG(
+        tb::run_toolbox("ml", "glm_fit", {{1.0, 2.0, 3.0}, {1.0, 2.0, 3.0}},
+                        "{\"rows\":3,\"columns\":1,\"local_method\":\"nope\"}"),
+        "unknown local method");
+
     return chtest::summary("toolbox_runner");
 }

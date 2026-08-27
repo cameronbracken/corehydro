@@ -907,6 +907,29 @@ test_that("hypothesis_test() method = 'linear_trend' defaults index to seq_along
   expect_equal(unname(r1[["p_value"]]), 0.9092, tolerance = 1e-4)
 })
 
+test_that("hypothesis_test() method = 'unimodality' reproduces Test_UnimodalityTest", {
+  # P5: un-gated by the GaussianMixtureModel port. The two C# tolerances differ by five orders of
+  # magnitude and are reproduced as written.
+  unimodal <- c(4.5, 5.2, 5.1, 4.9, 5.0, 5.3, 5.4, 4.8, 4.7, 5.2,
+                5.1, 4.6, 5.0, 5.3, 5.1, 4.9, 5.2, 5.0, 4.8, 5.3,
+                4.9, 5.1, 5.2, 4.8, 5.0, 5.1, 5.2, 4.7, 5.3, 5.0)
+  bimodal <- c(3.8, 3.9, 4.0, 3.9, 4.0, 4.1, 4.0, 3.8, 3.9, 4.0,
+               4.1, 4.0, 3.9, 4.0, 4.0, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3,
+               4.4, 4.5, 4.4, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3)
+  # The C# Assert.AreEqual(expected, actual, delta) tolerances are ABSOLUTE; testthat's
+  # `tolerance =` is relative, and 1e-9 RELATIVE on a p-value of 2.6e-5 is 2.6e-14 absolute --
+  # far tighter than upstream asserts. Compare on the absolute difference instead.
+  expect_lt(abs(unname(hypothesis_test(unimodal, method = "unimodality")[["p_value"]]) -
+                  0.4142441), 1e-4)
+  expect_lt(abs(unname(hypothesis_test(bimodal, method = "unimodality")[["p_value"]]) -
+                  2.55425752131444e-05), 1e-9)
+  # The hard-coded seed makes repeated calls identical, and the sample-size guard is upstream's.
+  expect_identical(hypothesis_test(unimodal, method = "unimodality"),
+                   hypothesis_test(unimodal, method = "unimodality"))
+  expect_error(hypothesis_test(rep(1, 9), method = "unimodality"),
+               "greater than or equal to 10")
+})
+
 test_that("hypothesis_test() validates its arguments", {
   expect_error(hypothesis_test(c(1, 2, 3), method = "equal_variance_t"),
                "`y` is required")

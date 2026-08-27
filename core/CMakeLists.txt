@@ -124,6 +124,15 @@ set(BF_TESTS
   test_ordinate
   test_ordered_paired_data
   test_uncertain_paired_data
+  test_ml_prerequisites
+  test_jenks_natural_breaks
+  test_k_means
+  test_gaussian_mixture_model
+  test_decision_tree
+  test_random_forest
+  test_k_nearest_neighbors
+  test_naive_bayes
+  test_generalized_linear_model
 )
 
 # Sobol test takes the direction-number file as its sole argument.

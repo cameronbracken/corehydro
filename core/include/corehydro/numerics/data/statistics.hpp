@@ -11,21 +11,21 @@
 // ties)` and the array overload `Percentile(IList<double>, IList<double> k, bool)` --
 // both were previously omitted (see the numbered fidelity note on the tie overload below,
 // which is the important divergence from the exact-equality overload directly above it).
-// `FiveNumberSummary`/`SevenNumberSummary` remain omitted -- no caller ported so far needs
-// them; add them if a later target does.
+// `SevenNumberSummary` remains omitted -- no caller ported so far needs it; add it if a
+// later target does. (`FiveNumberSummary` landed in P5; see the note at the bottom.)
 //
 // P3.3 adds `mean()`, the plain `Statistics.Mean(IList<double>)` overload -- distinct from
 // product_moments()'s internal mean, which requires N>=4 and returns NaN below that floor.
 // Fourier::autocorrelation (math/fourier/fourier.hpp) needs a mean with no minimum-sample-
 // size requirement, matching the C# call site (`Statistics.Mean(series)`, not
-// `Statistics.ProductMoments`). ParallelMean and the other overloads are not ported.
+// `Statistics.ProductMoments`). (`ParallelMean` landed in P5; see the note at the bottom.)
 //
 // P3.10 adds `variance()`/`standard_deviation()`, the plain `Statistics.Variance(IList
 // <double>)`/`StandardDeviation(IList<double>)` overloads (N-1 Bessel-corrected sample
 // variance via the same running-difference recurrence as the C# source, distinct from
 // `product_moments()`'s internal stdev which requires N>=4) -- Bootstrap's SE/CI computation
-// needs a 2-sample-minimum variance with no such floor. `PopulationVariance`/
-// `PopulationStandardDeviation` (N normalizer) are not ported -- no caller needs them yet.
+// needs a 2-sample-minimum variance with no such floor. (`PopulationVariance`/
+// `PopulationStandardDeviation` landed in P5; see the note at the bottom.)
 //
 // P1 adds `maximum()`, the plain `Statistics.Maximum(IList<double>)` overload
 // (Statistics.cs:90-105), for SpatialGEV::SetDefaultParameters (SpatialGEV.cs:480,487,494).
@@ -43,9 +43,18 @@
 // overload (Statistics.cs:573-583). All three exist for HypothesisTests (P4 Task 2), which
 // this port had not reached yet when the no-ties `ranks_in_place` and single-`k` `percentile`
 // were ported.
+//
+// P5 Task 1 adds the five members the Machine Learning layer needs: `population_variance`
+// (Statistics.cs:218) and `population_standard_deviation` (:253) for DecisionTree's variance
+// reduction, `parallel_mean` (:143) for RandomForest's and kNN's prediction-interval mean
+// column, `five_number_summary` (:590) for GeneralizedLinearModel's residual report, and
+// `entropy` (:736) for DecisionTree's classification information gain. `parallel_mean` is the
+// one that is NOT a literal transcription -- see its own note for why summing serially is the
+// faithful choice against an upstream method whose result depends on the machine's core count.
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -82,6 +91,44 @@ inline double variance(const std::vector<double>& data) {
 
 // Sample standard deviation (sqrt of `variance`). Mirrors Statistics.StandardDeviation.
 inline double standard_deviation(const std::vector<double>& data) { return std::sqrt(variance(data)); }
+
+// Evaluates the population variance (N normalizer, Statistics.cs:218). Same running-difference
+// recurrence as `variance()` above, divided by N rather than N-1 -- NOT `variance() * (n-1)/n`,
+// which is algebraically identical but rounds differently. Returns NaN for an empty sequence.
+inline double population_variance(const std::vector<double>& data) {
+    if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
+    double variance_ = 0.0;
+    double t = data[0];
+    for (std::size_t i = 1; i < data.size(); ++i) {
+        double di = static_cast<double>(i);
+        t += data[i];
+        double diff = (di + 1.0) * data[i] - t;
+        variance_ += diff * diff / ((di + 1.0) * di);
+    }
+    return variance_ / static_cast<double>(data.size());
+}
+
+// Population standard deviation (sqrt of `population_variance`, Statistics.cs:253).
+inline double population_standard_deviation(const std::vector<double>& data) {
+    return std::sqrt(population_variance(data));
+}
+
+// Arithmetic mean computed with a SERIAL sum (Statistics.cs:143).
+//
+// UPSTREAM DIVERGENCE, deliberate: C# `ParallelMean` is `data.AsParallel().Sum() / data.Count`,
+// which splits the sum across `Environment.ProcessorCount` partitions and adds the partial sums.
+// That makes its last bits depend on the machine's core count -- upstream is not reproducible
+// against ITSELF across machines here, so there is no fixed value to be faithful to. This port
+// sums serially, making `parallel_mean` exactly `mean`. Two ported call sites reach it, both the
+// "mean" column of a prediction-interval table: RandomForest::predict and
+// KNearestNeighbors::prediction_intervals. See docs/upstream-csharp-issues.md for the
+// measurement.
+inline double parallel_mean(const std::vector<double>& data) {
+    if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
+    double sum = 0.0;
+    for (double x : data) sum += x;
+    return sum / static_cast<double>(data.size());
+}
 
 // Estimates the arithmetic sample mean and the unbiased (N-1) sample variance in one call.
 // Mirrors Statistics.MeanVariance, which is literally `(Mean(data), Variance(data))` -- this
@@ -356,6 +403,48 @@ inline std::vector<double> percentile(const std::vector<double>& data, const std
     std::vector<double> result(k.size());
     for (std::size_t i = 0; i < k.size(); ++i) result[i] = percentile(*sorted, k[i], true);
     return result;
+}
+
+// Estimates the 5-number summary {min, 25th, 50th, 75th, max} (Statistics.cs:590). C# copies and
+// sorts once, then calls the sorted-input `Percentile` three times; `min`/`max` come straight off
+// the sorted copy rather than through `Minimum`/`Maximum`, so a NaN entry does NOT collapse the
+// whole result to NaN the way `minimum()` would. Mirrored.
+inline std::vector<double> five_number_summary(const std::vector<double>& data) {
+    if (data.empty()) throw std::invalid_argument("Sequence contains no elements.");
+    std::vector<double> sorted(data);
+    std::sort(sorted.begin(), sorted.end());
+    return {sorted.front(), percentile(sorted, 0.25, true), percentile(sorted, 0.50, true),
+            percentile(sorted, 0.75, true), sorted.back()};
+}
+
+// Returns the standardized values (x - mean) / sd.
+//
+// This is a `Tools.cs` member (Tools.cs:351), not a `Statistics.cs` one, and it is ported HERE
+// rather than in tools.hpp only because it calls `Statistics.MeanStandardDeviation` and
+// `tools.hpp` is included BY this header -- putting it there would be a circular include. The
+// namespace therefore differs from the C# class; tools.hpp carries a pointer note. Degenerate
+// spread (sd <= 0 or NaN) returns the ZERO-INITIALIZED result array, not NaNs -- upstream's
+// early return leaves `result` untouched.
+inline std::vector<double> standardize(const std::vector<double>& values) {
+    std::vector<double> result(values.size(), 0.0);
+    double mu = mean(values);
+    double sd = standard_deviation(values);
+    if (sd <= 0.0 || std::isnan(sd)) return result;
+    for (std::size_t i = 0; i < values.size(); ++i) result[i] = (values[i] - mu) / sd;
+    return result;
+}
+
+// Computes the entropy of `data` under `pdf` (Statistics.cs:736): -sum(p * log(p)) over
+// p = pdf(x), skipping any point whose density is not strictly positive. DecisionTree's
+// classification information gain is the only ported caller.
+inline double entropy(const std::vector<double>& data,
+                      const std::function<double(double)>& pdf) {
+    double sum = 0.0;
+    for (double x : data) {
+        double p = pdf(x);
+        if (p > 0.0) sum += p * std::log(p);
+    }
+    return -sum;
 }
 
 }  // namespace corehydro::numerics::data

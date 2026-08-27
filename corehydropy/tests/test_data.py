@@ -202,6 +202,48 @@ def test_analysis_data_hypothesis_test_validates_method_and_the_two_sample_split
         ch.analysis_data_hypothesis_test(HARRICANA, "equal_variance_t")
 
 
+def test_analysis_data_hypothesis_test_runs_the_unimodality_test():
+    unimodal = [4.5, 5.2, 5.1, 4.9, 5.0, 5.3, 5.4, 4.8, 4.7, 5.2,
+                5.1, 4.6, 5.0, 5.3, 5.1, 4.9, 5.2, 5.0, 4.8, 5.3,
+                4.9, 5.1, 5.2, 4.8, 5.0, 5.1, 5.2, 4.7, 5.3, 5.0]
+    r = ch.analysis_data_hypothesis_test(unimodal, "unimodality")
+    assert list(r.keys()) == ["unimodality"]
+    assert r["unimodality"] == pytest.approx(0.4142441, abs=1e-4)
+
+
+def test_analysis_data_hypothesis_test_summary_hypothesis_returns_all_ten():
+    s = ch.analysis_data_hypothesis_test(HARRICANA, "summary_hypothesis")
+    assert list(s.keys()) == [
+        "Jarque-Bera test for normality",
+        "Ljung-Box test for independence",
+        "Wald-Wolfowitz test for independence and stationarity (trend)",
+        "Mann-Whitney test for homogeneity and stationarity (jump)",
+        "Mann-Kendall test for homogeneity and stationarity (trend)",
+        "Linear trend test for stationarity (trend)",
+        "Equal variance t-test for differences in the means of two samples",
+        "Unequal variance t-test for differences in the means of two samples",
+        "F-test for differences in the variances of two samples",
+        "Mixture model test for unimodality",
+    ]
+    # Each value equals the corresponding standalone facade at the split the method clamps to
+    # (69 // 2 = 34), and split_index is optional here unlike for the two-sample facades.
+    assert s["Mann-Kendall test for homogeneity and stationarity (trend)"] == pytest.approx(
+        ch.analysis_data_hypothesis_test(HARRICANA, "mann_kendall")["mann_kendall"]
+    )
+    assert s[
+        "Equal variance t-test for differences in the means of two samples"
+    ] == pytest.approx(
+        ch.analysis_data_hypothesis_test(HARRICANA, "equal_variance_t", split_index=34)[
+            "equal_variance_t"
+        ]
+    )
+    # A record too short for Mann-Whitney NaNs every value, rather than reporting the nine that
+    # worked -- upstream's single try/catch. Documented in the docstring.
+    short = ch.analysis_data_hypothesis_test(list(range(1, 13)), "summary_hypothesis")
+    assert len(short) == 10
+    assert any(math.isnan(v) for v in short.values())
+
+
 def test_analysis_data_statistics_returns_the_twenty_named_summary_statistics():
     s = ch.analysis_data_statistics(PEAKS)
     assert len(s["value"]) == 20

@@ -1,9 +1,11 @@
 // Transcribed from: upstream/Numerics/Test_Numerics/Data/Statistics/Test_HypothesisTests.cs
-// @ 2a0357a. Every [TestMethod] in that file EXCEPT Test_UnimodalityTest, Test_GrubbsBeck, and
-// Test_MultipleGrubbsBeck (the last two exercise the already-ported MultipleGrubbsBeckTest, not
-// this class; UnimodalityTest is a documented P4 severance -- see hypothesis_tests.hpp's file
-// header). All input arrays are copied verbatim from the C# test file (byte-for-byte, verified
-// by scripted extraction against the checked-out submodule, not retyped from any summary).
+// @ 2a0357a. Every [TestMethod] in that file EXCEPT Test_GrubbsBeck and Test_MultipleGrubbsBeck
+// (which exercise the already-ported MultipleGrubbsBeckTest, not this class). All input arrays are
+// copied verbatim from the C# test file (byte-for-byte, verified by scripted extraction against
+// the checked-out submodule, not retyped from any summary).
+//
+// P5 added Test_UnimodalityTest, which was a documented P4 severance until
+// numerics/machine_learning/unsupervised/gaussian_mixture_model.hpp landed.
 #include <cmath>
 #include <vector>
 
@@ -252,6 +254,31 @@ void test_guards() {
     }
 }
 
+// Test_UnimodalityTest
+//
+// Upstream compares against the R package 'mclust' (Scrucca, Fop, Murphy & Raftery 2016). Note
+// the two tolerances differ by five orders of magnitude in the C# source and are reproduced as
+// written: 1E-4 on the unimodal sample, 1E-9 on the bimodal one.
+void test_unimodality_test() {
+    std::vector<double> unimodal_data{4.5, 5.2, 5.1, 4.9, 5.0, 5.3, 5.4, 4.8, 4.7, 5.2,
+                                       5.1, 4.6, 5.0, 5.3, 5.1, 4.9, 5.2, 5.0, 4.8, 5.3,
+                                       4.9, 5.1, 5.2, 4.8, 5.0, 5.1, 5.2, 4.7, 5.3, 5.0};
+    double pval = ht::unimodality_test(unimodal_data);
+    CHECK_NEAR(pval, 0.4142441, 1e-4);
+
+    std::vector<double> bimodal_data{3.8, 3.9, 4.0, 3.9, 4.0, 4.1, 4.0, 3.8, 3.9, 4.0,
+                                      4.1, 4.0, 3.9, 4.0, 4.0, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3,
+                                      4.4, 4.5, 4.4, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3};
+    pval = ht::unimodality_test(bimodal_data);
+    CHECK_NEAR(pval, 2.55425752131444e-05, 1e-9);
+
+    // COREHYDRO SUPPLEMENT: the sample-size guard, and the seeded-determinism contract (the
+    // method hard-codes seed 12345, so repeated calls must agree bit for bit).
+    CHECK_THROWS_MSG(ht::unimodality_test(std::vector<double>(9, 1.0)),
+                     "greater than or equal to 10");
+    CHECK_EQ(ht::unimodality_test(unimodal_data), ht::unimodality_test(unimodal_data));
+}
+
 }  // namespace
 
 int main() {
@@ -267,6 +294,7 @@ int main() {
     test_mann_whitney_test();
     test_mann_kendall_test();
     test_linear_trend_test();
+    test_unimodality_test();
     test_guards();
     return chtest::summary("test_hypothesis_tests");
 }

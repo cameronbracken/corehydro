@@ -1,17 +1,17 @@
 // ported from: Numerics/Data/Statistics/HypothesisTests.cs @ 2a0357a
 //
-// Twelve of the class's thirteen public statics -- every one-sample/two-sample parametric and
+// All thirteen public statics -- every one-sample/two-sample parametric and
 // nonparametric hypothesis test upstream ships, over the P4 Task 1 helpers (mean_variance, the
 // tie-returning ranks_in_place, the vector percentile -- percentile itself is not used here, but
 // the other two are load-bearing) plus numerics::pow (NOT std::pow -- see tools.hpp's own note) and
 // numerics::sqr.
 //
-// Deliberately NOT ported (P4):
-//   - UnimodalityTest: it fits Numerics.MachineLearning.GaussianMixtureModel at k = 1 and k = 2
-//     (each Train(12345, true)) and forms the likelihood-ratio statistic against ChiSquared(3).
-//     The Machine Learning layer is unported; P5 ports it and un-gates this method together with
-//     RMC.BestFit DataFrame::summary_hypothesis_test, which cannot ship without it (see
-//     models/data_frame/data_frame.hpp).
+// P5 completes the class: `unimodality_test`, the thirteenth static, was deferred at P4 because
+// it fits Numerics.MachineLearning.GaussianMixtureModel at k = 1 and k = 2 and the Machine
+// Learning layer was unported. It lands here now over
+// numerics/machine_learning/unsupervised/gaussian_mixture_model.hpp, and un-gates RMC.BestFit
+// DataFrame::unimodality_test and DataFrame::summary_hypothesis_test alongside it (see
+// models/data_frame/data_frame.hpp).
 //
 // Every C# ArgumentException guard is preserved with its exact message text, and every C#
 // integer-arithmetic quirk that is oracle-visible is transcribed rather than "cleaned up":
@@ -38,6 +38,7 @@
 #include "corehydro/numerics/distributions/chi_squared.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/distributions/student_t.hpp"
+#include "corehydro/numerics/machine_learning/unsupervised/gaussian_mixture_model.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
 #include "corehydro/numerics/math/special/beta.hpp"
@@ -281,6 +282,54 @@ inline double linear_trend_test(const std::vector<double>& indices, const std::v
     return (1.0 -
             tdist.cdf(std::fabs(lm.parameters()[1] / lm.parameter_standard_errors()[1]))) *
            2.0;
+}
+
+// The Gaussian mixture model test for unimodality. Fits a 1-component GMM (unimodal) and a
+// 2-component GMM (potentially bimodal) to the same sample and forms the likelihood-ratio
+// statistic against ChiSquared(3). Returns the 2-sided p-value; a small p-value is evidence
+// AGAINST unimodality.
+//
+// Three transcription notes:
+//   1. The whole body is wrapped in the C# `try { ... } catch { return double.NaN; }`. Mirrored
+//      with `catch (...)`: a Cholesky failure inside the GMM must surface as NaN rather than as
+//      an exception crossing into R or Python.
+//   2. Both fits use the HARD-CODED seed 12345 with k-means++ initialization. The method takes
+//      no seed argument; do not add one.
+//   3. `df = 3` is hard-coded regardless of the sample's dimension.
+//
+// Note on the statistic: `GaussianMixtureModel::log_likelihood()` omits the
+// -0.5 * D * log(2*pi) normalizing constant (see that header and
+// docs/upstream-csharp-issues.md), but both fits are over the same sample, so the omission
+// cancels exactly in the difference and this p-value is unaffected.
+inline double unimodality_test(const std::vector<double>& sample) {
+    int n = static_cast<int>(sample.size());
+    if (n < 10)
+        throw std::invalid_argument("The sample size must be greater than or equal to 10.");
+
+    try {
+        // Fit a 1-component GMM (unimodal).
+        machine_learning::GaussianMixtureModel gmm1(sample, 1);
+        gmm1.train(12345, true);
+        double log_lh1 = gmm1.log_likelihood();
+
+        // Fit a 2-component GMM (potentially bimodal).
+        machine_learning::GaussianMixtureModel gmm2(sample, 2);
+        gmm2.train(12345, true);
+        double log_lh2 = gmm2.log_likelihood();
+
+        // Compute the test statistic: likelihood-ratio test.
+        double test_stat = 2.0 * (log_lh2 - log_lh1);
+        int df = 3;
+
+        // Compute the p-value from the chi-square distribution.
+        distributions::ChiSquared chi_squared(df);
+        double pval = 1.0 - chi_squared.cdf(test_stat);
+
+        return pval;
+    } catch (...) {
+        // (C# logs to Debug.WriteLine here; this port has no debug channel.)
+        return std::numeric_limits<double>::quiet_NaN();
+    }
 }
 
 }  // namespace corehydro::numerics::data::hypothesis_tests

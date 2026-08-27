@@ -19,8 +19,9 @@ analysis_data_hypothesis_test(
 \item{method}{one of \code{"jarque_bera"} (normality), \code{"ljung_box"} (autocorrelation),
 \code{"equal_variance_t"} / \code{"unequal_variance_t"} (difference in means, Student's / Welch's),
 \code{"f"} (difference in variances), \code{"linear_trend"} (trend), \code{"wald_wolfowitz"} (runs test for
-independence), \code{"mann_whitney"} (homogeneity / jump), or \code{"mann_kendall"} (homogeneity /
-trend).}
+independence), \code{"mann_whitney"} (homogeneity / jump), \code{"mann_kendall"} (homogeneity /
+trend), \code{"unimodality"} (a Gaussian-mixture likelihood-ratio test, where a SMALL p-value is
+evidence AGAINST unimodality), or \code{"summary_hypothesis"} (all ten at once -- see Details).}
 
 \item{split_index}{the record index to split the sample at; required by \code{"equal_variance_t"},
 \code{"unequal_variance_t"}, \code{"f"}, and \code{"mann_whitney"}, ignored otherwise.}
@@ -31,15 +32,30 @@ default rule. Ignored by every other method.}
 \item{use_log10}{logical; test the log10-transformed values instead of the real-space values.}
 }
 \value{
-A named numeric vector of length 1, named \code{method}: the 2-sided p-value.
+A named numeric vector of length 1, named \code{method}: the 2-sided p-value. For
+\code{method = "summary_hypothesis"}, a named numeric vector of length 10 carrying every test's
+p-value, named by the library's own descriptive test names and in its own order.
 }
 \description{
-Runs one of the nine \code{DataFrame} hypothesis-test facades over the exact series of an
-\code{\link[=analysis_data]{analysis_data()}} frame (or a plain numeric vector). The four two-sample tests split the record
-at \code{split_index}, comparing observations with a data index below it against those at or above
-it -- the split is on the record's INDEX, not on array position, so it agrees with the split a
-caller would get by re-running the test on a record whose observations were supplied out of
-order.
+Runs one of the ten \code{DataFrame} hypothesis-test facades over the exact series of an
+\code{\link[=analysis_data]{analysis_data()}} frame (or a plain numeric vector), or all ten at once with
+\code{method = "summary_hypothesis"}. The four two-sample tests split the record at \code{split_index},
+comparing observations with a data index below it against those at or above it -- the split is
+on the record's INDEX, not on array position, so it agrees with the split a caller would get by
+re-running the test on a record whose observations were supplied out of order.
+}
+\details{
+\code{method = "summary_hypothesis"} is the library's own ten-test summary, and it behaves
+differently from calling the ten tests individually in three ways worth knowing, all inherited
+from upstream:
+\itemize{
+\item \code{split_index} is OPTIONAL. Left \code{NULL} (or given a value outside the record's index range)
+it selects the midpoint split rather than erroring.
+\item Any single test that fails turns the WHOLE result to \code{NaN}, rather than reporting the nine
+that worked. A record shorter than the 20 observations \code{"mann_whitney"} needs will therefore
+come back all-\code{NaN}.
+\item \code{"ljung_box"} is run at the library's default lag, ignoring \code{lag_max}.
+}
 }
 \examples{
 peaks <- c(122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205)

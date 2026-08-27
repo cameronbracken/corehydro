@@ -1670,10 +1670,12 @@ stateless, locks the C# stream bit-for-bit).
 
 ### `data_frame`
 
-P4 Task 6 (data and tests) added this kind for the twelve `DataFrame` facades Task 5 un-gated:
-the nine hypothesis-test methods (`jarque_bera`, `ljung_box`, `equal_variance_t`,
-`unequal_variance_t`, `f`, `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`) and
-the three summary methods (`summary_exact`, `summary_all`, `standardized`), reached through
+P4 Task 6 (data and tests) added this kind for the twelve `DataFrame` facades Task 5 un-gated,
+and P5 Task 6 completed it with the two more that landed alongside `GaussianMixtureModel`: the ten
+hypothesis-test methods (`jarque_bera`, `ljung_box`, `equal_variance_t`, `unequal_variance_t`,
+`f`, `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`, `unimodality`), the
+ten-test `summary_hypothesis` facade, and the three summary methods (`summary_exact`,
+`summary_all`, `standardized`), reached through
 `corehydro::models::runner::run_data_frame` (`models/data_frame_runner.hpp`). Every one of these
 reads the EXACT series only -- no censoring filter, no threshold machinery -- so `run_data_frame`
 returns the SAME `numerics::support::ToolboxResult` the toolbox groups return, and every runner's
@@ -1712,16 +1714,20 @@ dotnet emitter all support it, for parity with `run_data_frame`'s own two-path c
 function's header comment in `models/data_frame_runner.hpp`).
 
 Options: `use_log10` (default `false`, every method); `index` (the two-sample split, required by
-`equal_variance_t`/`unequal_variance_t`/`f`/`mann_whitney`, an error if omitted); `lag_max`
-(`ljung_box` only, default `-1`, meaning "use the library's own default rule"). `summary_exact`
+`equal_variance_t`/`unequal_variance_t`/`f`/`mann_whitney`, an error if omitted, and OPTIONAL for
+`summary_hypothesis`, which clamps an out-of-range value to the midpoint split itself and defaults
+to `-1`); `lag_max` (`ljung_box` only, default `-1`, meaning "use the library's own default rule";
+`summary_hypothesis` ignores it and always uses the default lag). `summary_hypothesis` returns a
+ten-key named result selected by `label` or `index`, in the C# dictionary's insertion order.
+`summary_exact`
 and `summary_all` return the twenty-key named result (`values` parallel to `names`, selected by
 `label` or `index`); `standardized` returns the exact series' standardized values followed by its
 standardized log10 values, `dims = {n, 2}` (row-major: row `i` is
 `[standardized_value[i], standardized_log10_value[i]]`), selected by `index` or `select:
 "rows"`/`"columns"`. `run_data_frame` calls `calculate_plotting_positions()` before `summary_all`
 and `standardized` (the C# tests do this explicitly, and both methods read plotting-position
-complements) but NOT before the nine hypothesis facades or `summary_exact`, none of which read
-plotting positions.
+complements) but NOT before the ten hypothesis facades, `summary_hypothesis`, or `summary_exact`,
+none of which read plotting positions.
 
 `fixtures/data/data_frame_facades.json` carries one or more cases per
 `ExactDataHypothesisTests.cs` `[TestMethod]` -- the SAME literals and datasets already
@@ -1738,7 +1744,9 @@ numbers for what is meant to be the same dataset. `summary_exact`, `summary_all`
 upstream test literal at all -- `NonparametricEmpiricalTests.cs`'s two DataFrame cases only assert
 finiteness/NaN patterns for these three methods, never a value -- so every one of their assertions
 is curated with `python3 tools/verify_oracles.py --dump` against the real C# `DataFrame`, and says
-so in its own `source`.
+so in its own `source`. `summary_hypothesis` is curated the same way and for the same reason --
+its only C# caller is the WPF GUI, so upstream has no test for it at all; `unimodality` does have
+C# literals (`ExactDataHypothesisTests.Test_UnimodalityTest`) and uses them.
 
 The dotnet emitter's `data_frame` branch DOES honor `oracle_skip` (the `toolbox` branch above does
 not), joining several other kinds that also honor it (`analysis`, `model_estimation`, ...) --
@@ -1904,9 +1912,10 @@ weights are `1/4/1/10` and pins the ORIGINAL-weight answer: honoring the weights
 defects are written up in `docs/upstream-csharp-issues.md`, and the user-facing `shortest_path()`
 verb in both packages calls `dijkstra`, never `network_solve_weights`.
 
-P4 "data and tests" (Task 3) added the `hypothesis` group, the sixteenth, over the twelve ported
+P4 "data and tests" (Task 3) added the `hypothesis` group, the sixteenth, over the ported
 hypothesis tests (`numerics/data/hypothesis_tests.hpp`, itself a port of the C#
-`Numerics.Data.Statistics.HypothesisTests` static class). Every method but `f_models` reads one
+`Numerics.Data.Statistics.HypothesisTests` static class) -- twelve at P4, completed to all
+thirteen in P5 with `unimodality`, which needed the then-unported `GaussianMixtureModel`. Every method but `f_models` reads one
 data vector (a one-sample test) or two (a two-sample test) and returns the 2-sided p-value with
 no `dims`/`names`, the same shape `correlation`'s methods use; `f_models` (the F-test comparing
 two nested regression models) takes NO data -- its four inputs
@@ -1917,9 +1926,11 @@ option (default `0`); `ljung_box` reads an optional `lag_max` option (default `-
 the C# default rule").
 
 `fixtures/toolbox/hypothesis.json` carries one case per `Test_HypothesisTests.cs` `[TestMethod]`
-(`Test_UnimodalityTest`, `Test_GrubbsBeck`, and `Test_MultipleGrubbsBeck` excluded -- the first is
-a documented P4 severance, the other two exercise the already-ported `MultipleGrubbsBeckTest`, not
-this class). Every value is `Test_HypothesisTests.cs`'s own literal at its own tolerance; the
+(`Test_GrubbsBeck` and `Test_MultipleGrubbsBeck` excluded -- they exercise the already-ported
+`MultipleGrubbsBeckTest`, not this class). `Test_UnimodalityTest` was excluded at P4 as a
+documented severance and joined in P5 as two cases, one per sample; note its two C# tolerances
+differ by five orders of magnitude (`1E-4` unimodal, `1E-9` bimodal) and are reproduced as
+written. Every value is `Test_HypothesisTests.cs`'s own literal at its own tolerance; the
 `datasets` block reuses the arrays already transcribed (and independently verified byte-identical
 against the checked-out submodule) into `core/tests/test_hypothesis_tests.cpp`, including the
 69-value Harricana River record shared by `wald_wolfowitz` and `mann_kendall` and the 126-value
@@ -1994,6 +2005,65 @@ x = {50,100,150,200,250}, `Deterministic(100,200,300,400,500)`, `XTransform = Lo
 -- the two boundary-clamp literals plus `Function(75)`/`InverseFunction(Function(75))` at the
 closed-form log-interpolation value the C# test itself computes rather than asserts as a separate
 literal.
+
+P5 "machine learning" added the `ml` group, the eighteenth, over the whole ported
+`Numerics.MachineLearning` namespace (`numerics/machine_learning/`): the five supervised learners
+(DecisionTree, RandomForest, KNearestNeighbors, NaiveBayes, GeneralizedLinearModel) and the three
+unsupervised ones (KMeans, GaussianMixtureModel, JenksNaturalBreaks).
+
+Its DATA LAYOUT is the `regression` group's, not the "one vector per series" convention the other
+groups use, because these methods take a predictor MATRIX: `data[0]` is the training predictors
+flattened ROW-MAJOR, `data[1]` is the response (empty for the three unsupervised methods), and
+`data[2]` is the optional new-data matrix, with `rows`, `columns` and `predict_rows` in
+`options`. `jenks_*` is the one exception -- it classifies one dimension, so it reads `data[0]`
+as a plain vector.
+
+Twenty-seven methods, grouped by class: `kmeans_means`/`_labels`/`_iterations`;
+`gmm_means`/`_weights`/`_labels`/`_sigmas`/`_log_likelihood`/`_iterations`;
+`jenks_breaks`/`_gvf`/`_clusters`; `decision_tree_predict`; `random_forest_predict`;
+`knn_predict`/`_neighbors`/`_bootstrap_predict`/`_prediction_intervals`;
+`naive_bayes_means`/`_sds`/`_priors`/`_classes`/`_predict`; and
+`glm_fit`/`_covariance`/`_residuals`/`_predict`/`_predict_intervals`. `numerics/support/toolbox/
+ml.hpp`'s file header is the reference for each one's options and result shape. The two interval
+tables (`random_forest_predict`, `knn_prediction_intervals`) and `glm_predict_intervals` carry
+BOTH `dims` and column `names`, so an assertion may select a cell with `label` (the column) plus
+`index` (the row) -- the one place in this format where the two combine.
+
+EVERY METHOD RE-TRAINS its model; there is no fitted-object cache, exactly as the `regression`
+group's `fit`/`covariance`/`residuals` each rebuild their `LinearRegression`. Seeded training is
+deterministic, so two calls agree.
+
+`fixtures/ml/machine_learning.json` pins the C# test literals where they exist -- the twelve
+k-means means (`Test_KMeans_Iris`, 1e-6), the GMM weights and means (`Test_GMM_Iris`, 1e-2), the
+full naive-Bayes oracle (twelve means, twelve standard deviations, three priors and all sixty
+predictions, 1e-6), the sixty kNN classification predictions (`Test_kNN_Iris`), and the GLM
+identity and log fits (`Test_SimpleLinearRegression`, `Test_Log`) -- and curates the rest with
+`python3 tools/verify_oracles.py --dump`, saying so in each assertion's `source`. The
+DecisionTree and RandomForest C# tests assert only INEQUALITIES (an accuracy floor, an R-squared
+comparison), so they contribute no literal here; their behavior is pinned by
+`core/tests/test_decision_tree.cpp` and `test_random_forest.cpp` instead, including a
+C#-measured tree shape.
+
+The Jenks case uses a 30-value CURATED dataset rather than the C# oracle's. The three
+`Test_Jenks_*Classes` methods all run against one 7,889-value array whose R BAMMtools breaks are
+the correctness oracle; at roughly 90 KB of JSON that array would grow a fixtures directory that
+is symlinked into BOTH shipped packages and already counts against CRAN's tarball-size guidance.
+It lives in `core/tests/data/jenks_dataset.hpp` instead, which ships nowhere, and this file proves
+cross-language reproduction on a small case -- the same split the rest of this format already
+uses: ctest for correctness against the literature, fixtures for cross-language agreement.
+
+`fixtures/ml/ml_cross_language.json` is this layer's CROSS-LANGUAGE PROOF, the counterpart of
+`fixtures/estimation/fit_cross_language.json`, `fixtures/toolbox/toolbox_cross_language.json` and
+`fixtures/callback/callback_cross_language.json`. It carries the same `toolbox`/`ml` kind and
+group (unlike those three, this layer needs no nested kinds, so it needs no bespoke kind of its
+own), but every assertion is at ZERO tolerance and its job is the guarantee rather than the
+accuracy: three seeded fits covering the three ways randomness enters this layer -- k-means++
+initialization, the random forest's two-generator bootstrap, and kNN's
+resample-per-realization stream. Read its own `reference` field for the two deliberate omissions
+and the measurements behind them: the prediction-interval MEAN column (upstream's
+`Statistics.ParallelMean` is not reproducible against itself across machines) and one kNN lower
+bound (a measured 2 ULP FMA-contraction difference inside the shared core, which the shipped
+packages have too because they compile the core the same way).
 
 ### `optimizer`
 

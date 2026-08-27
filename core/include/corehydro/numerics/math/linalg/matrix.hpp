@@ -120,6 +120,35 @@ class Matrix {
                 data_[i][j] = flat[static_cast<std::size_t>(i * number_of_columns + j)];
     }
 
+    // Construct an n-by-1 matrix from a single column of values (C# `Matrix(double[] x)`,
+    // Matrix.cs -- the 1-D-array ctor every Machine Learning class offers as its single-feature
+    // overload). P5 Task 1.
+    explicit Matrix(const std::vector<double>& column_values)
+        : data_(column_values.size(), std::vector<double>(1, 0.0)) {
+        for (std::size_t i = 0; i < column_values.size(); ++i) data_[i][0] = column_values[i];
+    }
+
+    // Builds a matrix from a list of COLUMNS (C# `Matrix(List<double[]> x)`, the ctor the
+    // Machine Learning test files use to assemble a feature matrix from named feature arrays).
+    //
+    // This is a named factory rather than a constructor because C# distinguishes
+    // `Matrix(double[,])` (rows) from `Matrix(List<double[]>)` (columns) by TYPE, and both map
+    // to `std::vector<std::vector<double>>` in C++ -- an overload pair here would be ambiguous
+    // and, worse, would silently transpose whichever call bound to the wrong one. The
+    // row-oriented form is the existing `explicit Matrix(Matrix2D)`. P5 Task 1.
+    static Matrix from_columns(const std::vector<std::vector<double>>& columns) {
+        if (columns.empty())
+            throw std::invalid_argument("Input must have at least one column.");
+        std::size_t rows = columns[0].size();
+        for (const std::vector<double>& c : columns)
+            if (c.size() != rows)
+                throw std::invalid_argument("All columns must have the same number of rows.");
+        Matrix m(static_cast<int>(rows), static_cast<int>(columns.size()));
+        for (std::size_t j = 0; j < columns.size(); ++j)
+            for (std::size_t i = 0; i < rows; ++i) m.data_[i][j] = columns[j][i];
+        return m;
+    }
+
     // Gets the number of rows.
     int number_of_rows() const { return static_cast<int>(data_.size()); }
 
@@ -129,6 +158,24 @@ class Matrix {
     // Get/set the element at the specific row and column index.
     double operator()(int row_index, int column_index) const { return data_[row_index][column_index]; }
     double& operator()(int row_index, int column_index) { return data_[row_index][column_index]; }
+
+    // Returns row `i` as a copy (C# `Matrix.Row(int)`). P5 Task 1 -- every Machine Learning
+    // class walks its predictor matrix a row at a time.
+    std::vector<double> row(int row_index) const {
+        if (row_index < 0 || row_index >= number_of_rows())
+            throw std::out_of_range("Matrix::row: row index out of range");
+        return data_[static_cast<std::size_t>(row_index)];
+    }
+
+    // Returns column `j` as a copy (C# `Matrix.Column(int)`). P5 Task 1.
+    std::vector<double> column(int column_index) const {
+        if (column_index < 0 || column_index >= number_of_columns())
+            throw std::out_of_range("Matrix::column: column index out of range");
+        std::vector<double> c(data_.size());
+        for (std::size_t i = 0; i < data_.size(); ++i)
+            c[i] = data_[i][static_cast<std::size_t>(column_index)];
+        return c;
+    }
 
     // Evaluates whether this matrix is symmetric.
     bool is_symmetric() const {

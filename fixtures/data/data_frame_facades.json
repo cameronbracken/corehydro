@@ -2,6 +2,16 @@
   "kind": "data_frame",
   "source": "src/RMC.BestFit/Models/DataFrame/DataFrame.cs @ c2e6192; hypothesis-test literals from src/RMC.BestFit.Tests/DataFrame/ExactDataHypothesisTests.cs, already transcribed in core/tests/test_data_frame_facades.cpp (P4 Task 5). Datasets are the SAME arrays fixtures/toolbox/hypothesis.json already carries (harricana69/noise126/jb_known13/data30a+data30b/data10a+data10b/trend_cos100), reused verbatim rather than re-transcribed a second time, since that file's arrays are independently verified byte-identical against the checked-out submodule. summary_exact/summary_all/standardized have NO upstream test literal (ExactDataHypothesisTests.cs and NonparametricEmpiricalTests.cs only assert finiteness/NaN patterns for those three methods, not exact values) -- curated with `python3 tools/verify_oracles.py --dump`, each such assertion says so in its own `source`.",
   "datasets": {
+    "unimodal30": [
+      4.5, 5.2, 5.1, 4.9, 5.0, 5.3, 5.4, 4.8, 4.7, 5.2,
+      5.1, 4.6, 5.0, 5.3, 5.1, 4.9, 5.2, 5.0, 4.8, 5.3,
+      4.9, 5.1, 5.2, 4.8, 5.0, 5.1, 5.2, 4.7, 5.3, 5.0
+    ],
+    "bimodal30": [
+      3.8, 3.9, 4.0, 3.9, 4.0, 4.1, 4.0, 3.8, 3.9, 4.0,
+      4.1, 4.0, 3.9, 4.0, 4.0, 4.3, 4.4, 4.4, 4.5, 4.4,
+      4.3, 4.4, 4.5, 4.4, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3
+    ],
     "harricana": [
       122, 244, 214, 173, 229, 156, 212, 263,
       146, 183, 161, 205, 135, 331, 225, 174,
@@ -199,6 +209,157 @@
           "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump` (standardized_value of harricana[0] = 122)" },
         { "method": "standardized", "index": 1, "expected": 2.0952017964896457, "mode": "rel", "tol": 1e-9,
           "source": "no upstream test literal; curated with `python3 tools/verify_oracles.py --dump` (standardized_log10_value of harricana[0] = 122)" }
+      ]
+    },
+    {
+      "name": "unimodality_unimodal",
+      "data": ["unimodal30"],
+      "assertions": [
+        {
+          "method": "unimodality",
+          "expected": 0.4142441,
+          "mode": "abs",
+          "tol": 0.0001,
+          "source": "ExactDataHypothesisTests.Test_UnimodalityTest (R 'mclust'); P5 un-gate"
+        }
+      ]
+    },
+    {
+      "name": "unimodality_bimodal",
+      "data": ["bimodal30"],
+      "assertions": [
+        {
+          "method": "unimodality",
+          "expected": 2.55425752131444e-05,
+          "mode": "abs",
+          "tol": 1e-09,
+          "source": "ExactDataHypothesisTests.Test_UnimodalityTest; the C# tolerance here is 1E-9"
+        }
+      ]
+    },
+    {
+      "name": "harricana_summary_hypothesis",
+      "data": ["harricana"],
+      "assertions": [
+        {
+          "method": "summary_hypothesis",
+          "label": "Jarque-Bera test for normality",
+          "expected": 0.0010565797084871598,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Ljung-Box test for independence",
+          "expected": 0.8204107252215712,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Wald-Wolfowitz test for independence and stationarity (trend)",
+          "expected": 0.24359142152435065,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Mann-Whitney test for homogeneity and stationarity (jump)",
+          "expected": 0.6876140273892082,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Mann-Kendall test for homogeneity and stationarity (trend)",
+          "expected": 0.775729412824826,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Linear trend test for stationarity (trend)",
+          "expected": 0.6720851161438381,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Equal variance t-test for differences in the means of two samples",
+          "expected": 0.4676093704862805,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Unequal variance t-test for differences in the means of two samples",
+          "expected": 0.4690972827379496,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "F-test for differences in the variances of two samples",
+          "expected": 0.22874507839410868,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Mixture model test for unimodality",
+          "expected": 0.0026404025587218882,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
+        }
+      ]
+    },
+    {
+      "name": "harricana_summary_hypothesis_index_30",
+      "data": ["harricana"],
+      "options": { "index": 30 },
+      "assertions": [
+        {
+          "method": "summary_hypothesis",
+          "label": "Mann-Whitney test for homogeneity and stationarity (jump)",
+          "expected": 0.38676057842842093,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library; explicit in-range split index 30"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Equal variance t-test for differences in the means of two samples",
+          "expected": 0.4879018070398864,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library; explicit in-range split index 30"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "Unequal variance t-test for differences in the means of two samples",
+          "expected": 0.4916440378388889,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library; explicit in-range split index 30"
+        },
+        {
+          "method": "summary_hypothesis",
+          "label": "F-test for differences in the variances of two samples",
+          "expected": 0.7162340168184578,
+          "mode": "rel",
+          "tol": 1e-09,
+          "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library; explicit in-range split index 30"
+        }
       ]
     }
   ]

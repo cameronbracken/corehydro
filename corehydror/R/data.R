@@ -317,32 +317,47 @@ data_exact_values <- function(data) {
 
 kDataHypothesisMethods <- c(
   "jarque_bera", "ljung_box", "equal_variance_t", "unequal_variance_t", "f",
-  "linear_trend", "wald_wolfowitz", "mann_whitney", "mann_kendall"
+  "linear_trend", "wald_wolfowitz", "mann_whitney", "mann_kendall", "unimodality",
+  "summary_hypothesis"
 )
 kDataTwoSampleMethods <- c("equal_variance_t", "unequal_variance_t", "f", "mann_whitney")
 
 #' A hypothesis test on an observation record
 #'
-#' Runs one of the nine `DataFrame` hypothesis-test facades over the exact series of an
-#' [analysis_data()] frame (or a plain numeric vector). The four two-sample tests split the record
-#' at `split_index`, comparing observations with a data index below it against those at or above
-#' it -- the split is on the record's INDEX, not on array position, so it agrees with the split a
-#' caller would get by re-running the test on a record whose observations were supplied out of
-#' order.
+#' Runs one of the ten `DataFrame` hypothesis-test facades over the exact series of an
+#' [analysis_data()] frame (or a plain numeric vector), or all ten at once with
+#' `method = "summary_hypothesis"`. The four two-sample tests split the record at `split_index`,
+#' comparing observations with a data index below it against those at or above it -- the split is
+#' on the record's INDEX, not on array position, so it agrees with the split a caller would get by
+#' re-running the test on a record whose observations were supplied out of order.
+#'
+#' @details
+#' `method = "summary_hypothesis"` is the library's own ten-test summary, and it behaves
+#' differently from calling the ten tests individually in three ways worth knowing, all inherited
+#' from upstream:
+#' * `split_index` is OPTIONAL. Left `NULL` (or given a value outside the record's index range)
+#'   it selects the midpoint split rather than erroring.
+#' * Any single test that fails turns the WHOLE result to `NaN`, rather than reporting the nine
+#'   that worked. A record shorter than the 20 observations `"mann_whitney"` needs will therefore
+#'   come back all-`NaN`.
+#' * `"ljung_box"` is run at the library's default lag, ignoring `lag_max`.
 #'
 #' @param data a numeric vector of observations, or a `corehydro_data` object from
 #'   [analysis_data()] (only its exact series is read).
 #' @param method one of `"jarque_bera"` (normality), `"ljung_box"` (autocorrelation),
 #'   `"equal_variance_t"` / `"unequal_variance_t"` (difference in means, Student's / Welch's),
 #'   `"f"` (difference in variances), `"linear_trend"` (trend), `"wald_wolfowitz"` (runs test for
-#'   independence), `"mann_whitney"` (homogeneity / jump), or `"mann_kendall"` (homogeneity /
-#'   trend).
+#'   independence), `"mann_whitney"` (homogeneity / jump), `"mann_kendall"` (homogeneity /
+#'   trend), `"unimodality"` (a Gaussian-mixture likelihood-ratio test, where a SMALL p-value is
+#'   evidence AGAINST unimodality), or `"summary_hypothesis"` (all ten at once -- see Details).
 #' @param split_index the record index to split the sample at; required by `"equal_variance_t"`,
 #'   `"unequal_variance_t"`, `"f"`, and `"mann_whitney"`, ignored otherwise.
 #' @param lag_max the maximum lag for `"ljung_box"`; `NULL` (the default) uses the library's own
 #'   default rule. Ignored by every other method.
 #' @param use_log10 logical; test the log10-transformed values instead of the real-space values.
-#' @return A named numeric vector of length 1, named `method`: the 2-sided p-value.
+#' @return A named numeric vector of length 1, named `method`: the 2-sided p-value. For
+#'   `method = "summary_hypothesis"`, a named numeric vector of length 10 carrying every test's
+#'   p-value, named by the library's own descriptive test names and in its own order.
 #' @seealso [analysis_data_statistics()] for the summary-statistics facades,
 #'   [analysis_data_summary()] for plotting positions.
 #' @export
@@ -370,6 +385,9 @@ analysis_data_hypothesis_test <- function(data, method, split_index = NULL, lag_
     opts$lag_max <- as.integer(lag_max)
   }
   r <- ch_data_frame_run_(method, list(values), "", to_spec_json(opts))
+  if (identical(method, "summary_hypothesis")) {
+    return(stats::setNames(r$values, r$names))
+  }
   out <- r$values[1]
   names(out) <- method
   out

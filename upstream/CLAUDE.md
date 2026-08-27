@@ -122,20 +122,24 @@ The Sobol generator embeds `Properties/new-joe-kuo-6.21201` as a resource.
   caller in this port's scope needs a Hunt search over a bare array; see `search.hpp`'s own header
   for the fidelity notes on both un-severed families). All three retirements are reachable from R
   and Python via the P4 Task 10 `curve_*`/`uncertain_curve_*`/`tabular_function` toolbox surface.
-- **`RMC.BestFit`'s `DataFrame.UnimodalityTest` and `DataFrame.SummaryHypothesisTest`** (both in
-  `#region Hypothesis Testing`, `Models/DataFrame/DataFrame.cs`) are the two members the P4 "data
-  and tests" phase's Task 5 left deferred when it un-gated the other twelve `#region Hypothesis
-  Testing`/`#region Summary Statistics` facade members. Both need
-  `Numerics.MachineLearning.GaussianMixtureModel`, which remains unported (see
-  `core/include/corehydro/numerics/data/hypothesis_tests.hpp`'s own header note on
-  `UnimodalityTest`). Deferred together to **P5**, when `GaussianMixtureModel` lands, because
-  `SummaryHypothesisTest` calls all ten hypothesis-test facades (the nine already-ported ones plus
-  Unimodality) inside one `try`/`catch` that NaNs its entire ten-key result dictionary if any
-  single call throws -- shipping it with a throwing `UnimodalityTest` arm would silently NaN nine
-  otherwise-working results rather than surface the real gap. `docs/upstream-csharp-issues.md`
-  separately records a Mann-Whitney argument-selection pattern in `SummaryHypothesisTest` that
-  looks suspicious on a first read but was checked against the real ternary semantics and is not a
-  bug.
+- **The whole `Numerics/Machine Learning/` subsystem** (`Supervised/`: DecisionTree,
+  RandomForest, KNearestNeighbors, NaiveBayes, GeneralizedLinearModel; `Unsupervised/`: KMeans,
+  GaussianMixtureModel, JenksNaturalBreaks; `Support/`: DecisionNode, JenksCluster) was unported
+  through every prior phase -- nothing in the distribution / estimation / model / analysis scope
+  needed a learner. The **P5 "machine learning" phase** (August 2026) ported all ten files into
+  `core/include/corehydro/numerics/machine_learning/`, reachable from R and Python through the
+  `ml` toolbox group. Its one severance is `GeneralizedLinearModel.Summary()` (see below).
+  `GaussianMixtureModel` landing also un-gated three members earlier phases had deferred:
+  `Numerics`'s own `HypothesisTests.UnimodalityTest` (the thirteenth static, deferred at P4), and
+  **`RMC.BestFit`'s `DataFrame.UnimodalityTest` and `DataFrame.SummaryHypothesisTest`** (both in
+  `#region Hypothesis Testing`, `Models/DataFrame/DataFrame.cs`), which P4's Task 5 left behind
+  when it un-gated the other twelve facade members. `SummaryHypothesisTest` was the consequential
+  one to defer correctly: it calls all ten hypothesis-test facades inside one `try`/`catch` that
+  NaNs its entire ten-key result dictionary if any single call throws, so shipping it with a
+  throwing `UnimodalityTest` arm would have silently NaN'd nine otherwise-working results rather
+  than surfacing the real gap. `docs/upstream-csharp-issues.md` separately records a Mann-Whitney
+  argument-selection pattern in `SummaryHypothesisTest` that looks suspicious on a first read but
+  was checked against the real ternary semantics and is not a bug.
 
 ---
 

@@ -1842,14 +1842,15 @@ def shortest_path(
     return values.reshape(int(r["dims"][0]), int(r["dims"][1]))
 
 
-# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
-# numerics/data/hypothesis_tests.hpp (a port of the C# `HypothesisTests` static class). Mirrors
+# The "hypothesis" toolbox group (P4 Task 3, completed in P5): the thirteen ported hypothesis
+# tests over numerics/data/hypothesis_tests.hpp (a port of the C# `HypothesisTests` static class). Mirrors
 # corehydror's own hypothesis_test() verb; both packages share this signature and produce
 # identical error text so a change here is not one-sided.
 
 _HYPOTHESIS_METHODS = (
     "one_sample_t", "equal_variance_t", "unequal_variance_t", "paired_t", "f", "f_models",
     "jarque_bera", "wald_wolfowitz", "ljung_box", "mann_whitney", "mann_kendall", "linear_trend",
+    "unimodality",
 )
 _HYPOTHESIS_TWO_SAMPLE = ("equal_variance_t", "unequal_variance_t", "paired_t", "f", "mann_whitney")
 
@@ -1868,16 +1869,11 @@ def hypothesis_test(
 ) -> dict:
     """Hypothesis tests.
 
-    Mirrors the C# ``HypothesisTests`` static class: twelve one- and two-sample parametric and
+    Mirrors the C# ``HypothesisTests`` static class: thirteen one- and two-sample parametric and
     nonparametric hypothesis tests, reached through the shared ``hypothesis`` toolbox group.
     Every method but ``"f_models"`` returns the 2-sided p-value of its test statistic;
     ``"f_models"`` (the F-test comparing two nested regression models) additionally returns the
     F statistic itself.
-
-    ``HypothesisTests`` has a thirteenth static, ``UnimodalityTest``, that is NOT exposed here:
-    it trains a ``Numerics.MachineLearning.GaussianMixtureModel`` at k = 1 and k = 2, and the
-    Machine Learning layer has no port yet. It is deferred, not permanently out of scope -- see
-    ``site/status.qmd`` for the tracking note.
 
     Argument use by method, and the C# guard each one inherits:
 
@@ -1899,6 +1895,12 @@ def hypothesis_test(
     - ``"linear_trend"``: ``x`` (the sample), ``index`` (default ``1..len(x)`` -- a VALUE the
       regression is fit against, not an index into ``x``). ``index`` and ``x`` must be the same
       length.
+    - ``"unimodality"``: ``x``. Needs at least 10 observations. Fits a 1-component and a
+      2-component Gaussian mixture model (both at the hard-coded seed 12345, so the result is
+      deterministic) and returns the p-value of the likelihood-ratio statistic against a
+      chi-square with 3 degrees of freedom, so a SMALL p-value is evidence against unimodality.
+      If either mixture fit fails numerically the result is ``nan`` rather than an error,
+      matching upstream.
 
     Parameters
     ----------
@@ -1912,7 +1914,8 @@ def hypothesis_test(
     method : str
         One of ``"one_sample_t"``, ``"equal_variance_t"``, ``"unequal_variance_t"``,
         ``"paired_t"``, ``"f"``, ``"f_models"``, ``"jarque_bera"``, ``"wald_wolfowitz"``,
-        ``"ljung_box"``, ``"mann_whitney"``, ``"mann_kendall"``, ``"linear_trend"``.
+        ``"ljung_box"``, ``"mann_whitney"``, ``"mann_kendall"``, ``"linear_trend"``,
+        ``"unimodality"``.
     population_mean : float
         The hypothesized mean for ``"one_sample_t"``. Default 0.
     lag_max : int, optional

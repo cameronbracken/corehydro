@@ -2816,6 +2816,207 @@ a numbered transcription note at the call site citing the C# line numbers below.
 - **Port handling:** none required -- not yet ported (P5).
 - **Suggested action:** none -- the C# is correct as written.
 
+## BUG — `Statistics.ParallelMean` is not reproducible against itself across machines
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs` @ 2a0357a, `ParallelMean(IList<double>)`
+  (line 143): `double sum = data.AsParallel().Sum(); return sum / data.Count;`.
+- **What:** PLINQ splits the source across partitions, sums each independently, and adds the
+  partial sums. Floating-point addition is not associative, so the result depends on how many
+  partitions the runtime chooses -- which is a function of `Environment.ProcessorCount`. Two
+  machines running the same build on the same data get different last bits. There is no
+  `WithDegreeOfParallelism` or ordered-accumulation constraint to pin it.
+- **Evidence (measured against the real library, this machine, `Environment.ProcessorCount = 10`,
+  `new Random(42)` uniforms scaled to [0, 1000), ULP difference of `ParallelMean` against a serial
+  left-to-right sum):**
+
+  | n | 16 | 32 | 50 | 64 | 100 | 128 | 200 | 256 | 300 | 400 | 500 | 600 | 800 | 1000 | 100000 |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | ULP | -1 | -1 | 0 | -1 | 1 | 2 | -1 | -1 | -3 | -4 | -5 | -7 | 0 | 5 | -29 |
+
+  Note there is no safe small-`n` threshold: PLINQ already partitions at n = 16. `Statistics.Mean`
+  (the serial overload) agrees with the serial sum exactly at every size, as expected.
+- **Why it matters for this port:** two ported call sites read it, both the "mean" column of a
+  prediction-interval table -- `RandomForest.Predict` (over `NumberOfTrees` tree predictions,
+  default 1000) and `KNearestNeighbors.PredictionIntervals` (over `realizations` bootstrap
+  predictions, default 1000). Every other column of both tables (`lower`/`median`/`upper`) comes
+  from `Statistics.Percentile` on a sorted array and is exactly reproducible.
+- **Port handling (intentional divergence, P5 Task 1):** `numerics/data/statistics.hpp`'s
+  `parallel_mean` sums SERIALLY, making it exactly `mean`. There is nothing else it could
+  faithfully do: upstream has no single value to be faithful to. The consequence is stated at the
+  call sites and the affected fixture assertions carry a relative tolerance with this measurement
+  named in their `source` string, rather than an `oracle_skip` mask.
+- **Suggested C# fix:** either sum serially (the arrays reaching this method are small enough that
+  the parallel overhead is unlikely to pay for itself) or, if the parallelism is wanted, make the
+  reduction deterministic -- fix the partition count and accumulate the partial sums in partition
+  order, or use a compensated (Kahan/Neumaier) sum so the partition split stops mattering.
+
+## COSMETIC — `Test_GeneralizedLinearModel.cs`'s commented-out `Summary()` transcripts are stale
+
+- **Where:** `Numerics/Test_Numerics/Machine Learning/Supervised/Test_GeneralizedLinearModel.cs`
+  @ 2a0357a, the `/* ... */` blocks after each test's `Debug.WriteLine(summary[i])` loop.
+- **What:** each test ends with a commented-out copy of the summary table the model used to
+  print. For `Test_SimpleLinearRegression` that block reads `AIC: 71.1801  AICc: 71.2453
+  BIC: 77.6423`. The shipped library returns `343.25605266374168`, `343.32127005504606` and
+  `349.71826989745085` for that exact fit -- 272.08 higher. Nothing fails, because the block is a
+  comment and the test never asserts AIC for the identity link (only `Test_Log`, `Test_Logistic`,
+  `Test_Probit` and `Test_LogLog` do, and those four are current).
+- **How it was found:** the port reproduced the shipped library's values to all 17 digits, and the
+  transcript was mistakenly used as an oracle while writing `test_generalized_linear_model.cpp`;
+  probing the real library settled it. The parameters and standard errors in the same blocks ARE
+  current, which is what makes the stale AIC line easy to trust.
+- **Port handling:** none needed -- the port matches the library exactly. The ctest pins the
+  measured values and says in place why the transcript must not be used.
+- **Lesson worth carrying:** in this corpus, only ASSERTED values in a `[TestMethod]` are oracles.
+  A commented-out `Debug.WriteLine` transcript has nothing keeping it honest.
+- **Suggested C# fix:** refresh or delete the stale block.
+
+## BUG — `KNearestNeighbors.kNN`'s shape guard is a tautology, so `GetNeighbors` never validates its query
+
+- **Where:** `Numerics/Machine Learning/Supervised/KNearestNeighbors.cs` @ 2a0357a, the private
+  `kNN(Matrix xTrain, Vector yTrain, Matrix xTest)` (line 243): `if (NumberOfFeatures !=
+  xTrain.NumberOfColumns) return null!;`.
+- **What:** `NumberOfFeatures` is defined as `X.NumberOfColumns` and `xTrain` is always
+  `this.X`, so the condition is always false. The guard was clearly meant to check the TEST
+  matrix -- which is what the sibling `kNNPredict` does correctly (`xTest.NumberOfColumns !=
+  xTrain.NumberOfColumns`). So all three public `GetNeighbors` overloads accept any query shape.
+- **What happens then:** `Tools.Distance(IList<double> x, IList<double> y)` loops over `x.Count`,
+  the QUERY row. A query with FEWER columns than the training matrix therefore silently computes
+  a partial-dimension distance and returns plausible-looking neighbors computed from a subset of
+  the features; a query with MORE columns indexes past the end of each training row and throws
+  `IndexOutOfRangeException` from inside the distance helper.
+- **Port handling:** the tautological guard is kept for structural fidelity (and does nothing, as
+  upstream); the narrower-query behavior is reproduced exactly, since that is a returned answer a
+  caller could depend on; and the wider-query case throws `std::out_of_range` -- the port's
+  standard mapping for a C# index exception -- rather than reading out of bounds, which would be
+  undefined behavior in C++ rather than a catchable exception. Pinned in
+  `test_k_nearest_neighbors.cpp`.
+- **Suggested C# fix:** `if (xTest.NumberOfColumns != xTrain.NumberOfColumns) return null!;`,
+  matching `kNNPredict`.
+
+## ROBUSTNESS — a default `DecisionTree` regression fit always recurses to one observation per leaf
+
+- **Where:** `Numerics/Machine Learning/Supervised/DecisionTree.cs` @ 2a0357a, `GrowTree`.
+- **What:** the stopping criteria are `bestIndex == -1 || depth >= MaxDepth || numberOfLabels <= 1
+  || numberOfSamples < MinimumSplitSize`, and for regression `numberOfLabels` is set to
+  `yTrain.Length` (the SAMPLE COUNT) rather than the distinct-value count. So the
+  `numberOfLabels <= 1` test only fires on a one-row node, making it redundant with the
+  `numberOfSamples < MinimumSplitSize` test at the default `MinimumSplitSize = 2`. Nor does the
+  purity of a node stop it: `VarianceReduction` on a node whose responses are all equal returns
+  `0 - 0 = 0`, which still beats `BestSplit`'s `double.MinValue` seed, so `bestIndex` is always
+  set. The result is that a default regression tree keeps splitting until every leaf holds a
+  single training observation -- it memorizes the training set.
+- **Evidence (measured against the real library):** `new DecisionTree(x, y, 7).Train()` on twelve
+  points whose responses are only two distinct values (six 10s at x = 1..6, six 100s at
+  x = 100..105) builds a 23-node tree: the root splits at 6, and each side is then a
+  right-leaning chain splitting off one point at a time (thresholds 1, 2, 3, 4, 5 and 100, 101,
+  102, 103, 104), ending in twelve singleton leaves. A tree that stopped on purity would have two
+  leaves. The full probe transcript is pinned in `core/tests/test_decision_tree.cpp`.
+- **Consequence:** it is why upstream's own `Test_DecisionTree_Regression` asserts that the tree
+  LOSES to a linear model, and why its remark says to "use a Random Forest to get better
+  performance" -- bagging is what recovers the variance the unregularized tree throws away. A user
+  reaching for a regression tree directly gets a memorizer unless they set `MinimumSplitSize` or
+  `MaxDepth` themselves. Classification is unaffected: there `numberOfLabels` IS the distinct
+  count, so a pure node stops.
+- **Port handling:** mirrored exactly (the tree shape above is pinned as a C#-measured oracle),
+  with the ordering recorded as a numbered transcription note in `decision_tree.hpp`.
+- **Suggested C# fix:** for regression, stop on variance rather than on count -- either set
+  `numberOfLabels` to the distinct count for both modes, or have `VarianceReduction` return
+  `double.MinValue` when the parent variance is 0. Either changes fitted trees, so it needs
+  re-pinned oracles.
+
+## BUG — `GaussianMixtureModel.MStep`'s positive-definite repair is a no-op (the return value is discarded)
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a, the last
+  line of `MStep()`: `MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`.
+- **What:** `MakeSymmetricPositiveDefinite` is `public static Matrix
+  MakeSymmetricPositiveDefinite(Matrix M)` (`Mathematics/Linear Algebra/MatrixRegularization.cs`
+  line 111) and is PURE -- it builds `S = 0.5 * (M + M.Transpose())`, clones it, adds a
+  trace-scaled ridge, and RETURNS the clone. It never writes through its argument. The GMM
+  discards the return value, so neither the symmetrization nor the ridge ever reaches
+  `Sigmas[k]`, despite the four-line comment above the call explaining why they are needed.
+- **What actually keeps the fit alive:** the diagonal floor a few lines earlier
+  (`Sigmas[k][d, d] = Math.Max(Sigmas[k][d, d], 1E-6 * colVar)`), which is applied by assignment
+  and does work. The M-step's covariance is also symmetric by construction, so the symmetrization
+  has nothing to repair in practice; the missing piece is the off-diagonal ridge that would
+  protect a near-singular component from failing Cholesky in the next E-step.
+- **Port handling:** mirrored, with the call kept and its result explicitly discarded
+  (`(void)...`) so the upstream diff keeps mapping line-for-line, and a numbered transcription
+  note in `gaussian_mixture_model.hpp` saying why assigning it would be a silent behavior change
+  against every oracle.
+- **Suggested C# fix:** `Sigmas[k] = MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`
+  — but note this CHANGES the fitted covariances (and therefore every downstream oracle,
+  including `HypothesisTests.UnimodalityTest`'s p-values), so it needs re-pinned test literals.
+
+## BUG — `GaussianMixtureModel.LogLikelihood` omits the multivariate-normal normalizing constant
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a,
+  `EStep()`: `LikelihoodMatrix[i, k] = -0.5 * (sum + logDet[k]) + Math.Log(Weights[k]);`.
+- **What:** the multivariate normal log density is `-0.5 * (D*log(2*pi) + logDet(Sigma) +
+  quadform)`. The `D*log(2*pi)` term is missing, so the accumulated `LogLikelihood` is short of
+  the true mixture log-likelihood by exactly `n * D/2 * log(2*pi)`.
+- **Evidence (measured):** a one-component fit on the 150 iris sepal-length values reports
+  `LogLikelihood = -46.198986426940849`; the properly normalized Gaussian log-likelihood at the
+  same fitted mean and variance is `-184.03976640764171`. The difference is
+  `150 * 0.5 * log(2*pi) = 137.8407...` to the last bit.
+- **Impact:** none on the fit (a constant offset cannot change which parameters maximize EM) and
+  none on the one upstream consumer: `HypothesisTests.UnimodalityTest` forms
+  `2 * (logLH2 - logLH1)` over two fits of the SAME sample, so the constant cancels exactly. It
+  does matter to a user treating `LogLikelihood` as a comparable model-selection score across
+  datasets of different size or dimension, or feeding it to AIC/BIC.
+- **Port handling:** mirrored, pinned in `test_gaussian_mixture_model.cpp` by asserting the
+  reported value against `normalized + n * D/2 * log(2*pi)` (so the test states the size of the
+  omission rather than hiding it), with a transcription note in the header.
+- **Suggested C# fix:** subtract `0.5 * Dimension * Math.Log(2 * Math.PI)` in the E-step. Every
+  `LogLikelihood` oracle would move by a known constant; the unimodality p-values would not.
+
+## BUG — `KMeans` with `k = 1` reports a random observation as the cluster mean
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/KMeans.cs` @ 2a0357a, `Train(int seed, bool
+  kMeansPlusPlus)`.
+- **What:** `Labels` is zero-initialized by the constructor, and `Train` runs the E-step, compares
+  the new labels against the old ones, and `break`s BEFORE the M-step when nothing changed. With
+  `k = 1` every point is assigned label 0 on the first E-step, which already matches the
+  zero-initialized array, so the loop exits on iteration 1 having never computed a centroid. The
+  reported `Means[0, *]` is whatever the initializer picked -- with k-means++ that is one randomly
+  chosen DATA POINT, not the mean of the data.
+- **Evidence (measured against the real library):** `new KMeans(new double[] {1, 2, 3, 10, 11,
+  12}, 1)` then `Train(7)` reports `Means[0, 0] = 10` and `Iterations = 1`. The sample mean is
+  6.5. The same input at `k = 2` converges correctly (`Means = {11, 2}`, `Iterations = 2`), so the
+  defect is specific to the single-cluster case.
+- **Related, and NOT a defect:** for `k > 1` the same break-before-M-step ordering means a
+  converged fit's `Means` are one M-step behind its `Labels`. That is harmless -- convergence is
+  defined as "the E-step changed nothing", so recomputing the centroids from the final labels
+  reproduces the reported means exactly (pinned in `test_k_means.cpp`). Only `k = 1` degenerates,
+  because there the E-step can never change anything.
+- **Port handling:** mirrored, and pinned by `test_k_means.cpp` against the C#-measured values.
+  `k_means.hpp` carries the ordering as a numbered transcription note.
+- **Suggested C# fix:** initialize `Labels` to `-1` rather than 0, so the first E-step always
+  counts as a change; or run one M-step unconditionally before the convergence test.
+
+## BUG — `JenksNaturalBreaks` throws `IndexOutOfRangeException` when every input value is identical
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/JenksNaturalBreaks.cs` @ 2a0357a,
+  `Estimate()` (the cluster-construction block at the end) into
+  `Support/JenksCluster.cs`'s constructor.
+- **What:** With all values equal, every candidate split has variance 0, so the dynamic program's
+  `>=` update leaves `lowerClassLimits[l, j]` at its smallest recorded start index. Walking the
+  limits back then produces `kclass[0] = lowerClassLimits[k, 2] - 2 = -1`, and
+  `new JenksCluster(SortedData, 0, -1)` immediately evaluates `data[endIndex]` = `data[-1]`.
+- **Evidence (measured against the real library):** `new JenksNaturalBreaks(new double[20] filled
+  with 3.5, 3)` throws `IndexOutOfRangeException: Index was outside the bounds of the array.` The
+  constructor's four documented guards (null, empty, `k <= 0`, `k > n`) all pass, so the failure
+  surfaces from inside the fitted algorithm rather than from validation.
+- **Note on scope:** this is the degenerate case only. Heavily tied data is fine -- upstream's own
+  7,889-value test dataset contains long runs of exact zeros and all three of its 5/7/9-class
+  oracles reproduce.
+- **Port handling:** mirrored. `JenksCluster`'s C++ constructor range-checks and throws
+  `std::out_of_range` (the port's standard mapping for a C# index exception) instead of reading
+  out of bounds, so the failure is the same failure with defined behavior;
+  `test_jenks_natural_breaks.cpp` pins the throw.
+- **Suggested C# fix:** detect `SortedData[0] == SortedData[^1]` (or a variance of 0) up front and
+  either return a single-class fit or throw a described `ArgumentException`, rather than letting a
+  negative index reach `JenksCluster`.
+
 ---
 
 ## How to work this list later

@@ -93,7 +93,11 @@ two arbitrary-length series has no business paying a JSON parse; scalars, enum n
 travel in a small `options_json`. The `network` group is the outlier in that list: its subject,
 `numerics/math/optimization/dynamic/` (BinaryHeap, Dijkstra, Network), is an optimization class
 whose input is a graph rather than a callable, so it joins the toolbox rather than the optimizer
-runner and reaches users as `shortest_path()`. `hypothesis` and `paired_data` are the P4 additions:
+runner and reaches users as `shortest_path()`. `ml` is the P5 addition, dispatching the whole ported Machine Learning layer (see the next
+paragraph) and reaching users as the eight `ml_*()` verbs; it takes the `regression` group's
+matrix-shaped data layout (flat row-major predictors in `data[0]`, response in `data[1]`, optional
+new data in `data[2]`) rather than the one-vector-per-series convention, because these methods
+take a predictor matrix. `hypothesis` and `paired_data` are the P4 additions:
 `hypothesis` dispatches `numerics/data/hypothesis_tests.hpp` (twelve of the thirteen
 `Numerics.Data.Statistics.HypothesisTests` statics -- `UnimodalityTest` is deferred, needing the
 unported `GaussianMixtureModel`) and reaches users as `hypothesis_test()`; `paired_data`
@@ -135,6 +139,24 @@ deliberately reproduce upstream array aliasing that is oracle-visible and must n
 up" -- `shuffled_complex_evolution.hpp`'s reused scratch point and `multi_start.hpp`'s
 re-seated initial-values array; each says so in a numbered transcription note, as does
 `network.hpp` for the three defects that make the C# `Network` class unconstructible.
+
+`core/include/corehydro/numerics/machine_learning/` holds the P5 Machine Learning port, mirroring
+the C# `Numerics.MachineLearning` namespace: `supervised/` (`decision_tree.hpp`,
+`random_forest.hpp`, `k_nearest_neighbors.hpp`, `naive_bayes.hpp`,
+`generalized_linear_model.hpp`), `unsupervised/` (`k_means.hpp`, `gaussian_mixture_model.hpp`,
+`jenks_natural_breaks.hpp`), and `support/` (`decision_node.hpp`, `jenks_cluster.hpp`, plus
+`linq_order.hpp`, a corehydro addition holding the two LINQ ORDERING semantics three call sites
+depend on -- `Distinct()`'s first-appearance order and the stable-`OrderByDescending` mode). Two
+shared helpers were extracted for it and must stay shared rather than re-copied:
+`numerics/utilities/dotnet_sort.hpp` (the .NET introsort, moved VERBATIM out of
+`models/data_frame/data_frame_plotting.hpp` so `KNearestNeighbors` can reach it without depending
+on `models/` -- its tie permutation is oracle-visible for both callers) and
+`numerics/math/optimization/support/nelder_mead_solver.hpp` (the `NelderMead`-to-`Optimizer`
+adapter, moved out of MLSL's private section so `GeneralizedLinearModel` uses the same code).
+`GeneralizedLinearModel.Summary()` is the layer's one severance, presentation-only text alongside
+the Bulletin17C GMM report. Every one of these classes carries numbered transcription notes for
+the upstream behaviours a "cleanup" would silently change; eight of them are also written up in
+`docs/upstream-csharp-issues.md` with the measurement behind each.
 
 `core/include/corehydro/numerics/support/callback_runner.hpp` is the third runner in that family
 and the one place a ported class whose INPUT is a live host-language function is dispatched:
@@ -339,7 +361,12 @@ Rscript -e 'testthat::test_local("corehydror")'
 pixi run python -m pip install --force-reinstall --no-deps ./corehydropy
 pixi run python -m pytest corehydropy/tests -q
 # pytest reads the fixtures MATERIALIZED into site-packages by pip, not the repo symlink, so a
-# fixture edit means nothing to a pytest count until the pip install above is re-run.
+# fixture edit means nothing to a pytest count until the pip install above is re-run. testthat is
+# the OPPOSITE and it is easy to get backwards: `testthat::test_local()` loads the package through
+# pkgload, which shims `system.file()` to resolve into the SOURCE tree's `corehydror/inst/`, and
+# `inst/fixtures` is a symlink to the repo's `fixtures/`. So a fixture edit is live for testthat
+# with no reinstall -- and mutating the INSTALLED library copy to check that a fixture is really
+# being validated proves nothing, because test_local never reads it.
 # vendoring: the core + fixtures are subtree symlinks; builds dereference them (R CMD build for R,
 # tools/materialize_core.py for Python). No sync/drift guard needed. To get a symlink-free tree:
 python3 tools/materialize_core.py    # (CI/release only; rewrites the working tree)
@@ -952,3 +979,59 @@ replays at exact tolerance -- one of seventeen new entries this phase adds to
 108/108 (test_fixtures 6139 checks); oracle gate 6128 reproduced, 0 failed, 11 skipped; testthat
 7161/0; pytest 1795**; `R CMD check --as-cran` holds at the same three NOTEs with no WARNING. No
 `oracle_skip` and no loosened tolerance was added anywhere in the phase.
+
+The machine-learning phase (P5, branch `port-machine-learning`, August 2026) ported the whole
+`Numerics/Machine Learning/` subsystem -- the last major slice of Numerics with no R or Python
+binding -- and is the fifth step of the release arc laid out in
+`docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`. All ten upstream
+files land under `core/include/corehydro/numerics/machine_learning/`: the five supervised learners
+(**DecisionTree**, **RandomForest**, **KNearestNeighbors**, **NaiveBayes**,
+**GeneralizedLinearModel**), the three unsupervised ones (**KMeans**, **GaussianMixtureModel**,
+**JenksNaturalBreaks**) and their two support types (DecisionNode, JenksCluster). They reach users
+as eight `ml_*()` verbs over a new `ml` toolbox group, the eighteenth, taking `toolbox_runner.hpp`
+from seventeen groups to eighteen; the group uses the `regression` group's matrix-shaped data
+layout rather than the one-vector-per-series convention, because these methods take a predictor
+matrix. `GaussianMixtureModel` landing also un-gated the three members P4 had deferred to this
+phase: `HypothesisTests::unimodality_test` (completing that class at all thirteen statics) and the
+two RMC.BestFit `DataFrame` facades `unimodality_test` and `summary_hypothesis_test`, so
+`models/data_frame/` now has no deferred facade. Two shared helpers were extracted rather than
+duplicated: the .NET introsort moved VERBATIM out of `models/data_frame/data_frame_plotting.hpp`
+into `numerics/utilities/dotnet_sort.hpp` (kNN's distance sort needs it -- its tie permutation is
+oracle-visible, and the plotting-position fixtures are the proof the move changed nothing), and
+the NelderMead-to-Optimizer adapter moved out of MLSL's private section into
+`numerics/math/optimization/support/nelder_mead_solver.hpp`. The one severance is
+`GeneralizedLinearModel::Summary()`, presentation-only text alongside the Bulletin17C GMM report.
+
+The phase's headline is that **eight upstream findings came out of it**, each MEASURED against the
+real compiled library rather than inferred, each mirrored rather than silently corrected, and each
+written up in `docs/upstream-csharp-issues.md`: `Statistics.ParallelMean` is not reproducible
+against ITSELF across machines (its PLINQ partitioned sum diverges from a serial sum at every size
+from n = 16 up -- a measured ULP table is in the entry); `GaussianMixtureModel.MStep`'s
+positive-definite repair discards the return value of a pure method, so it never happens;
+`GaussianMixtureModel.LogLikelihood` omits the `-0.5 * D * log(2*pi)` normalizing constant (which
+cancels in its one upstream consumer); `KMeans` with `k = 1` never runs an M-step, so it reports a
+random OBSERVATION as the cluster mean; `JenksNaturalBreaks` throws `IndexOutOfRangeException` on
+all-identical input; a default `DecisionTree` regression fit recurses to one observation per leaf
+(the whole 23-node tree was probed and is pinned); `RandomForest.Predict` has no column-count
+guard while `KNearestNeighbors.kNN`'s guard compares a value against its own definition; and
+`Test_GeneralizedLinearModel.cs`'s commented-out `Summary()` transcripts are STALE for the
+identity link -- the shipped library returns AIC 343.256, not the 71.180 the comment shows, and
+the port reproduces the library to 17 digits. That last one is the lesson to carry: in this
+corpus, only ASSERTED values in a `[TestMethod]` are oracles; a commented-out `Debug.WriteLine`
+transcript has nothing keeping it honest.
+
+Two honest limits are stated in `fixtures/ml/ml_cross_language.json` rather than papered over, and
+both cost that file an assertion. The prediction-interval MEAN column is the `ParallelMean` surface
+above, so it is omitted from the C# comparison entirely. And one kNN lower bound differs from C# by
+2 ULP: compiling the same probe with `-ffp-contract=off` reproduces the C# value exactly, so the
+cause is fused multiply-add contraction inside the shared core (`tools::distance`'s `d += dx * dx`),
+which the SHIPPED packages have too -- `core/CMakeLists.txt`'s `-ffp-contract=off` deliberately
+reaches only `fixture_callback_catalog.cpp`, because the ported core must be compiled the way R and
+Python compile it. R-to-Python agreement is unaffected. Neither omission uses `oracle_skip` and
+neither loosens a tolerance. Worked example **29** (not the 21 the release-arc spec projected -- the
+site numbering is past 21) exercises the whole surface on one regional flood-frequency problem,
+including an out-of-sample comparison where the parametric model BEATS the random forest, with the
+two reasons why. The version bump to **0.12.0** records it. Final numbers: **ctest 117/117; oracle
+gate 6383 reproduced, 0 failed, 11 skipped; testthat 7529/0; pytest 1829**; `R CMD check --as-cran`
+holds at the same three NOTEs with no WARNING. No `oracle_skip` and no loosened tolerance was added
+anywhere in the phase.

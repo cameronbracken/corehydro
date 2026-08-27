@@ -980,6 +980,30 @@ def test_hypothesis_test_linear_trend_defaults_index_to_1_based_range():
     assert r1["p_value"] == pytest.approx(0.9092, abs=1e-4)
 
 
+def test_hypothesis_test_unimodality_reproduces_test_unimodality_test():
+    # P5: un-gated by the GaussianMixtureModel port. The two C# tolerances differ by five orders
+    # of magnitude and are reproduced as written.
+    unimodal = [4.5, 5.2, 5.1, 4.9, 5.0, 5.3, 5.4, 4.8, 4.7, 5.2,
+                5.1, 4.6, 5.0, 5.3, 5.1, 4.9, 5.2, 5.0, 4.8, 5.3,
+                4.9, 5.1, 5.2, 4.8, 5.0, 5.1, 5.2, 4.7, 5.3, 5.0]
+    bimodal = [3.8, 3.9, 4.0, 3.9, 4.0, 4.1, 4.0, 3.8, 3.9, 4.0,
+               4.1, 4.0, 3.9, 4.0, 4.0, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3,
+               4.4, 4.5, 4.4, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3]
+    assert hypothesis_test(unimodal, method="unimodality")["p_value"] == pytest.approx(
+        0.4142441, abs=1e-4
+    )
+    assert hypothesis_test(bimodal, method="unimodality")["p_value"] == pytest.approx(
+        2.55425752131444e-05, abs=1e-9
+    )
+    # The hard-coded seed makes repeated calls identical, and the sample-size guard is upstream's.
+    assert (
+        hypothesis_test(unimodal, method="unimodality")
+        == hypothesis_test(unimodal, method="unimodality")
+    )
+    with pytest.raises(Exception, match="greater than or equal to 10"):
+        hypothesis_test([1.0] * 9, method="unimodality")
+
+
 def test_hypothesis_test_validates_its_arguments():
     with pytest.raises(ValueError, match="`y` is required"):
         hypothesis_test([1, 2, 3], method="equal_variance_t")

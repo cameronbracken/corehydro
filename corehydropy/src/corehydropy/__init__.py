@@ -110,6 +110,16 @@ from .data import (
     analysis_data_summary,
     threshold_diagnostics,
 )
+from .ml import (
+    ml_decision_tree,
+    ml_gaussian_mixture,
+    ml_glm,
+    ml_jenks_breaks,
+    ml_kmeans,
+    ml_knn,
+    ml_naive_bayes,
+    ml_random_forest,
+)
 from .models import (
     Model,
     ModelParameter,
@@ -313,6 +323,15 @@ __all__ = [
     "analysis_data_statistics",
     "analysis_data_summary",
     "threshold_diagnostics",
+    # machine learning
+    "ml_decision_tree",
+    "ml_gaussian_mixture",
+    "ml_glm",
+    "ml_jenks_breaks",
+    "ml_kmeans",
+    "ml_knn",
+    "ml_naive_bayes",
+    "ml_random_forest",
     "Model",
     "Trend",
     "ModelParameter",

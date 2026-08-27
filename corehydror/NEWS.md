@@ -1,3 +1,43 @@
+# corehydror 0.12.0
+
+The Machine Learning layer, the last major slice of Numerics with no R or Python binding: three
+unsupervised methods and five supervised ones. Its `GaussianMixtureModel` also un-gates the three
+members P4 deferred. See `CHANGELOG.md` at the repository root for the full account.
+
+## New features
+
+* Eight `ml_*()` verbs over the ported `Numerics.MachineLearning` namespace. Unsupervised:
+  `ml_kmeans()`, `ml_gaussian_mixture()` and `ml_jenks_breaks()`. Supervised:
+  `ml_decision_tree()`, `ml_random_forest()`, `ml_knn()`, `ml_naive_bayes()` and `ml_glm()`. Each
+  trains and answers in one call, the shape `linear_regression()` already uses, and a seeded fit
+  is bit-identical to the same call in Python.
+* `ml_glm()` fits a generalized linear model over five families, selected by `link`:
+  `"identity"` (Normal), `"log"` (Poisson), and `"logit"`, `"probit"` and
+  `"complementary_log_log"` (Binomial). It returns coefficients, standard errors, z-values,
+  p-values, the three information criteria, the covariance matrix and the residuals, with
+  optional predictions and confidence bands. `robust_se = TRUE` switches to the sandwich
+  covariance.
+* `hypothesis_test(method = "unimodality")` completes `HypothesisTests` at all thirteen of its
+  C# statics. It was deferred in 0.11.0 because it fits a `GaussianMixtureModel`, which now
+  exists.
+* `analysis_data_hypothesis_test()` gains `method = "unimodality"` and
+  `method = "summary_hypothesis"`, the two `DataFrame` facades deferred alongside it.
+  `"summary_hypothesis"` returns all ten tests at once and is documented with the three ways it
+  differs from calling them individually, all inherited from upstream.
+
+## Notes
+
+* Cluster labels (`ml_kmeans()`, `ml_gaussian_mixture()`) and neighbour indices (`ml_knn()`) are
+  0-based in both R and Python, matching the library's own indexing and the choice
+  `shortest_path()` made in 0.10.0.
+* `ml_glm()`'s `local_method` accepts five optimizers while `optim_minimize()`'s accepts three.
+  The two upstream classes construct different sets, so each surface follows its own.
+* Eight upstream behaviours worth knowing before relying on a result are documented at the verbs
+  that expose them and, in full, in `docs/upstream-csharp-issues.md`: among them, a default
+  regression tree recurses until every leaf holds one training observation, `ml_kmeans(k = 1)`
+  reports a random observation rather than the mean, the Gaussian mixture's `log_likelihood`
+  omits its normalizing constant, and `ml_jenks_breaks()` errors on fully degenerate input.
+
 # corehydror 0.11.0
 
 The data-and-testing layer that closes out the port: the twelve hypothesis tests, the two
