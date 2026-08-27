@@ -24,23 +24,53 @@ check_pair <- function(x, y, x_name = "x", y_name = "y") {
   invisible(NULL)
 }
 
-#' Correlation between two samples
+#' Correlation between two samples, or a correlation matrix
 #'
-#' Mirrors the C# `Correlation` class of the Numerics library. Upstream's matrix overloads
-#' (`Pearson(double[,])`, `Spearman(double[,])`) are not ported, so only the paired-vector forms
-#' are available here.
+#' Mirrors the C# `Correlation` class of the Numerics library: the paired-vector forms
+#' (`Correlation.Pearson`/`Spearman`/`KendallsTau`, both `IList<double>` overloads) and the
+#' Pearson/Spearman column-pairwise matrix overloads (`Pearson(double[,])`/`Spearman(double[,])`).
 #'
-#' @param x,y numeric vectors of equal length, at least two elements.
-#' @param method one of `"pearson"` (the default), `"spearman"`, or `"kendall"`.
-#' @return a single numeric correlation coefficient.
+#' @param x a numeric vector (paired-vector form, `y` required), or a numeric matrix or data
+#'   frame (matrix form, `y` omitted) with one column per variable.
+#' @param y a numeric vector of the same length as `x`, or `NULL` (the default) to compute the
+#'   correlation matrix of `x`'s columns instead.
+#' @param method one of `"pearson"` (the default), `"spearman"`, or `"kendall"`. `"kendall"` is
+#'   rejected when `y` is `NULL`: upstream has no `KendallsTau(double[,])` overload, so there is
+#'   no Kendall matrix form to compute.
+#' @return with `y` given, a single numeric correlation coefficient; with `y` `NULL`, a numeric
+#'   `ncol(x)`-by-`ncol(x)` matrix, dimnamed from `x`'s columns when `x` has column names.
 #' @examples
 #' x <- c(14, 8, 32, 7, 3, 15)
 #' y <- c(10, 5, 7, 4, 3, 8)
 #' correlation(x, y)
 #' correlation(x, y, method = "kendall")
+#' correlation(cbind(x, y))
 #' @export
-correlation <- function(x, y, method = c("pearson", "spearman", "kendall")) {
+correlation <- function(x, y = NULL, method = c("pearson", "spearman", "kendall")) {
   method <- match.arg(method)
+  if (is.null(y)) {
+    if (method == "kendall") {
+      stop("`method = \"kendall\"` has no matrix form; upstream Correlation has no ",
+           "KendallsTau(double[,]) overload", call. = FALSE)
+    }
+    x <- as.matrix(x)
+    if (!is.numeric(x)) {
+      stop("`x` must be a numeric matrix or data frame when `y` is NULL", call. = FALSE)
+    }
+    # C4 (P4 whole-branch review): as.matrix() on a plain vector silently produces an n x 1
+    # matrix rather than erroring, so `correlation(x)` on a bare vector used to return a 1x1
+    # matrix of 1 (a vector's trivial self-correlation) instead of raising the way corehydropy
+    # does for the same 1D input.
+    if (ncol(x) < 2L) {
+      stop("`x` must be a 2D array (observations in rows, variables in columns)", call. = FALSE)
+    }
+    p <- ncol(x)
+    data <- lapply(seq_len(p), function(j) x[, j])
+    r <- toolbox_run("correlation", paste0(method, "_matrix"), data)
+    m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+    dimnames(m) <- list(colnames(x), colnames(x))
+    return(m)
+  }
   check_pair(x, y)
   toolbox_run("correlation", method, list(x, y))$values[[1]]
 }
@@ -355,33 +385,68 @@ histogram <- function(x, bins = NULL) {
 
 #' Interpolate a paired series
 #'
-#' Mirrors the C# `Linear` interpolater of the Numerics library, including its x and y
-#' transforms.
+#' Mirrors the C# `Linear`, `CubicSpline`, and `Polynomial` interpolaters of the Numerics
+#' library. `x_transform`, `y_transform`, and `extrapolate` are Linear-only in C# (neither
+#' `CubicSpline` nor `Polynomial` has a transform surface or an `Extrapolate()` method), so
+#' they must be left at their defaults for `method = "cubic_spline"` or `"polynomial"`.
 #'
 #' @param x,y numeric vectors of equal length defining the knots.
 #' @param xout numeric vector of positions to interpolate at.
-#' @param x_transform,y_transform one of `"none"` (the default), `"log"`, or `"normal_z"`.
+#' @param method `"linear"` (the default), `"cubic_spline"`, or `"polynomial"`.
+#' @param order the polynomial order -- there are `order + 1` terms for each polynomial
+#'   function. Required when `method = "polynomial"`; must be `NULL` otherwise.
+#' @param x_transform,y_transform one of `"none"` (the default), `"logarithmic"` (also accepted
+#'   as `"log"` -- both spellings are equivalent, see the note below), or `"normal_z"`.
+#'   Linear-only.
 #' @param sort_order `"ascending"` (the default) or `"descending"`, describing `x`.
 #' @param extrapolate whether to extend the end segments beyond the knots. Default `FALSE`,
 #'   which clamps to the end knot, matching the C# `Interpolate()` default; `TRUE` calls the C#
-#'   `Extrapolate()` method instead.
+#'   `Extrapolate()` method instead. Linear-only.
 #' @return a numeric vector the same length as `xout`.
+#' @note `x_transform`/`y_transform` accept both `"log"` and `"logarithmic"` for the same
+#'   `Transform::Logarithmic` value everywhere a transform argument appears in this package
+#'   ([curve_interpolate()], [tabular_function()], and here); `"logarithmic"` (matching the C#
+#'   enum member name `Transform.Logarithmic`) is the spelling used in this package's own
+#'   examples and documentation.
 #' @examples
 #' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5))
+#' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5), method = "cubic_spline")
+#' interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5), method = "polynomial", order = 3)
 #' @export
-interpolate <- function(x, y, xout, x_transform = c("none", "log", "normal_z"),
-                        y_transform = c("none", "log", "normal_z"),
+interpolate <- function(x, y, xout, method = c("linear", "cubic_spline", "polynomial"),
+                        order = NULL,
+                        x_transform = c("none", "logarithmic", "log", "normal_z"),
+                        y_transform = c("none", "logarithmic", "log", "normal_z"),
                         sort_order = c("ascending", "descending"), extrapolate = FALSE) {
   check_pair(x, y)
   if (!is.numeric(xout)) {
     stop("`xout` must be numeric", call. = FALSE)
   }
+  method <- match.arg(method)
   x_transform <- match.arg(x_transform)
   y_transform <- match.arg(y_transform)
   sort_order <- match.arg(sort_order)
-  toolbox_run("interpolation", "linear", list(x, y, xout),
-              list(x_transform = x_transform, y_transform = y_transform,
-                   sort_order = sort_order, extrapolate = isTRUE(extrapolate)))$values
+  if (method != "linear" &&
+      (x_transform != "none" || y_transform != "none" || isTRUE(extrapolate))) {
+    stop("`x_transform`, `y_transform`, and `extrapolate` are linear-only; the C# ",
+         "CubicSpline/Polynomial classes have neither a transform surface nor an ",
+         "Extrapolate() method", call. = FALSE)
+  }
+  if (method == "polynomial") {
+    if (is.null(order)) {
+      stop("`order` is required when method = \"polynomial\"", call. = FALSE)
+    }
+  } else if (!is.null(order)) {
+    stop("`order` only applies when method = \"polynomial\"", call. = FALSE)
+  }
+  opts <- list(sort_order = sort_order)
+  if (method == "linear") {
+    opts <- c(opts, list(x_transform = x_transform, y_transform = y_transform,
+                         extrapolate = isTRUE(extrapolate)))
+  } else if (method == "polynomial") {
+    opts <- c(opts, list(order = as.integer(order)))
+  }
+  toolbox_run("interpolation", method, list(x, y, xout), opts)$values
 }
 
 #' Interpolate a 2D grid (bilinear interpolation)
@@ -392,17 +457,17 @@ interpolate <- function(x, y, xout, x_transform = c("none", "log", "normal_z"),
 #' @param y numeric matrix with `length(x1)` rows and `length(x2)` columns, `y[i, j]` the value
 #'   at `(x1[i], x2[j])`.
 #' @param x1out,x2out numeric vectors of equal length, positions to interpolate at.
-#' @param x1_transform,x2_transform,y_transform one of `"none"` (the default), `"log"`, or
-#'   `"normal_z"`.
+#' @param x1_transform,x2_transform,y_transform one of `"none"` (the default), `"logarithmic"`
+#'   (also accepted as `"log"`), or `"normal_z"`. See the note on [interpolate()].
 #' @param sort_order `"ascending"` (the default) or `"descending"`, describing `x1` and `x2`.
 #' @return a numeric vector the same length as `x1out`/`x2out`.
 #' @examples
 #' interpolate_2d(c(1, 2, 3), c(1, 2, 3), diag(3), c(1.5), c(1.5))
 #' @export
 interpolate_2d <- function(x1, x2, y, x1out, x2out,
-                           x1_transform = c("none", "log", "normal_z"),
-                           x2_transform = c("none", "log", "normal_z"),
-                           y_transform = c("none", "log", "normal_z"),
+                           x1_transform = c("none", "logarithmic", "log", "normal_z"),
+                           x2_transform = c("none", "logarithmic", "log", "normal_z"),
+                           y_transform = c("none", "logarithmic", "log", "normal_z"),
                            sort_order = c("ascending", "descending")) {
   if (!is.numeric(x1) || !is.numeric(x2)) {
     stop("`x1` and `x2` must be numeric vectors", call. = FALSE)
@@ -751,4 +816,758 @@ trend_names <- function() toolbox_run("trend", "names")$names
 # wants (numerics/support/toolbox/trend.hpp).
 unclass_trend <- function(tr) {
   list(type = tr$type, start_index = tr$start_index, values = tr$values)
+}
+
+# The "linalg" toolbox group (P2 "math extras" Task 9): QRDecomposition (Householder
+# reflections) and GaussJordanElimination. Matrices cross the runner boundary as ONE
+# flattened row-major vector plus `rows`/`cols` options, the same convention
+# interpolate_2d()'s bilinear `y` uses above -- since R matrices are stored column-major,
+# every verb below flattens via `as.double(t(m))`, and every result comes back via
+# `matrix(..., byrow = TRUE)`.
+
+#' QR decomposition
+#'
+#' Mirrors the C# `QRDecomposition` class (Householder reflections): decomposes the `M x N`
+#' matrix `a` into an `M x M` orthogonal matrix `q` and an `M x N` upper triangular matrix
+#' `r` such that `q %*% r` reproduces `a`. The C# `RMatrix` property is named `r` here (`R`
+#' has no naming collision in this package, unlike in the C# codebase).
+#'
+#' @param a a numeric matrix, M x N.
+#' @return a list with elements `q` (M x M) and `r` (M x N).
+#' @examples
+#' a <- matrix(c(1, 0, 2, 1, 2, 5, 1, 5, -1), nrow = 3)
+#' qr <- qr_decomposition(a)
+#' qr$q %*% qr$r  # reproduces a
+#' @export
+qr_decomposition <- function(a) {
+  a <- as.matrix(a)
+  if (!is.numeric(a)) {
+    stop("`a` must be a numeric matrix", call. = FALSE)
+  }
+  opts <- list(rows = as.integer(nrow(a)), cols = as.integer(ncol(a)))
+  a_flat <- as.double(t(a))
+  q <- toolbox_run("linalg", "qr_q", list(a_flat), opts)
+  r <- toolbox_run("linalg", "qr_r", list(a_flat), opts)
+  list(
+    q = matrix(q$values, nrow = q$dims[1], ncol = q$dims[2], byrow = TRUE),
+    r = matrix(r$values, nrow = r$dims[1], ncol = r$dims[2], byrow = TRUE)
+  )
+}
+
+#' Solve a linear system by QR decomposition
+#'
+#' Mirrors the C# `QRDecomposition::Solve` overloads (vector and matrix right-hand sides).
+#' `a` need not be square: an overdetermined system is solved in the least-squares sense; an
+#' underdetermined system leaves the trailing `ncol(a) - min(nrow(a), ncol(a))` unknowns at
+#' zero (matching `QRDecomposition.Solve`'s own truncated back-substitution, which only ever
+#' fills indices below `min(m, n)`).
+#'
+#' @param a a numeric matrix, M x N.
+#' @param b a numeric vector of length M, or a numeric matrix with M rows.
+#' @return a numeric vector of length N when `b` is a vector, or an `N x ncol(b)` matrix when
+#'   `b` is a matrix.
+#' @examples
+#' a <- matrix(c(1, 2, 3, 0, 1, 4, 5, 6, 0), nrow = 3, byrow = TRUE)
+#' qr_solve(a, c(1, 2, 3))
+#' @export
+qr_solve <- function(a, b) {
+  a <- as.matrix(a)
+  if (!is.numeric(a)) {
+    stop("`a` must be a numeric matrix", call. = FALSE)
+  }
+  rows <- nrow(a)
+  cols <- ncol(a)
+  a_flat <- as.double(t(a))
+  opts <- list(rows = as.integer(rows), cols = as.integer(cols))
+  if (is.matrix(b)) {
+    if (nrow(b) != rows) {
+      stop(sprintf("`b` must have %d rows, matching `a`; got %d", rows, nrow(b)), call. = FALSE)
+    }
+    opts$b_cols <- as.integer(ncol(b))
+    b_flat <- as.double(t(b))
+    r <- toolbox_run("linalg", "qr_solve_matrix", list(a_flat, b_flat), opts)
+    matrix(r$values, nrow = r$dims[1], ncol = r$dims[2], byrow = TRUE)
+  } else {
+    if (!is.numeric(b) || length(b) != rows) {
+      stop(sprintf("`b` must be a numeric vector of length %d, matching `a`'s rows; got %d",
+                   rows, length(b)), call. = FALSE)
+    }
+    toolbox_run("linalg", "qr_solve", list(a_flat, as.double(b)), opts)$values
+  }
+}
+
+#' Gauss-Jordan elimination
+#'
+#' Mirrors the C# `GaussJordanElimination::Solve(ref Matrix A, ref Matrix B)`: one full-pivot
+#' Gauss-Jordan reduction that produces `a`'s inverse and, when `b` is supplied, the solution
+#' set of `a %*% x = b`. Unlike the C# `ref, ref` in-place API, `a` and `b` are never mutated
+#' in R -- both results come back as new matrices.
+#'
+#' @param a a square numeric matrix, N x N.
+#' @param b a numeric matrix with N rows (the right-hand sides). Omit for the inverse alone,
+#'   in which case `solution` is an `N x 0` matrix.
+#' @return a list with elements `inverse` (`a`'s inverse, N x N) and `solution` (`N x ncol(b)`).
+#' @examples
+#' a <- matrix(c(1, 3, 3, 1, 4, 3, 1, 3, 4), nrow = 3, byrow = TRUE)
+#' gauss_jordan(a)$inverse
+#' @export
+gauss_jordan <- function(a, b = NULL) {
+  a <- as.matrix(a)
+  if (!is.numeric(a) || nrow(a) != ncol(a)) {
+    stop("`a` must be a square numeric matrix", call. = FALSE)
+  }
+  n <- nrow(a)
+  a_flat <- as.double(t(a))
+  if (is.null(b)) {
+    b_flat <- double(0)
+    b_cols <- 0L
+  } else {
+    b <- as.matrix(b)
+    if (!is.numeric(b) || nrow(b) != n) {
+      stop(sprintf("`b` must have %d rows, matching `a`; got %d", n, nrow(b)), call. = FALSE)
+    }
+    b_flat <- as.double(t(b))
+    b_cols <- as.integer(ncol(b))
+  }
+  opts <- list(rows = as.integer(n), cols = as.integer(n), b_cols = b_cols)
+  inv <- toolbox_run("linalg", "gauss_jordan_inverse", list(a_flat, b_flat), opts)
+  sol <- toolbox_run("linalg", "gauss_jordan_solution", list(a_flat, b_flat), opts)
+  list(
+    inverse = matrix(inv$values, nrow = inv$dims[1], ncol = inv$dims[2], byrow = TRUE),
+    solution = matrix(sol$values, nrow = sol$dims[1], ncol = sol$dims[2], byrow = TRUE)
+  )
+}
+
+# The "special" toolbox group (P2 "math extras" Task 10): the ported Debye and Evaluate special
+# functions. Both verbs vectorize over `x`, returning one value per element -- there is no
+# matrix result here, so no flatten/reassemble step like `linalg`'s above.
+
+#' The Debye function
+#'
+#' Mirrors the C# `Debye.Function`: a piecewise approximation of
+#' `D(x) = (n/x^n) * integral_0^x t^n / (e^t - 1) dt`, vectorized over `x`.
+#'
+#' @param x a non-negative numeric vector.
+#' @return a numeric vector the same length as `x`.
+#' @examples
+#' debye(0.5)
+#' debye(c(0.1, 1, 10))
+#' @export
+debye <- function(x) {
+  toolbox_run("special", "debye", list(as.double(x)))$values
+}
+
+#' Evaluate a polynomial
+#'
+#' Mirrors the C# `Evaluate` class's three polynomial evaluators (Horner's method), vectorized
+#' over `x` against one shared `coefficients` vector: `variant = "standard"` calls
+#' `Evaluate.Polynomial` (coefficients in ASCENDING order, `coefficients[1]` the constant term);
+#' `"reverse"` calls `Evaluate.PolynomialRev` (coefficients in DESCENDING order,
+#' `coefficients[1]` the highest-order term), optionally truncated to order `n + 1` via `n`;
+#' `"reverse_unit"` calls `Evaluate.PolynomialRev_1` (DESCENDING order with an implicit leading
+#' coefficient of 1).
+#'
+#' @param coefficients a numeric vector of polynomial coefficients.
+#' @param x a numeric vector, the points at which to evaluate.
+#' @param variant one of `"standard"` (default), `"reverse"`, or `"reverse_unit"`.
+#' @param n an optional integer redefining the polynomial's order to `n + 1`; only valid with
+#'   `variant = "reverse"`.
+#' @return a numeric vector the same length as `x`.
+#' @examples
+#' polynomial_eval(c(3, 5, 7), 4)
+#' polynomial_eval(c(3, 5, 7), 4, variant = "reverse")
+#' polynomial_eval(c(3, 5, 7), 4, variant = "reverse", n = 1)
+#' @export
+polynomial_eval <- function(coefficients, x, variant = c("standard", "reverse", "reverse_unit"),
+                            n = NULL) {
+  variant <- match.arg(variant)
+  if (!is.null(n) && variant != "reverse") {
+    stop("`n` is only valid with variant = \"reverse\"", call. = FALSE)
+  }
+  method <- switch(variant,
+    standard = "polynomial",
+    reverse = "polynomial_rev",
+    reverse_unit = "polynomial_rev_1"
+  )
+  opts <- if (is.null(n)) list() else list(n = as.integer(n))
+  toolbox_run("special", method, list(as.double(coefficients), as.double(x)), opts)$values
+}
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
+# The severed third implementation, TabularFunction, depends on the unported Paired Data
+# subsystem (see upstream/CLAUDE.md) and is not exposed.
+
+#' Evaluate a univariate function
+#'
+#' Mirrors the Numerics `LinearFunction` (`Y = alpha + beta*X + epsilon`) and `PowerFunction`
+#' (`Y = alpha * (X - xi)^beta * epsilon`), both over optional normally distributed noise
+#' (`epsilon ~ Normal(0, sigma)`) via `confidence_level`. `is_inverse` (PowerFunction's own
+#' `IsInverse` switch) selects which of the forward power law or its algebraic inverse
+#' `Function()`/`inverse = TRUE` evaluates -- an independent axis from `inverse` itself, which
+#' picks `Function()` vs. `InverseFunction()` on whichever of the two `is_inverse` selects.
+#'
+#' @param type `"linear"` or `"power"`, matched case-insensitively.
+#' @param parameters a numeric vector: `c(alpha, beta, sigma)` for `"linear"`; `c(alpha, beta,
+#'   xi, sigma)` for `"power"`. `sigma` is still required (e.g. 0) when `confidence_level` is
+#'   `NULL` -- it only enters the calculation on the non-deterministic path.
+#' @param x a numeric vector: the values to evaluate the function at, or (when `inverse = TRUE`)
+#'   the values to evaluate the inverse function at.
+#' @param inverse if `TRUE`, evaluates the inverse function (`InverseFunction()`) instead of the
+#'   forward function (`Function()`).
+#' @param is_inverse `"power"`-only: `PowerFunction`'s own `IsInverse` property. An error for
+#'   `type = "linear"`.
+#' @param confidence_level if given, evaluates the non-deterministic path at this quantile level;
+#'   if `NULL` (default), evaluates deterministically.
+#' @return a numeric vector the same length as `x`.
+#' @examples
+#' univariate_function("linear", c(0, 1, 0), c(1, 2, 3))
+#' univariate_function("power", c(5, 2, 0, 3), 6)
+#' univariate_function("power", c(5, 2, 0, 3), 6, confidence_level = 0.75)
+#' @export
+univariate_function <- function(type, parameters, x, inverse = FALSE, is_inverse = FALSE,
+                                 confidence_level = NULL) {
+  known <- c("linear", "power")
+  hit <- match(tolower(type), known)
+  if (is.na(hit)) {
+    stop(sprintf("unknown function type \"%s\". Available: %s", type,
+                 paste(known, collapse = ", ")), call. = FALSE)
+  }
+  type <- known[hit]
+  if (isTRUE(is_inverse) && !identical(type, "power")) {
+    stop(sprintf("`is_inverse` is only used for type \"power\"; got type \"%s\"", type),
+         call. = FALSE)
+  }
+  if (!is.numeric(parameters) || length(parameters) == 0L) {
+    stop("`parameters` must be a non-empty numeric vector", call. = FALSE)
+  }
+  if (!is.numeric(x) || length(x) == 0L) {
+    stop("`x` must be a non-empty numeric vector", call. = FALSE)
+  }
+  opts <- list(parameters = as.double(parameters))
+  opts[["function"]] <- type
+  if (identical(type, "power")) opts$is_inverse <- isTRUE(is_inverse)
+  if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
+  method <- if (isTRUE(inverse)) "inverse" else "evaluate"
+  toolbox_run("functions", method, list(as.double(x)), opts)$values
+}
+
+# The "network" toolbox group (P3 optimizers Task 10): the Dijkstra shortest-path solver over an
+# edge list. Edges cross the runner boundary as four parallel numeric vectors -- from, to,
+# weight, edge index -- with the destinations in the options object, and the result table comes
+# back flattened row-major with dims = {node_count, 3}, the same convention `linalg`'s matrix
+# results use above.
+
+# Internal: reject the mistakes an edge list can make, naming the argument. Returns the
+# validated, coerced edge index vector.
+check_edges <- function(from, to, weight, edge_index) {
+  if (!is.numeric(from) || !is.numeric(to) || !is.numeric(weight)) {
+    stop("`from`, `to` and `weight` must be numeric vectors", call. = FALSE)
+  }
+  n <- length(from)
+  if (n == 0L) {
+    stop("`from`, `to` and `weight` must describe at least one edge", call. = FALSE)
+  }
+  if (length(to) != n || length(weight) != n) {
+    stop(sprintf(paste0("`from`, `to` and `weight` must have the same length; ",
+                        "got %d, %d and %d"), n, length(to), length(weight)), call. = FALSE)
+  }
+  if (is.null(edge_index)) {
+    return(as.double(seq_len(n) - 1L))
+  }
+  if (!is.numeric(edge_index) || length(edge_index) != n) {
+    stop(sprintf("`edge_index` must be a numeric vector the same length as `from`; got %d for %d",
+                 length(edge_index), n), call. = FALSE)
+  }
+  as.double(edge_index)
+}
+
+# Internal: a node index is a whole, non-negative number. The shared C++ group header checks this
+# too (a fixture case reaches it directly), but checking here as well keeps the message naming
+# the R argument and keeps the two packages' errors identical.
+check_node_indices <- function(x, what) {
+  if (any(!is.finite(x)) || any(x != floor(x)) || any(x < 0)) {
+    stop(sprintf("`%s` must be whole, non-negative node indices", what), call. = FALSE)
+  }
+  invisible(NULL)
+}
+
+#' Shortest paths through a network
+#'
+#' Mirrors the C# `Dijkstra.Solve` overloads: solves the cheapest route from EVERY node of a
+#' directed, weighted graph to a set of destination nodes at once, running the search backwards
+#' from the destinations. The answer is a routing table -- for each node, which neighbour to step
+#' to, along which edge, and at what remaining cost.
+#'
+#' Node indices are 0-based in both `corehydror` and `corehydropy`, matching the C# result table
+#' the two packages share; a graph with `n` nodes uses indices `0` to `n - 1`. Unreachable nodes
+#' carry `cost = Inf` with `next_node = -1` and `edge_index = -1`, and a destination node carries
+#' `cost = 0` with `next_node` equal to its own index.
+#'
+#' Costs accumulate in single precision, because the ported solver does (C# declares
+#' `float Weight` and its own tests assert the table by exact `float` equality). Fractional
+#' weights therefore round to `float` before they are summed.
+#'
+#' @param from,to,weight numeric vectors of the same length, one element per directed edge:
+#'   the start node index, the end node index, and the cost of traversing the edge. `from` and
+#'   `to` must be whole, non-negative numbers.
+#' @param destinations a numeric vector of one or more destination node indices. With several
+#'   destinations, each node keeps whichever destination it reaches most cheaply.
+#' @param edge_index an optional numeric vector the same length as `from`, labelling each edge
+#'   (typically an index into whatever the edges came from -- a river reach, a road segment).
+#'   Defaults to `0:(length(from) - 1)`. These labels are what the `edge_index` result column
+#'   reports, and they need not be distinct.
+#' @param node_count an optional node count. Defaults to `max(from, to) + 1`; supply a larger
+#'   value to include isolated nodes carrying no edge, which then report `cost = Inf`. A value
+#'   below `max(from, to) + 1` is an error: the graph would not fit the routing table it asks for.
+#' @return a data frame with one row per node, in node-index order, and columns `next_node`,
+#'   `edge_index` (both integer) and `cost` (numeric).
+#' @examples
+#' # 0 -> 1 -> 2, plus a disconnected node 3
+#' shortest_path(
+#'   from = c(0, 1),
+#'   to = c(1, 2),
+#'   weight = c(1, 1),
+#'   destinations = 2,
+#'   node_count = 4
+#' )
+#' @export
+shortest_path <- function(from, to, weight, destinations, edge_index = NULL, node_count = NULL) {
+  edge_index <- check_edges(from, to, weight, edge_index)
+  if (!is.numeric(destinations)) {
+    stop("`destinations` must be a numeric vector of node indices", call. = FALSE)
+  }
+  if (length(destinations) == 0L) {
+    stop("`destinations` must name at least one destination node", call. = FALSE)
+  }
+  check_node_indices(from, "from")
+  check_node_indices(to, "to")
+  check_node_indices(destinations, "destinations")
+  opts <- list(destinations = spec_array(as.double(destinations)))
+  n_nodes <- max(from, to) + 1
+  if (!is.null(node_count)) {
+    if (!is.numeric(node_count) || length(node_count) != 1L || node_count < 1) {
+      stop("`node_count` must be a single positive number", call. = FALSE)
+    }
+    n_nodes <- as.double(node_count)
+    # A `node_count` below `max(from, to) + 1` cannot describe the edge list. The ported solver
+    # raises the C# IndexOutOfRangeException message from inside itself when it reaches the
+    # offending index, which is both late and unhelpful here, so reject it up front and name the
+    # argument. This is deliberately STRICTER than the C# solver, whose bounds check is lazy: it
+    # accepts a too-small count as long as no out-of-range index is ever reached (see
+    # dijkstra.hpp note 9). That input is a graph the caller cannot have meant.
+    if (n_nodes < max(from, to) + 1) {
+      stop(sprintf(paste0("`node_count` must be at least %d, the number of nodes `from` and `to` ",
+                          "describe; got %d"),
+                   as.integer(max(from, to) + 1), as.integer(n_nodes)), call. = FALSE)
+    }
+    opts$node_count <- n_nodes
+  }
+  if (any(destinations >= n_nodes)) {
+    stop(sprintf("`destinations` is out of range for a network of %d nodes", as.integer(n_nodes)),
+         call. = FALSE)
+  }
+  r <- toolbox_run(
+    "network", "dijkstra",
+    list(from, to, weight, edge_index),
+    opts
+  )
+  m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+  data.frame(
+    next_node = as.integer(m[, 1]),
+    edge_index = as.integer(m[, 2]),
+    cost = m[, 3]
+  )
+}
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# numerics/data/hypothesis_tests.hpp (a port of the C# `HypothesisTests` static class). Mirrors
+# corehydropy's own hypothesis_test() verb; both packages share this signature and produce
+# identical error text so a change here is not one-sided.
+
+.hypothesis_methods <- c(
+  "one_sample_t", "equal_variance_t", "unequal_variance_t", "paired_t", "f", "f_models",
+  "jarque_bera", "wald_wolfowitz", "ljung_box", "mann_whitney", "mann_kendall", "linear_trend"
+)
+.hypothesis_two_sample <- c("equal_variance_t", "unequal_variance_t", "paired_t", "f", "mann_whitney")
+
+#' Hypothesis tests
+#'
+#' Mirrors the C# `HypothesisTests` static class: twelve one- and two-sample parametric and
+#' nonparametric hypothesis tests, reached through the shared `hypothesis` toolbox group. Every
+#' method but `"f_models"` returns the 2-sided p-value of its test statistic; `"f_models"` (the
+#' F-test comparing two nested regression models) additionally returns the F statistic itself.
+#'
+#' @details
+#' `HypothesisTests` has a thirteenth static, `UnimodalityTest`, that is NOT exposed here: it
+#' trains a `Numerics.MachineLearning.GaussianMixtureModel` at k = 1 and k = 2, and the Machine
+#' Learning layer has no port yet. It is deferred, not permanently out of scope -- see
+#' `site/status.qmd` for the tracking note.
+#'
+#' Argument use by method, and the C# guard each one inherits:
+#' * `"one_sample_t"`: `x`, `population_mean` (default 0). Needs at least 2 observations.
+#' * `"equal_variance_t"` / `"unequal_variance_t"`: `x`, `y`. `equal_variance_t` needs a
+#'   combined length of at least 3; `unequal_variance_t` has no length guard (upstream has none
+#'   either).
+#' * `"paired_t"`: `x`, `y`, which must be the same length.
+#' * `"f"`: `x`, `y`, each needing at least 2 observations.
+#' * `"f_models"`: `sse_restricted`, `sse_full`, `df_restricted`, `df_full` (all required; `x`
+#'   and `y` are ignored). `df_restricted` must differ from `df_full`, and `df_full` must be
+#'   positive.
+#' * `"jarque_bera"` / `"wald_wolfowitz"`: `x`. No length guard.
+#' * `"ljung_box"`: `x`, `lag_max` (default `NULL`, meaning
+#'   `floor(min(10 * log10(length(x)), length(x) - 1))`, the C# default rule).
+#' * `"mann_whitney"`: `x`, `y`. `x` must be no longer than `y`, each must have more than 3
+#'   observations, and the combined length must exceed 20.
+#' * `"mann_kendall"`: `x`. Needs at least 10 observations.
+#' * `"linear_trend"`: `x` (the sample), `index` (default `seq_along(x)`, i.e. `1:length(x)` --
+#'   a VALUE the regression is fit against, not an index into `x`). `index` and `x` must be the
+#'   same length.
+#'
+#' @param x numeric vector: the sample (the two-sample methods' first sample, or the response
+#'   series for `"linear_trend"`). Ignored for `"f_models"`.
+#' @param y numeric vector, the second sample. Required for the two-sample methods listed above,
+#'   and rejected (must be `NULL`) for every other method -- earlier versions silently discarded
+#'   a `y` supplied to a one-sample method instead of raising.
+#' @param method one of `"one_sample_t"`, `"equal_variance_t"`, `"unequal_variance_t"`,
+#'   `"paired_t"`, `"f"`, `"f_models"`, `"jarque_bera"`, `"wald_wolfowitz"`, `"ljung_box"`,
+#'   `"mann_whitney"`, `"mann_kendall"`, `"linear_trend"`.
+#' @param population_mean the hypothesized mean for `"one_sample_t"`. Default 0.
+#' @param lag_max the max lag for `"ljung_box"`. Default `NULL` (use the C# default rule).
+#' @param index the index (x-axis) vector for `"linear_trend"`. Default `NULL`, meaning
+#'   `seq_along(x)`.
+#' @param sse_restricted,sse_full,df_restricted,df_full the four `"f_models"` inputs: the
+#'   restricted and full models' sum of squared errors and degrees of freedom.
+#' @return a named numeric vector: `p_value` for every method but `"f_models"`, which returns
+#'   `c(f_statistic =, p_value =)`.
+#' @examples
+#' hypothesis_test(c(4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25), method = "jarque_bera")
+#' @export
+hypothesis_test <- function(x = NULL, y = NULL, method = "jarque_bera", population_mean = 0,
+                            lag_max = NULL, index = NULL, sse_restricted = NULL, sse_full = NULL,
+                            df_restricted = NULL, df_full = NULL) {
+  if (!method %in% .hypothesis_methods) {
+    stop(sprintf("`method` must be one of %s; got \"%s\"",
+                 paste(sprintf("\"%s\"", .hypothesis_methods), collapse = ", "), method),
+         call. = FALSE)
+  }
+  if (method %in% .hypothesis_two_sample && is.null(y)) {
+    stop(sprintf("`y` is required for method \"%s\"", method), call. = FALSE)
+  }
+  # C2 (P4 whole-branch review): a one-sample method silently DISCARDED a non-NULL `y` --
+  # `hypothesis_test(a, b)` at the default method equalled `hypothesis_test(a)`. Reject it
+  # instead, the way R/callback.R:1028 rejects a delegate that does not belong to the chosen
+  # sampler.
+  if (!method %in% .hypothesis_two_sample && !is.null(y)) {
+    stop(sprintf("`y` is not used by method \"%s\"; leave it NULL", method), call. = FALSE)
+  }
+
+  if (identical(method, "f_models")) {
+    if (is.null(sse_restricted) || is.null(sse_full) || is.null(df_restricted) || is.null(df_full)) {
+      stop(paste0("`sse_restricted`, `sse_full`, `df_restricted`, and `df_full` are all ",
+                  "required for method \"f_models\""), call. = FALSE)
+    }
+    r <- toolbox_run("hypothesis", "f_models", list(), list(
+      sse_restricted = as.double(sse_restricted),
+      sse_full = as.double(sse_full),
+      df_restricted = as.double(df_restricted),
+      df_full = as.double(df_full)
+    ))
+    return(stats::setNames(r$values, r$names))
+  }
+
+  if (identical(method, "linear_trend")) {
+    idx <- if (is.null(index)) seq_along(x) else index
+    r <- toolbox_run("hypothesis", "linear_trend", list(as.double(idx), as.double(x)))
+    return(stats::setNames(r$values, "p_value"))
+  }
+
+  data <- if (method %in% .hypothesis_two_sample) {
+    list(as.double(x), as.double(y))
+  } else {
+    list(as.double(x))
+  }
+  opts <- switch(method,
+    one_sample_t = list(population_mean = as.double(population_mean)),
+    ljung_box = list(lag_max = as.double(if (is.null(lag_max)) -1 else lag_max)),
+    list()
+  )
+  r <- toolbox_run("hypothesis", method, data, opts)
+  stats::setNames(r$values, "p_value")
+}
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification (numerics/data/paired_data/, P4 Tasks 7-9), plus TabularFunction's
+# tabular/tabular_inverse arm on the "functions" group. Every curve verb below reads the same
+# strict_x/strict_y/order_x/order_y shape contract paired_data.hpp documents;
+# curve_interpolate() additionally reads x_transform/y_transform. Only five verbs are exported --
+# line_simplify, search, and is_valid are reachable through the fixture/oracle-gate surface but
+# are not given an R-facing wrapper by this task.
+
+# The order_x/order_y/x_transform/y_transform choices every curve verb below validates against,
+# declared once. `"logarithmic"` (matching the C# enum member name `Transform.Logarithmic`) is
+# this package's documented spelling; `"log"` is accepted as an equivalent alias (both parse to
+# the same value core-side) so a value valid for interpolate()/interpolate_2d() is also valid
+# here -- see the P4 whole-branch-review finding M2.
+.paired_data_orders <- c("ascending", "descending", "none")
+.paired_data_transforms <- c("none", "logarithmic", "log", "normal_z")
+
+# Internal: build a `distributions` list of corehydro_dist objects, recycling a single one across
+# every `x`. Shared by uncertain_curve_sample() and tabular_function(), which use identical
+# recycling and error text.
+paired_data_distributions <- function(distributions, x) {
+  if (inherits(distributions, "corehydro_dist")) distributions <- list(distributions)
+  if (!is.list(distributions) || length(distributions) == 0L ||
+      !all(vapply(distributions, inherits, logical(1), "corehydro_dist"))) {
+    stop("`distributions` must be a corehydro_dist or a list of corehydro_dist objects",
+         call. = FALSE)
+  }
+  if (length(distributions) == 1L && length(x) > 1L) {
+    distributions <- rep(distributions, length(x))
+  }
+  if (length(distributions) != length(x)) {
+    stop(sprintf("`distributions` must have length 1 or length(x) (%d); got %d",
+                 length(x), length(distributions)), call. = FALSE)
+  }
+  distributions
+}
+
+#' Interpolate a paired x-y curve
+#'
+#' Mirrors the C# `OrderedPairedData.GetYFromX`/`GetXFromY`: linear interpolation over a curve
+#' that keeps itself sorted/validated against a caller-chosen monotonicity contract, with
+#' optional per-axis transforms (log10 or the standard normal z-score) applied before/after
+#' interpolation. Exactly one of `xout`/`yout` must be supplied.
+#'
+#' @param x,y numeric vectors of equal length (at least two), the curve's ordinates.
+#' @param xout numeric vector of x positions to interpolate y at.
+#' @param yout numeric vector of y positions to interpolate x at.
+#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
+#'   `"log"`), or `"normal_z"`.
+#' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
+#' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
+#'   between consecutive ordinates. Default `TRUE`.
+#' @return a numeric vector, the same length as whichever of `xout`/`yout` was supplied.
+#' @examples
+#' curve_interpolate(c(50, 100, 150, 200, 250), c(100, 200, 300, 400, 500), xout = 75)
+#' @export
+curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
+                              x_transform = "none", y_transform = "none",
+                              order_x = "ascending", order_y = "ascending",
+                              strict_x = TRUE, strict_y = TRUE) {
+  check_pair(x, y)
+  if (is.null(xout) == is.null(yout)) {
+    stop("exactly one of `xout` or `yout` must be supplied", call. = FALSE)
+  }
+  # check_choice() rather than match.arg(): see R/fit.R:22 and the P4 whole-branch-review
+  # finding M3 -- match.arg's prefix matching would silently accept "log" as a prefix of
+  # "logarithmic" rather than the (also valid) full "log" token, and would accept ANY
+  # unambiguous prefix Python does not.
+  x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
+  y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y,
+               x_transform = x_transform, y_transform = y_transform)
+  if (!is.null(xout)) {
+    if (!is.numeric(xout)) {
+      stop("`xout` must be numeric", call. = FALSE)
+    }
+    toolbox_run("paired_data", "interpolate_y", list(x, y, xout), opts)$values
+  } else {
+    if (!is.numeric(yout)) {
+      stop("`yout` must be numeric", call. = FALSE)
+    }
+    toolbox_run("paired_data", "interpolate_x", list(x, y, yout), opts)$values
+  }
+}
+
+#' Area under a paired x-y curve
+#'
+#' Mirrors the C# `OrderedPairedData.TrapezoidalAreaUnderY`/`TrapezoidalAreaUnderX`: the
+#' trapezoidal-rule area between the curve and the x-axis (`under = "y"`) or the y-axis
+#' (`under = "x"`). Requires x (for `under = "y"`) or y (for `under = "x"`) to be sorted
+#' ascending or descending -- `order_x`/`order_y = "none"` raises the same error the C# method
+#' does.
+#'
+#' @inheritParams curve_interpolate
+#' @param under one of `"y"` (default, area under the curve against the x-axis) or `"x"` (area
+#'   against the y-axis).
+#' @return a single number.
+#' @examples
+#' curve_area(c(1, 2, 3, 4), c(1, 4, 9, 16))
+#' @export
+curve_area <- function(x, y, under = "y",
+                       order_x = "ascending", order_y = "ascending",
+                       strict_x = TRUE, strict_y = TRUE) {
+  check_pair(x, y)
+  under <- check_choice(under, c("y", "x"), "under")
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y)
+  method <- if (identical(under, "y")) "area_under_y" else "area_under_x"
+  toolbox_run("paired_data", method, list(x, y), opts)$values[[1]]
+}
+
+#' Simplify a paired x-y curve
+#'
+#' Mirrors the C# `OrderedPairedData`'s three curve-simplification algorithms: Douglas-Peucker
+#' (`method = "rdp"`, needs `tolerance`), Visvalingam-Whyatt (`method = "visvalingam"`, needs
+#' `num_to_keep`), and Lang (`method = "lang"`, needs `tolerance` and `look_ahead`). NOTE: unlike
+#' `rdp`/`visvalingam`, which always keep the curve's first and last point, `lang` does not
+#' force-keep the trailing point -- a real, verified-against-the-real-C#-library upstream
+#' behavior (see `ordered_paired_data.hpp`'s sixth transcription note), not a port bug.
+#'
+#' @inheritParams curve_interpolate
+#' @param method one of `"rdp"` (default), `"visvalingam"`, or `"lang"`.
+#' @param tolerance perpendicular-distance tolerance; required for `method` `"rdp"` or `"lang"`.
+#' @param num_to_keep number of points to keep; required for `method = "visvalingam"`, and must be
+#'   at least 2 (the algorithm always keeps the curve's first and last point, and needs at least
+#'   3 ordinates to triangulate at every intermediate step).
+#' @param look_ahead the Lang algorithm's look-ahead window; required for `method = "lang"`.
+#' @return a data frame with columns `x` and `y`.
+#' @examples
+#' x <- c(0, 1.57, 3.14, 4.71, 6.28)
+#' y <- c(0, 1, 0, -1, 0)
+#' curve_simplify(x, y, method = "rdp", tolerance = 0.01, strict_y = FALSE, order_y = "none")
+#' @export
+curve_simplify <- function(x, y, method = "rdp", tolerance = NULL, num_to_keep = NULL,
+                           look_ahead = NULL,
+                           order_x = "ascending", order_y = "ascending",
+                           strict_x = TRUE, strict_y = TRUE) {
+  check_pair(x, y)
+  if (!method %in% c("rdp", "visvalingam", "lang")) {
+    stop(sprintf("`method` must be one of \"rdp\", \"visvalingam\", \"lang\"; got \"%s\"", method),
+         call. = FALSE)
+  }
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y, algorithm = method)
+  if (identical(method, "rdp")) {
+    if (is.null(tolerance)) {
+      stop("`tolerance` is required when method = \"rdp\"", call. = FALSE)
+    }
+    opts$tolerance <- as.double(tolerance)
+  } else if (identical(method, "visvalingam")) {
+    if (is.null(num_to_keep)) {
+      stop("`num_to_keep` is required when method = \"visvalingam\"", call. = FALSE)
+    }
+    # Visvalingam-Whyatt always keeps the curve's first and last point, so it needs at least
+    # 3 ordinates to triangulate; below that the C++ layer throws (matching the C# List<T>
+    # indexer's ArgumentOutOfRangeException) rather than reading out of bounds. Checked here too
+    # so the caller gets one clear message instead of the runner's internal one.
+    if (!is.numeric(num_to_keep) || length(num_to_keep) != 1L || num_to_keep < 2) {
+      stop("`num_to_keep` must be a single integer of at least 2", call. = FALSE)
+    }
+    opts$num_to_keep <- as.integer(num_to_keep)
+  } else {
+    if (is.null(tolerance) || is.null(look_ahead)) {
+      stop("`tolerance` and `look_ahead` are both required when method = \"lang\"", call. = FALSE)
+    }
+    opts$tolerance <- as.double(tolerance)
+    opts$look_ahead <- as.integer(look_ahead)
+  }
+  r <- toolbox_run("paired_data", "simplify", list(x, y), opts)
+  m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+  data.frame(x = m[, 1], y = m[, 2])
+}
+
+#' Sample an uncertain paired curve
+#'
+#' Mirrors the C# `UncertainOrderedPairedData.CurveSample()`/`CurveSample(double)`: collapses a
+#' curve whose Y-coordinate is a whole distribution at each x down to a plain x-y curve, either
+#' at the distributions' means (`probability = NULL`, the default) or at a shared quantile
+#' (`probability` in `[0, 1]`).
+#'
+#' @param x numeric vector of x positions, at least one element.
+#' @param distributions a [distribution()] object, or a list of them the same length as `x` --
+#'   one distribution per x position. A single distribution is recycled across every `x`.
+#' @param probability quantile in `[0, 1]` to sample at; `NULL` (default) samples the mean.
+#'   Values outside `[0, 1]` are rejected -- the underlying C# `CurveSample(double)` silently
+#'   clamps them instead, so this range check is enforced here rather than core-side.
+#' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
+#' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
+#'   between consecutive ordinates. Default `TRUE`.
+#' @return a data frame with columns `x` and `y`.
+#' @examples
+#' x <- c(1, 2, 3, 5)
+#' d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)),
+#'           distribution("Triangular", c(6, 8, 12)), distribution("Triangular", c(13, 19, 20)))
+#' uncertain_curve_sample(x, d, probability = 0.5)
+#' @export
+uncertain_curve_sample <- function(x, distributions, probability = NULL,
+                                   order_x = "ascending", order_y = "ascending",
+                                   strict_x = TRUE, strict_y = TRUE) {
+  if (!is.numeric(x) || length(x) == 0L) {
+    stop("`x` must be a non-empty numeric vector", call. = FALSE)
+  }
+  distributions <- paired_data_distributions(distributions, x)
+  order_x <- check_choice(order_x, .paired_data_orders, "order_x")
+  order_y <- check_choice(order_y, .paired_data_orders, "order_y")
+  opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
+               order_x = order_x, order_y = order_y, distributions = distributions)
+  if (!is.null(probability)) {
+    # C3 (P4 whole-branch review): the core clamp (uncertain_ordered_paired_data.hpp) is a
+    # faithful port of C# CurveSample(double), which silently clamps an out-of-range quantile
+    # instead of raising -- `probability = 50` silently returned the 100% quantile. That core
+    # behavior is untouched; this host-layer range check is what actually rejects the mistake.
+    if (!is.numeric(probability) || length(probability) != 1L ||
+        probability < 0 || probability > 1) {
+      stop("`probability` must be a single number in [0, 1]", call. = FALSE)
+    }
+    opts$probability <- as.double(probability)
+  }
+  r <- toolbox_run("paired_data", "curve_sample", list(x), opts)
+  m <- matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
+  data.frame(x = m[, 1], y = m[, 2])
+}
+
+#' Evaluate a tabular function
+#'
+#' Mirrors the C# `TabularFunction`: builds an uncertain paired curve from `x` and
+#' `distributions`, samples it once (the mean curve, or `confidence_level` if given), and
+#' evaluates `Function()`/`InverseFunction()` at `at`. Unlike [curve_interpolate()] and friends,
+#' the underlying curve's shape contract is not configurable here -- `TabularFunction` is always
+#' built strict, ascending on both axes, matching every use in the ported C# test suite.
+#'
+#' @param x numeric vector, the curve's x positions, at least one element.
+#' @param distributions a [distribution()] object, or a list of them the same length as `x` --
+#'   one distribution per x position. A single distribution is recycled across every `x`.
+#' @param at numeric vector of points to evaluate at (or, when `inverse = TRUE`, points to
+#'   evaluate the inverse function at).
+#' @param inverse if `TRUE`, evaluates `InverseFunction()` instead of `Function()`.
+#' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
+#'   `"log"`), or `"normal_z"`.
+#' @param confidence_level quantile in `[0, 1]` to sample the curve at; `NULL` (default) samples
+#'   the mean.
+#' @param allow_negative_y_values allow a negative or `NaN` result to pass through unmodified,
+#'   rather than clamping it to `0`. Default `FALSE` (clamp), matching every use in the ported
+#'   C# test suite -- the C# class default is `TRUE`.
+#' @return a numeric vector, the same length as `at`.
+#' @examples
+#' x <- c(50, 100, 150, 200, 250)
+#' d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
+#' tabular_function(x, d, at = 50, x_transform = "logarithmic")
+#' @export
+tabular_function <- function(x, distributions, at, inverse = FALSE,
+                             x_transform = "none", y_transform = "none",
+                             confidence_level = NULL, allow_negative_y_values = FALSE) {
+  if (!is.numeric(x) || length(x) == 0L) {
+    stop("`x` must be a non-empty numeric vector", call. = FALSE)
+  }
+  distributions <- paired_data_distributions(distributions, x)
+  if (!is.numeric(at) || length(at) == 0L) {
+    stop("`at` must be a non-empty numeric vector", call. = FALSE)
+  }
+  x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
+  y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
+  opts <- list(x = spec_array(as.double(x)), distributions = distributions,
+               x_transform = x_transform, y_transform = y_transform,
+               allow_negative_y_values = isTRUE(allow_negative_y_values))
+  if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
+  method <- if (isTRUE(inverse)) "tabular_inverse" else "tabular"
+  toolbox_run("functions", method, list(at), opts)$values
 }

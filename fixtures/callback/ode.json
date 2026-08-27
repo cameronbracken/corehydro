@@ -1,0 +1,81 @@
+{
+  "kind": "callback",
+  "source": "Numerics/Mathematics/{ODE Solvers/RungeKutta.cs, ODE Solvers/Test_RungeKutta.cs}",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"math\", method \"ode_solve\", against the callback named by `construct.callback` -- a function each of the four runners writes itself as a native closure, so every case exercises the real host-language callback path the runner's guard exists to protect. Every expected value and tolerance is the upstream MSTest `Assert.AreEqual(expected, actual, delta)` literal from Test_RungeKutta.cs, transcribed verbatim. The single-step/adaptive cases (`ode_rk4_single_step`, `ode_rkf`, `ode_cash_karp`) pin only the FIRST loop iteration of their upstream test (initial = 0.5 at t = 0, stepping to t = 0.5), since a fixture case is one call into the runner rather than a scripted loop; core/tests/test_runge_kutta.cpp carries the full 4-step loop each upstream test itself runs.",
+  "callbacks": {
+    "Ode_TestFunction": "f(t, y) = y - t^2 + 1  [Mathematics/ODE Solvers/Test_RungeKutta.cs, every [TestMethod]'s shared `ode` lambda]"
+  },
+  "cases": [
+    {
+      "name": "ode_rk2",
+      "construct": {
+        "group": "math",
+        "method": "ode_solve",
+        "callback": "Ode_TestFunction",
+        "options": { "method": "rk2", "initial_value": 0.5, "start_time": 0.0, "end_time": 2.0, "time_steps": 5 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.5, "mode": "abs", "tol": 1, "source": "Test_RungeKutta.Test_2ndRK (delta 1)" },
+        { "method": "value", "args": [1], "expected": 1.425639364649936, "mode": "abs", "tol": 1, "source": "Test_RungeKutta.Test_2ndRK (delta 1)" },
+        { "method": "value", "args": [2], "expected": 2.640859085770477, "mode": "abs", "tol": 1, "source": "Test_RungeKutta.Test_2ndRK (delta 1)" },
+        { "method": "value", "args": [3], "expected": 4.009155464830968, "mode": "abs", "tol": 1, "source": "Test_RungeKutta.Test_2ndRK (delta 1)" },
+        { "method": "value", "args": [4], "expected": 5.305471950534675, "mode": "abs", "tol": 1, "source": "Test_RungeKutta.Test_2ndRK (delta 1)" },
+        { "method": "dim", "args": [0], "expected": 5, "mode": "abs", "tol": 0, "source": "RungeKutta.SecondOrder allocates new double[timeSteps] -- the array length is time_steps, not time_steps + 1" }
+      ]
+    },
+    {
+      "name": "ode_rk4",
+      "construct": {
+        "group": "math",
+        "method": "ode_solve",
+        "callback": "Ode_TestFunction",
+        "options": { "method": "rk4", "initial_value": 0.5, "start_time": 0.0, "end_time": 2.0, "time_steps": 5 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 0.5, "mode": "abs", "tol": 1e-2, "source": "Test_RungeKutta.Test_4thRK (delta 1E-2)" },
+        { "method": "value", "args": [1], "expected": 1.425639364649936, "mode": "abs", "tol": 1e-2, "source": "Test_RungeKutta.Test_4thRK (delta 1E-2)" },
+        { "method": "value", "args": [2], "expected": 2.640859085770477, "mode": "abs", "tol": 1e-2, "source": "Test_RungeKutta.Test_4thRK (delta 1E-2)" },
+        { "method": "value", "args": [3], "expected": 4.009155464830968, "mode": "abs", "tol": 1e-2, "source": "Test_RungeKutta.Test_4thRK (delta 1E-2)" },
+        { "method": "value", "args": [4], "expected": 5.305471950534675, "mode": "abs", "tol": 1e-2, "source": "Test_RungeKutta.Test_4thRK (delta 1E-2)" },
+        { "method": "dim", "args": [0], "expected": 5, "mode": "abs", "tol": 0, "source": "RungeKutta.FourthOrder allocates new double[timeSteps] -- the array length is time_steps, not time_steps + 1" }
+      ]
+    },
+    {
+      "name": "ode_rk4_single_step",
+      "construct": {
+        "group": "math",
+        "method": "ode_solve",
+        "callback": "Ode_TestFunction",
+        "options": { "method": "rk4", "initial_value": 0.5, "start_time": 0.0, "dt": 0.5 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.425639364649936, "mode": "abs", "tol": 1e-2, "source": "Test_RungeKutta.Test_4thRK_2, first loop iteration (delta 1E-2): RungeKutta.FourthOrder's single-step overload called with initial = 0.5, start = 0, dt = 0.5" },
+        { "method": "named", "name": "value", "expected": 1.425639364649936, "mode": "abs", "tol": 1e-2, "source": "the same value, read by its result name" }
+      ]
+    },
+    {
+      "name": "ode_rkf",
+      "construct": {
+        "group": "math",
+        "method": "ode_solve",
+        "callback": "Ode_TestFunction",
+        "options": { "method": "rkf", "initial_value": 0.5, "start_time": 0.0, "dt": 0.5, "dt_min": 0.001 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.425639364649936, "mode": "abs", "tol": 1e-4, "source": "Test_RungeKutta.Test_RKF, first loop iteration (delta 1E-4): RungeKutta.Fehlberg called with initial = 0.5, start = 0, dt = 0.5, dtMin = 0.001" }
+      ]
+    },
+    {
+      "name": "ode_cash_karp",
+      "construct": {
+        "group": "math",
+        "method": "ode_solve",
+        "callback": "Ode_TestFunction",
+        "options": { "method": "cash_karp", "initial_value": 0.5, "start_time": 0.0, "dt": 0.5, "dt_min": 0.001 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 1.425639364649936, "mode": "abs", "tol": 1e-3, "source": "Test_RungeKutta.Test_RKCK, first loop iteration (delta 1E-3): RungeKutta.CashKarp called with initial = 0.5, start = 0, dt = 0.5, dtMin = 0.001" }
+      ]
+    }
+  ]
+}

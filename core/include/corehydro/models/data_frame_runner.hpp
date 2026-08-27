@@ -6,7 +6,7 @@
 // fixture runner must drive the DataFrame surface through ONE code path so a given spec yields
 // byte-identical numbers in every language.
 //
-// Three entry points, matching the three data-layer verbs the packages expose:
+// Four entry points, matching the four data-layer verbs the packages expose:
 //
 //   summarize_data_frame(json)      -- build a standalone DataFrame from a `data_frame` spec
 //                                      object (the same grammar model_spec.hpp parses inside a
@@ -16,10 +16,19 @@
 //                                      vector, or at the model's own current values.
 //   run_threshold_diagnostics(...)  -- the two ThresholdDiagnostics statics behind one
 //                                      name-dispatched call, flattened to parallel vectors.
+//   run_data_frame(...)             -- the nine hypothesis-test facades, the two summary-
+//                                      statistics facades, and the standardized-value facade
+//                                      (P4 Task 6), behind one name-dispatched call. Returns the
+//                                      SAME numerics::support::ToolboxResult the toolbox groups
+//                                      return, so the three fixture runners' existing
+//                                      `toolbox_select` helper (index / label / select:
+//                                      "length"/"rows"/"columns") is reused verbatim -- no new
+//                                      selection code exists anywhere for this kind.
 //
 // Everything here returns plain structs of vectors and scalars: the packages hold no C++ object,
 // so a result crosses the boundary as data and nothing needs a finalizer.
 #pragma once
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -28,6 +37,7 @@
 #include "corehydro/models/json_lite.hpp"
 #include "corehydro/models/model_spec.hpp"
 #include "corehydro/models/support/model_base.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::models::runner {
 
@@ -194,6 +204,128 @@ inline ThresholdDiagnosticsResult run_threshold_diagnostics(const std::vector<do
     throw std::invalid_argument(
         "unknown threshold diagnostics method '" + method +
         "'; expected 'mean_residual_life' or 'parameter_stability'");
+}
+
+// --- Hypothesis-test and summary-statistics facades (P4 Task 6) ----------------------------
+//
+// Dispatches the twelve DataFrame facades Task 5 un-gated: the nine hypothesis tests
+// (jarque_bera / ljung_box / equal_variance_t / unequal_variance_t / f / linear_trend /
+// wald_wolfowitz / mann_whitney / mann_kendall), the two summary-statistics methods
+// (summary_exact / summary_all), and standardized (set_standardized_values(), read back off the
+// exact series). Every one of these reads the EXACT series only -- no censoring filter, no
+// threshold machinery -- so build_data_frame_from_json is not used here; instead this takes
+// EITHER a flat `data` vector (data[0] becomes the exact series with sequential 0-based indexes,
+// exactly the ExactSeries(std::vector<double>) ctor) OR a `data_frame_json` spec object (passed
+// to models::spec::build_data_frame unchanged, so a censored frame -- irrelevant series and all
+// -- is still reachable). Exactly one of the two must be supplied; requiring that here, in the
+// one shared runner, is what keeps the three fixture runners and the emitter from each growing
+// their own copy of the "which path did the caller mean" logic. The plain-vector path is what
+// every P4 fixture case and both user-facing verbs (analysis_data_hypothesis_test /
+// analysis_data_statistics) use; the spec path exists so a censored frame is still reachable
+// through this entry point too, for symmetry with build_data_frame_from_json above.
+//
+// calculate_plotting_positions() is called before summary_all and standardized (the C# tests do
+// it explicitly and both methods read plotting-position complements, so the results are
+// meaningless without it) and is NOT called for the nine hypothesis facades or summary_exact,
+// none of which read plotting positions.
+inline numerics::support::ToolboxResult run_data_frame(const std::string& method,
+                                                        const std::vector<std::vector<double>>& data,
+                                                        const std::string& data_frame_json,
+                                                        const std::string& options_json) {
+    using numerics::support::ToolboxResult;
+
+    bool has_json = !data_frame_json.empty();
+    bool has_data = !data.empty();
+    if (has_json == has_data)
+        throw std::runtime_error(
+            "run_data_frame requires exactly one of `data` or `data_frame_json`");
+
+    DataFrame df;
+    if (has_json) {
+        df = build_data_frame_from_json(data_frame_json);
+    } else {
+        const std::vector<double>& values =
+            numerics::support::detail::data_at(data, 0, "data_frame", method);
+        if (values.empty())
+            throw std::runtime_error("run_data_frame requires a non-empty data series");
+        df.set_exact_series(ExactSeries(values));
+    }
+
+    spec::JsonValue options = spec::parse_json(options_json.empty() ? "{}" : options_json);
+    bool use_log10 = options.value_or("use_log10", false);
+
+    // Single dispatch: each method is handled in exactly one place, so a method added here with
+    // no matching branch falls through to `matched = false` and the "unknown data_frame method"
+    // error below, rather than silently landing in another method's branch (P4 whole-branch
+    // review finding C7 -- the previous two-static-vector gate plus an independent if-chain could
+    // drift out of sync).
+    double p = 0.0;
+    bool matched = true;
+    if (method == "jarque_bera") {
+        p = df.jarque_bera_test(use_log10);
+    } else if (method == "ljung_box") {
+        p = df.ljung_box_test(options.value_or("lag_max", -1), use_log10);
+    } else if (method == "linear_trend") {
+        p = df.linear_trend_test(use_log10);
+    } else if (method == "wald_wolfowitz") {
+        p = df.wald_wolfowitz_test(use_log10);
+    } else if (method == "mann_kendall") {
+        p = df.mann_kendall_test(use_log10);
+    } else if (method == "equal_variance_t" || method == "unequal_variance_t" ||
+              method == "f" || method == "mann_whitney") {
+        if (!options.contains("index"))
+            throw std::runtime_error("data_frame method '" + method +
+                                     "' requires an 'index' option");
+        int index = options.at("index").as_int();
+        if (method == "equal_variance_t") {
+            p = df.equal_variance_t_test(index, use_log10);
+        } else if (method == "unequal_variance_t") {
+            p = df.unequal_variance_t_test(index, use_log10);
+        } else if (method == "f") {
+            p = df.f_test(index, use_log10);
+        } else {  // mann_whitney
+            p = df.mann_whitney_test(index, use_log10);
+        }
+    } else {
+        matched = false;
+    }
+
+    if (matched) return numerics::support::detail::scalar(p);
+
+    if (method == "summary_exact") {
+        ToolboxResult r;
+        for (const auto& [key, value] : df.summary_statistics_exact_data_only()) {
+            r.names.push_back(key);
+            r.values.push_back(value);
+        }
+        return r;
+    }
+
+    if (method == "summary_all") {
+        df.calculate_plotting_positions();
+        ToolboxResult r;
+        for (const auto& [key, value] : df.summary_statistics_all_data()) {
+            r.names.push_back(key);
+            r.values.push_back(value);
+        }
+        return r;
+    }
+
+    if (method == "standardized") {
+        df.calculate_plotting_positions();
+        df.set_standardized_values();
+        ToolboxResult r;
+        const ExactSeries& exact = df.exact_series();
+        r.values.reserve(exact.count() * 2);
+        for (std::size_t i = 0; i < exact.count(); ++i) {
+            r.values.push_back(exact[i].standardized_value());
+            r.values.push_back(exact[i].standardized_log10_value());
+        }
+        r.dims = {static_cast<int>(exact.count()), 2};
+        return r;
+    }
+
+    throw std::runtime_error("unknown data_frame method: " + method);
 }
 
 }  // namespace corehydro::models::runner

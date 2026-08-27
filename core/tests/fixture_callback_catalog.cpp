@@ -17,6 +17,8 @@
 #include <utility>
 #include <vector>
 
+#include "corehydro/numerics/distributions/normal.hpp"
+#include "corehydro/numerics/tools.hpp"
 #include "optimization_test_functions.hpp"
 
 namespace tbx = corehydro::numerics::support;
@@ -39,10 +41,43 @@ tbx::Objective optimizer_objective(const std::string& name) {
     if (name == "DeJong") return tbx::Objective(test_functions::de_jong);
     if (name == "Booth") return tbx::Objective(test_functions::booth);
     if (name == "McCormick") return tbx::Objective(test_functions::mccormick);
+    if (name == "Rosenbrock") return tbx::Objective(test_functions::rosenbrock);
+    if (name == "Eggholder") return tbx::Objective(test_functions::eggholder);
+    if (name == "SumOfPowerFunctions")
+        return tbx::Objective(test_functions::sum_of_power_functions);
     if (name == "FX")
         return tbx::Objective(
             [](const std::vector<double>& v) { return test_functions::fx(v[0]); });
+    // Test_AugmentedLagrange.cs's own inline objectives and constraint functions (see
+    // optimization_test_functions.hpp's addition block). A constraint has the same
+    // `double(const std::vector<double>&)` shape as an objective, so both roles resolve out of
+    // this one catalog; `Disk` really is used as both (its C# formula is Test_RosenbrockDisk's
+    // constraint and Test_MixedConstraints's objective, written identically).
+    if (name == "AL1_Objective") return tbx::Objective(test_functions::al1_objective);
+    if (name == "AL2_Objective") return tbx::Objective(test_functions::al2_objective);
+    if (name == "SumAll") return tbx::Objective(test_functions::sum_all);
+    if (name == "Haimes_Primary") return tbx::Objective(test_functions::haimes_primary);
+    if (name == "Haimes_Secondary") return tbx::Objective(test_functions::haimes_secondary);
+    if (name == "RosenbrockDisk_Objective")
+        return tbx::Objective(test_functions::rosenbrock_disk_objective);
+    if (name == "Disk") return tbx::Objective(test_functions::disk);
+    if (name == "SumXY") return tbx::Objective(test_functions::sum_xy);
+    if (name == "X0") return tbx::Objective(test_functions::x0);
+    if (name == "X1") return tbx::Objective(test_functions::x1);
     throw std::runtime_error("unknown optimizer fixture objective: " + name);
+}
+
+// The optional analytic gradients the "adam"/"gradient_descent" cases name by `construct.gradient`
+// -- the second host-language callback the optimizer surface takes. Same shape as the objective
+// catalog above, and deliberately a SEPARATE table: a gradient name resolves to a vector-valued
+// function, so a typo naming an objective here cannot silently type-check. The `Grad_` prefix
+// keeps these names distinct from the objective catalog's for the same reason the callback
+// catalog's `Diff_`/`Root_`/`Quad_` prefixes do.
+tbx::Gradient optimizer_gradient(const std::string& name) {
+    if (name == "Grad_FXYZ") return tbx::Gradient(test_functions::grad_fxyz);
+    if (name == "Grad_DeJong") return tbx::Gradient(test_functions::grad_de_jong);
+    if (name == "Grad_Booth") return tbx::Gradient(test_functions::grad_booth);
+    throw std::runtime_error("unknown optimizer fixture gradient: " + name);
 }
 
 // --- callback path (callback surface, Task 1) --------------------------------------------
@@ -58,8 +93,29 @@ tbx::Objective optimizer_objective(const std::string& name) {
 void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
     if (name == "Root_Quadratic") {
         cbs.scalar = [](double x) { return x * x - 2.0; };
+    } else if (name == "RootD_Quadratic") {
+        // P2 "math extras": the analytic derivative of Root_Quadratic
+        // (TestFunctions.Quadratic_Deriv), the newton catalog's counterpart of Root_Quadratic.
+        cbs.scalar_deriv = [](double x) { return 2.0 * x; };
     } else if (name == "Root_Cubic") {
         cbs.scalar = [](double x) { return x * x * x - x - 1.0; };
+    } else if (name == "Root_Trigonometric") {
+        // TestFunctions.Trigonometric: 2 sin(x) - 3 cos(x) - 0.5, root ~1.12191713 on [0, pi].
+        cbs.scalar = [](double x) { return 2.0 * std::sin(x) - 3.0 * std::cos(x) - 0.5; };
+    } else if (name == "RootD_Trigonometric") {
+        // TestFunctions.Trigonometric_Deriv: 2 cos(x) + 3 sin(x).
+        cbs.scalar_deriv = [](double x) { return 2.0 * std::cos(x) + 3.0 * std::sin(x); };
+    } else if (name == "Sys_Linear_F") {
+        // Test_NewtonRaphson.Test_Multi_LinearSystem's system: F([x;y]) = [3x + y - 9, x + 2y - 8],
+        // whose unique root is [2, 3].
+        cbs.vector_vector = [](const std::vector<double>& v) {
+            return std::vector<double>{3.0 * v[0] + v[1] - 9.0, v[0] + 2.0 * v[1] - 8.0};
+        };
+    } else if (name == "Sys_Linear_J") {
+        // The (constant) Jacobian of Sys_Linear_F, row-major 2 x 2: [[3, 1], [1, 2]].
+        cbs.vector_matrix = [](const std::vector<double>&) {
+            return std::make_pair(std::vector<double>{3.0, 1.0, 1.0, 2.0}, std::vector<int>{2, 2});
+        };
     } else if (name == "Diff_FX") {
         cbs.scalar = [](double x) { return std::pow(x, 3.0); };
     } else if (name == "Diff_FXY") {
@@ -89,6 +145,17 @@ void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
         // subdividing branch of the recursion. Arithmetic only, so all four runners agree bit for
         // bit and the evaluation count is a real oracle. See the fixture's `callbacks` note.
         cbs.scalar = [](double x) { return 1.0 / (1.0 + 1.0e4 * x * x); };
+    } else if (name == "Quad2D_XPlusY") {
+        // P2 "math extras", the math/quadrature_2d catalog: Test_AdaptiveSimpsonsRule2D.Test_XPlusY.
+        cbs.scalar_xy = [](double x, double y) { return x + y; };
+    } else if (name == "Quad2D_PI2D") {
+        // Test_AdaptiveSimpsonsRule2D.Test_PI, upstream's Integrands.PI2D: the indicator of the
+        // unit disc, whose integral over [-1, 1] x [-1, 1] approximates pi.
+        cbs.scalar_xy = [](double x, double y) { return (x * x + y * y < 1.0) ? 1.0 : 0.0; };
+    } else if (name == "Ode_TestFunction") {
+        // The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
+        // [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
+        cbs.scalar_xy = [](double t, double y) { return y - t * t + 1.0; };
     } else if (name == "Mcmc_GaussianKernel") {
         // The mcmc catalog (fixtures/callback/mcmc.json). Both log-densities are arithmetic only
         // and sum in an explicit loop rather than through any accumulate helper: a Markov chain
@@ -457,6 +524,40 @@ void callback_set(const std::string& name, tbx::CallbackSet& cbs) {
             for (int k : rng->integers(2, 0, 100)) out.push_back(static_cast<double>(k));
             out.push_back(rng->uniform(1).at(0));
             return out;
+        };
+    } else if (name == "Nd_PI") {
+        // The math/quadrature_nd catalog (fixtures/callback/math.json), P2 "math extras": upstream's
+        // Test_Numerics/Mathematics/Integration/Integrands.cs `PI(double[] vals)`, the indicator of
+        // the unit disc read off the first two components -- always 2-dimensional regardless of how
+        // many dimensions the case's own `min`/`max` carry, exactly as the C# function is.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            return (p[0] * p[0] + p[1] * p[1] < 1.0) ? 1.0 : 0.0;
+        };
+    } else if (name == "Nd_GSL") {
+        // Integrands.cs `GSL(double[] x)`: the GNU Scientific Library 3-dimensional test integrand,
+        // A / (1 - cos(x0) cos(x1) cos(x2)) with A = 1 / pi^3.
+        cbs.vector_scalar = [](const std::vector<double>& p) {
+            const double a = 1.0 / (corehydro::numerics::kPi * corehydro::numerics::kPi *
+                                    corehydro::numerics::kPi);
+            return a / (1.0 - std::cos(p[0]) * std::cos(p[1]) * std::cos(p[2]));
+        };
+    } else if (name == "NdW_SumOfNormals3") {
+        // Integrands.cs `SumOfNormals(double[] p)`, the 3-dimensional case (upstream's
+        // Test_Vegas.Test_SumOfThreeNormals wraps it `(x, y) => Integrands.SumOfNormals(x)`,
+        // ignoring the weight -- transcribed here the same way). `p[i]` is a probability in
+        // (0, 1); `Normal::standard_z` is the ALREADY-PORTED, oracle-validated inverse standard
+        // Normal CDF (upstream's `Normal.StandardZ`, itself a rational-polynomial approximation --
+        // NOT arithmetic a fixture catalog could transcribe faithfully by hand), reused here rather
+        // than reimplemented, exactly as core/tests/test_integration_random.cpp's own
+        // `integrand_sum_of_normals` (Task 5) already does. `mu20`/`sigma20` sliced to the first
+        // three entries.
+        cbs.vector_weight = [](const std::vector<double>& p, double /*weight*/) {
+            static const double mu[] = {10.0, 30.0, 17.0};
+            static const double sigma[] = {2.0, 15.0, 5.0};
+            double acc = 0.0;
+            for (std::size_t i = 0; i < p.size(); ++i)
+                acc += mu[i] + sigma[i] * corehydro::numerics::distributions::Normal::standard_z(p[i]);
+            return acc;
         };
     } else if (name == "Rng_Warmup1000") {
         cbs.vector_rng = [](const std::vector<double>&, bfsamp::MersenneTwister& prng) {

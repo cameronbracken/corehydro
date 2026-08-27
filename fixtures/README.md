@@ -1668,6 +1668,85 @@ argmin of a flat likelihood, port termination differs slightly from C#);
 `[sample_size, dimension, seed, row, col]` (element of the seeded Latin hypercube sample;
 stateless, locks the C# stream bit-for-bit).
 
+### `data_frame`
+
+P4 Task 6 (data and tests) added this kind for the twelve `DataFrame` facades Task 5 un-gated:
+the nine hypothesis-test methods (`jarque_bera`, `ljung_box`, `equal_variance_t`,
+`unequal_variance_t`, `f`, `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`) and
+the three summary methods (`summary_exact`, `summary_all`, `standardized`), reached through
+`corehydro::models::runner::run_data_frame` (`models/data_frame_runner.hpp`). Every one of these
+reads the EXACT series only -- no censoring filter, no threshold machinery -- so `run_data_frame`
+returns the SAME `numerics::support::ToolboxResult` the toolbox groups return, and every runner's
+`toolbox_select` (index / label / select: `"length"`/`"rows"`/`"columns"`) is reused verbatim; no
+new selection code exists anywhere for this kind.
+
+```jsonc
+{
+  "kind": "data_frame",
+  "datasets": { "harricana": [ ...69 numbers... ] },
+  "cases": [
+    {
+      "name": "harricana_mann_kendall",
+      "data": ["harricana"],        // dataset name or inline array; resolved exactly as the
+                                     // `toolbox` kind resolves its `data`. data[0] becomes the
+                                     // exact series, with sequential 0-based indexes -- the
+                                     // ExactSeries(std::vector<double>) constructor's own
+                                     // convention, and what the C# tests' own
+                                     // `ExactSeries = new ExactSeries(data)` produces too.
+      "options": { "use_log10": false },
+      "assertions": [
+        { "method": "mann_kendall", "expected": 0.7757, "mode": "abs", "tol": 1e-4,
+          "source": "ExactDataHypothesisTests.Test_MannKendall" }
+      ]
+    }
+  ]
+}
+```
+
+A case may instead carry a `data_frame` object (the `model_spec.hpp` `data_frame` grammar --
+`exact`/`interval`/`threshold`/`uncertain` arrays of objects) in place of `data`, for the rarer
+censored-frame path `run_data_frame` also accepts; `data` must be empty when `data_frame` is
+given, and vice versa. No case in this file uses it -- these twelve facades read the exact series
+only, so a plain `data` array is what every case here needs -- but the three runners and the
+dotnet emitter all support it, for parity with `run_data_frame`'s own two-path contract (see that
+function's header comment in `models/data_frame_runner.hpp`).
+
+Options: `use_log10` (default `false`, every method); `index` (the two-sample split, required by
+`equal_variance_t`/`unequal_variance_t`/`f`/`mann_whitney`, an error if omitted); `lag_max`
+(`ljung_box` only, default `-1`, meaning "use the library's own default rule"). `summary_exact`
+and `summary_all` return the twenty-key named result (`values` parallel to `names`, selected by
+`label` or `index`); `standardized` returns the exact series' standardized values followed by its
+standardized log10 values, `dims = {n, 2}` (row-major: row `i` is
+`[standardized_value[i], standardized_log10_value[i]]`), selected by `index` or `select:
+"rows"`/`"columns"`. `run_data_frame` calls `calculate_plotting_positions()` before `summary_all`
+and `standardized` (the C# tests do this explicitly, and both methods read plotting-position
+complements) but NOT before the nine hypothesis facades or `summary_exact`, none of which read
+plotting positions.
+
+`fixtures/data/data_frame_facades.json` carries one or more cases per
+`ExactDataHypothesisTests.cs` `[TestMethod]` -- the SAME literals and datasets already
+transcribed into `core/tests/test_data_frame_facades.cpp` (P4 Task 5). These are the SAME
+underlying C# test datasets `fixtures/toolbox/hypothesis.json` already carries
+(`harricana69`, `noise126`, `jb_known13`, `data30a`+`data30b`, `data10a`+`data10b`,
+`trend_cos100`), but the arrays are DUPLICATED under this file's own keys (`harricana`,
+`jb_data`, `jb_data2`, `variance_t_data`, `f_data`, `cos_data`), not referenced or shared --
+there is no cross-file key aliasing in this fixture format. The values are byte-identical today
+by construction (both were transcribed from the same C# literal), but nothing enforces that they
+stay that way: a maintainer fixing a value in `hypothesis.json` must edit the corresponding array
+in `data_frame_facades.json` too, by hand, or the two gates will silently pin two different
+numbers for what is meant to be the same dataset. `summary_exact`, `summary_all`, and `standardized` have NO
+upstream test literal at all -- `NonparametricEmpiricalTests.cs`'s two DataFrame cases only assert
+finiteness/NaN patterns for these three methods, never a value -- so every one of their assertions
+is curated with `python3 tools/verify_oracles.py --dump` against the real C# `DataFrame`, and says
+so in its own `source`.
+
+The dotnet emitter's `data_frame` branch DOES honor `oracle_skip` (the `toolbox` branch above does
+not), joining several other kinds that also honor it (`analysis`, `model_estimation`, ...) --
+see `tools/oracle_emitter/Program.cs`'s own comment at the `data_frame` branch, which names this
+same list. This is a deliberate consistency choice, not a reflection of anything unreproducible
+here -- no assertion in this file uses `oracle_skip`, since every value here either reproduces a
+C# test literal or was curated directly against this same branch.
+
 ### `toolbox`
 
 The Numerics utility layer (Phase 4 of the docs/examples effort: correlation, goodness of fit,
@@ -1707,19 +1786,231 @@ is a positional flattened array rather than a named vector (Sobol, Stratify, His
 linear regression's coefficient/covariance/residual matrices, ...) -- has no `names` array to look
 `label` up against, so it now throws on a `label` key instead of silently falling through to
 `"index"`-or-0 the way the C++/R/Python `toolbox_select` helpers never would. Symmetrically, the
-groups whose C++ `ToolboxResult` never sets `dims` at all (`interpolation.linear`/`bilinear`,
-`regression.residuals`/`predict`, `statistics.ranks`/`percentile`, every `gof` method) now throw on
+groups whose C++ `ToolboxResult` never sets `dims` at all (`interpolation.linear`/`bilinear`/
+`cubic_spline`/`polynomial`, `regression.residuals`/`predict`, `statistics.ranks`/`percentile`,
+every `gof` method) now throw on
 `select: "rows"`/`"columns"` instead of answering a fabricated or unrelated value, matching the
 C++/R/Python helpers' behavior when `r.dims` is empty. No fixture pairs either combination with one
 of those groups today, so neither change altered any existing case. See `ToolboxSelectFlat`'s and
 `ToolboxSelectFlatNoDims`'s header comments in `tools/oracle_emitter/Program.cs`.
 
+P2 "math extras" (Task 9) added the `linalg` group, the first entirely NEW toolbox group since the
+Phase 4 docs/examples effort's original eleven -- over the ported `QRDecomposition` (Householder
+reflections) and `GaussJordanElimination` (`numerics/math/linalg/{qr_decomposition,
+gauss_jordan_elimination}.hpp`). Every matrix crosses the runner boundary as ONE flattened
+row-major `double` vector plus `rows`/`cols` options (`b_cols` for a second matrix), the same
+convention `regression`'s predictor matrix already uses -- there is no matrix type common to
+C++/R/Python/C#, so a nested array is never on this grammar. Methods: `qr_q`/`qr_r` (`data:
+[a_flat]`) return Q (`M x M`) and R (`M x N`); `qr_solve` (`data: [a_flat, b]`, `b` length `M`)
+returns the length-`N` solution vector with NO `dims` (mirroring `interpolation.linear`'s own
+undimensioned result -- `select: "rows"`/`"columns"` throws here exactly as it does there);
+`qr_solve_matrix` (`data: [a_flat, b_flat]`, `b_cols` required) returns the `N x b_cols` solution
+matrix; `gauss_jordan_inverse`/`gauss_jordan_solution` (`data: [a_flat, b_flat]`, `b_cols`
+required) drive the SAME in-place `Solve(ref A, ref B)` call and read back `A` (now the inverse,
+`N x N`) or `B` (now the solution set, `N x b_cols`) respectively -- each fixture assertion, and
+each dotnet-emitter call, clones `A`/`B` fresh before calling `Solve`, since the C# delegate
+mutates its arguments and the two arms must not observe each other's mutation.
+`fixtures/toolbox/linalg.json` is the one file of this group. None of
+`Test_QRDecomposition.cs`'s nine methods compares `Q`, `R`, or a solved `x` against a literal --
+every one is a residual/reconstruction check (`A*x ~= b` or `Q*R ~= A` to `1e-10`) -- so the
+`qr_q`/`qr_r`/`qr_solve`/`qr_solve_matrix` values are curated via `oracle_emitter --dump` against
+the real C# classes rather than lifted from a test literal, per the `bivariate_copula`/
+`multivariate_distribution` curation convention above; `gauss_jordan_inverse`/
+`gauss_jordan_solution` reuse `Test_GaussJordanElim`'s own literal `true_IA` and are asserted
+EXACTLY (`tol: 0`), the one pair of methods in this file that are.
+
+Task 10 added the `special` group over the ported `Debye` and `Evaluate` classes
+(`numerics/math/special/{debye,evaluate}.hpp`). All four methods vectorize over the LAST data
+vector and return one value per element, with no `dims`/`names` -- the same shape `trend`'s
+`predict` arm uses. `debye` (`data: [x]`) evaluates `Debye.Function` at every `x`;
+`polynomial`/`polynomial_rev`/`polynomial_rev_1` (`data: [coefficients, x]`) evaluate the
+matching `Evaluate.*` static at every `x` against the one shared `coefficients` vector;
+`polynomial_rev` additionally reads an optional integer `n` option, mirroring
+`Evaluate.PolynomialRev`'s own optional `n` parameter (default `-1`, meaning "use the whole
+coefficient list"). `fixtures/toolbox/special_functions.json` is the one file of this group:
+the `debye` case's eight values are `Test_Debye`'s own literal array, asserted at its own `1E-4`
+tolerance; the three `polynomial*` cases instead assert `Evaluate.Polynomial`/`PolynomialRev`/
+`PolynomialRev_1` against `Test_Polynomial`/`Test_PolynomialRev`/`Test_PolynomialRev_1`'s
+hand-computed formula over one shared `coeffs = [3, 5, 7]`, `x = 4` (`Test_PolynomialRev` also
+covers the optional `n = 1` argument), asserted EXACTLY (`tol: 0`) since that arithmetic is
+integer-valued with no rounding.
+
+Task 11 added the `functions` group over the two non-tabular `IUnivariateFunction`
+implementations, `LinearFunction` and `PowerFunction` (`numerics/functions/`). `function` selects
+which to build (`"linear"` | `"power"`); `parameters` is a POSITIONAL array in
+`set_parameters`'s own order (linear: `[alpha, beta, sigma]`; power: `[alpha, beta, xi, sigma]`)
+-- unlike `link`'s named `parameters` object, both functions here take one fixed, ordered list, so
+a positional array is unambiguous. `is_inverse` (power-only, `PowerFunction.IsInverse`) is
+scope-checked exactly as `link`'s `inner` key is scoped to `"Centered"`: present for `"linear"`,
+the runner throws. `confidence_level`'s mere PRESENCE (not its value) switches the built function
+to non-deterministic before `parameters` is applied, mirroring every non-deterministic C#
+constructor overload (the one that takes `sigma`); its absence means deterministic. `evaluate`/
+`inverse` (`data: [x]`) both vectorize over `x` and return one value per element, the same shape
+`link`'s three methods use. The severed third implementation, `TabularFunction`, depends on the
+unported Paired Data subsystem and is not exposed here -- see `upstream/CLAUDE.md`.
+`fixtures/toolbox/univariate_functions.json` is the one file of this group: most cases transcribe
+`Test_Functions.cs`'s own literals directly (`Test_Linear_Function`/`Test_Power_Function`/
+`Test_InversePower_Function`'s `Function()` values, including their `ConfidenceLevel = 0.75`
+branches) or the intermediate `Function()` value the two `Test_*_Inverse` round-trip methods
+compute but never assert as a literal (only the final `InverseFunction(Function(x)) == x` identity
+is asserted there, so the intermediate is instead the same closed-form arithmetic the deterministic
+branch evaluates: `alpha + beta*x` for linear, `alpha*(x-xi)^beta` for power). The two
+`*_confidence_inverse` cases -- `InverseFunction()` under a set `ConfidenceLevel`, a combination
+`Test_Functions.cs` never asserts as a literal -- are curated via `oracle_emitter --dump` against
+the real C# classes, per the `bivariate_copula`/`multivariate_distribution` curation convention
+above; `power_confidence_inverse`'s dumped value coincides with `Test_InversePower_Function`'s own
+`y3` literal, because `PowerFunction.InverseFunction()`'s `IsInverse = false` branch is
+algebraically identical to `Function()`'s `IsInverse = true` branch for the same alpha/beta/xi/
+sigma/confidence/input.
+
+P3 "optimizers" (Task 10) added the `network` group, the fifteenth, over the ported
+dynamic-programming trio (`numerics/math/optimization/dynamic/{binary_heap,dijkstra,network}.hpp`).
+It is the only group whose subject is a GRAPH rather than a series, so the edge list crosses the
+runner boundary as FOUR parallel data vectors -- `[from, to, weight, index]`, all of the same
+length, one element per edge -- with the destination node indices in `options.destinations` (an
+array, or a bare number for one) and an optional `node_count`. Every method returns the C#
+`float[nNodes, 3]` result table flattened row-major with `dims = {node_count, 3}` and the C#
+column order (`NEXT_NODE`, `EDGE_INDEX`, `COST`), so an assertion selects a cell with
+`index: node * 3 + column`. Unreachable nodes carry `-1`, `-1`, `"inf"`.
+
+PRECISION: costs accumulate in `float`, because the ported solver does (C# declares
+`float Weight`, allocates `float[nNodes, 3]`, and its own tests assert the table by exact `float`
+equality). The toolbox boundary is where the widening to `double` happens, so a fractional weight
+rounds to `float` before it is summed. Every weight in `DijkstraTesting.cs` is a small integer, so
+every value in `fixtures/toolbox/network.json` is exact in both precisions and is asserted at
+`mode: "equal"` (tolerance 0), exactly as the C# tests assert them.
+
+Three methods, mapping to the three C# entry points: `dijkstra` is the free `Dijkstra.Solve` (its
+single-destination overload when one destination is given, its `int[]` overload otherwise, which
+is the rule each transcribed C# test follows and which the emitter mirrors); `network_solve` is
+`Network.Solve`, which caches the incoming-edge lists in its constructor and forwards to that same
+free solver; `network_solve_weights` is `Network.Solve(float[] edgeWeights)`, taking a FIFTH data
+vector of replacement weights. `node_count` is a `dijkstra`-only option -- `Network` derives its
+own node count, so supplying it to either `network_*` method is an error rather than a silently
+ignored key.
+
+Two upstream defects shape this group and are pinned rather than papered over. The shipped C#
+`Network` CANNOT BE CONSTRUCTED at all (its constructor sizes both edge caches at the maximum node
+index instead of `max + 1` and then indexes one past the end), so the dotnet emitter drives the
+free `Dijkstra.Solve` for all three methods; that is exact rather than approximate, because
+`Network.Solve` does nothing but forward its cached lists to that function, and a patched C#
+`Network` -- the same file with only the sizing corrected, which is the port's one intentional
+divergence -- was measured returning the free solver's table element for element. And
+`Network.Solve(float[] edgeWeights)` IGNORES its own argument, passing the stale cache alongside
+the re-weighted array, so the case
+`triangle_path_network_solve_weights_are_ignored` supplies all-ones weights on a graph whose real
+weights are `1/4/1/10` and pins the ORIGINAL-weight answer: honoring the weights would route node
+1 through node 0 instead of node 2, so the case fails loudly if anyone ever "fixes" the port. Both
+defects are written up in `docs/upstream-csharp-issues.md`, and the user-facing `shortest_path()`
+verb in both packages calls `dijkstra`, never `network_solve_weights`.
+
+P4 "data and tests" (Task 3) added the `hypothesis` group, the sixteenth, over the twelve ported
+hypothesis tests (`numerics/data/hypothesis_tests.hpp`, itself a port of the C#
+`Numerics.Data.Statistics.HypothesisTests` static class). Every method but `f_models` reads one
+data vector (a one-sample test) or two (a two-sample test) and returns the 2-sided p-value with
+no `dims`/`names`, the same shape `correlation`'s methods use; `f_models` (the F-test comparing
+two nested regression models) takes NO data -- its four inputs
+(`sse_restricted`/`sse_full`/`df_restricted`/`df_full`) are all scalar options -- and returns a
+NAMED two-value result, `names = {"f_statistic", "p_value"}`, selected the same way
+`statistics.product_moments`/`l_moments` are. `one_sample_t` reads an optional `population_mean`
+option (default `0`); `ljung_box` reads an optional `lag_max` option (default `-1`, meaning "use
+the C# default rule").
+
+`fixtures/toolbox/hypothesis.json` carries one case per `Test_HypothesisTests.cs` `[TestMethod]`
+(`Test_UnimodalityTest`, `Test_GrubbsBeck`, and `Test_MultipleGrubbsBeck` excluded -- the first is
+a documented P4 severance, the other two exercise the already-ported `MultipleGrubbsBeckTest`, not
+this class). Every value is `Test_HypothesisTests.cs`'s own literal at its own tolerance; the
+`datasets` block reuses the arrays already transcribed (and independently verified byte-identical
+against the checked-out submodule) into `core/tests/test_hypothesis_tests.cpp`, including the
+69-value Harricana River record shared by `wald_wolfowitz` and `mann_kendall` and the 126-value
+noise series shared by `jarque_bera` and `ljung_box` (NOT 128 -- a documented correction to an
+earlier plan draft). Two expected values are EXPRESSIONS rather than literals in the C# source --
+Wald-Wolfowitz's `(1 - Normal.StandardCDF(1.167)) * 2` and Mann-Whitney's
+`(1 - Normal.StandardCDF(0.54)) * 2` -- each evaluated once here and pinned as a number, with the
+statistic and the expression recorded in the assertion's `source`.
+
+P4 "data and tests" (Task 10) added the `paired_data` group, the seventeenth, over the ported
+Paired Data subsystem (`numerics/data/paired_data/{ordered_paired_data,
+uncertain_ordered_paired_data,line_simplification}.hpp`, P4 Tasks 7-9). Every method that builds
+an `OrderedPairedData` reads the curve's shape contract from `data: [x, y]` plus four shared
+options -- `strict_x`/`strict_y` (bool, default `true`), `order_x`/`order_y` (the `SortOrder`
+names `"ascending"`/`"descending"`/`"none"`, default `"ascending"`) -- and, for
+`interpolate_y`/`interpolate_x` only, two more: `x_transform`/`y_transform` (the `Transform` names
+`"none"`/`"logarithmic"`/`"normal_z"`, default `"none"`). Nine methods:
+`interpolate_y`/`interpolate_x` (`data: [x, y, xout]`/`[x, y, yout]`) vectorize `GetYFromX`/
+`GetXFromY` over the third data vector, no `dims`; `area_under_y`/`area_under_x` are the two
+`TrapezoidalAreaUnder*` scalars; `simplify` (`options.algorithm` = `"rdp"` | `"visvalingam"` |
+`"lang"`, plus that algorithm's own `tolerance`/`num_to_keep`/`look_ahead`) returns the simplified
+curve flattened row-major with `dims = {n, 2}`, same for the standalone
+`line_simplify` (`options.epsilon`, no shape-contract options at all --
+`LineSimplification::RamerDouglasPeucker` takes a bare ordinate list); `search` (`options.value`,
+`axis` = `"x"`|`"y"`, `algorithm` = `"smart"`|`"sequential"`|`"bisection"`|`"hunt"`|`"binary"`)
+returns the found index as a scalar, built-searched-once-and-dropped (the C# search methods this
+un-gates mutate `XSearchStart`/`Xcorrelated` on the instance, so this group cannot and does not
+reproduce cross-call state); `is_valid` returns the NAMED two-value result
+`{"is_valid", "error_count"}` -- the C# `GetErrors()` message STRINGS do not cross this boundary
+(`ToolboxResult` carries doubles/names, not strings); `curve_sample` (`data: [x]`,
+`options.distributions` an array of `dist_spec` grammar objects, one per `x`, optional
+`options.probability`) builds an `UncertainOrderedPairedData` and returns
+`CurveSample()`/`CurveSample(probability)` flattened the same way, with `distribution_type`
+OPTIONAL despite the C# constructor having no default -- it falls back to the first built
+distribution's own type, which is exact rather than approximate because `CurveSample` never
+consults `IsValid`/`Distribution`. The `functions` group's `tabular`/`tabular_inverse` methods are
+this task's tenth surface, over the third `IUnivariateFunction`, `TabularFunction`: same
+`distributions` array plus `options.x` (the curve's domain, NOT part of `data` -- `data[0]` holds
+the evaluation points instead), the two transforms, `confidence_level`, `is_deterministic`, and
+`allow_negative_y_values`; unlike `paired_data`'s own methods, the underlying curve's shape
+contract is not configurable here (`TabularFunction` is always built strict/ascending on both
+axes, matching every C# test use), and `distribution_type` is never a settable option at all --
+only ever the first built distribution's own type.
+
+`fixtures/toolbox/paired_data.json` pins `Test_PairedData.cs`/`Test_PairedDataInterpolation.cs`/
+`Test_UncertainPairedData.cs` literals already transcribed and reviewer-verified into
+`core/tests/test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`: the four reservoir-
+curve sort-order datasets' `Test_GetY` sweep reduced to an 11-point representative subset (indices
+0, 7, 15, 23, 31, 39, 47, 55, 63, 71, 77 of the shared 78-point query array) plus two below/
+above-range clamp checks per dataset (the `GetYFromX` boundary guard itself, not a distinct C#
+literal) and both `TrapezoidalArea` values; the seven interpolation-transform combinations pinned
+in BOTH sort orders (14 tiny cases); `search`'s `871`/`127` on the shared 1000-point identity
+curve; and `curve_sample`'s two expectation vectors (the mean curve and the `probability = 0.5`
+curve) on the shared Triangular fixture; and, on the shared five-point sin curve
+`{(0,0), (3.14/2,1), (3.14,0), (3*3.14/2,-1), (2*3.14,0)}` (`strict_x = true`,
+`order_x = ascending`, `strict_y = false`, `order_y = none`), `simplify`'s `rdp` (tolerance 0.01)
+and `visvalingam` (`num_to_keep = 4`) cases (4 rows / 8 flattened coordinates each,
+`{(0,0), (1.57,1), (4.71,-1), (6.28,0)}`, `Test_DouglasPeuckerSimplify`/
+`Test_VisvaligamWhyattSimplify`) and the standalone `line_simplify` case (`epsilon = 0.1`, the
+same 4-point result at `Test_RamerDouglasPeucker`'s own 1e-6 tolerance, not exact like the two
+`OrderedPairedData` simplifiers). **THE ONE DELIBERATE CORRECTION TO AN UPSTREAM TEST
+in this file:** `simplify`'s `lang` case (tolerance 0.01, look_ahead 2) pins **3** rows, not the 4
+`rdp`/`visvalingam` pin -- verified directly against the real C# library (not merely this port's
+own transcription): `LangSimplify(0.01, 2)` on the shared five-point sin curve returns
+`{(0,0), (1.57,1), (4.71,-1)}`, dropping `(6.28, 0)` -- see `ordered_paired_data.hpp`'s sixth
+transcription note for the full account of why `Test_LangSimplify.cs`'s own (weakly-asserted,
+length-bounded-loop) four-point claim does not hold. `is_valid` is exercised by the ctest suites
+(`test_ordered_paired_data.cpp`/`test_uncertain_paired_data.cpp`'s own validity assertions) but
+carries no case in this file. `fixtures/toolbox/univariate_functions.json`
+gained four `tabular`/`tabular_inverse` cases transcribing `Test_Tabular_Function`'s own
+x = {50,100,150,200,250}, `Deterministic(100,200,300,400,500)`, `XTransform = Logarithmic` fixture
+-- the two boundary-clamp literals plus `Function(75)`/`InverseFunction(Function(75))` at the
+closed-form log-interpolation value the C# test itself computes rather than asserts as a separate
+literal.
+
 ### `optimizer`
 
-The six ported Numerics optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent), run against a
-NAMED built-in objective (one of `FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`, the same formulas
-`core/tests/optimization_test_functions.hpp` and each fixture runner's own native closure
-implement) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
+The fourteen ported Numerics optimizers (DE, particle swarm, shuffled complex evolution, simulated
+annealing, multi-start, MLSL, BFGS, Powell, ADAM, gradient descent, Nelder-Mead, Brent, golden
+section, augmented Lagrange), run against a
+NAMED built-in objective (one of
+`FXYZ`/`DeJong`/`Booth`/`McCormick`/`FX`/`Rosenbrock`/`Eggholder`/`SumOfPowerFunctions`, plus the
+ten `Test_AugmentedLagrange.cs` inline functions
+`AL1_Objective`/`AL2_Objective`/`Haimes_Primary`/`Haimes_Secondary`/`RosenbrockDisk_Objective`/
+`Disk`/`SumAll`/`SumXY`/`X0`/`X1`,
+the same formulas `core/tests/optimization_test_functions.hpp` and each fixture runner's own native
+closure implement -- the accumulating ones, `DeJong`, `Rosenbrock`, `SumOfPowerFunctions`,
+`AL1_Objective`, `AL2_Objective` and `SumAll`,
+spell their sum out as an
+explicit loop in all four catalogs rather than calling `sum()`/`Sum()`, which would accumulate in a
+different precision in R) rather than serializable data -- so this is a separate kind from `toolbox` above, not a
 `toolbox` group, reached through its own runner (`numerics/support/optimizer_runner.hpp`) and its
 own glue (`ch_optim_run_` / `_core.optim_run`). `construct` is passed straight through as the
 runner's spec JSON, minus the `objective` key (not part of the runner's own grammar). Processed by
@@ -1751,7 +2042,65 @@ literals this way).
 
 Assertion `method` is `"value"` (the objective's own value at the optimum, in its own sign
 convention -- never negated for a `"maximize": true` construct), `"parameter"` (`args: [index]`),
-or `"status"` (the exact `OptimizationStatus` name).
+`"iterations"`, `"function_evaluations"` (both integer counts, so `"mode": "equal"`),
+`"multiplier"` (`args: [set, index]`, where `set` is `"lambda"` | `"mu"` | `"nu"` -- the three
+augmented Lagrange multiplier vectors, in that class's own naming), or
+`"status"` (the exact `OptimizationStatus` name).
+
+`construct.control` is optional and passes straight through as the runner's `control` object; each
+method reads only the keys its own class exposes (`population_size` for `"de"`/`"particle_swarm"`;
+`complexes`/`cce_iterations`/`tolerance_steps` for `"sce"`;
+`initial_temperature`/`min_temperature`/`cooling_rate`/`update_cycles`/`temperature_cycles`/
+`tolerance_steps` for `"simulated_annealing"`; `local_method` for `"multi_start"`/`"mlsl"`; and
+`local_absolute_tolerance`/`local_relative_tolerance`/`polish` for `"multi_start"`; `alpha` for
+`"adam"`/`"gradient_descent"`; and `beta1`/`beta2` for `"adam"`, beside the
+`max_iterations`/`absolute_tolerance`/`relative_tolerance`/`max_function_evaluations`/
+`report_failure`/`compute_hessian` set the `Optimizer` base carries). An absent key leaves the
+ported class's own default.
+
+`construct.gradient` is optional and names an analytic gradient in a SECOND catalog
+(`Grad_FXYZ`/`Grad_DeJong`/`Grad_Booth`, likewise written out term by term in all four runners),
+the second host-language callback the two gradient-taking methods accept. It is not part of the
+runner's spec grammar either -- each runner strips it and passes the resolved function through the
+gradient entry point (`ch_optim_run_grad_` / `_core.optim_run_grad`) instead of the plain one. Only
+`"adam"` and `"gradient_descent"` read it; omitted, both classes differentiate the objective
+numerically, exactly as a null C# `Gradient` delegate makes them. The three cases that supply one
+also pin `iterations` and `function_evaluations` at exact equality, because those counts are the
+only thing that distinguishes a run driven by the supplied gradient from one that silently ignored
+it (1518 evaluations against 12137 for the otherwise identical `adam_fxyz`); all three counts were
+measured identical in the real C# library, in the C++ core compiled with and without
+floating-point contraction, in R and in Python. The `Grad_` prefix follows the same convention the
+`callback` kind's catalog uses, and the two catalogs are separate lookups.
+
+`construct.constraints` and `construct.inner` belong to `"augmented_lagrange"` and to nothing else.
+Each `constraints[i]` object carries a `function` key naming an entry in the SAME catalog the
+objective comes from (an objective and a constraint are the same shape, so both roles resolve out
+of one lookup -- `Disk` really is used as both, being `Test_RosenbrockDisk`'s constraint and
+`Test_MixedConstraints`'s objective written identically upstream), plus the serializable half of
+the constraint: `type` (`"eq"` | `"le"` | `"ge"`, mapping onto
+`EqualTo`/`LesserThanOrEqualTo`/`GreaterThanOrEqualTo`), `value`, and an optional `tolerance`
+(default `1E-8`). Like `objective` and `gradient`, `function` is a catalog name and NOT part of the
+runner's own grammar: each runner strips it, resolves it, and passes the callbacks through the
+constrained entry point (`ch_optim_run_constrained_` / `_core.optim_run_constrained`), where they
+pair POSITIONALLY with what is left of the `constraints` array. `inner` names the borrowed inner
+optimizer (`method` plus optional `initial`/`lower`/`upper`/`seed`/`control`, each vector falling
+back to the top-level one); omitted, it is BFGS over the top-level vectors, the shape every
+upstream C# test uses.
+
+```jsonc
+{
+  "name": "augmented_lagrange_haimes",
+  "construct": {
+    "method": "augmented_lagrange", "objective": "Haimes_Primary",
+    "initial": [5, 5], "lower": [0, 0], "upper": [10, 10],
+    "constraints": [{ "function": "Haimes_Secondary", "type": "le", "value": 13.31 }]
+  },
+  "assertions": [
+    { "method": "parameter", "args": [0], "expected": 4.5, "mode": "abs", "tol": 1e-2 },
+    { "method": "multiplier", "args": ["mu", 0], "expected": 1.67, "mode": "abs", "tol": 1e-2 }
+  ]
+}
+```
 
 ### `callback`
 
@@ -1807,6 +2156,113 @@ opens with `EMITTER-READ`. `Quad_Peak` in `fixtures/callback/math.json` is likew
 addition rather than an upstream integrand: every upstream integrand converges on the first
 whole-interval evaluation at 21 evaluations, so it is the one callback pinning the SUBDIVIDING
 branch of the recursion.
+
+P2 "math extras" widened `math/root_find` and added two methods, all over the ported
+Bisection/Secant/NewtonRaphson root finders (`numerics/math/rootfinding/`) beside the pre-existing
+Brent. `root_find`'s `options.method` is now one of `"brent"` (the default, absent-key-compatible
+with every fixture written before this key existed), `"bisection"`, or `"secant"` --
+`"bisection"` additionally requires `first_guess`, the running root Bisection.Solve seeds itself
+with (the bracket only seeds its initial step direction); `"secant"` takes no `first_guess`, since
+Secant.Solve picks its own starting point off the bracket. `root_find_newton` is a SEPARATE
+method rather than a fourth `root_find` arm, because it needs a second callback (`construct.df`,
+resolved out of the same catalog as `callback`) rather than a second option: `first_guess` is
+required, and `lower`/`upper` are optional -- their PRESENCE together, not a sub-key, selects
+`NewtonRaphson.RobustSolve` over the plain `NewtonRaphson.Solve`, mirroring the ported class's own
+two entry points. `root_find_system` solves a system of equations: `callback` names `F` (theta ->
+vector) and `construct.jacobian` names `J` (theta -> matrix, ROW-major with its own shape -- the
+same key and shape the `"gmm"` group's optional Jacobian already uses, reused rather than
+duplicated), `options.first_guess` is a vector giving the system's dimension n, and the result's
+`dims` is `{n}` rather than empty, matching `math/gradient`'s own vector-shaped result.
+
+P2 "math extras" also widened `math/quadrature` and added `math/quadrature_2d`, over the four
+deterministic integrators ported alongside AdaptiveGaussKronrod (`numerics/math/integration/`):
+SimpsonsRule, TrapezoidalRule, AdaptiveSimpsonsRule, AdaptiveGaussLobatto, AdaptiveSimpsonsRule2D,
+and the five `Integration` statics (GaussLegendre, GaussLegendre20, TrapezoidalRule(steps),
+SimpsonsRule(steps), Midpoint). `quadrature`'s `options.method` is now one of `"gauss_kronrod"`
+(the default, absent-key-compatible with every fixture written before this key existed),
+`"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`, `"gauss_lobatto"` (the four other
+Integrator-class arms, which keep the existing `{integral, function_evaluations, standard_error}`
+triple and a real status -- `0.0` for `standard_error` where the driven class has none of its own,
+namely SimpsonsRule/TrapezoidalRule/AdaptiveGaussLobatto), or `"gauss_legendre"`,
+`"gauss_legendre20"`, `"simpsons_fixed"`, `"trapezoidal_fixed"`, `"midpoint"` (the five statics,
+which return `values = {integral}` alone and `status = "Success"` unconditionally, since none has
+an Integrator to report one -- those `"status"` assertions are therefore structural rather than
+`EMITTER-READ`, the same distinction the file header draws for `root_find`/`derivative`/
+`gradient`/`hessian`). `"adaptive_simpsons"` alone takes the optional `min_depth`/`max_depth`;
+the three fixed-step statics take the optional `steps` (default 2). `quadrature_2d` is a SEPARATE
+method rather than a `quadrature` arm, because its callback is `f(x, y)` rather than `f(x)`; it
+always drives AdaptiveSimpsonsRule2D and always returns the result triple + status, with
+`options.min_x`/`max_x`/`min_y`/`max_y` required and `absolute_tolerance`/`relative_tolerance`/
+`min_depth`/`max_depth` optional. `Quad2D_XPlusY` and `Quad2D_PI2D` in
+`fixtures/callback/math.json` are its two catalog entries, both real upstream integrands
+(`Test_AdaptiveSimpsonsRule2D.Test_XPlusY`/`Test_PI`, the latter Integrands.PI2D).
+
+P2 "math extras" also added `math/ode_solve`, over the ported RungeKutta family
+(`numerics/math/ode/runge_kutta.hpp`): `second_order`, `fourth_order` (plus its single-step
+overload `fourth_order_step`), `fehlberg`, and `cash_karp`. It reuses `quadrature_2d`'s
+`scalar_xy` callback shape, `f(t, y)` rather than `f(x, y)`, so it needed no new `CallbackSet`
+member. `options.method` is one of `"rk4"` (the default), `"rk2"`, `"rkf"`, or `"cash_karp"`.
+`"rk2"` always drives `second_order` and always needs `end_time`/`time_steps`, returning the
+solution array (`dims = {time_steps}`, NOT `time_steps + 1` -- the ported C# allocates
+`new double[timeSteps]`). `"rk4"` needs one of two shapes, distinguished by the PRESENCE of
+`end_time` rather than a method sub-key (the same rule `root_find_newton`'s bracket follows):
+present drives the array overload exactly as `"rk2"` does; absent drives the single-step
+overload over `dt` alone, returning one number (`values = {value}`, `names = {"value"}`).
+`"rkf"`/`"cash_karp"` always need `dt`/`dt_min` and optionally `tolerance` (absent leaves the
+ported routine's own default, 1E-3, in force), returning one number the same way `"rk4"`'s
+single-step form does. `fixtures/callback/ode.json` is the one file of this method, its five
+cases (`ode_rk2`, `ode_rk4`, `ode_rk4_single_step`, `ode_rkf`, `ode_cash_karp`) each transcribing
+one of Test_RungeKutta.cs's five `[TestMethod]`s over its one catalog entry, `Ode_TestFunction`
+(`f(t, y) = y - t^2 + 1`); the single-step/adaptive cases pin only the FIRST step of the upstream
+loop test (`t: 0 -> 0.5`), since a fixture case is one call into the runner rather than a scripted
+loop -- the ctest suite (`core/tests/test_runge_kutta.cpp`) carries the full 4-step loop each
+upstream test itself runs.
+
+P2 "math extras" (Task 6) added `math/quadrature_nd` and `math/quadrature_vegas`, over the three
+ported stochastic multidimensional integrators (`numerics/math/integration/`):
+MonteCarloIntegration, Miser, and Vegas. `quadrature_nd` drives the first two over `callback` (the
+same `vector_scalar` shape `gradient`/`hessian` already use), `options.method` one of
+`"monte_carlo"` (the default) or `"miser"`; `min`/`max` are required vectors whose common length is
+the dimensionality, `seed` PRESENT seeds the class's `random` member the way the emitter's `new
+MersenneTwister(seed)` does, and `use_sobol` (default true) maps to `use_sobol_sequence` -- though
+MonteCarloIntegration's own flag is a documented DEAD property upstream, consulted by neither
+Integrate() nor this arm. Because MonteCarloIntegration's own loop is bounded by `max_iterations`
+rather than `max_function_evaluations` (the latter is checked only AFTER the loop, to choose the
+reported status, not to end it early -- faithfully ported, not a bug), `"monte_carlo"` alone also
+accepts `min_iterations`/`max_iterations`/`relative_tolerance`, none of which the upstream RMC
+delegate options grammar carries; `"miser"` alone accepts `fraction`/`min_subregion_points`/
+`min_bisections`/`dither`, mapping to the ported class's own members. `quadrature_vegas` drives
+Vegas over a NEW `CallbackSet` member, `vector_weight` (`f(x, weight) -> y`, upstream's own Vegas
+integrand shape -- its own method rather than a `quadrature_nd` arm because of that different
+callback shape), taking the same `min`/`max`/`seed`/`use_sobol` plus Vegas's own
+`independent_evaluations`/`function_calls`/`alpha`/`number_of_bins`/`tail_focus_parameter`/
+`initialize`/`check_convergence`, and `target_probability` (PRESENT calls the ported
+`configure_for_rare_events()` helper, applied LAST so it may override the bin/alpha/tail-focus
+options the same way the C# method itself does). `quadrature_nd` returns the familiar
+`{integral, function_evaluations, standard_error}` triple + status; `quadrature_vegas` returns a
+fourth value, `chi_squared`, since Vegas alone reports one. An upstream quirk worth knowing before
+reading a `"status"` assertion here: unlike MonteCarloIntegration/Vegas/AdaptiveGaussKronrod,
+Miser's own `Integrate()` never assigns a success status -- it stays `"None"` (`ClearResults()`'s
+value), written only on the catch-block `"Failure"` path -- verified against the real C# source,
+not assumed. `Nd_PI`/`Nd_GSL` (real upstream integrands, `Integrands.PI`/`GSL`) and
+`NdW_SumOfNormals3` (`Integrands.SumOfNormals`, the weight-ignoring wrapper
+`Test_Vegas.Test_SumOfThreeNormals` itself uses) are the three catalog entries in
+`fixtures/callback/math.json`; the last calls each runner's OWN already-ported, oracle-validated
+Normal quantile (`Normal::standard_z`/`dist_quantile()`/`Distribution.quantile()`/
+`Normal.StandardZ`) rather than reimplementing that rational-polynomial approximation as arithmetic
+by hand. Also worth knowing before pinning a value here: MonteCarloIntegration/Miser/Vegas are
+CORE code, not fixture-catalog code, so -- unlike the callback catalogs, which core/CMakeLists.txt
+deliberately compiles with `-ffp-contract=off` -- they compile with default (fused-multiply-add
+capable) semantics everywhere, INCLUDING in R and Python; a formula with a near-cancelling
+subtraction (`avg2 - avg*avg` for MonteCarloIntegration's own standard error; the analogous term in
+Miser; `sum_chi_squared_ - sum_weighted_results_ * result_` for Vegas's chi_squared) can therefore
+differ from the never-fused C# value by more than the last bit even though R, Python and this
+repo's own C++ runner all agree with EACH OTHER. `fixtures/callback/math.json`'s three pinned cases
+use a measured, non-zero `"rel"` tolerance on those fields for exactly that reason (as small as
+1e-12 where the drift is sub-ulp, as loose as 1e-6 for Vegas's `chi_squared`, whose subtraction
+amplifies the drift to a measured ~1.1e-7 relative); `fixtures/callback/callback_cross_language.json`'s
+own digest case, being zero-tolerance across all four runners, only pins `function_evaluations`
+and `status` for exactly the same reason.
 
 The `"rng"` group has one method, `probe`, and one job: prove that a draw taken INSIDE a
 host-language callback comes off the core's seeded stream rather than off R's or Python's own
@@ -1938,11 +2394,16 @@ contracted lambda computes a different function from the one the fixture names.
 ### `toolbox_cross_language`
 
 One purpose-built fixture (`fixtures/toolbox/toolbox_cross_language.json`), not a general-purpose
-kind: its single case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
+kind: its first case nests an `"optimizer"` sub-block (shaped exactly like an `optimizer`-kind
 case's `construct`/`assertions`) alongside `"sobol"` and `"stratify"` sub-blocks (each shaped
 exactly like a `toolbox`-kind group-`"sampling"` case's `options`/`assertions`), so that ONE
 fixture drives a seeded stochastic optimizer run and two deterministic sequence generators through
-all four runners together. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
+all four runners together. Every sub-block is OPTIONAL: the four cases the optimizer phase added
+(one per stochastic method newly reachable from `optim_minimize()`) carry an `"optimizer"` block
+alone, and each pins only the quantities MEASURED to reproduce in all four harnesses -- see the
+fixture's own `reference` field, and the matching `FIDELITY` entry in
+`docs/upstream-csharp-issues.md`, for why a seeded ParticleSwarm or SCE run pins its iteration and
+evaluation counts but not every converged digit. Its job mirrors `fixtures/estimation/fit_cross_language.json`'s
 `short_exact`-digest precedent: proving R and Python agree bit for bit, this time across the
 toolbox/optimizer surface rather than a Bayesian MCMC chain. Every value is dumped from the REAL
 C# `DifferentialEvolution`/`SobolSequence`/`Stratify` via `tools/oracle_emitter --dump` and
@@ -2124,8 +2585,8 @@ targets (new in v2.1.4, adapted from the new `Test_Search.cs`) use the same `arg
 `core/include/corehydro/numerics/data/interpolation/search.hpp`'s file header) -- two of the
 `bisection_descending_*` cases genuinely distinguish the pre-fix (`start`) from the fixed (correct
 bracketing index) behavior. Unlike `Histogram.*`/`Bilinear.log_floor_value` below, `Search.*` stays
-C++-only even after Task 4: neither `interpolation` toolbox method (`linear`/`bilinear`) returns a
-search index, only an interpolated `y`.
+C++-only even after Task 4: no `interpolation` toolbox method (`linear`/`bilinear`/`cubic_spline`/
+`polynomial`) returns a search index, only an interpolated `y`.
 
 The `Bilinear.log_floor_value` target (`fixtures/special_functions/bilinear.json`, new in v2.1.4,
 adapted from `Test_LogarithmicFloorMatchesLinearInterpolation`) takes `args = [x1_query,
@@ -2146,7 +2607,15 @@ existing one; `fixtures/toolbox/interpolation.json` pins the `linear` method's t
 `extrapolate()`-extends distinction, scraped verbatim from `Test_Linear.cs` (the exact class this
 method wraps, unlike the `Test_PairedDataInterpolation.cs`/`OrderedPairedData` class that exercises
 the identical transform formulas through a different C# type) -- no other fixture in this repo pins
-`Linear.Interpolate()`/`Extrapolate()` directly.
+`Linear.Interpolate()`/`Extrapolate()` directly. The P2 math-extras phase (Task 8) added the
+`cubic_spline`/`polynomial` cases to the same file, scraped verbatim from `Test_CubicSpline.cs`/
+`Test_Polynomial.cs`: a single-value case, a 4-point list case, and a 34-point (or 34-of-40, for
+`polynomial` -- the C# `true_Y` literal itself has 40 entries but the C# test loop only checks the
+first `X.Length` (34) of them, transcribed as-is) list case per class, at each test's own tolerance.
+Unlike `linear`/`bilinear`, neither class has a transform surface or an `Extrapolate()` method in
+C#, so these two cases carry only `sort_order` (`polynomial` also carries the required `order`) --
+the `interpolate()` R/Python verb, not the toolbox arm, is what rejects a non-default transform or
+`extrapolate` for these two methods, matching the fact that C# simply has no such option to reject.
 
 The `Probability.hpcm_joint`/`Probability.hpcm_conditional_at` targets
 (`fixtures/special_functions/probability.json`, new in v2.1.4, adapted from the new

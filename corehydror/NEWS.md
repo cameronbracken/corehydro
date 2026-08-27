@@ -1,3 +1,148 @@
+# corehydror 0.11.0
+
+The data-and-testing layer that closes out the port: the twelve hypothesis tests, the two
+severed DataFrame facades, the Correlation matrix overloads, and the whole Paired Data
+subsystem. See `CHANGELOG.md` at the repository root for the full account.
+
+## New features
+
+* `hypothesis_test(x, y = NULL, method = ...)` -- twelve statistical tests from
+  `Numerics.Data.Statistics.HypothesisTests`: `"one_sample_t"`, `"equal_variance_t"`,
+  `"unequal_variance_t"`, `"paired_t"`, `"f"`, `"f_models"`, `"jarque_bera"`,
+  `"wald_wolfowitz"`, `"ljung_box"`, `"mann_whitney"`, `"mann_kendall"`, `"linear_trend"`.
+  `method = "f_models"` returns a named `c(f_statistic =, p_value =)` pair; every other method
+  returns a single p-value. `UnimodalityTest`, the thirteenth C# method, is deferred: it fits a
+  `GaussianMixtureModel`, and the Machine Learning layer is unported.
+* `analysis_data_hypothesis_test()` and `analysis_data_statistics()` un-gate two RMC.BestFit
+  `DataFrame` facades that had been waiting on `HypothesisTests`. Between them they carry twelve
+  of the fourteen members of the two regions they cover -- nine of the eleven Hypothesis Testing
+  facades plus all three Summary Statistics facades. `unimodality_test` and
+  `summary_hypothesis_test` are deferred alongside `UnimodalityTest` for the same reason.
+* `correlation()` gains a matrix path: called with a matrix or data frame and no `y`, it returns
+  the full Pearson or Spearman correlation matrix rather than one pairwise value. Upstream has no
+  Kendall matrix overload, so `method = "kendall"` with a matrix is an error naming the reason.
+* The Paired Data subsystem, reachable as five new verbs: `curve_interpolate()` and `curve_area()`
+  over a curve's linear interpolation and trapezoidal area; `curve_simplify()` over the three
+  simplification algorithms (Douglas-Peucker, Visvalingam-Whyatt, Lang); `uncertain_curve_sample()`,
+  which samples a curve whose y-values are distributions rather than numbers, at a chosen
+  probability or at each distribution's mean; and `tabular_function()`, the last of the three
+  `IUnivariateFunction` implementations, interpolating a tabulated curve with optional log or
+  normal-score transforms on either axis.
+* A worked example pair, 28, walking the Harricana River annual peaks through the independence,
+  homogeneity and normality tests, the same record through `analysis_data()`, a correlation matrix
+  over three series, and a reservoir stage-storage curve interpolated, simplified, and sampled
+  under uncertainty.
+
+## Notes
+
+* `curve_simplify(method = "lang")` reproduces an upstream defect rather than fixing it: unlike
+  the other two algorithms, Lang does not force-keep a curve's last point, so it can silently drop
+  it. Measured against the real C# library and pinned by both a ctest and a fixture; see
+  `docs/upstream-csharp-issues.md`.
+
+# corehydror 0.10.0
+
+The rest of the Numerics optimization layer. `optim_minimize()` grew from six methods to
+fourteen, gained an optional analytic gradient and its first constrained method, and the
+dynamic-programming trio arrives as `shortest_path()`. See `CHANGELOG.md` at the repository root
+for the full account.
+
+## New features
+
+* Four new global optimizers on `optim_minimize()` / `optim_maximize()`: `"particle_swarm"`,
+  `"sce"` (shuffled complex evolution), `"simulated_annealing"` and `"multi_start"`. All four are
+  seeded, and each takes its own settings through `control` -- `population_size`; `complexes` /
+  `cce_iterations` / `tolerance_steps`; `initial_temperature` / `min_temperature` /
+  `cooling_rate` / `update_cycles` / `temperature_cycles` / `tolerance_steps`; and `local_method` /
+  `local_absolute_tolerance` / `local_relative_tolerance` / `polish`.
+* Three new local optimizers: `"adam"`, `"gradient_descent"` and `"golden_section"` (the last
+  one-dimensional, like `"brent"`). ADAM and gradient descent take `alpha` through `control`, and
+  ADAM the decay factors `beta1` and `beta2`.
+* A `gradient` argument on both verbs: a function returning one partial derivative per parameter,
+  accepted by `"adam"` and `"gradient_descent"`. Supplying it cut a five-dimensional gradient
+  descent from 103,141 objective calls to 8,596.
+* Constrained optimization through `method = "augmented_lagrange"`, with the new
+  `optim_constraint()` constructor and the two new arguments `constraints` and `inner`. The result
+  carries `multipliers`, the three Lagrange multiplier vectors.
+* `local_method` is now a `control` setting on `"mlsl"` as well as on the new `"multi_start"`.
+* `shortest_path()` -- Dijkstra shortest paths over a graph given as parallel `from`, `to` and
+  `weight` vectors plus a set of destinations, returning the next node, edge and cost for every
+  node, backed by the ported `BinaryHeap` / `Dijkstra` / `Network`. Node indices are
+  0-based, matching the C# literals and the Python twin.
+* A worked example pair, 19, covering the seeded global searches, the constrained problem and its
+  shadow price, the analytic gradient, and `shortest_path()`, ending in an executable reproduction
+  check.
+
+## Changes to results
+
+* `optim_maximize()` now rejects `method = "augmented_lagrange"` by name. The upstream C# class
+  always minimizes internally, so a maximize request returned the constrained minimum labelled
+  `Success`. Negate the objective and call `optim_minimize()`; the error message says so.
+* A `control` setting that belongs to a different method is now an error naming both, rather than
+  a silent no-op. Every method's settings are validated against one table.
+
+## Bug fixes
+
+* `shortest_path()` rejects a `node_count` smaller than the graph rather than reading past the end
+  of its arrays. The unguarded core code was undefined behavior, and could terminate the session
+  instead of raising; C# raises an `IndexOutOfRangeException` there, and the port now does the
+  equivalent.
+
+## Notes
+
+* A seeded `"particle_swarm"` or `"sce"` run reproduces bit-for-bit between corehydror and
+  corehydropy, but not necessarily against the C# library: both branch on comparisons between
+  accumulated sums, and a compiler that emits fused multiply-add takes a different search path.
+  The difference is measured and documented rather than hidden -- `"simulated_annealing"` and
+  `"multi_start"` reproduce C# exactly, and the deterministic methods have no PRNG at all.
+* `method = "multi_start"` can report a value its own reported parameters do not produce, because
+  upstream's polish step clamps the best point onto the bounds after recording its fitness. The
+  real C# library returns the same numbers; see `docs/upstream-csharp-issues.md`.
+
+# corehydror 0.9.0
+
+The last unported slice of Numerics that is not a distribution, model, or estimator: root
+finding, integration, ODE solving, spline/polynomial interpolation, linear algebra, and two small
+special-function/general-function groups, all callable against a user-written R function. See
+`CHANGELOG.md` at the repository root for the full account.
+
+## New features
+
+* `root_find()` gains a `method` option (`"brent"`, the default, `"bisection"`, `"secant"`,
+  `"newton"`) over the existing bracketing interface, and `root_find_system()` solves a
+  vector-valued system with multivariate Newton-Raphson given `f`, its `jacobian`, and a
+  `first_guess`.
+* `quadrature()` gains a `method` option covering ten deterministic rules (`"gauss_kronrod"`, the
+  default adaptive rule, plus `"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`,
+  `"gauss_lobatto"`, `"gauss_legendre"`, `"gauss_legendre20"`, `"simpsons_fixed"`,
+  `"trapezoidal_fixed"`, `"midpoint"`). `quadrature_2d()` integrates over a rectangle, and
+  `quadrature_nd()` integrates over an arbitrary-dimensional box with three seeded Monte Carlo
+  families (`"monte_carlo"`, `"miser"`, `"vegas"`, the last with rare-event configuration).
+* `ode_solve()` -- the ported `RungeKutta` solver (`"rk4"`, `"rk2"`, `"rkf"`, `"cash_karp"`) for
+  `dy/dt = f(t, y)` from an initial value over a fixed number of time steps.
+* `interpolate()` gains `method = "cubic_spline"` and `method = "polynomial"` alongside the
+  existing linear method; the transform and extrapolation arguments remain linear-only, matching
+  the C# `CubicSpline`/`Polynomial` classes, which have neither.
+* Three small toolbox groups: `qr_decomposition()`, `qr_solve()`, and `gauss_jordan()` (linear
+  algebra); `debye()` and `polynomial_eval()` (special functions, the last with three literal
+  conventions -- standard, reverse, reverse-unit); and `univariate_function()`, evaluating the
+  ported `LinearFunction` and `PowerFunction` (forward, inverse, and the optional
+  normally-distributed noise path).
+* A worked example pair, 18, walks all of the above ending in an executable reproduction check.
+
+## Notes
+
+* `TabularFunction`, the third `IUnivariateFunction` implementation, depends on the still-unported
+  Paired Data subsystem and is not exposed; it is deferred, not silently dropped, and is tracked
+  for a later release.
+* Two of the three seeded Monte Carlo integrators in `quadrature_nd()` carry a measured, honestly
+  documented rounding difference at the current shipped build: `"monte_carlo"` reproduces
+  bit-for-bit against the real C# library and across R, Python, and C++; `"miser"` measured 1 ULP
+  off C#, and `"vegas"` 2-3 ULP between R and Python, from floating-point contraction in the
+  variance/chi-squared accumulation. No tolerance was loosened and no oracle was skipped to hide
+  this; the affected fixture cases assert the seeded evaluation counts and status instead of the
+  integral value, with the measurements recorded alongside them.
+
 # corehydror 0.8.0
 
 Two gaps the port left open, closed. `GeneralizedNormal` was the one univariate family named in

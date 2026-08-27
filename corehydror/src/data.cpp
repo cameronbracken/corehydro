@@ -12,8 +12,10 @@
 #include <vector>
 
 #include "corehydro/models/data_frame_runner.hpp"
+#include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace runner = corehydro::models::runner;
+namespace tb = corehydro::numerics::support;
 using namespace cpp11;
 
 static std::vector<double> to_vec(doubles x) {
@@ -102,4 +104,37 @@ list ch_threshold_diagnostics_(doubles data, std::string method, double u_min, d
         "shape_lower_ci"_nm = from_vec(r.shape_lower_ci),
         "shape_upper_ci"_nm = from_vec(r.shape_upper_ci),
     });
+}
+
+// Packs a ToolboxResult exactly as ch_toolbox_run_ does (src/toolbox.cpp): values/names/dims/
+// spec. run_data_frame returns the SAME struct the toolbox groups return, so the twelve
+// DataFrame hypothesis-test / summary-statistics facades (P4 Task 6) reuse this shape rather
+// than growing their own.
+static list pack_toolbox_result(const tb::ToolboxResult& r) {
+    writable::doubles values(static_cast<R_xlen_t>(r.values.size()));
+    for (std::size_t i = 0; i < r.values.size(); ++i) values[static_cast<R_xlen_t>(i)] = r.values[i];
+    writable::strings names(static_cast<R_xlen_t>(r.names.size()));
+    for (std::size_t i = 0; i < r.names.size(); ++i) names[static_cast<R_xlen_t>(i)] = r.names[i];
+    writable::integers dims(static_cast<R_xlen_t>(r.dims.size()));
+    for (std::size_t i = 0; i < r.dims.size(); ++i) dims[static_cast<R_xlen_t>(i)] = r.dims[i];
+    return writable::list({"values"_nm = values, "names"_nm = names, "dims"_nm = dims,
+                           "spec"_nm = writable::strings({r.spec})});
+}
+
+// The twelve DataFrame hypothesis-test / summary-statistics facades (P4 Task 6), behind one
+// name-dispatched call: the nine hypothesis tests, summary_exact, summary_all, and standardized.
+// `data` holds the exact-series values (data[0] becomes the exact series with sequential 0-based
+// indexes); `data_frame_json`, when non-empty, instead builds the frame from a `data_frame` spec
+// object and `data` must be empty -- exactly one of the two is required (see
+// data_frame_runner.hpp's run_data_frame for why there are two paths).
+[[cpp11::register]]
+list ch_data_frame_run_(std::string method, list data, std::string data_frame_json,
+                        std::string options_json) {
+    std::vector<std::vector<double>> vecs;
+    vecs.reserve(static_cast<std::size_t>(data.size()));
+    for (R_xlen_t i = 0; i < data.size(); ++i) {
+        doubles col(data[i]);
+        vecs.emplace_back(col.begin(), col.end());
+    }
+    return pack_toolbox_result(runner::run_data_frame(method, vecs, data_frame_json, options_json));
 }

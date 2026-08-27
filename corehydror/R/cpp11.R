@@ -32,6 +32,18 @@ ch_callback_math_ <- function(method, options_json, f) {
   .Call(`_corehydror_ch_callback_math_`, method, options_json, f)
 }
 
+ch_callback_math2_ <- function(method, options_json, f, g) {
+  .Call(`_corehydror_ch_callback_math2_`, method, options_json, f, g)
+}
+
+ch_callback_math_xy_ <- function(method, options_json, f) {
+  .Call(`_corehydror_ch_callback_math_xy_`, method, options_json, f)
+}
+
+ch_callback_math_vw_ <- function(method, options_json, f) {
+  .Call(`_corehydror_ch_callback_math_vw_`, method, options_json, f)
+}
+
 ch_callback_mcmc_ <- function(options_json, f, proposal, gradient) {
   .Call(`_corehydror_ch_callback_mcmc_`, options_json, f, proposal, gradient)
 }
@@ -70,6 +82,10 @@ ch_model_log_likelihood_ <- function(model_json, dataset, params) {
 
 ch_threshold_diagnostics_ <- function(data, method, u_min, u_max, n_thresholds, confidence_level) {
   .Call(`_corehydror_ch_threshold_diagnostics_`, data, method, u_min, u_max, n_thresholds, confidence_level)
+}
+
+ch_data_frame_run_ <- function(method, data, data_frame_json, options_json) {
+  .Call(`_corehydror_ch_data_frame_run_`, method, data, data_frame_json, options_json)
 }
 
 ch_dist_moments_ <- function(target, params) {
@@ -322,4 +338,12 @@ ch_toolbox_run_ <- function(group, method, data, options_json) {
 
 ch_optim_run_ <- function(spec_json, objective) {
   .Call(`_corehydror_ch_optim_run_`, spec_json, objective)
+}
+
+ch_optim_run_grad_ <- function(spec_json, objective, gradient) {
+  .Call(`_corehydror_ch_optim_run_grad_`, spec_json, objective, gradient)
+}
+
+ch_optim_run_constrained_ <- function(spec_json, objective, constraints) {
+  .Call(`_corehydror_ch_optim_run_constrained_`, spec_json, objective, constraints)
 }

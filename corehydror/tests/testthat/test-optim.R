@@ -1,14 +1,18 @@
 test_that("an error inside the objective reaches the caller intact, for every method", {
   # The guard (GuardedObjective + optimizer_runner.hpp's per-method rethrow) is the whole point of
-  # this task, so this case is parametrized over ALL SIX methods -- a hole in just one of them
+  # this task, so this case is parametrized over ALL ELEVEN methods -- a hole in just one of them
   # (bfgs/mlsl were bypassed by an internal gradient-probe exception before the fix) would not have
   # shown up if only "de" were exercised here.
   boom <- function(p) stop("boom in the objective")
-  needs_initial <- c("bfgs", "powell", "mlsl", "nelder_mead")
-  stochastic <- c("de", "mlsl")
-  for (m in c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent")) {
+  needs_initial <- c("bfgs", "powell", "mlsl", "multi_start", "nelder_mead")
+  stochastic <- c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl")
+  one_dim <- c("brent", "golden_section")
+  for (m in c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+              "bfgs", "powell", "nelder_mead", "brent", "golden_section")) {
     expect_error(
-      optim_minimize(boom, lower = c(-1, -1), upper = c(1, 1),
+      optim_minimize(boom,
+                     lower = if (m %in% one_dim) -1 else c(-1, -1),
+                     upper = if (m %in% one_dim) 1 else c(1, 1),
                      initial = if (m %in% needs_initial) c(0, 0) else NULL,
                      method = m, seed = if (m %in% stochastic) 1 else NULL),
       "boom in the objective", info = m
@@ -22,9 +26,10 @@ test_that("the guard survives under report_failure = FALSE too, for every base m
   # way (only "nelder_mead"/"brent" reject a report_failure control, since they don't derive from
   # the Optimizer base).
   boom <- function(p) stop("boom in the objective")
-  needs_initial <- c("bfgs", "powell", "mlsl")
-  stochastic <- c("de", "mlsl")
-  for (m in c("de", "bfgs", "powell", "mlsl")) {
+  needs_initial <- c("bfgs", "powell", "mlsl", "multi_start")
+  stochastic <- c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl")
+  for (m in c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+              "bfgs", "powell", "golden_section")) {
     expect_error(
       optim_minimize(boom, lower = c(-1, -1), upper = c(1, 1),
                      initial = if (m %in% needs_initial) c(0, 0) else NULL,
@@ -166,6 +171,87 @@ test_that("compute_hessian = FALSE opts out of the Hessian", {
   expect_null(fit$hessian)
 })
 
+# The Booth function, minimum 0 at (1, 3). Written out rather than vectorized so the Python twin
+# in corehydropy/tests/test_optim.py evaluates the identical arithmetic.
+booth <- function(p) (p[1] + 2 * p[2] - 7)^2 + (2 * p[1] + p[2] - 5)^2
+
+test_that("the new global methods find the Booth optimum", {
+  for (m in c("particle_swarm", "sce", "simulated_annealing", "multi_start")) {
+    fit <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                          initial = if (m == "multi_start") c(0, 0) else NULL,
+                          method = m, seed = 12345)
+    expect_equal(fit$parameters, c(1, 3), tolerance = 1e-3, info = m)
+  }
+})
+
+test_that("golden_section finds a one dimensional minimum", {
+  fit <- optim_minimize(function(p) (p[1] - 2)^2, lower = 0, upper = 5, method = "golden_section")
+  expect_equal(fit$parameters, 2, tolerance = 1e-4)
+})
+
+test_that("multi_start accepts a local_method and rejects an unknown one", {
+  fit <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "multi_start", seed = 12345,
+                        control = list(local_method = "powell"))
+  expect_equal(fit$parameters, c(1, 3), tolerance = 1e-3)
+  expect_error(
+    optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "multi_start", seed = 1, control = list(local_method = "adam")),
+    "local_method"
+  )
+})
+
+test_that("multi_start's max_iterations is not overwritten by its constructor", {
+  # MultiStart sets MaxIterations to 100 in its CONSTRUCTOR rather than as a field default, so a
+  # runner arm that applied the controls before construction would silently ignore this.
+  fit <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "multi_start", seed = 12345,
+                        control = list(max_iterations = 15))
+  expect_identical(fit$iterations, 15L)
+})
+
+test_that("a control reaches each new class", {
+  # One control value per new class actually changing the run -- the counterpart of the "de"
+  # max_function_evaluations check below, which is the only other test here that proves a control
+  # is read at all.
+  capped <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                           method = "simulated_annealing", seed = 12345,
+                           control = list(max_iterations = 12))
+  expect_lt(capped$function_evaluations, 5000)  # a default 10,000-iteration run costs ~800,000
+
+  small <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                          method = "particle_swarm", seed = 12345,
+                          control = list(population_size = 10))
+  default <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10),
+                            method = "particle_swarm", seed = 12345)
+  expect_false(identical(small$function_evaluations, default$function_evaluations))
+
+  tight <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10), method = "sce",
+                          seed = 12345, control = list(complexes = 2))
+  loose <- optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10), method = "sce",
+                          seed = 12345)
+  expect_false(identical(tight$function_evaluations, loose$function_evaluations))
+
+  # local_method is the one control shared by two methods, and both of its non-default values have
+  # to reach the class: a run polished by Powell costs a different number of evaluations than the
+  # same run polished by BFGS.
+  bfgs <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                         method = "multi_start", seed = 12345,
+                         control = list(local_method = "bfgs"))
+  powell <- optim_minimize(booth, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                           method = "multi_start", seed = 12345,
+                           control = list(local_method = "powell"))
+  expect_false(identical(bfgs$function_evaluations, powell$function_evaluations))
+})
+
+test_that("a control belonging to another method names the method", {
+  expect_error(
+    optim_minimize(booth, lower = c(-10, -10), upper = c(10, 10), method = "de", seed = 1,
+                   control = list(cooling_rate = 0.9)),
+    'got method "de"'
+  )
+})
+
 test_that("a control value actually reaches the optimizer: max_function_evaluations caps the count", {
   # Guards against a transposed assignment in apply_common_controls/apply_optimizer_controls going
   # unnoticed -- no other test in this file exercises any `control` key at all.
@@ -175,4 +261,276 @@ test_that("a control value actually reaches the optimizer: max_function_evaluati
   uncapped <- optim_minimize(f, lower = c(-5, -5), upper = c(5, 5), seed = 42)
   expect_lte(capped$function_evaluations, 45)
   expect_lt(capped$function_evaluations, uncapped$function_evaluations)
+})
+
+# --- the two gradient-taking methods ------------------------------------------------------
+#
+# f(p) = (p1 - 3)^2 + (p2 + 1)^2, minimum 0 at (3, -1), with the analytic gradient written out
+# term by term so the Python twin in corehydropy/tests/test_optim.py evaluates the identical
+# arithmetic.
+quad_shifted <- function(p) (p[1] - 3)^2 + (p[2] + 1)^2
+quad_shifted_gradient <- function(p) c(2 * (p[1] - 3), 2 * (p[2] + 1))
+
+test_that("adam and gradient_descent take an analytic gradient", {
+  for (m in c("gradient_descent", "adam")) {
+    fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                          method = m, gradient = quad_shifted_gradient,
+                          control = list(alpha = 0.1))
+    expect_equal(fit$parameters, c(3, -1), tolerance = 1e-3, info = m)
+  }
+})
+
+test_that("adam and gradient_descent fall back to numerical differentiation", {
+  # An omitted `gradient` is the ported classes' null Gradient, which routes through
+  # NumericalDerivative.Gradient exactly as C# does -- so the same run must land in the same place.
+  for (m in c("gradient_descent", "adam")) {
+    fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                          method = m, control = list(alpha = 0.1))
+    expect_equal(fit$parameters, c(3, -1), tolerance = 1e-3, info = m)
+  }
+})
+
+test_that("the analytic gradient is actually used, not just accepted", {
+  # A run driven by the supplied gradient never pays for the 2*D finite-difference probes, so it
+  # costs strictly fewer objective evaluations than the same run without one. Without this, a
+  # runner arm that dropped the gradient on the floor would pass every assertion above.
+  with_g <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                           method = "gradient_descent", gradient = quad_shifted_gradient,
+                           control = list(alpha = 0.1))
+  without_g <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10),
+                              upper = c(10, 10), method = "gradient_descent",
+                              control = list(alpha = 0.1))
+  expect_lt(with_g$function_evaluations, without_g$function_evaluations)
+})
+
+test_that("an error inside the gradient reaches the caller intact", {
+  boom <- function(p) stop("boom in the gradient")
+  for (m in c("gradient_descent", "adam")) {
+    expect_error(
+      optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                     method = m, gradient = boom),
+      "boom in the gradient", info = m
+    )
+  }
+})
+
+test_that("a gradient returning the wrong length is rejected by message", {
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "adam", gradient = function(p) 1),
+    "one value per parameter"
+  )
+})
+
+test_that("`gradient` is rejected for every method that cannot take one", {
+  expect_error(
+    optim_minimize(quad_shifted, lower = c(-10, -10), upper = c(10, 10), method = "de", seed = 1,
+                   gradient = quad_shifted_gradient),
+    "gradient"
+  )
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "bfgs", gradient = quad_shifted_gradient),
+    "gradient"
+  )
+})
+
+test_that("`gradient` must be a function", {
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "adam", gradient = 1),
+    "function"
+  )
+})
+
+test_that("alpha, beta1 and beta2 reach the right classes", {
+  # alpha is shared; beta1/beta2 are ADAM's alone, so gradient_descent must reject them by name.
+  fast <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                         method = "gradient_descent", gradient = quad_shifted_gradient,
+                         control = list(alpha = 0.1))
+  slow <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                         method = "gradient_descent", gradient = quad_shifted_gradient,
+                         control = list(alpha = 0.01))
+  expect_lt(fast$iterations, slow$iterations)
+  expect_error(
+    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                   method = "gradient_descent", control = list(beta1 = 0.5)),
+    "beta1"
+  )
+  fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "adam", gradient = quad_shifted_gradient,
+                        control = list(alpha = 0.1, beta1 = 0.8, beta2 = 0.9))
+  expect_s3_class(fit, "corehydro_optim")
+})
+
+test_that("`seed` is rejected for the two gradient methods", {
+  for (m in c("adam", "gradient_descent")) {
+    expect_error(
+      optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                     method = m, seed = 1),
+      "stochastic", info = m
+    )
+  }
+})
+
+# --- the constrained surface (augmented Lagrange) -------------------------------------------
+#
+# Test_Haimes_5_2 from Test_AugmentedLagrange.cs, driven end to end through the public R surface:
+# the objective and the constraint are both R closures, so this exercises the two host-language
+# callbacks the arm guards, not just the C++ classes core/tests/test_augmented_lagrange.cpp
+# already covers. Every expected value below is that C# test's own literal, at its own tolerance.
+haimes_primary <- function(p) (p[1] - 2)^2 + (p[2] - 4)^2 + 5
+haimes_secondary <- function(p) (p[1] - 6)^2 + (p[2] - 10)^2 + 6
+
+test_that("augmented Lagrange reproduces Test_Haimes_5_2 through the public surface", {
+  fit <- optim_minimize(
+    haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  )
+  expect_s3_class(fit, "corehydro_optim")
+  expect_equal(fit$parameters[[1]], 4.5, tolerance = 1e-2)
+  expect_equal(fit$parameters[[2]], 7.75, tolerance = 1e-2)
+  expect_equal(fit$value, 25.31, tolerance = 1e-2)
+  expect_equal(fit$multipliers$less_than[[1]], 1.67, tolerance = 1e-2)
+  # The other two multiplier sets exist and are empty: this problem has no equality or
+  # greater-than constraint, and the three vectors are sized by COUNTING each type.
+  expect_length(fit$multipliers$equality, 0L)
+  expect_length(fit$multipliers$greater_than, 0L)
+})
+
+test_that("an explicit `inner` spec drives the same problem to the same answer", {
+  fit <- optim_minimize(
+    haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(optim_constraint(haimes_secondary, value = 13.31, type = "le")),
+    inner = list(method = "bfgs", initial = c(5, 5), lower = c(0, 0), upper = c(10, 10))
+  )
+  expect_equal(fit$parameters[[1]], 4.5, tolerance = 1e-2)
+  expect_equal(fit$parameters[[2]], 7.75, tolerance = 1e-2)
+})
+
+test_that("all three constraint types index their own multiplier vector", {
+  # Test_MixedConstraints: minimize x^2 + y^2 subject to x + y = 4, x <= 3, y >= 0.5.
+  fit <- optim_minimize(
+    function(p) p[1]^2 + p[2]^2, initial = c(1, 3), lower = c(-10, -10), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(
+      optim_constraint(function(p) p[1] + p[2], value = 4, type = "eq"),
+      optim_constraint(function(p) p[1], value = 3, type = "le"),
+      optim_constraint(function(p) p[2], value = 0.5, type = "ge")
+    )
+  )
+  expect_equal(fit$parameters[[1]], 2, tolerance = 0.1)
+  expect_equal(fit$parameters[[2]], 2, tolerance = 0.1)
+  expect_equal(fit$value, 8, tolerance = 0.5)
+  expect_length(fit$multipliers$equality, 1L)
+  expect_length(fit$multipliers$less_than, 1L)
+  expect_length(fit$multipliers$greater_than, 1L)
+})
+
+test_that("`constraints` and `inner` are rejected for every other method", {
+  con <- list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  expect_error(
+    optim_minimize(haimes_primary, lower = c(0, 0), upper = c(10, 10), method = "de", seed = 1,
+                   constraints = con),
+    "augmented_lagrange"
+  )
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "bfgs", inner = list(method = "bfgs")),
+    "augmented_lagrange"
+  )
+})
+
+test_that("augmented Lagrange requires at least one constraint", {
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "augmented_lagrange"),
+    "constraints"
+  )
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "augmented_lagrange", constraints = list()),
+    "constraints"
+  )
+})
+
+# optim_maximize() used to accept this method and return the constrained MINIMUM labelled
+# "Success": upstream AugmentedLagrange.Optimize() always calls the inner optimizer's Minimize()
+# over an augmented Lagrangian built from the RAW objective, so the outer sign flip never reaches
+# the search. The port still mirrors that; the public verb refuses the request.
+test_that("optim_maximize rejects augmented Lagrange and the documented workaround is right", {
+  peak <- function(p) -(p[1] - 3)^2                     # true constrained max at x = 1: -4
+  con <- optim_constraint(function(p) p[1], value = 1, type = "le")
+  expect_error(
+    optim_maximize(peak, initial = 0, lower = -10, upper = 10,
+                   method = "augmented_lagrange", constraints = list(con)),
+    "cannot maximize"
+  )
+  # Every other method still maximizes.
+  expect_s3_class(
+    optim_maximize(function(p) -(p[1] - 3)^2, lower = -10, upper = 10, method = "de", seed = 1),
+    "corehydro_optim"
+  )
+  # The workaround the error names: minimize -f under the same constraint.
+  fit <- optim_minimize(function(p) (p[1] - 3)^2, initial = 0, lower = -10, upper = 10,
+                        method = "augmented_lagrange", constraints = list(con))
+  expect_equal(fit$parameters[[1]], 1, tolerance = 1e-3)
+  expect_equal(-fit$value, -4, tolerance = 1e-3)
+})
+
+test_that("optim_constraint validates its own arguments", {
+  expect_error(optim_constraint(1, value = 1), "function")
+  expect_error(optim_constraint(haimes_secondary, value = 1, type = "lt"), "'arg'")
+  expect_error(optim_constraint(haimes_secondary, value = c(1, 2)), "single finite number")
+  expect_error(optim_constraint(haimes_secondary, value = 1, tolerance = -1), "non-negative")
+})
+
+test_that("an inner method that cannot be an inner optimizer is rejected by name", {
+  con <- list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  for (m in c("nelder_mead", "brent", "augmented_lagrange")) {
+    expect_error(
+      optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                     method = "augmented_lagrange", constraints = con,
+                     inner = list(method = m, initial = c(5, 5), lower = c(0, 0),
+                                  upper = c(10, 10))),
+      m, info = m
+    )
+  }
+})
+
+test_that("an error inside a constraint reaches the caller intact", {
+  # The constraint is the third host-language callback the optimizer surface takes, guarded
+  # through the SAME abort state as the objective (see optimizer_runner.hpp) -- so an R error
+  # raised inside it must survive AugmentedLagrange's inner optimizer's own catch-all.
+  expect_error(
+    optim_minimize(haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+                   method = "augmented_lagrange",
+                   constraints = list(optim_constraint(function(p) stop("boom in the constraint"),
+                                                       value = 1, type = "le"))),
+    "boom in the constraint"
+  )
+})
+
+test_that("`multipliers` is absent for every unconstrained method", {
+  fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "bfgs")
+  expect_null(fit$multipliers)
+})
+
+test_that("print() shows only the multiplier sets the problem actually has", {
+  fit <- optim_minimize(
+    haimes_primary, initial = c(5, 5), lower = c(0, 0), upper = c(10, 10),
+    method = "augmented_lagrange",
+    constraints = list(optim_constraint(haimes_secondary, value = 13.31, type = "le"))
+  )
+  out <- paste(capture.output(print(fit)), collapse = "\n")
+  expect_match(out, "less than multipliers")
+  expect_false(grepl("equality multipliers", out))
+  expect_false(grepl("greater than multipliers", out))
+  # An unconstrained result has no multiplier line at all.
+  plain <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                          method = "bfgs")
+  expect_false(grepl("multipliers", paste(capture.output(print(plain)), collapse = "\n")))
 })

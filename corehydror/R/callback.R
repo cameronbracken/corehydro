@@ -42,33 +42,63 @@ callback_check_point <- function(x) {
 
 #' Find a root of a user-written function
 #'
-#' Solves `f(x) = 0` on `[lower, upper]` with the ported Numerics Brent root finder. `f` must
-#' change sign across the interval.
+#' Solves `f(x) = 0` with a ported Numerics root finder: Brent (the default), Bisection, Secant,
+#' or Newton-Raphson. `method = "brent"`, `"bisection"`, and `"secant"` all bracket the root on
+#' `[lower, upper]`, over which `f` must change sign; `method = "newton"` takes an analytic
+#' derivative `df` and a `first_guess` instead, with the bracket optional (see below).
 #'
 #' @param f a function taking one number and returning one number.
-#' @param lower,upper the bracketing interval.
-#' @param tolerance the convergence tolerance on the bracket width. `NULL`, the default, leaves the
-#'   ported Brent solver's own default (1e-8) in force; the value is not restated here, so a change
-#'   to it lands in one place.
+#' @param lower,upper the bracketing interval. Required for `method` `"brent"`, `"bisection"`,
+#'   and `"secant"`. For `"newton"` they are optional, and it is their PRESENCE -- both together --
+#'   that selects the robust (bracket-aware) Newton-Raphson variant over the plain one, matching
+#'   the ported class's own two entry points rather than a method sub-argument.
+#' @param method one of `"brent"` (the default), `"bisection"`, `"secant"`, or `"newton"`.
+#' @param df the analytic derivative of `f`, a function taking one number and returning one
+#'   number. Required for, and only used by, `method = "newton"`.
+#' @param first_guess the running root Bisection and Newton-Raphson seed themselves with (the
+#'   bracket only seeds their initial step direction / bracket maintenance). Required for
+#'   `method = "bisection"` and `method = "newton"`; unused by `"brent"` and `"secant"`, which
+#'   pick their own starting point off the bracket.
+#' @param tolerance the convergence tolerance on the root. `NULL`, the default, leaves the ported
+#'   solver's own default (1e-8) in force; the value is not restated here, so a change to it lands
+#'   in one place.
 #' @param max_iterations the iteration cap; the search raises an error if it is reached. `NULL`,
 #'   the default, leaves the ported solver's own default (1000) in force.
 #' @return the root, a single number.
 #' @examples
 #' root_find(function(x) x^2 - 2, lower = 0, upper = 2)
+#' root_find(function(x) x^2 - 2, lower = 0, upper = 4, method = "bisection", first_guess = 1)
+#' root_find(function(x) x^3 - x - 1, lower = -1, upper = 5, method = "secant")
+#' root_find(function(x) x^2 - 2, method = "newton", df = function(x) 2 * x, first_guess = 1)
 #' @export
-root_find <- function(f, lower, upper, tolerance = NULL, max_iterations = NULL) {
+root_find <- function(f, lower = NULL, upper = NULL,
+                      method = c("brent", "bisection", "secant", "newton"),
+                      df = NULL, first_guess = NULL, tolerance = NULL, max_iterations = NULL) {
+  method <- match.arg(method)
   callback_check_fn(f)
-  if (!is.numeric(lower) || length(lower) != 1L || !is.finite(lower) ||
-      !is.numeric(upper) || length(upper) != 1L || !is.finite(upper)) {
-    stop("`lower` and `upper` must each be a single finite number", call. = FALSE)
+  check_bound <- function(x, name) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      stop("`", name, "` must be a single finite number", call. = FALSE)
+    }
   }
-  if (lower >= upper) {
-    stop("`lower` must be below `upper`", call. = FALSE)
-  }
+  has_lower <- !is.null(lower)
+  has_upper <- !is.null(upper)
   # An option key is written ONLY when the caller supplied it, so an unset argument reaches the
   # ported routine's own default rather than a copy of that default made here. Mirrors
   # corehydropy's root_find() and the same rule in callback/math.hpp and the oracle emitter.
-  opts <- list(lower = as.double(lower), upper = as.double(upper))
+  opts <- list()
+  if (has_lower || has_upper) {
+    if (!has_lower || !has_upper) {
+      stop("`lower` and `upper` must both be supplied, or both left NULL", call. = FALSE)
+    }
+    check_bound(lower, "lower")
+    check_bound(upper, "upper")
+    if (lower >= upper) {
+      stop("`lower` must be below `upper`", call. = FALSE)
+    }
+    opts$lower <- as.double(lower)
+    opts$upper <- as.double(upper)
+  }
   if (!is.null(tolerance)) {
     if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
       stop("`tolerance` must be a single positive number", call. = FALSE)
@@ -81,40 +111,136 @@ root_find <- function(f, lower, upper, tolerance = NULL, max_iterations = NULL) 
     }
     opts$max_iterations <- as.integer(max_iterations)
   }
+
+  if (method == "newton") {
+    if (is.null(df)) {
+      stop("`df`, the analytic derivative of `f`, is required for method = \"newton\"", call. = FALSE)
+    }
+    callback_check_fn(df)
+    if (is.null(first_guess)) {
+      stop("`first_guess` is required for method = \"newton\"", call. = FALSE)
+    }
+    check_bound(first_guess, "first_guess")
+    opts$first_guess <- as.double(first_guess)
+    return(ch_callback_math2_("root_find_newton", to_spec_json(opts), f, df)$values[[1]])
+  }
+
+  if (method == "bisection") {
+    if (is.null(first_guess)) {
+      stop("`first_guess` is required for method = \"bisection\"", call. = FALSE)
+    }
+    check_bound(first_guess, "first_guess")
+    opts$first_guess <- as.double(first_guess)
+  }
+  if (!has_lower) {
+    stop("`lower` and `upper` are required for method = \"", method, "\"", call. = FALSE)
+  }
+  opts$method <- method
   ch_callback_math_("root_find", to_spec_json(opts), f)$values[[1]]
+}
+
+#' Solve a system of nonlinear equations
+#'
+#' Solves `F(x) = 0` for a vector-valued `F` with the ported Numerics multivariate Newton-Raphson
+#' method, iterating `x_(n+1) = x_n - J(x_n)^-1 F(x_n)`.
+#'
+#' @param f the system of equations: a function taking a numeric vector and returning a numeric
+#'   vector of the same length.
+#' @param jacobian the Jacobian of `f`: a function taking the same numeric vector and returning the
+#'   square matrix of partial derivatives, one ROW per equation.
+#' @param first_guess the starting vector; its length fixes the dimension of the system.
+#' @param tolerance the convergence tolerance, applied to both the step size and the residual.
+#'   `NULL`, the default, leaves the ported solver's own default (1e-8) in force.
+#' @param max_iterations the iteration cap; the search raises an error if it is reached. `NULL`,
+#'   the default, leaves the ported solver's own default (1000) in force.
+#' @return the root, a numeric vector the length of `first_guess`.
+#' @examples
+#' f <- function(v) c(3 * v[1] + v[2] - 9, v[1] + 2 * v[2] - 8)
+#' j <- function(v) matrix(c(3, 1, 1, 2), nrow = 2, byrow = TRUE)
+#' root_find_system(f, j, first_guess = c(0, 0))
+#' @export
+root_find_system <- function(f, jacobian, first_guess, tolerance = NULL, max_iterations = NULL) {
+  callback_check_fn(f)
+  callback_check_fn(jacobian)
+  if (!is.numeric(first_guess) || length(first_guess) == 0L || !all(is.finite(first_guess))) {
+    stop("`first_guess` must be a non-empty numeric vector of finite values", call. = FALSE)
+  }
+  opts <- list(first_guess = spec_array(as.double(first_guess)))
+  if (!is.null(tolerance)) {
+    if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
+      stop("`tolerance` must be a single positive number", call. = FALSE)
+    }
+    opts$tolerance <- as.double(tolerance)
+  }
+  if (!is.null(max_iterations)) {
+    if (!is.numeric(max_iterations) || length(max_iterations) != 1L || max_iterations < 1) {
+      stop("`max_iterations` must be a single positive integer", call. = FALSE)
+    }
+    opts$max_iterations <- as.integer(max_iterations)
+  }
+  res <- ch_callback_math2_("root_find_system", to_spec_json(opts), f, jacobian)
+  as.numeric(res$values)
 }
 
 #' Integrate a user-written function
 #'
-#' Computes the definite integral of `f` over `[lower, upper]` with the ported Numerics
-#' adaptive Gauss-Kronrod rule (10-point Gauss, 21-point Kronrod), which subdivides the
-#' interval until the two nested estimates agree to the requested tolerance.
+#' Computes the definite integral of `f` over `[lower, upper]`. The default `method`,
+#' `"gauss_kronrod"`, is the ported Numerics adaptive Gauss-Kronrod rule (10-point Gauss, 21-point
+#' Kronrod), which subdivides the interval until the two nested estimates agree to the requested
+#' tolerance. Nine other ported methods (P2 "math extras") are available: three more adaptive
+#' rules (`"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`, `"gauss_lobatto"`) and five fixed
+#' rules with no adaptive refinement (`"gauss_legendre"`, `"gauss_legendre20"`,
+#' `"simpsons_fixed"`, `"trapezoidal_fixed"`, `"midpoint"`).
 #'
 #' The name is `quadrature()` rather than `integrate()` so it does not mask
 #' [stats::integrate()].
 #'
 #' @param f a function taking one number and returning one number.
 #' @param lower,upper the limits of integration. `upper` must be above `lower`; neither may be
-#'   infinite (the ported rule integrates a finite interval).
+#'   infinite (every one of these rules integrates a finite interval).
+#' @param method one of `"gauss_kronrod"` (the default), `"simpsons"`, `"trapezoidal"`,
+#'   `"adaptive_simpsons"`, `"gauss_lobatto"`, `"gauss_legendre"`, `"gauss_legendre20"`,
+#'   `"simpsons_fixed"`, `"trapezoidal_fixed"`, or `"midpoint"`.
 #' @param absolute_tolerance,relative_tolerance the convergence tolerances on the difference
-#'   between the Gauss and Kronrod estimates. Each must lie between 1e-15 and 1. `NULL`, the
-#'   default, leaves the ported integrator's own defaults (1e-8) in force.
-#' @param max_function_evaluations the cap on evaluations of `f`. Reaching it stops the
-#'   subdivision and reports it in the status rather than raising an error. `NULL`, the default,
-#'   leaves the ported integrator's own default in force.
+#'   between the two nested estimates the adaptive methods compare (`"gauss_kronrod"`,
+#'   `"simpsons"`, `"trapezoidal"`, `"adaptive_simpsons"`, `"gauss_lobatto"`). Each must lie
+#'   between 1e-15 and 1. `NULL`, the default, leaves the ported integrator's own defaults (1e-8)
+#'   in force. Only apply to the adaptive methods; supplying either for one of the five fixed-rule
+#'   methods raises an error.
+#' @param max_function_evaluations the cap on evaluations of `f`, for the adaptive methods.
+#'   Reaching it stops the subdivision and reports it in the status rather than raising an error.
+#'   `NULL`, the default, leaves the ported integrator's own default in force. Supplying it for
+#'   one of the five fixed-rule methods raises an error.
+#' @param steps the number of integration steps for `method` `"simpsons_fixed"`,
+#'   `"trapezoidal_fixed"`, or `"midpoint"` alone. `NULL`, the default, leaves the ported static's
+#'   own default (2) in force.
+#' @param min_depth,max_depth the recursion-depth bounds for `method = "adaptive_simpsons"` alone.
+#'   `NULL`, the default, leaves the ported class's own defaults (0 and 100) in force.
 #' @return the integral, a single number, carrying three attributes: `status`, one of `"Success"`,
-#'   `"MaximumFunctionEvaluationsReached"`, `"MaximumIterationsReached"`, `"Failure"` or
-#'   `"None"`; `function_evaluations`, the number of times `f` was called; and `standard_error`,
-#'   the rule's own error estimate (the square root of the accumulated squared differences between
-#'   the Gauss and Kronrod estimates, zero when the interval never needed subdividing).
+#'   `"MaximumFunctionEvaluationsReached"`, `"MaximumIterationsReached"`, `"Failure"` or `"None"`
+#'   for the five adaptive methods (always `"Success"` for the five fixed-rule methods, which have
+#'   no such status of their own); `function_evaluations`, the number of times `f` was called
+#'   (`NA` for the five fixed-rule methods, whose ported statics report no count); and
+#'   `standard_error`, the rule's own error estimate where the driven class has one (zero for
+#'   `"simpsons"`, `"trapezoidal"`, and `"gauss_lobatto"`, which have none; `NA` for the five
+#'   fixed-rule methods).
 #' @examples
 #' quadrature(function(x) x^2, lower = 0, upper = 3)
 #' q <- quadrature(sin, lower = 0, upper = pi)
 #' attr(q, "status")
 #' attr(q, "standard_error")
+#' quadrature(function(x) x^3, lower = 0, upper = 1, method = "gauss_lobatto")
+#' quadrature(function(x) x^3, lower = 0, upper = 1, method = "midpoint", steps = 1000)
 #' @export
-quadrature <- function(f, lower, upper, absolute_tolerance = NULL, relative_tolerance = NULL,
-                       max_function_evaluations = NULL) {
+quadrature <- function(f, lower, upper,
+                       method = c("gauss_kronrod", "simpsons", "trapezoidal",
+                                  "adaptive_simpsons", "gauss_lobatto", "gauss_legendre",
+                                  "gauss_legendre20", "simpsons_fixed", "trapezoidal_fixed",
+                                  "midpoint"),
+                       absolute_tolerance = NULL, relative_tolerance = NULL,
+                       max_function_evaluations = NULL, steps = NULL,
+                       min_depth = NULL, max_depth = NULL) {
+  method <- match.arg(method)
   callback_check_fn(f)
   if (!is.numeric(lower) || length(lower) != 1L || !is.finite(lower) ||
       !is.numeric(upper) || length(upper) != 1L || !is.finite(upper)) {
@@ -123,8 +249,133 @@ quadrature <- function(f, lower, upper, absolute_tolerance = NULL, relative_tole
   if (lower >= upper) {
     stop("`lower` must be below `upper`", call. = FALSE)
   }
+  fixed_methods <- c("gauss_legendre", "gauss_legendre20", "simpsons_fixed",
+                     "trapezoidal_fixed", "midpoint")
   # See root_find() above: a key is written only when the caller supplied it.
   opts <- list(lower = as.double(lower), upper = as.double(upper))
+  if (method != "gauss_kronrod") {
+    opts$method <- method
+  }
+  if (!is.null(absolute_tolerance)) {
+    if (method %in% fixed_methods) {
+      stop("`absolute_tolerance` only applies to the adaptive methods, not method = \"",
+           method, "\"", call. = FALSE)
+    }
+    if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
+        absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
+      stop("`absolute_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+    }
+    opts$absolute_tolerance <- as.double(absolute_tolerance)
+  }
+  if (!is.null(relative_tolerance)) {
+    if (method %in% fixed_methods) {
+      stop("`relative_tolerance` only applies to the adaptive methods, not method = \"",
+           method, "\"", call. = FALSE)
+    }
+    if (!is.numeric(relative_tolerance) || length(relative_tolerance) != 1L ||
+        relative_tolerance < 1e-15 || relative_tolerance > 1) {
+      stop("`relative_tolerance` must be a single number between 1e-15 and 1", call. = FALSE)
+    }
+    opts$relative_tolerance <- as.double(relative_tolerance)
+  }
+  if (!is.null(max_function_evaluations)) {
+    if (method %in% fixed_methods) {
+      stop("`max_function_evaluations` only applies to the adaptive methods, not method = \"",
+           method, "\"", call. = FALSE)
+    }
+    if (!is.numeric(max_function_evaluations) || length(max_function_evaluations) != 1L ||
+        max_function_evaluations < 1) {
+      stop("`max_function_evaluations` must be a single positive integer", call. = FALSE)
+    }
+    opts$max_function_evaluations <- as.integer(max_function_evaluations)
+  }
+  if (!is.null(steps)) {
+    if (!method %in% fixed_methods) {
+      stop("`steps` only applies to method = \"simpsons_fixed\", \"trapezoidal_fixed\", or ",
+           "\"midpoint\"", call. = FALSE)
+    }
+    if (!is.numeric(steps) || length(steps) != 1L || steps < 1) {
+      stop("`steps` must be a single positive integer", call. = FALSE)
+    }
+    opts$steps <- as.integer(steps)
+  }
+  if (!is.null(min_depth) || !is.null(max_depth)) {
+    if (!identical(method, "adaptive_simpsons")) {
+      stop("`min_depth`/`max_depth` only apply to method = \"adaptive_simpsons\"", call. = FALSE)
+    }
+    if (!is.null(min_depth)) {
+      if (!is.numeric(min_depth) || length(min_depth) != 1L || min_depth < 0) {
+        stop("`min_depth` must be a single non-negative integer", call. = FALSE)
+      }
+      opts$min_depth <- as.integer(min_depth)
+    }
+    if (!is.null(max_depth)) {
+      if (!is.numeric(max_depth) || length(max_depth) != 1L || max_depth < 0) {
+        stop("`max_depth` must be a single non-negative integer", call. = FALSE)
+      }
+      opts$max_depth <- as.integer(max_depth)
+    }
+  }
+  res <- ch_callback_math_("quadrature", to_spec_json(opts), f)
+  # The five fixed-rule statics return values = {integral} alone (see the file header): no
+  # function_evaluations or standard_error to report, so those two attributes carry NA rather
+  # than reading past the end of the result.
+  if (length(res$values) >= 3L) {
+    structure(res$values[[1]],
+              status = res$status,
+              function_evaluations = as.integer(res$values[[2]]),
+              standard_error = res$values[[3]])
+  } else {
+    structure(res$values[[1]],
+              status = res$status,
+              function_evaluations = NA_integer_,
+              standard_error = NA_real_)
+  }
+}
+
+#' Integrate a user-written function of two variables over a rectangle
+#'
+#' Computes the definite integral of `f(x, y)` over the rectangle `[min_x, max_x] x
+#' [min_y, max_y]` with the ported Numerics adaptive Simpson's rule in two dimensions
+#' (P2 "math extras"): the tensor-product 3x3-point Simpson estimate over the whole domain is
+#' compared against the sum of the four quadrant sub-estimates, and the domain is subdivided into
+#' quadrants until the two agree to the requested tolerance.
+#'
+#' @param f a function taking two numbers (`x`, `y`) and returning one number.
+#' @param min_x,max_x,min_y,max_y the bounds of the rectangle. `max_x` must be above `min_x`, and
+#'   `max_y` above `min_y`.
+#' @param absolute_tolerance,relative_tolerance the convergence tolerances on the difference
+#'   between the whole-domain and quadrant-subdivided estimates, each between 1e-15 and 1.
+#'   `NULL`, the default, leaves the ported integrator's own defaults (1e-8) in force.
+#' @param min_depth,max_depth the recursion-depth bounds. `NULL`, the default, leaves the ported
+#'   class's own defaults (0 and 100) in force.
+#' @return the integral, a single number, carrying the same three attributes [quadrature()]
+#'   returns: `status`, `function_evaluations`, and `standard_error`.
+#' @examples
+#' quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1)
+#' @export
+quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NULL,
+                          relative_tolerance = NULL, min_depth = NULL, max_depth = NULL) {
+  if (!is.function(f)) {
+    stop("`f` must be a function taking two numbers and returning a single number", call. = FALSE)
+  }
+  check_bound <- function(x, name) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      stop("`", name, "` must be a single finite number", call. = FALSE)
+    }
+  }
+  check_bound(min_x, "min_x")
+  check_bound(max_x, "max_x")
+  check_bound(min_y, "min_y")
+  check_bound(max_y, "max_y")
+  if (min_x >= max_x) {
+    stop("`min_x` must be below `max_x`", call. = FALSE)
+  }
+  if (min_y >= max_y) {
+    stop("`min_y` must be below `max_y`", call. = FALSE)
+  }
+  opts <- list(min_x = as.double(min_x), max_x = as.double(max_x),
+              min_y = as.double(min_y), max_y = as.double(max_y))
   if (!is.null(absolute_tolerance)) {
     if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
         absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
@@ -139,14 +390,341 @@ quadrature <- function(f, lower, upper, absolute_tolerance = NULL, relative_tole
     }
     opts$relative_tolerance <- as.double(relative_tolerance)
   }
-  if (!is.null(max_function_evaluations)) {
-    if (!is.numeric(max_function_evaluations) || length(max_function_evaluations) != 1L ||
-        max_function_evaluations < 1) {
-      stop("`max_function_evaluations` must be a single positive integer", call. = FALSE)
+  if (!is.null(min_depth)) {
+    if (!is.numeric(min_depth) || length(min_depth) != 1L || min_depth < 0) {
+      stop("`min_depth` must be a single non-negative integer", call. = FALSE)
     }
-    opts$max_function_evaluations <- as.integer(max_function_evaluations)
+    opts$min_depth <- as.integer(min_depth)
   }
-  res <- ch_callback_math_("quadrature", to_spec_json(opts), f)
+  if (!is.null(max_depth)) {
+    if (!is.numeric(max_depth) || length(max_depth) != 1L || max_depth < 0) {
+      stop("`max_depth` must be a single non-negative integer", call. = FALSE)
+    }
+    opts$max_depth <- as.integer(max_depth)
+  }
+  res <- ch_callback_math_xy_("quadrature_2d", to_spec_json(opts), f)
+  structure(res$values[[1]],
+            status = res$status,
+            function_evaluations = as.integer(res$values[[2]]),
+            standard_error = res$values[[3]])
+}
+
+#' Solve a user-written ordinary differential equation
+#'
+#' Solves `dy/dt = f(t, y)` forward from `start_time` with a ported Numerics Runge-Kutta method
+#' (P2 "math extras"): fixed-step second- or fourth-order Runge-Kutta over an equally-spaced grid
+#' (`method = "rk2"`/`"rk4"` with `end_time`/`time_steps`), the fourth-order method's single-step
+#' form (`method = "rk4"` with `dt` alone), or one of the two adaptive-step-size methods,
+#' Runge-Kutta-Fehlberg or Runge-Kutta-Cash-Karp (`method = "rkf"`/`"cash_karp"` with
+#' `dt`/`dt_min`).
+#'
+#' @param f a function taking two numbers (`t`, `y`) and returning `dy/dt`, one number.
+#' @param initial_value the value of `y` at `start_time`.
+#' @param start_time the time to start integrating from.
+#' @param end_time,time_steps the end time and the number of equally-spaced points between
+#'   `start_time` and `end_time` (inclusive of both ends). Required together for `method =
+#'   "rk2"`; for `method = "rk4"`, supplying them selects this array form over the single-step
+#'   form (see `dt` below) -- their PRESENCE, not a separate flag.
+#' @param dt the step size. For `method = "rk4"` without `end_time`/`time_steps`, the single step
+#'   to advance by (the ODE is solved once, at `start_time + dt`). For `method = "rkf"`/
+#'   `"cash_karp"`, the maximum internal step size, required together with `dt_min`.
+#' @param dt_min the minimum internal step size for `method = "rkf"`/`"cash_karp"`, required
+#'   together with `dt`.
+#' @param method one of `"rk4"` (the default), `"rk2"`, `"rkf"`, or `"cash_karp"`.
+#' @param tolerance the absolute error tolerance for `method = "rkf"`/`"cash_karp"` alone. `NULL`,
+#'   the default, leaves the ported routine's own default (1e-3) in force.
+#' @return for `method = "rk2"`, or `"rk4"` with `end_time`/`time_steps`: a numeric vector of
+#'   length `time_steps`, the solution at each grid point (`y[1]` is `initial_value`). For every
+#'   other case: a single number, the solution at `start_time + dt` (`"rk4"`'s single-step form)
+#'   or at `start_time + dt` under the adaptive step control (`"rkf"`/`"cash_karp"`).
+#' @examples
+#' # dy/dt = y, y(0) = 1: the exact solution is y(t) = exp(t).
+#' y <- ode_solve(function(t, y) y, initial_value = 1, start_time = 0, end_time = 1,
+#'                time_steps = 100)
+#' y[100]
+#' @export
+ode_solve <- function(f, initial_value, start_time, end_time = NULL, time_steps = NULL,
+                      dt = NULL, dt_min = NULL, method = c("rk4", "rk2", "rkf", "cash_karp"),
+                      tolerance = NULL) {
+  method <- match.arg(method)
+  if (!is.function(f)) {
+    stop("`f` must be a function taking two numbers (t, y) and returning a single number",
+         call. = FALSE)
+  }
+  check_number <- function(x, name) {
+    if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) {
+      stop("`", name, "` must be a single finite number", call. = FALSE)
+    }
+  }
+  check_number(initial_value, "initial_value")
+  check_number(start_time, "start_time")
+  opts <- list(initial_value = as.double(initial_value), start_time = as.double(start_time))
+  if (method != "rk4") {
+    opts$method <- method
+  }
+
+  array_form <- method == "rk2" || (method == "rk4" && !is.null(end_time))
+  if (array_form) {
+    if (is.null(end_time) || is.null(time_steps)) {
+      stop("`end_time` and `time_steps` are both required for method = \"", method, "\"",
+           call. = FALSE)
+    }
+    check_number(end_time, "end_time")
+    if (!is.numeric(time_steps) || length(time_steps) != 1L || time_steps < 2) {
+      stop("`time_steps` must be a single integer of at least 2", call. = FALSE)
+    }
+    opts$end_time <- as.double(end_time)
+    opts$time_steps <- as.integer(time_steps)
+  } else if (method == "rk4") {
+    if (is.null(dt)) {
+      stop("`dt` is required for method = \"rk4\" when `end_time` is not supplied", call. = FALSE)
+    }
+    check_number(dt, "dt")
+    opts$dt <- as.double(dt)
+  } else {
+    # rkf / cash_karp
+    if (is.null(dt) || is.null(dt_min)) {
+      stop("`dt` and `dt_min` are both required for method = \"", method, "\"", call. = FALSE)
+    }
+    check_number(dt, "dt")
+    check_number(dt_min, "dt_min")
+    opts$dt <- as.double(dt)
+    opts$dt_min <- as.double(dt_min)
+    if (!is.null(tolerance)) {
+      if (!is.numeric(tolerance) || length(tolerance) != 1L || tolerance <= 0) {
+        stop("`tolerance` must be a single positive number", call. = FALSE)
+      }
+      opts$tolerance <- as.double(tolerance)
+    }
+  }
+
+  res <- ch_callback_math_xy_("ode_solve", to_spec_json(opts), f)
+  if (array_form) {
+    unlist(res$values, use.names = FALSE)
+  } else {
+    res$values[[1]]
+  }
+}
+
+#' Integrate a user-written function over a multidimensional box
+#'
+#' Computes the definite integral of `f` over the hyper-rectangle `[min, max]` (P2 "math extras")
+#' with one of three ported stochastic multidimensional integrators: plain Monte Carlo (`method =
+#' "monte_carlo"`, the default), Miser (recursive stratified-sampling Monte Carlo, Press et al.
+#' "Numerical Recipes" Sec. 7.9), or Vegas (Lepage's adaptive importance sampling, Sec. 7.8, with
+#' an optional Power Transform for rare tail-event sampling). `min`/`max` give both the
+#' per-dimension bounds and, via their length, the number of dimensions.
+#'
+#' `method = "vegas"` takes `f(x, weight)` -- `x` the sample point and `weight` the importance
+#' weight Vegas has already computed for it -- rather than `f(x)`, matching the upstream C# Vegas
+#' constructor's own integrand shape; a weight-ignoring wrapper (`function(x, w) g(x)`) reproduces
+#' an `f(x)`-only integrand under Vegas, exactly as the upstream unit tests wrap theirs.
+#'
+#' The SAMPLE STREAM -- which points `f` is called at -- reproduces bit-for-bit against the same
+#' run in `corehydropy`, EXCEPT that `seed` has no effect on `method = "monte_carlo"` or a
+#' Sobol-sampled run of `"miser"`/`"vegas"` (the default, `use_sobol = TRUE`): Miser and Vegas draw
+#' their sample points from a Sobol low-discrepancy sequence rather than the Mersenne Twister
+#' `seed` seeds, and `MonteCarloIntegration`'s own `UseSobolSequence` flag is a documented DEAD
+#' property upstream -- declared but never consulted by `Integrate()` -- so a `"monte_carlo"` run
+#' always draws from the generator `seed` seeds. `use_sobol = FALSE` reroutes Miser/Vegas through
+#' that same seeded generator instead. An HONEST LIMIT, measured rather than assumed: the
+#' AGGREGATED numbers this function returns are not always bit-identical between R and Python
+#' the way the sample stream is. `MonteCarloIntegration`/`Miser`/`Vegas` are ported CORE code, so
+#' -- unlike the callback surface's own catalog tests, which the C++ side compiles with
+#' `-ffp-contract=off` for exactly this reason -- they compile with whatever fused-multiply-add
+#' behavior each package's own build flags happen to produce (R's `-O2` and corehydropy's CMake
+#' default are not guaranteed to agree), and the picture is different per method rather than
+#' uniform across the surface. `method = "monte_carlo"` is the one case measured to reproduce
+#' `integral` bit-for-bit across ALL FOUR runners -- this package, `corehydropy`, the C++ fixture
+#' runner under both FMA settings, and the real C# library -- because its own arithmetic (a running
+#' sum of hit/miss weights divided by the sample count) has no near-cancelling subtraction for a
+#' fused-multiply-add ULP to hide in; `fixtures/callback/callback_cross_language.json` pins it at
+#' zero tolerance for exactly that reason. `"miser"` and `"vegas"` do not reproduce that cleanly --
+#' measured directly, `"miser"`'s own `integral` misses the C# value by 1 ULP under this package's
+#' shipped build, and `"vegas"`'s `integral`, while itself exact against C#, sits beside a
+#' `standard_error` (both methods) and `chi_squared` (`"vegas"` only) that are not: both are built
+#' from a near-cancelling subtraction (`avg2 - avg*avg`-shaped for Monte Carlo/Miser,
+#' `sum_chi_squared - sum_weighted_results * result` for Vegas) that amplifies a fused-multiply-add
+#' ULP difference, and a live R-vs-`corehydropy` comparison of `"vegas"` at these settings showed
+#' `integral` itself, not just `standard_error`/`chi_squared`, moving by a few ULP language to
+#' language. This is a property of the classes' own arithmetic, not a bug in either binding, and it
+#' is why `fixtures/callback/callback_cross_language.json`'s own `quadrature_nd`/`quadrature_vegas`
+#' digest asserts `function_evaluations` and `status` on every method, `integral` ADDITIONALLY on
+#' `"monte_carlo"` alone, and nothing else -- see that file's reference note for the measurements.
+#'
+#' @param f a function taking a numeric vector and returning one number (`method =
+#'   "monte_carlo"`/`"miser"`), or a function taking a numeric vector and a number (the sample
+#'   weight) and returning one number (`method = "vegas"`).
+#' @param min,max numeric vectors of the same length giving the per-dimension lower and upper
+#'   bounds; their common length is the number of dimensions. Every `max` entry must be above the
+#'   matching `min` entry.
+#' @param method one of `"monte_carlo"` (the default), `"miser"`, or `"vegas"`.
+#' @param seed an integer seed for the class's random number generator. `NULL`, the default,
+#'   leaves the ported class's own clock-seeded default in force -- so a `NULL` `"miser"`/`"vegas"`
+#'   run under Sobol sampling is still reproducible (the Sobol sequence is deterministic), but a
+#'   `NULL` `"monte_carlo"` run, or a `"miser"`/`"vegas"` run with `use_sobol = FALSE`, is not. See
+#'   the Details.
+#' @param use_sobol whether to draw sample points from a Sobol low-discrepancy sequence rather
+#'   than the (possibly seeded) generator. Default `TRUE`. Only `"miser"` and `"vegas"` read this;
+#'   see the Details on why `"monte_carlo"` does not.
+#' @param max_function_evaluations the cap on evaluations of `f`. `NULL`, the default, leaves the
+#'   ported class's own default in force. Applies to `"monte_carlo"` and `"miser"` alone --
+#'   `"miser"`'s own recursion is bounded directly by it, where `"monte_carlo"`'s loop is bounded
+#'   by `max_iterations` instead (see below); supplying it for `method = "vegas"` raises an error.
+#' @param min_iterations,max_iterations,relative_tolerance `method = "monte_carlo"` alone: the
+#'   floor on iterations before the convergence check is consulted, the ceiling on iterations
+#'   (`"monte_carlo"`'s real throttle, since `max_function_evaluations` is checked only after the
+#'   loop ends to choose the reported status), and the relative-error convergence threshold. `NULL`,
+#'   the default, leaves the ported class's own defaults in force. Supplying any for another
+#'   `method` raises an error.
+#' @param fraction,min_subregion_points,min_bisections,dither `method = "miser"` alone: the
+#'   fraction of remaining evaluations spent exploring variance at each stage, the minimum points
+#'   per terminal subregion, the minimum evaluations before a subregion is bisected further, and
+#'   the dither applied when the integrand's active region falls on a subdivision boundary. `NULL`,
+#'   the default, leaves the ported class's own defaults in force. Supplying any for another
+#'   `method` raises an error.
+#' @param independent_evaluations,function_calls,alpha,number_of_bins,tail_focus_parameter,initialize,check_convergence,target_probability
+#'   `method = "vegas"` alone. `independent_evaluations`
+#'   and `function_calls` bound the run (their product is the maximum total evaluations);
+#'   `alpha` is the grid-refinement damping exponent; `number_of_bins` the stratification bin
+#'   count; `tail_focus_parameter` the Power Transform exponent (1.0, the default, is standard
+#'   uniform sampling); `initialize` selects a cold start (0, the default), inheriting the grid
+#'   alone (1), or inheriting the grid and its answers (2); `check_convergence` whether to exit
+#'   early on convergence. `target_probability`, if supplied, calls the ported
+#'   `configure_for_rare_events()` helper -- applied AFTER every other option, so it may override
+#'   `number_of_bins`/`alpha`/`tail_focus_parameter`, exactly as the C# helper does. `NULL`, the
+#'   default, leaves the ported class's own defaults in force. Supplying any for another `method`
+#'   raises an error.
+#' @return the integral, a single number, carrying `status` (`"Success"`,
+#'   `"MaximumFunctionEvaluationsReached"`, `"Failure"`, or `"None"`), `function_evaluations`, and
+#'   `standard_error` as attributes -- and, for `method = "vegas"` alone, `chi_squared`, the
+#'   Chi-Squared statistic (an approximate diagnostic for the run's own internal consistency across
+#'   its independent evaluations). An upstream quirk, verified against the real C# source rather
+#'   than assumed: `method = "miser"` always reports `status` `"None"` on success -- unlike
+#'   `"monte_carlo"` and `"vegas"`, the ported `Miser::integrate()` (faithfully mirroring C#'s
+#'   `Miser.Integrate()`) never assigns a success status, only ever writing `"Failure"` from its
+#'   catch block.
+#' @examples
+#' # max_iterations/relative_tolerance keep this example under the CRAN 5s example budget;
+#' # omitting them lets `"monte_carlo"`'s own (much larger) default run to full convergence.
+#' quadrature_nd(function(x) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
+#'               seed = 12345, max_iterations = 2000, relative_tolerance = 0.01)
+#' quadrature_nd(function(x, w) if (x[1]^2 + x[2]^2 < 1) 1 else 0, min = c(-1, -1), max = c(1, 1),
+#'               method = "vegas")
+#' @export
+quadrature_nd <- function(f, min, max,
+                          method = c("monte_carlo", "miser", "vegas"),
+                          seed = NULL, use_sobol = TRUE,
+                          max_function_evaluations = NULL,
+                          min_iterations = NULL, max_iterations = NULL,
+                          relative_tolerance = NULL,
+                          fraction = NULL, min_subregion_points = NULL,
+                          min_bisections = NULL, dither = NULL,
+                          independent_evaluations = NULL, function_calls = NULL,
+                          alpha = NULL, number_of_bins = NULL,
+                          tail_focus_parameter = NULL, initialize = NULL,
+                          check_convergence = NULL, target_probability = NULL) {
+  method <- match.arg(method)
+  callback_check_fn(f)
+  if (!is.numeric(min) || !is.numeric(max) || length(min) < 1L || length(min) != length(max)) {
+    stop("`min` and `max` must be numeric vectors of the same positive length", call. = FALSE)
+  }
+  if (any(!is.finite(min)) || any(!is.finite(max))) {
+    stop("`min` and `max` must be finite", call. = FALSE)
+  }
+  if (any(max <= min)) {
+    stop("every `max` entry must be above the matching `min` entry", call. = FALSE)
+  }
+  dimension <- length(min)
+  opts <- list(min = as.double(min), max = as.double(max))
+  if (method != "monte_carlo") {
+    opts$method <- method
+  }
+  if (!is.null(seed)) {
+    if (!is.numeric(seed) || length(seed) != 1L) {
+      stop("`seed` must be a single integer", call. = FALSE)
+    }
+    opts$seed <- as.integer(seed)
+  }
+  if (!is.logical(use_sobol) || length(use_sobol) != 1L || is.na(use_sobol)) {
+    stop("`use_sobol` must be a single logical value", call. = FALSE)
+  }
+  opts$use_sobol <- use_sobol
+  # Miser and Vegas unconditionally construct a SobolSequence over `dimension`, regardless of
+  # `use_sobol` (see numerics/support/callback/math.hpp's SOBOL PATH note), so the path is
+  # resolved and supplied whenever `dimension > 1` and `method` is one of the two, exactly as
+  # sobol_sequence() above resolves its own.
+  if (method %in% c("miser", "vegas") && dimension > 1L) {
+    path <- system.file("extdata", "new-joe-kuo-6.21201", package = "corehydror")
+    if (!nzchar(path)) {
+      stop("direction-numbers file not found in corehydror inst/extdata", call. = FALSE)
+    }
+    opts$sobol_path <- path
+  }
+
+  mc_only <- c("min_iterations", "max_iterations", "relative_tolerance")
+  miser_only <- c("fraction", "min_subregion_points", "min_bisections", "dither")
+  vegas_only <- c("independent_evaluations", "function_calls", "alpha", "number_of_bins",
+                  "tail_focus_parameter", "initialize", "check_convergence", "target_probability")
+  supplied <- function(...) {
+    vals <- list(...)
+    names(vals)[!vapply(vals, is.null, logical(1))]
+  }
+  check_scope <- function(names_supplied, allowed_methods, group_label) {
+    if (length(names_supplied) && !method %in% allowed_methods) {
+      stop("`", paste(names_supplied, collapse = "`, `"), "` only appl", if (length(names_supplied) > 1) "y" else "ies",
+           " to method ", group_label, call. = FALSE)
+    }
+  }
+  check_scope(supplied(min_iterations = min_iterations, max_iterations = max_iterations,
+                       relative_tolerance = relative_tolerance),
+              "monte_carlo", '"monte_carlo"')
+  check_scope(supplied(fraction = fraction, min_subregion_points = min_subregion_points,
+                       min_bisections = min_bisections, dither = dither),
+              "miser", '"miser"')
+  check_scope(supplied(independent_evaluations = independent_evaluations,
+                       function_calls = function_calls, alpha = alpha,
+                       number_of_bins = number_of_bins,
+                       tail_focus_parameter = tail_focus_parameter, initialize = initialize,
+                       check_convergence = check_convergence,
+                       target_probability = target_probability),
+              "vegas", '"vegas"')
+  if (!is.null(max_function_evaluations) && method == "vegas") {
+    stop("`max_function_evaluations` only applies to method = \"monte_carlo\" or \"miser\", not ",
+         "\"vegas\" -- use `function_calls`/`independent_evaluations`", call. = FALSE)
+  }
+
+  if (!is.null(max_function_evaluations)) opts$max_function_evaluations <- as.integer(max_function_evaluations)
+  if (!is.null(min_iterations)) opts$min_iterations <- as.integer(min_iterations)
+  if (!is.null(max_iterations)) opts$max_iterations <- as.integer(max_iterations)
+  if (!is.null(relative_tolerance)) opts$relative_tolerance <- as.double(relative_tolerance)
+  if (!is.null(fraction)) opts$fraction <- as.double(fraction)
+  if (!is.null(min_subregion_points)) opts$min_subregion_points <- as.integer(min_subregion_points)
+  if (!is.null(min_bisections)) opts$min_bisections <- as.integer(min_bisections)
+  if (!is.null(dither)) opts$dither <- as.double(dither)
+  if (!is.null(independent_evaluations)) opts$independent_evaluations <- as.integer(independent_evaluations)
+  if (!is.null(function_calls)) opts$function_calls <- as.integer(function_calls)
+  if (!is.null(alpha)) opts$alpha <- as.double(alpha)
+  if (!is.null(number_of_bins)) opts$number_of_bins <- as.integer(number_of_bins)
+  if (!is.null(tail_focus_parameter)) opts$tail_focus_parameter <- as.double(tail_focus_parameter)
+  if (!is.null(initialize)) opts$initialize <- as.integer(initialize)
+  if (!is.null(check_convergence)) {
+    if (!is.logical(check_convergence) || length(check_convergence) != 1L || is.na(check_convergence)) {
+      stop("`check_convergence` must be a single logical value", call. = FALSE)
+    }
+    opts$check_convergence <- check_convergence
+  }
+  if (!is.null(target_probability)) opts$target_probability <- as.double(target_probability)
+
+  if (method == "vegas") {
+    res <- ch_callback_math_vw_("quadrature_vegas", to_spec_json(opts), f)
+    return(structure(res$values[[1]],
+                     status = res$status,
+                     function_evaluations = as.integer(res$values[[2]]),
+                     standard_error = res$values[[3]],
+                     chi_squared = res$values[[4]]))
+  }
+  res <- ch_callback_math_("quadrature_nd", to_spec_json(opts), f)
   structure(res$values[[1]],
             status = res$status,
             function_evaluations = as.integer(res$values[[2]]),

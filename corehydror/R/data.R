@@ -292,3 +292,137 @@ threshold_diagnostics <- function(x, u_min, u_max, n_thresholds = 20, confidence
     as.integer(n_thresholds), as.double(confidence_level)
   )
 }
+
+# Internal: the exact-series values a data-layer facade reads, in series order. Both
+# analysis_data_hypothesis_test() and analysis_data_statistics() read the EXACT series only, so a
+# corehydro_data object contributes just its `exact` values (ignoring any interval/threshold/
+# uncertain series it also carries); a plain numeric vector is used as-is.
+data_exact_values <- function(data) {
+  if (inherits(data, "corehydro_data")) {
+    if (is.null(data$exact)) {
+      stop("`data` has no exact series; analysis_data_hypothesis_test()/analysis_data_statistics() ",
+        "read the exact series only",
+        call. = FALSE
+      )
+    }
+    return(as.double(vapply(data$exact, function(e) e$value, double(1))))
+  }
+  if (!is.numeric(data)) {
+    stop("`data` must be a numeric vector or a corehydro_data object from analysis_data()",
+      call. = FALSE
+    )
+  }
+  as.double(data)
+}
+
+kDataHypothesisMethods <- c(
+  "jarque_bera", "ljung_box", "equal_variance_t", "unequal_variance_t", "f",
+  "linear_trend", "wald_wolfowitz", "mann_whitney", "mann_kendall"
+)
+kDataTwoSampleMethods <- c("equal_variance_t", "unequal_variance_t", "f", "mann_whitney")
+
+#' A hypothesis test on an observation record
+#'
+#' Runs one of the nine `DataFrame` hypothesis-test facades over the exact series of an
+#' [analysis_data()] frame (or a plain numeric vector). The four two-sample tests split the record
+#' at `split_index`, comparing observations with a data index below it against those at or above
+#' it -- the split is on the record's INDEX, not on array position, so it agrees with the split a
+#' caller would get by re-running the test on a record whose observations were supplied out of
+#' order.
+#'
+#' @param data a numeric vector of observations, or a `corehydro_data` object from
+#'   [analysis_data()] (only its exact series is read).
+#' @param method one of `"jarque_bera"` (normality), `"ljung_box"` (autocorrelation),
+#'   `"equal_variance_t"` / `"unequal_variance_t"` (difference in means, Student's / Welch's),
+#'   `"f"` (difference in variances), `"linear_trend"` (trend), `"wald_wolfowitz"` (runs test for
+#'   independence), `"mann_whitney"` (homogeneity / jump), or `"mann_kendall"` (homogeneity /
+#'   trend).
+#' @param split_index the record index to split the sample at; required by `"equal_variance_t"`,
+#'   `"unequal_variance_t"`, `"f"`, and `"mann_whitney"`, ignored otherwise.
+#' @param lag_max the maximum lag for `"ljung_box"`; `NULL` (the default) uses the library's own
+#'   default rule. Ignored by every other method.
+#' @param use_log10 logical; test the log10-transformed values instead of the real-space values.
+#' @return A named numeric vector of length 1, named `method`: the 2-sided p-value.
+#' @seealso [analysis_data_statistics()] for the summary-statistics facades,
+#'   [analysis_data_summary()] for plotting positions.
+#' @export
+#' @examples
+#' peaks <- c(122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205)
+#' analysis_data_hypothesis_test(peaks, "mann_kendall")
+#' analysis_data_hypothesis_test(peaks, "equal_variance_t", split_index = 6)
+analysis_data_hypothesis_test <- function(data, method, split_index = NULL, lag_max = NULL,
+                                          use_log10 = FALSE) {
+  # check_choice() rather than match.arg() (R/fit.R:22): match.arg accepts an unambiguous
+  # PREFIX, so `method = "jarque"` would silently run in R (resolving to "jarque_bera") and be
+  # an error in Python -- exactly the M3 finding from the P4 whole-branch review.
+  method <- check_choice(method, kDataHypothesisMethods, "method")
+  values <- data_exact_values(data)
+  if (method %in% kDataTwoSampleMethods && is.null(split_index)) {
+    stop(sprintf("method = \"%s\" requires `split_index`, the record index to split the sample at", method),
+      call. = FALSE
+    )
+  }
+  opts <- list(use_log10 = isTRUE(use_log10))
+  if (!is.null(split_index)) {
+    opts$index <- as.integer(split_index)
+  }
+  if (!is.null(lag_max)) {
+    opts$lag_max <- as.integer(lag_max)
+  }
+  r <- ch_data_frame_run_(method, list(values), "", to_spec_json(opts))
+  out <- r$values[1]
+  names(out) <- method
+  out
+}
+
+#' Summary statistics for an observation record
+#'
+#' Runs the `DataFrame` summary-statistics facades over the exact series of an [analysis_data()]
+#' frame (or a plain numeric vector): record length, low-outlier count, min/max, the first four
+#' product moments in real space and log10 space, and seven percentiles.
+#'
+#' By default (`all_data = FALSE`) the statistics are computed directly from the exact series
+#' (`SummaryStatisticsExactDataOnly`). With `all_data = TRUE`, they instead come from a
+#' nonparametric distribution fit through the Hirsch-Stedinger plotting positions of the combined
+#' exact/interval/uncertain record (`SummaryStatisticsAllData`) -- the same fit
+#' [analysis_data_summary()] uses -- so `"Record Length"` counts the full record (censored series
+#' included) rather than the exact series alone, and the two methods can disagree even on a frame
+#' with no censored data because their percentile and moment estimators differ. Both report `NaN`
+#' for every value when the exact series has fewer than 10 points.
+#'
+#' @param data a numeric vector of observations, or a `corehydro_data` object from
+#'   [analysis_data()] (only its exact series is read).
+#' @param all_data logical; use `SummaryStatisticsAllData` (see Details) instead of the default
+#'   exact-series-only statistics.
+#' @param standardized logical; also run `SetStandardizedValues()` (after computing plotting
+#'   positions) and return the exact series' standardized values and standardized log10 values,
+#'   parallel to [analysis_data_summary()]'s `value`.
+#' @return A named list. `value` holds the twenty summary statistics, named by
+#'   `c("Record Length", "Events Per Index (lambda)", "Low Outliers", "Minimum", "Maximum", "Mean",
+#'   "Std Dev", "Skewness", "Kurtosis", "Mean (of log)", "Std Dev (of log)", "Skewness (of log)",
+#'   "Kurtosis (of log)", "1%", "5%", "25%", "50%", "75%", "95%", "99%")`. With
+#'   `standardized = TRUE`, `standardized_value` and `standardized_log10_value` are added: numeric
+#'   vectors parallel to the exact series, in series order. (The second name's parenthetical is the
+#'   Greek letter lambda, spelled out here rather than embedded literally so the PDF manual
+#'   renders; the actual returned name carries the Greek character, matching the C# source.)
+#' @seealso [analysis_data_hypothesis_test()] for the hypothesis-test facades,
+#'   [analysis_data_summary()] for plotting positions and record diagnostics.
+#' @export
+#' @examples
+#' peaks <- c(12500, 15300, 8900, 22100, 18700, 14200, 9800, 28500, 17400, 11600)
+#' s <- analysis_data_statistics(peaks)
+#' s$value[["Mean"]]
+analysis_data_statistics <- function(data, all_data = FALSE, standardized = FALSE) {
+  values <- data_exact_values(data)
+  method <- if (isTRUE(all_data)) "summary_all" else "summary_exact"
+  r <- ch_data_frame_run_(method, list(values), "", "{}")
+  out <- list(value = stats::setNames(r$values, r$names))
+  if (isTRUE(standardized)) {
+    rs <- ch_data_frame_run_("standardized", list(values), "", "{}")
+    n <- rs$dims[1]
+    idx <- seq_len(n)
+    out$standardized_value <- rs$values[2 * idx - 1]
+    out$standardized_log10_value <- rs$values[2 * idx]
+  }
+  out
+}

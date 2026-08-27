@@ -827,11 +827,71 @@ static double NumericalDerivativeNormalLoglik(double[] x)
 static double OptimizerTestFX(double x) => (x + 3d) * Math.Pow(x - 1d, 2d);
 static double OptimizerTestFXYZ(double[] p) =>
     Math.Pow(4d * p[0] - 0.5d, 2d) + Math.Pow(3d * p[1] - 0.6d, 2d) + Math.Pow(2d * p[2] - 0.7d, 2d);
-static double OptimizerTestDeJong(double[] p) => p.Sum(v => v * v);
+// The two accumulating objectives spell their sum out as an explicit loop rather than calling
+// LINQ's Sum(), matching the C++/R/Python catalogs' own loops term for term.
+static double OptimizerTestDeJong(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i < p.Length; i++) F += Math.Pow(p[i], 2);
+    return F;
+}
 static double OptimizerTestBooth(double[] p) =>
     Math.Pow(p[0] + 2d * p[1] - 7d, 2d) + Math.Pow(2d * p[0] + p[1] - 5d, 2d);
 static double OptimizerTestMcCormick(double[] p) =>
     Math.Sin(p[0] + p[1]) + Math.Pow(p[0] - p[1], 2d) - 1.5d * p[0] + 2.5d * p[1] + 1d;
+static double OptimizerTestRosenbrock(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i + 1 < p.Length; i++)
+        F += 100 * Math.Pow(p[i + 1] - p[i] * p[i], 2) + Math.Pow(1 - p[i], 2);
+    return F;
+}
+static double OptimizerTestEggholder(double[] p) =>
+    -(p[1] + 47d) * Math.Sin(Math.Sqrt(Math.Abs((p[0] / 2d) + (p[1] + 47d))))
+    - p[0] * Math.Sin(Math.Sqrt(Math.Abs(p[0] - (p[1] + 47d))));
+static double OptimizerTestSumOfPowerFunctions(double[] p)
+{
+    double F = 0d;
+    for (int i = 0; i < p.Length; i++) F += Math.Pow(Math.Abs(p[i]), i + 2d);
+    return F;
+}
+// Test_AugmentedLagrange.cs's own inline objectives and constraint functions. Unlike everything
+// above, these do NOT come from TestFunctions.cs: the constrained tests define both inline in each
+// [TestMethod] body, so each is transcribed term for term in the C# expression order, with the two
+// accumulating ones spelled out as explicit loops (the real `Tools.Sum` is itself a plain loop over
+// `sum += values[i]`, and this emitter's catalog must evaluate what the other three catalogs do).
+static double OptimizerTestAL1Objective(double[] x)
+{
+    var NB = new double[3];
+    for (int i = 0; i < 3; i++) NB[i] = (20 * x[i] - x[i] * x[i] - 24) / Math.Pow(1.10, i);
+    double sum = 0d;
+    for (int i = 0; i < NB.Length; i++) sum += NB[i];
+    return -sum;
+}
+static double OptimizerTestAL2Objective(double[] x)
+{
+    var NB = new double[2];
+    NB[0] = 60 * x[0] - 0.5 * x[0] * x[0];
+    NB[1] = (64 * x[1] - 0.5 * x[1] * x[1]) / 1.5;
+    double sum = 0d;
+    for (int i = 0; i < NB.Length; i++) sum += NB[i];
+    return -sum;
+}
+static double OptimizerTestSumAll(double[] x)
+{
+    double sum = 0d;
+    for (int i = 0; i < x.Length; i++) sum += x[i];
+    return sum;
+}
+static double OptimizerTestHaimesPrimary(double[] x) =>
+    Math.Pow(x[0] - 2, 2) + Math.Pow(x[1] - 4, 2) + 5;
+static double OptimizerTestHaimesSecondary(double[] x) =>
+    Math.Pow(x[0] - 6, 2) + Math.Pow(x[1] - 10, 2) + 6;
+// NOT the same expression as OptimizerTestRosenbrock: the C# test writes the two-dimensional case
+// out by hand, `(1 - x)^2` FIRST and the 100-weighted term second.
+static double OptimizerTestRosenbrockDiskObjective(double[] x) =>
+    Math.Pow(1 - x[0], 2) + 100 * Math.Pow(x[1] - x[0] * x[0], 2);
+static double OptimizerTestDisk(double[] x) => (x[0] * x[0]) + (x[1] * x[1]);
 static Func<double[], double> OptimizerTestFunction(string name) => name switch
 {
     "FXYZ" => OptimizerTestFXYZ,
@@ -839,8 +899,253 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
     "Booth" => OptimizerTestBooth,
     "McCormick" => OptimizerTestMcCormick,
     "FX" => p => OptimizerTestFX(p[0]),
+    "Rosenbrock" => OptimizerTestRosenbrock,
+    "Eggholder" => OptimizerTestEggholder,
+    "SumOfPowerFunctions" => OptimizerTestSumOfPowerFunctions,
+    // A constraint has the same Func<double[], double> shape as an objective, so both roles resolve
+    // out of this one catalog; `Disk` really is used as both (its formula is Test_RosenbrockDisk's
+    // constraint and Test_MixedConstraints's objective, written identically upstream).
+    "AL1_Objective" => OptimizerTestAL1Objective,
+    "AL2_Objective" => OptimizerTestAL2Objective,
+    "SumAll" => OptimizerTestSumAll,
+    "Haimes_Primary" => OptimizerTestHaimesPrimary,
+    "Haimes_Secondary" => OptimizerTestHaimesSecondary,
+    "RosenbrockDisk_Objective" => OptimizerTestRosenbrockDiskObjective,
+    "Disk" => OptimizerTestDisk,
+    "SumXY" => p => p[0] + p[1],
+    "X0" => p => p[0],
+    "X1" => p => p[1],
     _ => throw new Exception($"unknown optimizer fixture objective: {name}")
 };
+
+// The optional analytic gradients an `optimizer`-kind construct names by `construct.gradient` --
+// the second delegate the real C# ADAM / GradientDescent take (a null one is what "differentiate
+// numerically" means to both). TestFunctions.cs carries no gradients, so these are the
+// hand-differentiated counterparts of core/tests/optimization_test_functions.hpp's own additions,
+// written out term by term so all four catalogs evaluate the identical arithmetic.
+static double[] OptimizerTestGradFXYZ(double[] p) =>
+    new double[] { 8d * (4d * p[0] - 0.5), 6d * (3d * p[1] - 0.6), 4d * (2d * p[2] - 0.7) };
+static double[] OptimizerTestGradDeJong(double[] p)
+{
+    var g = new double[p.Length];
+    for (int i = 0; i < p.Length; i++) g[i] = 2d * p[i];
+    return g;
+}
+static double[] OptimizerTestGradBooth(double[] p) => new double[]
+{
+    2d * (p[0] + 2d * p[1] - 7d) + 4d * (2d * p[0] + p[1] - 5d),
+    4d * (p[0] + 2d * p[1] - 7d) + 2d * (2d * p[0] + p[1] - 5d)
+};
+static Func<double[], double[]> OptimizerTestGradient(string name) => name switch
+{
+    "Grad_FXYZ" => OptimizerTestGradFXYZ,
+    "Grad_DeJong" => OptimizerTestGradDeJong,
+    "Grad_Booth" => OptimizerTestGradBooth,
+    _ => throw new Exception($"unknown optimizer fixture gradient: {name}")
+};
+
+// Builds and configures the REAL C# optimizer an `optimizer`-kind construct names, mirroring
+// optimizer_runner.hpp's run_optimizer arm for arm: the same fourteen method names, the seed applied
+// to whichever of the six stochastic classes was built, and every `control` key applied only when
+// present and only by the class that reads it (an absent key leaves the C# class default). Shared
+// by the "optimizer" and "toolbox_cross_language" branches below, which had carried two copies of
+// the construction switch before this phase added five methods and the control block to it.
+// MultiStart sets MaxIterations in its CONSTRUCTOR, so the control block must stay after
+// construction exactly as the C++ runner's does.
+static Optimizer BuildOptimizerFromConstruct(JsonElement construct)
+{
+    string method = construct.GetProperty("method").GetString()!;
+    string objectiveName = construct.TryGetProperty("objective", out var objEl)
+        ? objEl.GetString()! : "DeJong";
+    Func<double[], double> objective = OptimizerTestFunction(objectiveName);
+    double[] lower = construct.TryGetProperty("lower", out var lowerEl)
+        ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    double[] upper = construct.TryGetProperty("upper", out var upperEl)
+        ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    double[] initial = construct.TryGetProperty("initial", out var initialEl)
+        ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
+    int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
+    // The optional analytic gradient the two gradient-taking methods take, resolved out of its own
+    // catalog. A null delegate is exactly what "differentiate numerically" means to both classes.
+    Func<double[], double[]>? gradient = construct.TryGetProperty("gradient", out var gradEl)
+        ? OptimizerTestGradient(gradEl.GetString()!) : null;
+    JsonElement? control = construct.TryGetProperty("control", out var ctrlEl) ? ctrlEl : null;
+
+    // The one constrained method. It BORROWS an inner optimizer (built by the same BuildOne every
+    // unconstrained method goes through, so an "inner" sub-spec may name any of them, falling back
+    // to BFGS over the top-level vectors) and takes one constraint function per `constraints`
+    // entry, resolved out of the same catalog as the objective. Mirrors optimizer_runner.hpp's
+    // "augmented_lagrange" arm key for key.
+    if (method == "augmented_lagrange")
+    {
+        string innerMethod = "bfgs";
+        double[] il = lower, iu = upper, ii = initial;
+        int? iseed = null;
+        JsonElement? ictrl = null;
+        if (construct.TryGetProperty("inner", out var innerEl))
+        {
+            innerMethod = innerEl.GetProperty("method").GetString()!;
+            if (innerEl.TryGetProperty("lower", out var e1))
+                il = e1.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("upper", out var e2))
+                iu = e2.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("initial", out var e3))
+                ii = e3.EnumerateArray().Select(ParseNum).ToArray();
+            if (innerEl.TryGetProperty("seed", out var e4)) iseed = e4.GetInt32();
+            if (innerEl.TryGetProperty("control", out var e5)) ictrl = e5;
+        }
+        Optimizer inner = BuildOne(innerMethod, objective, il, iu, ii, iseed, ictrl, null);
+        var cons = new List<IConstraint>();
+        foreach (var c in construct.GetProperty("constraints").EnumerateArray())
+        {
+            string typeName = c.GetProperty("type").GetString()!;
+            ConstraintType ct = typeName switch
+            {
+                "eq" => ConstraintType.EqualTo,
+                "le" => ConstraintType.LesserThanOrEqualTo,
+                "ge" => ConstraintType.GreaterThanOrEqualTo,
+                _ => throw new Exception($"unknown constraint type: {typeName}")
+            };
+            double cValue = ParseNum(c.GetProperty("value"));
+            double cTol = c.TryGetProperty("tolerance", out var tolEl) ? ParseNum(tolEl) : 1E-8;
+            cons.Add(new Constraint(OptimizerTestFunction(c.GetProperty("function").GetString()!),
+                                    inner.NumberOfParameters, cValue, ct, cTol));
+        }
+        var al = new AugmentedLagrange(objective, inner, cons.ToArray());
+        ApplyOptimizerControls(al, control);
+        return al;
+    }
+    return BuildOne(method, objective, lower, upper, initial, seed, control, gradient);
+}
+
+// The per-method construction switch, split out of BuildOptimizerFromConstruct so the constrained
+// arm above can build its INNER optimizer through the identical path rather than a second copy.
+static Optimizer BuildOne(string method, Func<double[], double> objective, double[] lower,
+                          double[] upper, double[] initial, int? seed, JsonElement? control,
+                          Func<double[], double[]>? gradient)
+{
+    Optimizer optimizer = method switch
+    {
+        "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
+        "particle_swarm" => new ParticleSwarm(objective, lower.Length, lower, upper),
+        "sce" => new ShuffledComplexEvolution(objective, lower.Length, lower, upper),
+        "simulated_annealing" => new SimulatedAnnealing(objective, lower.Length, lower, upper),
+        "multi_start" => new MultiStart(objective, initial.Length, initial, lower, upper),
+        "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
+        "powell" => new Powell(objective, initial.Length, initial, lower, upper),
+        // Alpha is left at the ctor default here and applied from `control` below like every other
+        // knob, so one code path handles it rather than two.
+        "adam" => new ADAM(objective, initial.Length, initial, lower, upper, 0.001, gradient),
+        "gradient_descent" =>
+            new GradientDescent(objective, initial.Length, initial, lower, upper, 0.001, gradient),
+        "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
+        "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
+        "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
+        "golden_section" => new GoldenSection(x => objective([x]), lower[0], upper[0]),
+        _ => throw new Exception($"unknown optimizer method: {method}")
+    };
+    if (seed.HasValue)
+    {
+        if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is ParticleSwarm psOptimizer) psOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is ShuffledComplexEvolution sceOptimizer) sceOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is SimulatedAnnealing saOptimizer) saOptimizer.PRNGSeed = seed.Value;
+        else if (optimizer is MultiStart msOptimizer) msOptimizer.PRNGSeed = seed.Value;
+    }
+    ApplyOptimizerControls(optimizer, control);
+    return optimizer;
+}
+
+// Reads one Lagrange multiplier off a finished AugmentedLagrange run, for the `multiplier` fixture
+// assertion method. Named sets rather than one flat vector because the three are sized by COUNTING
+// the constraints of each type, so index 0 of "mu" is not index 0 of the constraint list.
+static double OptimizerMultiplier(Optimizer optimizer, JsonElement args)
+{
+    if (optimizer is not AugmentedLagrange al)
+        throw new Exception("the `multiplier` assertion only applies to augmented_lagrange");
+    string set = args[0].GetString()!;
+    int index = args[1].GetInt32();
+    return set switch
+    {
+        "lambda" => al.Lambda[index],
+        "mu" => al.Mu[index],
+        "nu" => al.Nu[index],
+        _ => throw new Exception($"unknown multiplier set: {set}")
+    };
+}
+
+// Applies one `control` object's knobs to an already-constructed optimizer, only the keys present
+// and only on the class that reads each (an absent key leaves the C# class default). Split out
+// with BuildOne so the constrained arm can apply the OUTER control block to the AugmentedLagrange
+// itself. MultiStart sets MaxIterations in its CONSTRUCTOR, so this must stay after construction
+// exactly as the C++ runner's application does.
+static void ApplyOptimizerControls(Optimizer optimizer, JsonElement? control)
+{
+    if (control.HasValue)
+    {
+        foreach (var knob in control.Value.EnumerateObject())
+        {
+            switch (knob.Name)
+            {
+                case "max_iterations": optimizer.MaxIterations = knob.Value.GetInt32(); break;
+                case "absolute_tolerance": optimizer.AbsoluteTolerance = ParseNum(knob.Value); break;
+                case "relative_tolerance": optimizer.RelativeTolerance = ParseNum(knob.Value); break;
+                case "max_function_evaluations":
+                    optimizer.MaxFunctionEvaluations = knob.Value.GetInt32(); break;
+                case "report_failure": optimizer.ReportFailure = knob.Value.GetBoolean(); break;
+                case "compute_hessian": optimizer.ComputeHessian = knob.Value.GetBoolean(); break;
+                case "population_size":
+                    if (optimizer is DifferentialEvolution dePop) dePop.PopulationSize = knob.Value.GetInt32();
+                    else ((ParticleSwarm)optimizer).PopulationSize = knob.Value.GetInt32();
+                    break;
+                case "complexes":
+                    ((ShuffledComplexEvolution)optimizer).Complexes = knob.Value.GetInt32(); break;
+                case "cce_iterations":
+                    ((ShuffledComplexEvolution)optimizer).CCEIterations = knob.Value.GetInt32(); break;
+                case "tolerance_steps":
+                    if (optimizer is ShuffledComplexEvolution sceTol) sceTol.ToleranceSteps = knob.Value.GetInt32();
+                    else ((SimulatedAnnealing)optimizer).ToleranceSteps = knob.Value.GetInt32();
+                    break;
+                case "initial_temperature":
+                    ((SimulatedAnnealing)optimizer).InitialTemperature = ParseNum(knob.Value); break;
+                case "min_temperature":
+                    ((SimulatedAnnealing)optimizer).MinTemperature = ParseNum(knob.Value); break;
+                case "cooling_rate":
+                    ((SimulatedAnnealing)optimizer).CoolingRate = ParseNum(knob.Value); break;
+                case "update_cycles":
+                    ((SimulatedAnnealing)optimizer).UpdateCycles = knob.Value.GetInt32(); break;
+                case "temperature_cycles":
+                    ((SimulatedAnnealing)optimizer).TemperatureCycles = knob.Value.GetInt32(); break;
+                case "local_method":
+                    {
+                        LocalMethod lm = knob.Value.GetString() switch
+                        {
+                            "bfgs" => LocalMethod.BFGS,
+                            "nelder_mead" => LocalMethod.NelderMead,
+                            "powell" => LocalMethod.Powell,
+                            _ => throw new Exception($"unknown local_method: {knob.Value.GetString()}")
+                        };
+                        if (optimizer is MLSL mlslLm) mlslLm.Method = lm;
+                        else ((MultiStart)optimizer).Method = lm;
+                        break;
+                    }
+                case "local_absolute_tolerance":
+                    ((MultiStart)optimizer).LocalAbsoluteTolerance = ParseNum(knob.Value); break;
+                case "local_relative_tolerance":
+                    ((MultiStart)optimizer).LocalRelativeTolerance = ParseNum(knob.Value); break;
+                case "polish": ((MultiStart)optimizer).Polish = knob.Value.GetBoolean(); break;
+                case "alpha":
+                    if (optimizer is ADAM adamAlpha) adamAlpha.Alpha = ParseNum(knob.Value);
+                    else ((GradientDescent)optimizer).Alpha = ParseNum(knob.Value);
+                    break;
+                case "beta1": ((ADAM)optimizer).Beta1 = ParseNum(knob.Value); break;
+                case "beta2": ((ADAM)optimizer).Beta2 = ParseNum(knob.Value); break;
+                default: throw new Exception($"unknown optimizer control: {knob.Name}");
+            }
+        }
+    }
+}
 
 // The callback surface, Task 1: the Test_Brent/Test_Differentiation formulas
 // fixtures/callback/math.json names by string, inlined here for the same reason as the optimizer
@@ -854,7 +1159,15 @@ static Func<double[], double> OptimizerTestFunction(string name) => name switch
 static Func<double, double>? CallbackScalarFunction(string name) => name switch
 {
     "Root_Quadratic" => x => Math.Pow(x, 2) - 2,
+    // P2 "math extras": TestFunctions.Quadratic_Deriv, the newton catalog's counterpart of
+    // Root_Quadratic. Same Func<double, double> shape as every other member of this switch, so it
+    // lives here rather than in a derivative-only catalog of its own.
+    "RootD_Quadratic" => x => 2d * x,
     "Root_Cubic" => x => x * x * x - x - 1d,
+    // TestFunctions.Trigonometric, root ~1.12191713 on [0, pi].
+    "Root_Trigonometric" => x => 2d * Math.Sin(x) - 3d * Math.Cos(x) - 0.5,
+    // TestFunctions.Trigonometric_Deriv.
+    "RootD_Trigonometric" => x => 2d * Math.Cos(x) + 3d * Math.Sin(x),
     "Diff_FX" => x => Math.Pow(x, 3.0),
     "Quad_FX3" => x => Math.Pow(x, 3d),
     "Quad_Cosine" => x => Math.Cos(x),
@@ -875,6 +1188,65 @@ static Func<double[], double>? CallbackVectorFunction(string name) => name switc
     "Diff_FXY" => p => Math.Pow(p[0], 2) * Math.Pow(p[1], 3),
     "Diff_FXYZ" => p => Math.Pow(p[0], 3.0) + Math.Pow(p[1], 4.0) + Math.Pow(p[2], 5.0),
     "Diff_FH" => p => Math.Pow(p[0], 3.0) - 2 * p[0] * p[1] - Math.Pow(p[1], 6),
+    // The math/quadrature_nd catalog (fixtures/callback/math.json), P2 "math extras": upstream's
+    // Test_Numerics/Mathematics/Integration/Integrands.cs `PI(double[] vals)`, the indicator of
+    // the unit disc read off the first two components -- always 2-dimensional regardless of how
+    // many dimensions the case's own `min`/`max` carry, exactly as the C# function is.
+    "Nd_PI" => p => (p[0] * p[0] + p[1] * p[1] < 1d) ? 1d : 0d,
+    // Integrands.cs `GSL(double[] x)`: the GNU Scientific Library 3-dimensional test integrand,
+    // A / (1 - cos(x0) cos(x1) cos(x2)) with A = 1 / pi^3.
+    "Nd_GSL" => p => (1d / (Math.PI * Math.PI * Math.PI)) /
+                     (1d - Math.Cos(p[0]) * Math.Cos(p[1]) * Math.Cos(p[2])),
+    _ => null
+};
+
+// The math/quadrature_vegas catalog (P2 "math extras"): upstream's own Vegas integrand shape,
+// f(x, weight) -> y. `NdW_SumOfNormals3` is Integrands.cs `SumOfNormals(double[] p)` (the
+// 3-dimensional case), wrapped weight-ignoring exactly as Test_Vegas.cs's own
+// `(x, y) => Integrands.SumOfNormals(x)` wraps it -- transcribed identically in all four runners
+// (see core/tests/fixture_callback_catalog.cpp's twin) so the R/Python/C++ closures reproduce this
+// REAL C# `Normal.StandardZ` bit for bit.
+static Func<double[], double, double>? CallbackVectorWeightFunction(string name) => name switch
+{
+    "NdW_SumOfNormals3" => (p, w) =>
+    {
+        double[] mu = [10d, 30d, 17d];
+        double[] sigma = [2d, 15d, 5d];
+        double acc = 0d;
+        for (int i = 0; i < p.Length; i++) acc += mu[i] + sigma[i] * Normal.StandardZ(p[i]);
+        return acc;
+    },
+    _ => null
+};
+
+// P2 "math extras", the math/quadrature_2d catalog: Test_AdaptiveSimpsonsRule2D's own integrands
+// (Mathematics/Integration/Integrands.cs), the C# counterpart of the four runners' native (x, y)
+// closures.
+static Func<double, double, double>? CallbackScalarXyFunction(string name) => name switch
+{
+    "Quad2D_XPlusY" => (x, y) => x + y,
+    // Integrands.PI2D: the indicator of the unit disc, whose integral over [-1, 1] x [-1, 1]
+    // approximates pi.
+    "Quad2D_PI2D" => (x, y) => (x * x + y * y < 1d) ? 1d : 0d,
+    // The math/ode_solve catalog (fixtures/callback/ode.json), P2 "math extras": every
+    // [TestMethod] in Test_RungeKutta.cs shares this f(t, y) = y - t^2 + 1.
+    "Ode_TestFunction" => (t, y) => y - t * t + 1d,
+    _ => null
+};
+
+// P2 "math extras", the math/root_find_system catalog: Test_NewtonRaphson.Test_Multi_LinearSystem's
+// system, F([x;y]) = [3x + y - 9, x + 2y - 8] with the constant Jacobian [[3, 1], [1, 2]], whose
+// unique root is [2, 3]. `double[,]`, not `Matrix`, so this catalog's shape matches
+// CallbackJacobianFunction's (the gmm group's) rather than adding a third jacobian shape.
+static Func<double[], double[]>? CallbackSystemFunction(string name) => name switch
+{
+    "Sys_Linear_F" => v => new[] { 3.0 * v[0] + v[1] - 9.0, v[0] + 2.0 * v[1] - 8.0 },
+    _ => null
+};
+
+static Func<double[], double[,]>? CallbackSystemJacobianFunction(string name) => name switch
+{
+    "Sys_Linear_J" => _ => new double[,] { { 3.0, 1.0 }, { 1.0, 2.0 } },
     _ => null
 };
 
@@ -4654,13 +5026,7 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
     switch (group)
     {
         case "correlation":
-            return method switch
-            {
-                "pearson"  => Correlation.Pearson(data[0], data[1]),
-                "spearman" => Correlation.Spearman(data[0], data[1]),
-                "kendall"  => Correlation.KendallsTau(data[0], data[1]),
-                _ => throw new Exception($"unknown correlation method: {method}")
-            };
+            return CorrelationDispatch(method, data, asrt);
         case "gof":
             return GofDispatch(method, data, options, asrt);
         case "spectra":
@@ -4681,9 +5047,344 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return LinkDispatch(method, data, options, asrt);
         case "trend":
             return TrendDispatch(method, data, options, asrt);
+        case "linalg":
+            return LinalgDispatch(method, data, options, asrt);
+        case "special":
+            return SpecialDispatch(method, data, options, asrt);
+        case "functions":
+            return FunctionsDispatch(method, data, options, asrt);
+        case "network":
+            return NetworkDispatch(method, data, options, asrt);
+        case "hypothesis":
+            return HypothesisDispatch(method, data, options, asrt);
+        case "paired_data":
+            return PairedDataDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
+}
+
+// Mirrors models/data_frame_runner.hpp's run_data_frame dispatch against a real
+// BestFitModels.DataFrame (P4 Task 6). The nine hypothesis facades and "summary_exact" return a
+// single scalar (no dims); "summary_all" returns the same twenty-key named result; "standardized"
+// flattens {StandardizedValue, StandardizedLog10Value} per exact-series item row-major, dims
+// {Count, 2}.
+static double DataFrameDispatch(string method, BestFitModels.DataFrame df, JsonElement options,
+                                JsonElement asrt)
+{
+    bool useLog10 = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("use_log10", out var ul) && ul.GetBoolean();
+    int OptIndex()
+    {
+        if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty("index", out var idx))
+            throw new Exception($"data_frame method '{method}' requires an 'index' option");
+        return idx.GetInt32();
+    }
+
+    switch (method)
+    {
+        case "jarque_bera":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.JarqueBeraTest(useLog10) });
+        case "ljung_box":
+        {
+            int lagMax = options.ValueKind == JsonValueKind.Object &&
+                        options.TryGetProperty("lag_max", out var lm) ? lm.GetInt32() : -1;
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LjungBoxTest(lagMax, useLog10) });
+        }
+        case "equal_variance_t":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.EqualVarianceTtest(OptIndex(), useLog10) });
+        case "unequal_variance_t":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.UnequalVarianceTtest(OptIndex(), useLog10) });
+        case "f":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.Ftest(OptIndex(), useLog10) });
+        case "linear_trend":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LinearTrendTest(useLog10) });
+        case "wald_wolfowitz":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.WaldWolfowitzTest(useLog10) });
+        case "mann_whitney":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.MannWhitneyTest(OptIndex(), useLog10) });
+        case "mann_kendall":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.MannKendallTest(useLog10) });
+        case "summary_exact":
+        {
+            var summary = df.SummaryStatisticsExactDataOnly();
+            return ToolboxSelectNamed(asrt, summary.Keys.ToArray(), summary.Values.ToArray());
+        }
+        case "summary_all":
+        {
+            var summary = df.SummaryStatisticsAllData();
+            return ToolboxSelectNamed(asrt, summary.Keys.ToArray(), summary.Values.ToArray());
+        }
+        case "standardized":
+        {
+            df.SetStandardizedValues();
+            var flat = new List<double>();
+            foreach (var e in df.ExactSeries)
+            {
+                flat.Add(e.StandardizedValue);
+                flat.Add(e.StandardizedLog10Value);
+            }
+            return ToolboxSelectFlat(asrt, flat.ToArray(), df.ExactSeries.Count, 2);
+        }
+        default:
+            throw new Exception($"unknown data_frame method: {method}");
+    }
+}
+
+// Mirrors numerics/support/toolbox/correlation.hpp's run_correlation arm against the real
+// Numerics.Data.Statistics.Correlation. `pearson`/`spearman`/`kendall` are the pairwise scalar
+// methods (data[0]/data[1] are the two samples); `pearson_matrix`/`spearman_matrix` are the
+// column-pairwise matrix overloads -- `data` holds one array PER COLUMN (matching the toolbox
+// convention: every data vector is one column, not one flattened matrix like LinalgDispatch's
+// `rows`/`cols` convention below), reassembled here into the `double[,]` shape
+// Correlation.Pearson(double[,])/Spearman(double[,]) take, then flattened row-major with
+// ToolboxSelectFlat for the p-by-p result. There is no `kendall_matrix` arm: upstream's
+// Correlation class has no KendallsTau(double[,]) overload.
+static double CorrelationDispatch(string method, List<double[]> data, JsonElement asrt)
+{
+    if (method == "pearson_matrix" || method == "spearman_matrix")
+    {
+        int p = data.Count;
+        int n = data[0].Length;
+        var samples = new double[n, p];
+        for (int j = 0; j < p; j++)
+            for (int i = 0; i < n; i++)
+                samples[i, j] = data[j][i];
+        double[,] corr = method == "pearson_matrix" ? Correlation.Pearson(samples) : Correlation.Spearman(samples);
+        var flat = new double[p * p];
+        for (int j = 0; j < p; j++)
+            for (int k = 0; k < p; k++) flat[j * p + k] = corr[j, k];
+        return ToolboxSelectFlat(asrt, flat, p, p);
+    }
+    return method switch
+    {
+        "pearson"  => Correlation.Pearson(data[0], data[1]),
+        "spearman" => Correlation.Spearman(data[0], data[1]),
+        "kendall"  => Correlation.KendallsTau(data[0], data[1]),
+        _ => throw new Exception($"unknown correlation method: {method}")
+    };
+}
+
+// Mirrors numerics/support/toolbox/linalg.hpp's run_linalg arm against the real
+// Numerics.Mathematics.LinearAlgebra.QRDecomposition/GaussJordanElimination. Matrices cross as
+// one flattened row-major array plus `rows`/`cols` options (`b_cols` for a second matrix B),
+// the same convention RegressionDispatch above uses for its predictor matrix. C#
+// GaussJordanElimination.Solve mutates its `ref Matrix A, ref Matrix B` arguments in place, so
+// each gauss_jordan_* arm clones A/B fresh from the flat input before calling Solve -- the two
+// arms must not share one mutated pair, since either could be evaluated first depending on
+// fixture assertion order.
+static Matrix LinalgMatrixFromFlat(double[] flat, int rows, int cols)
+{
+    var m = new Matrix(rows, cols);
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < cols; j++) m[i, j] = flat[i * cols + j];
+    return m;
+}
+
+static double LinalgDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    int rows = options.GetProperty("rows").GetInt32();
+    int cols = options.GetProperty("cols").GetInt32();
+    var a = LinalgMatrixFromFlat(data[0], rows, cols);
+
+    if (method == "qr_q")
+    {
+        var qr = new QRDecomposition(a);
+        var q = qr.Q;
+        var flat = new double[q.NumberOfRows * q.NumberOfColumns];
+        for (int i = 0; i < q.NumberOfRows; i++)
+            for (int j = 0; j < q.NumberOfColumns; j++) flat[i * q.NumberOfColumns + j] = q[i, j];
+        return ToolboxSelectFlat(asrt, flat, q.NumberOfRows, q.NumberOfColumns);
+    }
+    if (method == "qr_r")
+    {
+        var qr = new QRDecomposition(a);
+        var r = qr.RMatrix;
+        var flat = new double[r.NumberOfRows * r.NumberOfColumns];
+        for (int i = 0; i < r.NumberOfRows; i++)
+            for (int j = 0; j < r.NumberOfColumns; j++) flat[i * r.NumberOfColumns + j] = r[i, j];
+        return ToolboxSelectFlat(asrt, flat, r.NumberOfRows, r.NumberOfColumns);
+    }
+    if (method == "qr_solve")
+    {
+        var qr = new QRDecomposition(a);
+        var x = qr.Solve(new Vector(data[1]));
+        var flat = new double[x.Length];
+        for (int i = 0; i < x.Length; i++) flat[i] = x[i];
+        return ToolboxSelectFlatNoDims(asrt, flat);
+    }
+    if (method == "qr_solve_matrix")
+    {
+        int bCols = options.GetProperty("b_cols").GetInt32();
+        var b = LinalgMatrixFromFlat(data[1], rows, bCols);
+        var qr = new QRDecomposition(a);
+        var x = qr.Solve(b);
+        var flat = new double[x.NumberOfRows * x.NumberOfColumns];
+        for (int i = 0; i < x.NumberOfRows; i++)
+            for (int j = 0; j < x.NumberOfColumns; j++) flat[i * x.NumberOfColumns + j] = x[i, j];
+        return ToolboxSelectFlat(asrt, flat, x.NumberOfRows, x.NumberOfColumns);
+    }
+    if (method == "gauss_jordan_inverse" || method == "gauss_jordan_solution")
+    {
+        int bCols = options.GetProperty("b_cols").GetInt32();
+        Matrix aArg = LinalgMatrixFromFlat(data[0], rows, cols);
+        Matrix bArg = LinalgMatrixFromFlat(data[1], rows, bCols);
+        GaussJordanElimination.Solve(ref aArg, ref bArg);
+        var result = method == "gauss_jordan_inverse" ? aArg : bArg;
+        var flat = new double[result.NumberOfRows * result.NumberOfColumns];
+        for (int i = 0; i < result.NumberOfRows; i++)
+            for (int j = 0; j < result.NumberOfColumns; j++) flat[i * result.NumberOfColumns + j] = result[i, j];
+        return ToolboxSelectFlat(asrt, flat, result.NumberOfRows, result.NumberOfColumns);
+    }
+    throw new Exception($"unknown linalg method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/network.hpp's run_network arm against the real
+// Numerics.Mathematics.Optimization.Dijkstra. The edge list arrives as four parallel data arrays
+// ([from, to, weight, index], one element per edge) with the destination node indices in
+// `options.destinations` and an optional `node_count`; the float[nNodes, 3] result table is
+// flattened row-major to match the C++ ToolboxResult (dims = {nNodes, 3}).
+//
+// ALL THREE methods are driven through the free Dijkstra.Solve, INCLUDING the two network_* ones,
+// and that is deliberate rather than a shortcut: the shipped C# Network cannot be constructed at
+// all (its constructor sizes both edge caches at the maximum node index rather than max + 1 and
+// then indexes one past the end, so every construction throws IndexOutOfRangeException -- measured,
+// and written up in docs/upstream-csharp-issues.md). A patched Network -- the same file with only
+// that sizing corrected, which is the port's one intentional divergence -- was measured returning
+// the free solver's table element for element, because Network.Solve does nothing but forward its
+// cached edge lists to this very function. `network_solve_weights` is likewise driven on the
+// ORIGINAL weights, because Network.Solve(float[] edgeWeights) passes the stale cache alongside
+// its re-weighted array and the solver reads its weights out of that cache: the custom weights
+// have no effect, which is exactly what the fixture case pins.
+static double NetworkDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    double[] from = data[0], to = data[1], weight = data[2], index = data[3];
+    var edges = new List<Edge>();
+    for (int i = 0; i < from.Length; i++)
+        edges.Add(new Edge((int)from[i], (int)to[i], (float)weight[i], (int)index[i]));
+
+    var destinations = new List<int>();
+    var d = options.GetProperty("destinations");
+    if (d.ValueKind == JsonValueKind.Array)
+        foreach (var e in d.EnumerateArray()) destinations.Add((int)ParseNum(e));
+    else destinations.Add((int)ParseNum(d));
+
+    // "dijkstra" honors the fixture's node_count (C#'s own optional nNodes parameter, -1 meaning
+    // "derive it"); the two network_* methods take none, because Network derives its own.
+    int nodeCount = -1;
+    if (method == "dijkstra")
+    {
+        if (options.TryGetProperty("node_count", out var nc)) nodeCount = (int)ParseNum(nc);
+    }
+    else if (method == "network_solve" || method == "network_solve_weights")
+    {
+        int max = 0;
+        foreach (var edge in edges) max = Math.Max(max, Math.Max(edge.FromIndex, edge.ToIndex));
+        nodeCount = max + 1;
+    }
+    else throw new Exception($"unknown network method: {method}");
+
+    // Which overload: the single-destination one for one destination, the int[] one otherwise --
+    // the same rule the C++ arm follows, and the one each transcribed C# test calls.
+    float[,] table = destinations.Count == 1
+        ? Dijkstra.Solve(edges, destinations[0], nodeCount)
+        : Dijkstra.Solve(edges, destinations.ToArray(), nodeCount);
+
+    int rows = table.GetLength(0);
+    var flat = new double[rows * 3];
+    for (int i = 0; i < rows; i++)
+        for (int j = 0; j < 3; j++) flat[i * 3 + j] = table[i, j];
+    return ToolboxSelectFlat(asrt, flat, rows, 3);
+}
+
+// Mirrors numerics/support/toolbox/special.hpp's run_special arm against the real
+// Numerics.Mathematics.SpecialFunctions.Debye/Evaluate. "debye" (data[0] = x) evaluates
+// Debye.Function at every x; "polynomial"/"polynomial_rev"/"polynomial_rev_1" (data[0] =
+// coefficients, data[1] = x) evaluate the matching Evaluate.* static at every x with the shared
+// coefficients array; "polynomial_rev" additionally reads an optional integer "n" option
+// (Evaluate.PolynomialRev's own optional n parameter, default -1).
+static double SpecialDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "debye")
+    {
+        double[] xs = data[0];
+        double[] values = xs.Select(x => Debye.Function(x)).ToArray();
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    if (method == "polynomial" || method == "polynomial_rev" || method == "polynomial_rev_1")
+    {
+        double[] coefficients = data[0];
+        double[] xs = data[1];
+        double[] values;
+        if (method == "polynomial")
+        {
+            values = xs.Select(x => Evaluate.Polynomial(coefficients, x)).ToArray();
+        }
+        else if (method == "polynomial_rev")
+        {
+            int n = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("n", out var nEl)
+                ? nEl.GetInt32() : -1;
+            values = xs.Select(x => Evaluate.PolynomialRev(coefficients, x, n)).ToArray();
+        }
+        else
+        {
+            values = xs.Select(x => Evaluate.PolynomialRev_1(coefficients, x)).ToArray();
+        }
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    throw new Exception($"unknown special method: {method}");
+}
+
+// Mirrors numerics/support/toolbox/hypothesis.hpp's run_hypothesis arm against the real
+// Numerics.Data.Statistics.HypothesisTests. Every method but "f_models" reads its data vector(s)
+// (data[0] for a one-sample test, data[0]/data[1] for a two-sample test) and returns the scalar
+// p-value through ToolboxSelectFlatNoDims (mirroring detail::scalar); "f_models" takes NO data
+// (its four inputs are options) and reads index/label directly out of a two-element named
+// {f_statistic, p_value} array, exactly as StatisticsDispatch's product_moments/l_moments do.
+static double HypothesisDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "one_sample_t")
+    {
+        double populationMean = options.ValueKind == JsonValueKind.Object &&
+                                options.TryGetProperty("population_mean", out var pm)
+            ? pm.GetDouble() : 0d;
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.OneSampleTtest(data[0], populationMean) });
+    }
+    if (method == "equal_variance_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.EqualVarianceTtest(data[0], data[1]) });
+    if (method == "unequal_variance_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.UnequalVarianceTtest(data[0], data[1]) });
+    if (method == "paired_t")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.PairedTtest(data[0], data[1]) });
+    if (method == "f")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.Ftest(data[0], data[1]) });
+    if (method == "f_models")
+    {
+        double sseRestricted = options.GetProperty("sse_restricted").GetDouble();
+        double sseFull = options.GetProperty("sse_full").GetDouble();
+        int dfRestricted = options.GetProperty("df_restricted").GetInt32();
+        int dfFull = options.GetProperty("df_full").GetInt32();
+        HypothesisTests.FtestModels(sseRestricted, sseFull, dfRestricted, dfFull, out double fStat, out double pValue);
+        return ToolboxSelectNamed(asrt, new[] { "f_statistic", "p_value" }, new[] { fStat, pValue });
+    }
+    if (method == "jarque_bera")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.JarqueBeraTest(data[0]) });
+    if (method == "wald_wolfowitz")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.WaldWolfowitzTest(data[0]) });
+    if (method == "mann_kendall")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.MannKendallTest(data[0]) });
+    if (method == "ljung_box")
+    {
+        int lagMax = options.ValueKind == JsonValueKind.Object &&
+                    options.TryGetProperty("lag_max", out var lm)
+            ? lm.GetInt32() : -1;
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.LjungBoxTest(data[0], lagMax) });
+    }
+    if (method == "mann_whitney")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.MannWhitneyTest(data[0], data[1]) });
+    if (method == "linear_trend")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.LinearTrendTest(data[0], data[1]) });
+    throw new Exception($"unknown hypothesis method: {method}");
 }
 
 // Mirrors numerics/support/toolbox/sampling.hpp's run_sampling arm. The C# SobolSequence ctor
@@ -4870,6 +5571,78 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
     throw new Exception($"unknown trend method: {method}");
 }
 
+// Mirrors numerics/support/toolbox/functions.hpp's run_functions arm against the real
+// Numerics.Functions.LinearFunction/PowerFunction. `parameters` is a positional array (linear:
+// [alpha, beta, sigma]; power: [alpha, beta, xi, sigma]); `is_inverse` is PowerFunction-only and
+// scoped-checked exactly as the C++ arm does; `confidence_level`'s mere PRESENCE (not its value)
+// switches IsDeterministic to false before SetParameters runs, mirroring every non-deterministic
+// C# constructor overload (the one that takes sigma).
+static double FunctionsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    if (method == "tabular" || method == "tabular_inverse")
+    {
+        double[] tabX = options.GetProperty("x").EnumerateArray().Select(ParseNum).ToArray();
+        var tabDists = options.GetProperty("distributions").EnumerateArray()
+            .Select(BuildSpecDistribution).ToArray();
+        if (tabDists.Length != tabX.Length)
+            throw new Exception(
+                $"toolbox method 'functions.{method}' needs one distribution per x value; " +
+                $"got {tabDists.Length} distributions for {tabX.Length} x values");
+        var tabUpd = new UncertainOrderedPairedData(tabX, tabDists, true, Numerics.Data.SortOrder.Ascending,
+            true, Numerics.Data.SortOrder.Ascending, tabDists[0].Type);
+        var tabFunc = new TabularFunction(tabUpd);
+        tabFunc.XTransform = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        tabFunc.YTransform = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        if (OptBool(options, "is_deterministic", false)) tabFunc.IsDeterministic = true;
+        if (options.TryGetProperty("confidence_level", out var clOpt)) tabFunc.ConfidenceLevel = clOpt.GetDouble();
+        tabFunc.AllowNegativeYValues = OptBool(options, "allow_negative_y_values", true);
+        double[] evalPoints = data[0];
+        var tvalues = method == "tabular"
+            ? evalPoints.Select(tabFunc.Function).ToArray()
+            : evalPoints.Select(tabFunc.InverseFunction).ToArray();
+        return ToolboxSelectFlat(asrt, tvalues, tvalues.Length, 1);
+    }
+
+    string fn = options.GetProperty("function").GetString()!;
+    double[] parameters = options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+    bool hasConfidence = options.TryGetProperty("confidence_level", out var clEl);
+    bool hasIsInverse = options.TryGetProperty("is_inverse", out var isInvEl);
+    if (hasIsInverse && fn != "power")
+        throw new Exception($"'is_inverse' is only valid for function 'power'; got function '{fn}'");
+
+    IUnivariateFunction f;
+    if (fn == "linear")
+    {
+        var lf = new LinearFunction();
+        lf.IsDeterministic = !hasConfidence;
+        lf.SetParameters(parameters);
+        if (hasConfidence) lf.ConfidenceLevel = clEl.GetDouble();
+        f = lf;
+    }
+    else if (fn == "power")
+    {
+        var pf = new PowerFunction();
+        pf.IsDeterministic = !hasConfidence;
+        pf.IsInverse = hasIsInverse && isInvEl.GetBoolean();
+        pf.SetParameters(parameters);
+        if (hasConfidence) pf.ConfidenceLevel = clEl.GetDouble();
+        f = pf;
+    }
+    else
+    {
+        throw new Exception($"unknown function type: {fn}");
+    }
+
+    double[] x = data[0];
+    var values = method switch
+    {
+        "evaluate" => x.Select(f.Function).ToArray(),
+        "inverse" => x.Select(f.InverseFunction).ToArray(),
+        _ => throw new Exception($"unknown functions method: {method}")
+    };
+    return ToolboxSelectFlat(asrt, values, values.Length, 1);
+}
+
 // Selects a value the way the fixture runners' client-side "select" logic does, generalized
 // to a FLAT array with a known {rows, cols} shape (numerics.support.toolbox_runner.hpp's `dims`):
 // "length" -> flat.Length, "rows"/"columns" -> the shape, else index into flat[index]. `label` is
@@ -4973,11 +5746,185 @@ static Numerics.Data.SortOrder ParseSortOrder(string s) => s switch
     _ => throw new Exception($"unknown sort order '{s}'; expected ascending or descending")
 };
 
+// Mirrors numerics/support/toolbox/paired_data.hpp's own paired_data_sort_order/
+// paired_data_transform: this group's spellings differ from ParseSortOrder/
+// ParseInterpolationTransform above (SortOrder.None is reachable here; the transform is
+// "logarithmic", not "log"), so it gets its own local parsers rather than reusing those.
+static Numerics.Data.SortOrder ParsePairedDataSortOrder(string s) => s switch
+{
+    "ascending" => Numerics.Data.SortOrder.Ascending,
+    "descending" => Numerics.Data.SortOrder.Descending,
+    "none" => Numerics.Data.SortOrder.None,
+    _ => throw new Exception($"unknown sort order '{s}'; expected ascending, descending, or none")
+};
+
+static Numerics.Data.Transform ParsePairedDataTransform(string s) => s switch
+{
+    "none" => Numerics.Data.Transform.None,
+    "logarithmic" => Numerics.Data.Transform.Logarithmic,
+    "normal_z" => Numerics.Data.Transform.NormalZ,
+    _ => throw new Exception($"unknown transform '{s}'; expected none, logarithmic, or normal_z")
+};
+
+// Mirrors numerics/support/toolbox/paired_data.hpp's run_paired_data: the real
+// Numerics.Data.OrderedPairedData / UncertainOrderedPairedData / LineSimplification driving the
+// same nine methods. `curve_sample`'s `distribution_type` is optional here too, defaulting to
+// the first built distribution's own .Type -- see the C++ header's file comment for why that
+// default is exact rather than a guess (CurveSample never consults IsValid/Distribution).
+static double PairedDataDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
+{
+    OrderedPairedData BuildOpd(string m)
+    {
+        double[] x = data[0];
+        double[] y = data[1];
+        bool strictX = OptBool(options, "strict_x", true);
+        bool strictY = OptBool(options, "strict_y", true);
+        var orderX = ParsePairedDataSortOrder(OptString(options, "order_x", "ascending"));
+        var orderY = ParsePairedDataSortOrder(OptString(options, "order_y", "ascending"));
+        return new OrderedPairedData(x, y, strictX, orderX, strictY, orderY);
+    }
+
+    double[] CurveFlatFromOpd(OrderedPairedData opd)
+    {
+        var flat = new double[opd.Count * 2];
+        for (int i = 0; i < opd.Count; i++)
+        {
+            flat[2 * i] = opd[i].X;
+            flat[2 * i + 1] = opd[i].Y;
+        }
+        return flat;
+    }
+
+    double[] CurveFlatFromOrdinates(List<Ordinate> ords)
+    {
+        var flat = new double[ords.Count * 2];
+        for (int i = 0; i < ords.Count; i++)
+        {
+            flat[2 * i] = ords[i].X;
+            flat[2 * i + 1] = ords[i].Y;
+        }
+        return flat;
+    }
+
+    if (method == "interpolate_y")
+    {
+        var opd = BuildOpd(method);
+        double[] xout = data[2];
+        var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        var values = xout.Select(v => opd.GetYFromX(v, xt, yt)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+
+    if (method == "interpolate_x")
+    {
+        var opd = BuildOpd(method);
+        double[] yout = data[2];
+        var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
+        var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        var values = yout.Select(v => opd.GetXFromY(v, xt, yt)).ToArray();
+        return ToolboxSelectFlat(asrt, values, values.Length, 1);
+    }
+
+    if (method == "area_under_y")
+        return ToolboxSelectFlatNoDims(asrt, new[] { BuildOpd(method).TrapezoidalAreaUnderY() });
+
+    if (method == "area_under_x")
+        return ToolboxSelectFlatNoDims(asrt, new[] { BuildOpd(method).TrapezoidalAreaUnderX() });
+
+    if (method == "simplify")
+    {
+        var opd = BuildOpd(method);
+        string algorithm = options.GetProperty("algorithm").GetString()!;
+        OrderedPairedData simplified = algorithm switch
+        {
+            "rdp" => opd.DouglasPeuckerSimplify(options.GetProperty("tolerance").GetDouble()),
+            "visvalingam" => opd.VisvaligamWhyattSimplify(options.GetProperty("num_to_keep").GetInt32()),
+            "lang" => opd.LangSimplify(options.GetProperty("tolerance").GetDouble(),
+                                       options.GetProperty("look_ahead").GetInt32()),
+            _ => throw new Exception($"unknown paired_data.simplify algorithm '{algorithm}'")
+        };
+        var flat = CurveFlatFromOpd(simplified);
+        return ToolboxSelectFlat(asrt, flat, simplified.Count, 2);
+    }
+
+    if (method == "line_simplify")
+    {
+        double[] x = data[0];
+        double[] y = data[1];
+        var ords = x.Zip(y, (xv, yv) => new Ordinate(xv, yv)).ToList();
+        var output = new List<Ordinate>();
+        LineSimplification.RamerDouglasPeucker(ords, options.GetProperty("epsilon").GetDouble(), ref output);
+        var flat = CurveFlatFromOrdinates(output);
+        return ToolboxSelectFlat(asrt, flat, output.Count, 2);
+    }
+
+    if (method == "search")
+    {
+        var opd = BuildOpd(method);
+        double value = options.GetProperty("value").GetDouble();
+        string axis = OptString(options, "axis", "x");
+        string algorithm = OptString(options, "algorithm", "smart");
+        int idx = (axis, algorithm) switch
+        {
+            ("x", "smart") => opd.SearchX(value),
+            ("x", "sequential") => opd.SequentialSearchX(value),
+            ("x", "bisection") => opd.BisectionSearchX(value),
+            ("x", "hunt") => opd.HuntSearchX(value),
+            ("x", "binary") => opd.BinarySearchX(value),
+            ("y", "smart") => opd.SearchY(value),
+            ("y", "sequential") => opd.SequentialSearchY(value),
+            ("y", "bisection") => opd.BisectionSearchY(value),
+            ("y", "hunt") => opd.HuntSearchY(value),
+            ("y", "binary") => opd.BinarySearchY(value),
+            _ => throw new Exception($"unknown paired_data.search axis/algorithm '{axis}'/'{algorithm}'")
+        };
+        return ToolboxSelectFlatNoDims(asrt, new double[] { idx });
+    }
+
+    if (method == "is_valid")
+    {
+        var opd = BuildOpd(method);
+        var names = new[] { "is_valid", "error_count" };
+        var values = new double[] { opd.IsValid ? 1.0 : 0.0, opd.GetErrors().Count };
+        return ToolboxSelectNamed(asrt, names, values);
+    }
+
+    if (method == "curve_sample")
+    {
+        double[] x = data[0];
+        var dists = options.GetProperty("distributions").EnumerateArray()
+            .Select(BuildSpecDistribution).ToArray();
+        if (dists.Length != x.Length)
+            throw new Exception(
+                $"toolbox method 'paired_data.curve_sample' needs one distribution per x value; " +
+                $"got {dists.Length} distributions for {x.Length} x values");
+        bool strictX = OptBool(options, "strict_x", true);
+        bool strictY = OptBool(options, "strict_y", true);
+        var orderX = ParsePairedDataSortOrder(OptString(options, "order_x", "ascending"));
+        var orderY = ParsePairedDataSortOrder(OptString(options, "order_y", "ascending"));
+        var dtype = options.TryGetProperty("distribution_type", out var dtOpt)
+            ? Enum.Parse<UnivariateDistributionType>(dtOpt.GetString()!)
+            : dists[0].Type;
+        var uopd = new UncertainOrderedPairedData(x, dists, strictX, orderX, strictY, orderY, dtype);
+        var sampled = options.TryGetProperty("probability", out var probOpt)
+            ? uopd.CurveSample(probOpt.GetDouble())
+            : uopd.CurveSample();
+        var flat = CurveFlatFromOpd(sampled);
+        return ToolboxSelectFlat(asrt, flat, sampled.Count, 2);
+    }
+
+    throw new Exception($"unknown paired_data method: {method}");
+}
+
 static string OptString(JsonElement options, string key, string fallback) =>
     options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetString()! : fallback;
 
 static bool OptBool(JsonElement options, string key, bool fallback) =>
     options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetBoolean() : fallback;
+
+static int OptInt(JsonElement options, string key, int fallback) =>
+    options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v) ? v.GetInt32() : fallback;
 
 static double InterpolationDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
@@ -5009,6 +5956,22 @@ static double InterpolationDispatch(string method, List<double[]> data, JsonElem
         };
         var values = new double[x1out.Length];
         for (int i = 0; i < x1out.Length; i++) values[i] = interp.Interpolate(x1out[i], x2out[i]);
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    if (method == "cubic_spline")
+    {
+        double[] x = data[0], y = data[1], xout = data[2];
+        var interp = new CubicSpline(x, y, order);
+        var values = xout.Select(v => interp.Interpolate(v)).ToArray();
+        return ToolboxSelectFlatNoDims(asrt, values);
+    }
+    if (method == "polynomial")
+    {
+        double[] x = data[0], y = data[1], xout = data[2];
+        int polyOrder = OptInt(options, "order", -1);
+        if (polyOrder < 0) throw new Exception("toolbox method 'interpolation.polynomial' needs an 'order' option");
+        var interp = new Polynomial(polyOrder, x, y, order);
+        var values = xout.Select(v => interp.Interpolate(v)).ToArray();
         return ToolboxSelectFlatNoDims(asrt, values);
     }
     throw new Exception($"unknown interpolation method: {method}");
@@ -5462,6 +6425,88 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         continue;
     }
 
+    // --- data_frame branch (P4 Task 6) -----------------------------------------------------
+    // The twelve DataFrame hypothesis-test / summary-statistics facades Task 5 un-gated,
+    // dispatched against a REAL BestFitModels.DataFrame built either from a case's flat `data`
+    // array (data[0] -> ExactSeries with sequential indices, mirroring
+    // models::runner::run_data_frame's plain-vector path and the C# tests' own
+    // `df.ExactSeries = new ExactSeries(data)` construction) or -- for parity with that runner's
+    // second path, unused by any case shipped today -- a `data_frame` spec object through the
+    // existing BuildSpecDataFrame helper. Mirrors the toolbox branch's shape (dataset
+    // resolution, --dump support, Compare). CalculatePlottingPositions() runs before
+    // "summary_all"/"standardized" only, matching run_data_frame's own contract (the nine
+    // hypothesis facades and "summary_exact" never read plotting positions).
+    //
+    // Unlike the toolbox branch above (which does not honor oracle_skip), this branch DOES: it
+    // is a documented choice, not an oversight, for consistency with the other kind branches
+    // (analysis, model_estimation, ...) that carry oracle_skip. No case in
+    // fixtures/data/data_frame_facades.json uses it -- every value here either reproduces a C#
+    // test literal or is curated fresh against this branch via --dump, so oracle_skip is
+    // available but never exercised in this fixture.
+    if (kindStr == "data_frame")
+    {
+        var dfSets = new Dictionary<string, double[]>();
+        if (root.TryGetProperty("datasets", out var dfDatasets))
+            foreach (var kv in dfDatasets.EnumerateObject())
+                dfSets[kv.Name] = kv.Value.EnumerateArray().Select(ParseNum).ToArray();
+
+        foreach (var c in root.GetProperty("cases").EnumerateArray())
+        {
+            string caseName = c.GetProperty("name").GetString()!;
+            JsonElement options = c.TryGetProperty("options", out var dfOptionsEl) ? dfOptionsEl : default;
+
+            foreach (var asrt in c.GetProperty("assertions").EnumerateArray())
+            {
+                string method = asrt.GetProperty("method").GetString()!;
+                string where = $"data_frame/{caseName}/{method}";
+
+                // Rebuilt PER ASSERTION, not once per case: the other three runners (C++, R,
+                // Python) each build a fresh DataFrame per assertion, and DataFrame is mutable
+                // (CalculatePlottingPositions/SetStandardizedValues write state onto it), so
+                // reusing one instance across a case's assertions here would let an earlier
+                // assertion's mutation leak into a later one -- a lifetime this emitter alone
+                // used to get wrong (P4 whole-branch review finding C6; latent, since no shipped
+                // case mixes methods in a way that exposes it).
+                BestFitModels.DataFrame df;
+                if (c.TryGetProperty("data_frame", out var dfSpecEl))
+                {
+                    df = BuildSpecDataFrame(dfSpecEl);
+                }
+                else
+                {
+                    var firstData = c.GetProperty("data")[0];
+                    double[] values = firstData.ValueKind == JsonValueKind.String
+                        ? dfSets[firstData.GetString()!]
+                        : firstData.EnumerateArray().Select(ParseNum).ToArray();
+                    df = new BestFitModels.DataFrame { ExactSeries = new ExactSeries(values) };
+                }
+
+                if (method == "summary_all" || method == "standardized")
+                    df.CalculatePlottingPositions();
+
+                if (dump)
+                {
+                    DumpLine("data_frame", caseName, method, Array.Empty<JsonElement>(),
+                        () => (object)DataFrameDispatch(method, df, options, asrt));
+                    continue;
+                }
+
+                if (asrt.TryGetProperty("oracle_skip", out var dfSkipEl) && dfSkipEl.GetBoolean())
+                {
+                    skip++;
+                    continue;
+                }
+
+                double actual;
+                try { actual = DataFrameDispatch(method, df, options, asrt); }
+                catch (Exception ex) { fail++; failures.Add($"{where}: {ex.Message}"); continue; }
+                if (Compare(actual, asrt)) pass++;
+                else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
+        }
+        continue;
+    }
+
     // --- optimizer branch (Task 8) --------------------------------------------------------
     // Runs the SIX real C# optimizers (all deriving from the real Optimizer base -- unlike this
     // port's NelderMead/BrentSearch, which are deliberately standalone; see optimizer.hpp's file
@@ -5477,34 +6522,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         {
             string caseName = c.GetProperty("name").GetString()!;
             var construct = c.GetProperty("construct");
-            string method = construct.GetProperty("method").GetString()!;
-            string objectiveName = construct.TryGetProperty("objective", out var objEl)
-                ? objEl.GetString()! : "DeJong";
-            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
-            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
-                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] upper = construct.TryGetProperty("upper", out var upperEl)
-                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] initial = construct.TryGetProperty("initial", out var initialEl)
-                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
             bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
-            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
-
-            Optimizer optimizer = method switch
-            {
-                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
-                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
-                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
-                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
-                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
-                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
-                _ => throw new Exception($"unknown optimizer method: {method}")
-            };
-            if (seed.HasValue)
-            {
-                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
-                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
-            }
+            Optimizer optimizer = BuildOptimizerFromConstruct(construct);
 
             if (maximize) optimizer.Maximize(); else optimizer.Minimize();
             double[] parameters = optimizer.BestParameterSet.Values;
@@ -5526,6 +6545,11 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 {
                     "value" => value,
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    "iterations" => optimizer.Iterations,
+                    "function_evaluations" => optimizer.FunctionEvaluations,
+                    // args: [set, index] -- "lambda"/"mu"/"nu", the three AugmentedLagrange
+                    // multiplier vectors in the class's own naming. Only that one class has them.
+                    "multiplier" => OptimizerMultiplier(optimizer, asrt.GetProperty("args")),
                     _ => throw new Exception($"unknown optimizer fixture assertion method: {am}")
                 };
                 if (Compare(actual, asrt)) pass++;
@@ -5563,6 +6587,11 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             double Opt(string key, double dflt) =>
                 options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var v)
                     ? ParseNum(v) : dflt;
+            // P2 "math extras": root_find_newton's bracket presence check (BOTH lower and upper
+            // present selects the robust variant, not a method sub-key) needs to distinguish
+            // "absent" from "present with a default-looking value", which Opt's own dflt cannot.
+            bool Has(string key) =>
+                options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out _);
             double[] OptVector(string key)
             {
                 if (options.ValueKind != JsonValueKind.Object || !options.TryGetProperty(key, out var v))
@@ -5700,12 +6729,70 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             }
             else if (method == "root_find")
             {
+                // P2 "math extras": `options.method` picks the ported root finder, absent meaning
+                // "brent" -- preserving every fixture written before this key existed, exactly as
+                // callback/math.hpp's own root_find arm does.
                 var f = CallbackScalarFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
-                values = [Numerics.Mathematics.RootFinding.Brent.Solve(
-                    f, Opt("lower", 0d), Opt("upper", 0d), Opt("tolerance", 1E-8),
-                    (int)Opt("max_iterations", 1000))];
+                string rootMethod = options.ValueKind == JsonValueKind.Object &&
+                                    options.TryGetProperty("method", out var rmEl)
+                    ? rmEl.GetString()! : "brent";
+                double tol = Opt("tolerance", 1E-8);
+                int maxIter = (int)Opt("max_iterations", 1000);
+                double rootValue = rootMethod switch
+                {
+                    "brent" => Numerics.Mathematics.RootFinding.Brent.Solve(
+                        f, Opt("lower", 0d), Opt("upper", 0d), tol, maxIter),
+                    "bisection" => Numerics.Mathematics.RootFinding.Bisection.Solve(
+                        f, Opt("first_guess", 0d), Opt("lower", 0d), Opt("upper", 0d), tol, maxIter),
+                    "secant" => Numerics.Mathematics.RootFinding.Secant.Solve(
+                        f, Opt("lower", 0d), Opt("upper", 0d), tol, maxIter),
+                    _ => throw new Exception($"math/root_find: unknown method '{rootMethod}'")
+                };
+                values = [rootValue];
                 dims = [];
+            }
+            else if (method == "root_find_newton")
+            {
+                // The second callback, `df`, resolved out of the same catalog as `callback` --
+                // math/root_find_newton's own second required delegate, mirroring the gmm group's
+                // `jacobian` key.
+                var f = CallbackScalarFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
+                string dfName = construct.GetProperty("df").GetString()!;
+                var df = CallbackScalarFunction(dfName)
+                    ?? throw new Exception($"callback '{dfName}' is not a scalar function");
+                double firstGuess = Has("first_guess")
+                    ? Opt("first_guess", 0d)
+                    : throw new Exception("math/root_find_newton requires the option 'first_guess'");
+                double tol = Opt("tolerance", 1E-8);
+                int maxIter = (int)Opt("max_iterations", 1000);
+                // Both present -- not a method sub-key -- selects the robust (bracketed) variant,
+                // matching the ported class's own two static methods. See callback/math.hpp.
+                double rootValue = Has("lower") && Has("upper")
+                    ? Numerics.Mathematics.RootFinding.NewtonRaphson.RobustSolve(
+                        f, df, firstGuess, Opt("lower", 0d), Opt("upper", 0d), tol, maxIter)
+                    : Numerics.Mathematics.RootFinding.NewtonRaphson.Solve(
+                        f, df, firstGuess, tol, maxIter);
+                values = [rootValue];
+                dims = [];
+            }
+            else if (method == "root_find_system")
+            {
+                var F = CallbackSystemFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a system function");
+                string jName = construct.GetProperty("jacobian").GetString()!;
+                var Jraw = CallbackSystemJacobianFunction(jName)
+                    ?? throw new Exception($"callback '{jName}' is not a system jacobian function");
+                double[] firstGuess = OptVector("first_guess");
+                double tol = Opt("tolerance", 1E-8);
+                int maxIter = (int)Opt("max_iterations", 1000);
+                Vector FVec(Vector v) => new Vector(F(v.ToArray()));
+                Matrix JMat(Vector v) => new Matrix(Jraw(v.ToArray()));
+                Vector rootVector = Numerics.Mathematics.RootFinding.NewtonRaphson.Solve(
+                    FVec, JMat, new Vector(firstGuess), tol, maxIter);
+                values = rootVector.ToArray();
+                dims = [values.Length];
             }
             else if (method == "derivative")
             {
@@ -5736,23 +6823,286 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             {
                 var f = CallbackScalarFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not a scalar function");
-                var agk = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod(
-                    f, Opt("lower", 0d), Opt("upper", 0d));
-                // Written only when the fixture carries the key, exactly as callback/math.hpp
-                // does, so an absent key exercises the C# class's OWN default.
+                // P2 "math extras": `options.method` picks the ported integrator/static, absent
+                // meaning "gauss_kronrod" -- preserving every fixture written before this key
+                // existed, exactly as callback/math.hpp's own quadrature arm does. See that file's
+                // header for the result-shape split between the Integrator-class arms (a real
+                // status/function_evaluations/standard_error) and the static arms (integral only,
+                // status unconditionally "Success").
+                string qMethod = options.ValueKind == JsonValueKind.Object &&
+                                 options.TryGetProperty("method", out var qmEl)
+                    ? qmEl.GetString()! : "gauss_kronrod";
+                void ApplyTolerances(Numerics.Mathematics.Integration.Integrator integ)
+                {
+                    if (options.ValueKind != JsonValueKind.Object) return;
+                    if (options.TryGetProperty("absolute_tolerance", out var at))
+                        integ.AbsoluteTolerance = ParseNum(at);
+                    if (options.TryGetProperty("relative_tolerance", out var rt))
+                        integ.RelativeTolerance = ParseNum(rt);
+                    if (options.TryGetProperty("max_function_evaluations", out var mfe))
+                        integ.MaxFunctionEvaluations = (int)ParseNum(mfe);
+                }
+                if (qMethod == "gauss_kronrod")
+                {
+                    var agk = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(agk);
+                    agk.Integrate();
+                    values = [agk.Result, agk.FunctionEvaluations, agk.StandardError];
+                    dims = [];
+                    statusName = agk.Status.ToString();
+                }
+                else if (qMethod == "simpsons")
+                {
+                    var sr = new Numerics.Mathematics.Integration.SimpsonsRule(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(sr);
+                    sr.Integrate();
+                    values = [sr.Result, sr.FunctionEvaluations, 0d];
+                    dims = [];
+                    statusName = sr.Status.ToString();
+                }
+                else if (qMethod == "trapezoidal")
+                {
+                    var tr = new Numerics.Mathematics.Integration.TrapezoidalRule(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(tr);
+                    tr.Integrate();
+                    values = [tr.Result, tr.FunctionEvaluations, 0d];
+                    dims = [];
+                    statusName = tr.Status.ToString();
+                }
+                else if (qMethod == "adaptive_simpsons")
+                {
+                    var asr = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(asr);
+                    if (Has("min_depth")) asr.MinDepth = (int)Opt("min_depth", 0d);
+                    if (Has("max_depth")) asr.MaxDepth = (int)Opt("max_depth", 100d);
+                    asr.Integrate();
+                    values = [asr.Result, asr.FunctionEvaluations, asr.StandardError];
+                    dims = [];
+                    statusName = asr.Status.ToString();
+                }
+                else if (qMethod == "gauss_lobatto")
+                {
+                    var gl = new Numerics.Mathematics.Integration.AdaptiveGaussLobatto(
+                        f, Opt("lower", 0d), Opt("upper", 0d));
+                    ApplyTolerances(gl);
+                    gl.Integrate();
+                    values = [gl.Result, gl.FunctionEvaluations, 0d];
+                    dims = [];
+                    statusName = gl.Status.ToString();
+                }
+                else if (qMethod == "gauss_legendre" || qMethod == "gauss_legendre20" ||
+                         qMethod == "simpsons_fixed" || qMethod == "trapezoidal_fixed" ||
+                         qMethod == "midpoint")
+                {
+                    int qSteps = (int)Opt("steps", 2d);
+                    double integral = qMethod switch
+                    {
+                        "gauss_legendre" => Numerics.Mathematics.Integration.Integration.GaussLegendre(
+                            f, Opt("lower", 0d), Opt("upper", 0d)),
+                        "gauss_legendre20" => Numerics.Mathematics.Integration.Integration.GaussLegendre20(
+                            f, Opt("lower", 0d), Opt("upper", 0d)),
+                        "simpsons_fixed" => Numerics.Mathematics.Integration.Integration.SimpsonsRule(
+                            f, Opt("lower", 0d), Opt("upper", 0d), qSteps),
+                        "trapezoidal_fixed" => Numerics.Mathematics.Integration.Integration.TrapezoidalRule(
+                            f, Opt("lower", 0d), Opt("upper", 0d), qSteps),
+                        _ => Numerics.Mathematics.Integration.Integration.Midpoint(
+                            f, Opt("lower", 0d), Opt("upper", 0d), qSteps)
+                    };
+                    values = [integral];
+                    dims = [];
+                    statusName = "Success";
+                }
+                else
+                {
+                    throw new Exception($"math/quadrature: unknown method '{qMethod}'");
+                }
+            }
+            else if (method == "quadrature_2d")
+            {
+                // P2 "math extras": the (x, y) half of the math group, always driving
+                // AdaptiveSimpsonsRule2D and always returning the result triple + status, exactly
+                // as quadrature's Integrator-class arms do. See callback/math.hpp's file header.
+                var f2 = CallbackScalarXyFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an (x, y) function");
+                var asr2d = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule2D(
+                    f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
                 if (options.ValueKind == JsonValueKind.Object)
                 {
-                    if (options.TryGetProperty("absolute_tolerance", out var at))
-                        agk.AbsoluteTolerance = ParseNum(at);
-                    if (options.TryGetProperty("relative_tolerance", out var rt))
-                        agk.RelativeTolerance = ParseNum(rt);
-                    if (options.TryGetProperty("max_function_evaluations", out var mfe))
-                        agk.MaxFunctionEvaluations = (int)ParseNum(mfe);
+                    if (options.TryGetProperty("absolute_tolerance", out var at2))
+                        asr2d.AbsoluteTolerance = ParseNum(at2);
+                    if (options.TryGetProperty("relative_tolerance", out var rt2))
+                        asr2d.RelativeTolerance = ParseNum(rt2);
+                    if (options.TryGetProperty("min_depth", out var mnd))
+                        asr2d.MinDepth = (int)ParseNum(mnd);
+                    if (options.TryGetProperty("max_depth", out var mxd))
+                        asr2d.MaxDepth = (int)ParseNum(mxd);
                 }
-                agk.Integrate();
-                values = [agk.Result, agk.FunctionEvaluations, agk.StandardError];
+                asr2d.Integrate();
+                values = [asr2d.Result, asr2d.FunctionEvaluations, asr2d.StandardError];
                 dims = [];
-                statusName = agk.Status.ToString();
+                statusName = asr2d.Status.ToString();
+            }
+            else if (method == "quadrature_nd")
+            {
+                // P2 "math extras": drives the real C# MonteCarloIntegration (the default
+                // `options.method`) or Miser, mirroring callback/math.hpp's own quadrature_nd arm
+                // -- including its "seed present -> new MersenneTwister(seed)" idiom and its
+                // extra min_iterations/max_iterations/relative_tolerance options for
+                // "monte_carlo" (that class's OWN real throttle; see the header note on that
+                // header for why max_function_evaluations alone is not). No Sobol path is passed
+                // to either ctor: unlike this port's SobolSequence, C#'s reads its direction
+                // numbers from an embedded resource, exactly as the "sampling"/"sobol" toolbox arm
+                // above already relies on.
+                var fnd = CallbackVectorFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not a vector function");
+                double[] ndMin = OptVector("min");
+                double[] ndMax = OptVector("max");
+                if (ndMax.Length != ndMin.Length)
+                    throw new Exception("math/quadrature_nd: 'min' and 'max' must be the same length");
+                int ndDims = ndMin.Length;
+                string ndMethod = options.ValueKind == JsonValueKind.Object &&
+                                  options.TryGetProperty("method", out var ndmEl)
+                    ? ndmEl.GetString()! : "monte_carlo";
+                bool ndUseSobol = !options.ValueKind.Equals(JsonValueKind.Object) ||
+                                  !options.TryGetProperty("use_sobol", out var ndusEl) ||
+                                  ndusEl.GetBoolean();
+                if (ndMethod == "monte_carlo")
+                {
+                    var mc = new Numerics.Mathematics.Integration.MonteCarloIntegration(
+                        fnd, ndDims, ndMin, ndMax);
+                    if (Has("seed")) mc.Random = new MersenneTwister((int)Opt("seed", 0d));
+                    mc.UseSobolSequence = ndUseSobol;
+                    if (Has("min_iterations")) mc.MinIterations = (int)Opt("min_iterations", 0d);
+                    if (Has("max_iterations")) mc.MaxIterations = (int)Opt("max_iterations", 0d);
+                    if (Has("relative_tolerance")) mc.RelativeTolerance = Opt("relative_tolerance", 0d);
+                    if (Has("max_function_evaluations"))
+                        mc.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    mc.Integrate();
+                    values = [mc.Result, mc.FunctionEvaluations, mc.StandardError];
+                    dims = [];
+                    statusName = mc.Status.ToString();
+                }
+                else if (ndMethod == "miser")
+                {
+                    var miser = new Numerics.Mathematics.Integration.Miser(fnd, ndDims, ndMin, ndMax);
+                    if (Has("seed")) miser.Random = new MersenneTwister((int)Opt("seed", 0d));
+                    miser.UseSobolSequence = ndUseSobol;
+                    if (Has("max_function_evaluations"))
+                        miser.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    if (Has("fraction")) miser.Fraction = Opt("fraction", 0d);
+                    if (Has("min_subregion_points"))
+                        miser.MinimumNumberOfSubregionPoints = (int)Opt("min_subregion_points", 0d);
+                    if (Has("min_bisections"))
+                        miser.MinimumNumberOfBisections = (int)Opt("min_bisections", 0d);
+                    if (Has("dither")) miser.Dither = Opt("dither", 0d);
+                    miser.Integrate();
+                    values = [miser.Result, miser.FunctionEvaluations, miser.StandardError];
+                    dims = [];
+                    statusName = miser.Status.ToString();
+                }
+                else
+                {
+                    throw new Exception($"math/quadrature_nd: unknown method '{ndMethod}'");
+                }
+            }
+            else if (method == "quadrature_vegas")
+            {
+                // P2 "math extras": drives the real C# Vegas, mirroring callback/math.hpp's own
+                // quadrature_vegas arm. `target_probability`, if present, calls
+                // ConfigureForRareEvents LAST, after every other option, exactly as the ported
+                // method itself documents.
+                var fw = CallbackVectorWeightFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an (x, weight) function");
+                double[] vMin = OptVector("min");
+                double[] vMax = OptVector("max");
+                if (vMax.Length != vMin.Length)
+                    throw new Exception("math/quadrature_vegas: 'min' and 'max' must be the same length");
+                int vDims = vMin.Length;
+                var vegas = new Numerics.Mathematics.Integration.Vegas(fw, vDims, vMin, vMax);
+                if (Has("seed")) vegas.Random = new MersenneTwister((int)Opt("seed", 0d));
+                vegas.UseSobolSequence = !options.ValueKind.Equals(JsonValueKind.Object) ||
+                                         !options.TryGetProperty("use_sobol", out var vusEl) ||
+                                         vusEl.GetBoolean();
+                if (Has("independent_evaluations"))
+                    vegas.IndependentEvaluations = (int)Opt("independent_evaluations", 0d);
+                if (Has("function_calls")) vegas.FunctionCalls = (int)Opt("function_calls", 0d);
+                if (Has("alpha")) vegas.Alpha = Opt("alpha", 0d);
+                if (Has("number_of_bins")) vegas.NumberOfBins = (int)Opt("number_of_bins", 0d);
+                if (Has("tail_focus_parameter"))
+                    vegas.TailFocusParameter = Opt("tail_focus_parameter", 0d);
+                if (Has("initialize")) vegas.Initialize = (int)Opt("initialize", 0d);
+                if (Has("check_convergence"))
+                    vegas.CheckConvergence = options.GetProperty("check_convergence").GetBoolean();
+                if (Has("target_probability"))
+                    vegas.ConfigureForRareEvents(Opt("target_probability", 0d));
+                vegas.Integrate();
+                values = [vegas.Result, vegas.FunctionEvaluations, vegas.StandardError, vegas.ChiSquared];
+                dims = [];
+                statusName = vegas.Status.ToString();
+            }
+            else if (method == "ode_solve")
+            {
+                // P2 "math extras": drives the real C# RungeKutta over the same f(t, y) shape
+                // quadrature_2d's f(x, y) already uses, mirroring callback/math.hpp's own
+                // ode_solve arm -- including the "end_time PRESENT selects the array overload"
+                // rule for "rk4" rather than a method sub-key.
+                var fode = CallbackScalarXyFunction(callbackName)
+                    ?? throw new Exception($"callback '{callbackName}' is not an (x, y) function");
+                string odeMethod = options.ValueKind == JsonValueKind.Object &&
+                                   options.TryGetProperty("method", out var odemEl)
+                    ? odemEl.GetString()! : "rk4";
+                double odeInitial = Opt("initial_value", 0d);
+                double odeStart = Opt("start_time", 0d);
+                if (odeMethod == "rk2")
+                {
+                    int odeSteps = (int)Opt("time_steps", 0d);
+                    values = Numerics.Mathematics.ODESolvers.RungeKutta.SecondOrder(fode, odeInitial, odeStart,
+                                                    Opt("end_time", 0d), odeSteps);
+                    dims = [values.Length];
+                }
+                else if (odeMethod == "rk4")
+                {
+                    if (Has("end_time"))
+                    {
+                        int odeSteps = (int)Opt("time_steps", 0d);
+                        values = Numerics.Mathematics.ODESolvers.RungeKutta.FourthOrder(fode, odeInitial, odeStart,
+                                                        Opt("end_time", 0d), odeSteps);
+                        dims = [values.Length];
+                    }
+                    else
+                    {
+                        values = [Numerics.Mathematics.ODESolvers.RungeKutta.FourthOrder(fode, odeInitial, odeStart, Opt("dt", 0d))];
+                        dims = [];
+                        valueNames = ["value"];
+                    }
+                }
+                else if (odeMethod == "rkf" || odeMethod == "cash_karp")
+                {
+                    double odeDt = Opt("dt", 0d);
+                    double odeDtMin = Opt("dt_min", 0d);
+                    double odeValue = Has("tolerance")
+                        ? (odeMethod == "rkf"
+                              ? Numerics.Mathematics.ODESolvers.RungeKutta.Fehlberg(fode, odeInitial, odeStart, odeDt, odeDtMin,
+                                                    Opt("tolerance", 0d))
+                              : Numerics.Mathematics.ODESolvers.RungeKutta.CashKarp(fode, odeInitial, odeStart, odeDt, odeDtMin,
+                                                    Opt("tolerance", 0d)))
+                        : (odeMethod == "rkf"
+                              ? Numerics.Mathematics.ODESolvers.RungeKutta.Fehlberg(fode, odeInitial, odeStart, odeDt, odeDtMin)
+                              : Numerics.Mathematics.ODESolvers.RungeKutta.CashKarp(fode, odeInitial, odeStart, odeDt, odeDtMin));
+                    values = [odeValue];
+                    dims = [];
+                    valueNames = ["value"];
+                }
+                else
+                {
+                    throw new Exception($"math/ode_solve: unknown method '{odeMethod}'");
+                }
+                // Neither RungeKutta static has a status object; "Success" unconditionally,
+                // exactly as the C++ runner reports for it (see callback/math.hpp's file header).
             }
             else
             {
@@ -5825,36 +7175,14 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             string caseName = c.GetProperty("name").GetString()!;
 
             // --- optimizer sub-block (mirrors the "optimizer" kind branch above) -----------
-            var optBlock = c.GetProperty("optimizer");
+            // Every sub-block is OPTIONAL: the first case nests all three, while the seeded
+            // per-method digest cases added by the optimizer phase carry an "optimizer" block
+            // alone. Mirrors the same presence check in the other three runners.
+            if (c.TryGetProperty("optimizer", out var optBlock))
+            {
             var construct = optBlock.GetProperty("construct");
-            string method = construct.GetProperty("method").GetString()!;
-            string objectiveName = construct.TryGetProperty("objective", out var objEl)
-                ? objEl.GetString()! : "DeJong";
-            Func<double[], double> objective = OptimizerTestFunction(objectiveName);
-            double[] lower = construct.TryGetProperty("lower", out var lowerEl)
-                ? lowerEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] upper = construct.TryGetProperty("upper", out var upperEl)
-                ? upperEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
-            double[] initial = construct.TryGetProperty("initial", out var initialEl)
-                ? initialEl.EnumerateArray().Select(ParseNum).ToArray() : Array.Empty<double>();
             bool maximize = construct.TryGetProperty("maximize", out var maxEl) && maxEl.GetBoolean();
-            int? seed = construct.TryGetProperty("seed", out var seedEl) ? seedEl.GetInt32() : null;
-
-            Optimizer optimizer = method switch
-            {
-                "de" => new DifferentialEvolution(objective, lower.Length, lower, upper),
-                "bfgs" => new BFGS(objective, initial.Length, initial, lower, upper),
-                "powell" => new Powell(objective, initial.Length, initial, lower, upper),
-                "mlsl" => new MLSL(objective, initial.Length, initial, lower, upper),
-                "nelder_mead" => new NelderMead(objective, initial.Length, initial, lower, upper),
-                "brent" => new BrentSearch(x => objective([x]), lower[0], upper[0]),
-                _ => throw new Exception($"unknown optimizer method: {method}")
-            };
-            if (seed.HasValue)
-            {
-                if (optimizer is DifferentialEvolution deOptimizer) deOptimizer.PRNGSeed = seed.Value;
-                else if (optimizer is MLSL mlslOptimizer) mlslOptimizer.PRNGSeed = seed.Value;
-            }
+            Optimizer optimizer = BuildOptimizerFromConstruct(construct);
             if (maximize) optimizer.Maximize(); else optimizer.Minimize();
             double[] parameters = optimizer.BestParameterSet.Values;
             double optValue = maximize ? -optimizer.BestParameterSet.Fitness : optimizer.BestParameterSet.Fitness;
@@ -5872,6 +7200,8 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                     {
                         "value" => (object)optValue,
                         "parameter" => (object)parameters[asrt.GetProperty("args")[0].GetInt32()],
+                        "iterations" => (object)optimizer.Iterations,
+                        "function_evaluations" => (object)optimizer.FunctionEvaluations,
                         "status" => (object)status,
                         _ => throw new Exception(
                             $"unknown toolbox_cross_language optimizer assertion method: {am}")
@@ -5889,11 +7219,14 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 {
                     "value" => optValue,
                     "parameter" => parameters[asrt.GetProperty("args")[0].GetInt32()],
+                    "iterations" => optimizer.Iterations,
+                    "function_evaluations" => optimizer.FunctionEvaluations,
                     _ => throw new Exception(
                         $"unknown toolbox_cross_language optimizer assertion method: {am}")
                 };
                 if (Compare(actual, asrt)) pass++;
                 else { fail++; failures.Add($"{where}: expected {asrt.GetProperty("expected")} got {actual:G17}"); }
+            }
             }
 
             // --- sobol / stratify sub-blocks, both routed through the same ToolboxDispatch the
@@ -5901,7 +7234,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             // only) ------------------------------------------------------------------------
             foreach (var (subKey, methodName) in new[] { ("sobol", "sobol"), ("stratify", "stratify") })
             {
-                var block = c.GetProperty(subKey);
+                if (!c.TryGetProperty(subKey, out var block)) continue;
                 JsonElement options = block.TryGetProperty("options", out var oEl) ? oEl : default;
                 var data = new List<double[]>();
                 foreach (var asrt in block.GetProperty("assertions").EnumerateArray())
@@ -6433,7 +7766,22 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
         continue;
     }
 
-    if (kindStr != "univariate_distribution") continue;
+    // Every recognized `kind` is dispatched (and `continue`s past this point) above. Reaching
+    // here with anything other than "univariate_distribution" (the one kind with no explicit
+    // early branch -- it falls through to the dispatch below) means the fixture's `kind` matches
+    // NONE of them: a typo, or a new kind this emitter was never wired up for. That used to fall
+    // through silently, dropping the file from the oracle gate with zero warning and zero effect
+    // on the pass/fail counts (P4 whole-branch review finding C10). Fail loudly instead: this IS
+    // the oracle gate, so a fixture with no dispatcher reproducing nothing is exactly the failure
+    // this tool exists to catch.
+    if (kindStr != "univariate_distribution")
+    {
+        fail++;
+        failures.Add(
+            $"{file}: unrecognized fixture kind '{kindStr ?? "(missing)"}' -- no runner " +
+            "dispatched this file, so none of its assertions were reproduced");
+        continue;
+    }
 
     string target = root.GetProperty("target").GetString()!;
 

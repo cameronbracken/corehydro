@@ -8,8 +8,10 @@ interpolate(
   x,
   y,
   xout,
-  x_transform = c("none", "log", "normal_z"),
-  y_transform = c("none", "log", "normal_z"),
+  method = c("linear", "cubic_spline", "polynomial"),
+  order = NULL,
+  x_transform = c("none", "logarithmic", "log", "normal_z"),
+  y_transform = c("none", "logarithmic", "log", "normal_z"),
   sort_order = c("ascending", "descending"),
   extrapolate = FALSE
 )
@@ -19,21 +21,39 @@ interpolate(
 
 \item{xout}{numeric vector of positions to interpolate at.}
 
-\item{x_transform, y_transform}{one of \code{"none"} (the default), \code{"log"}, or \code{"normal_z"}.}
+\item{method}{\code{"linear"} (the default), \code{"cubic_spline"}, or \code{"polynomial"}.}
+
+\item{order}{the polynomial order -- there are \code{order + 1} terms for each polynomial
+function. Required when \code{method = "polynomial"}; must be \code{NULL} otherwise.}
+
+\item{x_transform, y_transform}{one of \code{"none"} (the default), \code{"logarithmic"} (also accepted
+as \code{"log"} -- both spellings are equivalent, see the note below), or \code{"normal_z"}.
+Linear-only.}
 
 \item{sort_order}{\code{"ascending"} (the default) or \code{"descending"}, describing \code{x}.}
 
 \item{extrapolate}{whether to extend the end segments beyond the knots. Default \code{FALSE},
 which clamps to the end knot, matching the C# \code{Interpolate()} default; \code{TRUE} calls the C#
-\code{Extrapolate()} method instead.}
+\code{Extrapolate()} method instead. Linear-only.}
 }
 \value{
 a numeric vector the same length as \code{xout}.
 }
 \description{
-Mirrors the C# \code{Linear} interpolater of the Numerics library, including its x and y
-transforms.
+Mirrors the C# \code{Linear}, \code{CubicSpline}, and \code{Polynomial} interpolaters of the Numerics
+library. \code{x_transform}, \code{y_transform}, and \code{extrapolate} are Linear-only in C# (neither
+\code{CubicSpline} nor \code{Polynomial} has a transform surface or an \code{Extrapolate()} method), so
+they must be left at their defaults for \code{method = "cubic_spline"} or \code{"polynomial"}.
+}
+\note{
+\code{x_transform}/\code{y_transform} accept both \code{"log"} and \code{"logarithmic"} for the same
+\code{Transform::Logarithmic} value everywhere a transform argument appears in this package
+(\code{\link[=curve_interpolate]{curve_interpolate()}}, \code{\link[=tabular_function]{tabular_function()}}, and here); \code{"logarithmic"} (matching the C#
+enum member name \code{Transform.Logarithmic}) is the spelling used in this package's own
+examples and documentation.
 }
 \examples{
 interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5))
+interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5), method = "cubic_spline")
+interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), c(1.5, 2.5), method = "polynomial", order = 3)
 }

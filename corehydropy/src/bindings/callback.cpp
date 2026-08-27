@@ -153,6 +153,20 @@ std::function<double(double)> as_scalar_fn(py::function f) {
     };
 }
 
+// Converts a Python callable of two arguments into the (x, y) -> z signature math/quadrature_2d
+// takes (P2 "math extras"). Mirrors as_scalar_fn's cast and error wording.
+std::function<double(double, double)> as_scalar_xy_fn(py::function f) {
+    return [f](double x, double y) -> double {
+        py::object out = f(x, y);
+        try {
+            return out.cast<double>();
+        } catch (const py::cast_error&) {
+            throw std::runtime_error("the function must return a single number; got " +
+                                     std::string(py::str(out)));
+        }
+    };
+}
+
 // f(theta) -> vector, the shape the HMC/NUTS gradient callback and the Gibbs proposal take. The
 // length is checked in the core (against the prior count, which is the only place that knows it);
 // here the job is refusing something that is not a sequence of numbers at all, and refusing a nan
@@ -170,6 +184,23 @@ std::function<std::vector<double>(const std::vector<double>&)> as_vector_vector_
             if (std::isnan(value))
                 throw std::runtime_error("the function returned nan rather than a number");
         return result;
+    };
+}
+
+// Converts a Python callable of two arguments into the (x, weight) -> z signature
+// math/quadrature_vegas takes (P2 "math extras"), upstream's own Vegas integrand shape -- `x` the
+// sample point (a sequence of numbers) and `weight` the importance weight Vegas has already
+// computed for it. Mirrors as_scalar_xy_fn's cast and error wording, with `x` marshaled as a
+// std::vector<double> the way as_vector_scalar_fn's argument is.
+std::function<double(const std::vector<double>&, double)> as_vector_weight_fn(py::function f) {
+    return [f](const std::vector<double>& x, double weight) -> double {
+        py::object out = f(x, weight);
+        try {
+            return out.cast<double>();
+        } catch (const py::cast_error&) {
+            throw std::runtime_error("the function must return a single number; got " +
+                                     std::string(py::str(out)));
+        }
     };
 }
 
@@ -513,6 +544,67 @@ void register_callback(py::module_& m) {
                 cbs.scalar = as_scalar_fn(f);
             else
                 cbs.vector_scalar = as_vector_scalar_fn(f);
+            return pack(sup::run_callback("math", method, options_json, cbs));
+        },
+        py::arg("method"), py::arg("options_json"), py::arg("f"));
+
+    // The two-callback half of the math group (P2 "math extras"): "root_find_newton" (f, its
+    // analytic derivative df) and "root_find_system" (F, its Jacobian J). Split from
+    // "callback_math" above because pybind11 arguments are fixed too -- every other math method
+    // takes exactly one Python function, and these two need a second. `f`/`g` play different roles
+    // by method: for "root_find_newton" they are the scalar function and its scalar derivative
+    // (`cbs.scalar`/`cbs.scalar_deriv`); for "root_find_system" they are the vector-valued system
+    // function and its Jacobian (`cbs.vector_vector`/`cbs.vector_matrix`, the same shapes the mcmc
+    // gradient and gmm jacobian callbacks already use).
+    m.def(
+        "callback_math2",
+        [](const std::string& method, const std::string& options_json, py::function f,
+           py::function g) {
+            sup::CallbackSet cbs;
+            if (method == "root_find_newton") {
+                cbs.scalar = as_scalar_fn(f);
+                cbs.scalar_deriv = as_scalar_fn(g);
+            } else if (method == "root_find_system") {
+                cbs.vector_vector = as_vector_vector_fn(f);
+                cbs.vector_matrix = as_matrix_fn(g, "the jacobian function");
+            } else {
+                throw std::invalid_argument("unknown two-callback math method: " + method);
+            }
+            return pack(sup::run_callback("math", method, options_json, cbs));
+        },
+        py::arg("method"), py::arg("options_json"), py::arg("f"), py::arg("g"));
+
+    // The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" and "ode_solve",
+    // split from "callback_math" above for the same reason "callback_math2" is -- the arity
+    // differs from every other math method's. `f` marshals through as_scalar_xy_fn into
+    // `cbs.scalar_xy`; "ode_solve" reuses the same shape with `t` playing `x`'s role (see
+    // callback/math.hpp's ode_solve arm).
+    m.def(
+        "callback_math_xy",
+        [](const std::string& method, const std::string& options_json, py::function f) {
+            sup::CallbackSet cbs;
+            if (method == "quadrature_2d" || method == "ode_solve") {
+                cbs.scalar_xy = as_scalar_xy_fn(f);
+            } else {
+                throw std::invalid_argument("unknown xy-callback math method: " + method);
+            }
+            return pack(sup::run_callback("math", method, options_json, cbs));
+        },
+        py::arg("method"), py::arg("options_json"), py::arg("f"));
+
+    // The (x, weight) half of the math group (P2 "math extras"): "quadrature_vegas" alone, split
+    // from "callback_math" for the same reason "callback_math_xy" is -- the callback shape differs
+    // from every other math method's. `f` marshals through as_vector_weight_fn into
+    // `cbs.vector_weight`.
+    m.def(
+        "callback_math_vw",
+        [](const std::string& method, const std::string& options_json, py::function f) {
+            sup::CallbackSet cbs;
+            if (method == "quadrature_vegas") {
+                cbs.vector_weight = as_vector_weight_fn(f);
+            } else {
+                throw std::invalid_argument("unknown vector-weight-callback math method: " + method);
+            }
             return pack(sup::run_callback("math", method, options_json, cbs));
         },
         py::arg("method"), py::arg("options_json"), py::arg("f"));

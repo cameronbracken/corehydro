@@ -5,12 +5,20 @@ import numpy as np
 import pytest
 
 from corehydropy import (
+    Distribution,
     RunningCovariance,
     RunningStatistics,
     autocorrelation,
+    correlation,
     cross_correlation,
+    curve_area,
+    curve_interpolate,
+    curve_simplify,
+    debye,
     dft,
+    gauss_jordan,
     histogram,
+    hypothesis_test,
     interpolate,
     interpolate_2d,
     joint_probability,
@@ -22,16 +30,23 @@ from corehydropy import (
     link_names,
     linear_regression,
     percentile,
+    polynomial_eval,
     product_moments,
+    qr_decomposition,
+    qr_solve,
     ranks,
     running_covariance,
     running_statistics,
+    shortest_path,
     sobol_sequence,
     stratify,
     summary_statistics,
+    tabular_function,
     trend_names,
     trend_parameters,
     trend_predict,
+    uncertain_curve_sample,
+    univariate_function,
 )
 from corehydropy.models import trend
 
@@ -91,6 +106,41 @@ def test_percentile_accepts_a_vector_of_probabilities():
 def test_percentile_rejects_a_non_numeric_probs_argument():
     with pytest.raises(ValueError, match="probs"):
         percentile([1, 2, 3], probs="half")
+
+
+def test_correlation_with_a_matrix_returns_the_p_by_p_matrix():
+    c0 = [14, 8, 32, 7, 3, 15]
+    c1 = [10, 5, 7, 4, 3, 8]
+    c2 = [2, 9, 1, 6, 4, 11]
+    x = np.column_stack([c0, c1, c2])
+
+    m = correlation(x)
+    assert m.shape == (3, 3)
+    np.testing.assert_array_equal(np.diag(m), [1, 1, 1])
+    np.testing.assert_allclose(m, m.T)
+    assert m[0, 1] == correlation(c0, c1)
+    assert m[0, 2] == correlation(c0, c2)
+    assert m[1, 2] == correlation(c1, c2)
+
+    ms = correlation(x, method="spearman")
+    np.testing.assert_array_equal(np.diag(ms), [1, 1, 1])
+    assert ms[0, 1] == correlation(c0, c1, method="spearman")
+
+
+def test_correlation_rejects_kendall_for_a_matrix():
+    x = np.column_stack([[14, 8, 32, 7, 3, 15], [10, 5, 7, 4, 3, 8]])
+    with pytest.raises(ValueError, match="kendall.*matrix"):
+        correlation(x, method="kendall")
+
+
+def test_correlation_rejects_a_1d_vector_in_matrix_mode():
+    # C4 (P4 whole-branch review): corehydropy already raised here; corehydror's as.matrix()
+    # coercion silently returned a 1x1 matrix of 1 for the same input instead. This pins the
+    # Python side of the parity fix.
+    with pytest.raises(
+        ValueError, match=r"`x` must be a 2D array \(observations in rows, variables in columns\)"
+    ):
+        correlation([14, 8, 32, 7, 3, 15])
 
 
 def test_running_covariance_chunked_matches_a_single_call():
@@ -195,6 +245,39 @@ def test_interpolate_on_a_log_log_grid_reproduces_the_csharp_test_log_oracle():
     y = [100, 200, 300, 400, 500]
     out = interpolate(x, y, [75], x_transform="log", y_transform="log")
     np.testing.assert_allclose(out, [150.0], atol=1e-6)
+
+
+def test_interpolate_cubic_spline_reproduces_the_csharp_test_cubicspline_oracle():
+    x = [6, 24, 48, 72]
+    y = [9.96, 22.13, 32.27, 37.60]
+    out = interpolate(x, y, [8], method="cubic_spline")
+    np.testing.assert_allclose(out, [11.4049889205445], atol=1e-6)
+
+
+def test_interpolate_polynomial_order3_reproduces_the_csharp_test_polynomial_oracle():
+    x = [6, 24, 48, 72]
+    y = [9.96, 22.13, 32.27, 37.60]
+    out = interpolate(x, y, [8], method="polynomial", order=3)
+    np.testing.assert_allclose(out, [11.5415808882467], atol=1e-6)
+
+
+def test_interpolate_requires_order_for_method_polynomial():
+    with pytest.raises(ValueError, match="order"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], method="polynomial")
+
+
+def test_interpolate_rejects_order_for_a_non_polynomial_method():
+    with pytest.raises(ValueError, match="order"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], order=3)
+
+
+def test_interpolate_rejects_a_non_default_transform_or_extrapolate_for_a_non_linear_method():
+    with pytest.raises(ValueError, match="linear-only"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], method="cubic_spline",
+                    x_transform="log")
+    with pytest.raises(ValueError, match="linear-only"):
+        interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5], method="polynomial", order=3,
+                    extrapolate=True)
 
 
 def test_interpolate_2d_rejects_a_y_array_whose_shape_does_not_match_x1_by_x2():
@@ -564,3 +647,496 @@ def test_trend_names_and_trend_cannot_drift_every_listed_type_constructs():
     for type_ in trend_names():
         tr = trend("location", type_)
         assert tr.type == type_
+
+
+# The "linalg" toolbox group (P2 "math extras" Task 9).
+
+
+def test_qr_decomposition_reproduces_a():
+    a = [[1, 1, 1], [0, 2, 5], [2, 5, -1]]
+    qr = qr_decomposition(a)
+    assert qr["q"].shape == (3, 3)
+    assert qr["r"].shape == (3, 3)
+    np.testing.assert_allclose(qr["q"] @ qr["r"], a, atol=1e-10)
+
+
+def test_qr_solve_reproduces_the_test_qrdecomposition_square_system_expected_vector():
+    # Test_QRDecomposition.cs's Test_SolveVector: A = [[1,1,1],[0,2,5],[2,5,-1]],
+    # b = [6,-4,27]; the real system solves to x = [5, 3, -2].
+    a = [[1, 1, 1], [0, 2, 5], [2, 5, -1]]
+    b = [6, -4, 27]
+    x = qr_solve(a, b)
+    np.testing.assert_allclose(x, [5.0, 3.0, -2.0], atol=1e-9)
+    np.testing.assert_allclose(np.asarray(a) @ x, b, atol=1e-9)
+
+
+def test_qr_solve_matrix_rhs_matches_the_vector_rhs():
+    a = [[1, 2, 3], [0, 1, 4], [5, 6, 0]]
+    b_vec = [1, 2, 3]
+    b_mat = [[1], [2], [3]]
+    x_vec = qr_solve(a, b_vec)
+    x_mat = qr_solve(a, b_mat)
+    assert x_mat.shape == (3, 1)
+    np.testing.assert_allclose(x_mat[:, 0], x_vec, atol=1e-10)
+
+
+def test_qr_solve_underdetermined_leaves_the_trailing_unknown_at_zero():
+    a = [[2, 3, 5, 1], [1, 0, 2, 3], [0, 1, 4, 2]]
+    b = [1, 2, 3]
+    x = qr_solve(a, b)
+    assert x.shape == (4,)
+    assert x[3] == 0.0
+    np.testing.assert_allclose(np.asarray(a) @ x, b, atol=1e-8)
+
+
+def test_qr_solve_rejects_a_mismatched_b_length():
+    a = [[1, 0], [0, 1]]
+    with pytest.raises(ValueError, match="rows"):
+        qr_solve(a, [1, 2, 3])
+
+
+def test_gauss_jordan_reproduces_true_ia_exactly():
+    # Test_GaussJordanElimination.cs's Test_GaussJordanElim: A = [[1,3,3],[1,4,3],[1,3,4]],
+    # true_IA = [[7,-3,-3],[-1,1,0],[-1,0,1]].
+    a = [[1, 3, 3], [1, 4, 3], [1, 3, 4]]
+    result = gauss_jordan(a)
+    np.testing.assert_array_equal(result["inverse"], [[7, -3, -3], [-1, 1, 0], [-1, 0, 1]])
+    assert result["solution"].shape == (3, 0)
+
+
+def test_gauss_jordan_solution_solves_ax_equals_b():
+    a = [[1, 3, 3], [1, 4, 3], [1, 3, 4]]
+    b = [[1], [0], [0]]
+    result = gauss_jordan(a, b)
+    np.testing.assert_allclose(np.asarray(a) @ result["solution"], b, atol=1e-10)
+
+
+def test_gauss_jordan_rejects_a_non_square_a():
+    with pytest.raises(ValueError, match="square"):
+        gauss_jordan([[1, 2, 3], [4, 5, 6]])
+
+
+# The "special" toolbox group (P2 "math extras" Task 10).
+
+
+def test_debye_reproduces_the_test_debye_literal_at_x_1_0():
+    # Test_SpecialFunctions.cs's Test_Debye: testX[1] = 1.0, testValid[1] = 0.6744156.
+    np.testing.assert_allclose(debye(1.0), [0.6744156], atol=1e-4)
+
+
+def test_debye_is_vectorized_over_x_reproducing_the_whole_test_debye_array():
+    x = [0.1, 1.0, 2.8, 9.5, 10, 15, 25, 100]
+    valid = [0.9629999, 0.6744156, 0.3099952, 0.02241066, 0.01929577, 0.005771263,
+             0.001246836, 1.948182e-05]
+    np.testing.assert_allclose(debye(x), valid, atol=1e-4)
+
+
+def test_debye_rejects_a_negative_x():
+    with pytest.raises(Exception):
+        debye(-1)
+
+
+def test_polynomial_eval_variant_standard_reproduces_test_polynomial():
+    # Test_SpecialFunctions.cs's Test_Polynomial: coeffs = [3, 5, 7], x = 4, valid = 135.
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4), [135])
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="standard"), [135])
+
+
+def test_polynomial_eval_variant_reverse_reproduces_test_polynomial_rev_with_and_without_n():
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="reverse"), [75])
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="reverse", n=1), [17])
+
+
+def test_polynomial_eval_variant_reverse_unit_reproduces_test_polynomial_rev_1():
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], 4, variant="reverse_unit"), [139])
+
+
+def test_polynomial_eval_is_vectorized_over_x():
+    np.testing.assert_allclose(polynomial_eval([3, 5, 7], [0, 4]), [3, 135])
+
+
+def test_polynomial_eval_rejects_n_with_a_non_reverse_variant():
+    with pytest.raises(ValueError, match="reverse"):
+        polynomial_eval([3, 5, 7], 4, variant="standard", n=1)
+    with pytest.raises(ValueError, match="reverse"):
+        polynomial_eval([3, 5, 7], 4, variant="reverse_unit", n=1)
+
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations. Literals transcribed from Test_Functions.cs.
+
+
+def test_univariate_function_reproduces_test_linear_function():
+    np.testing.assert_allclose(univariate_function("linear", [0, 1, 0], 6), [6], atol=1e-6)
+    np.testing.assert_allclose(
+        univariate_function("linear", [-2, 5, 3], 6), [(5 * 6) + -2], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("linear", [-2, 5, 3], 6, confidence_level=0.75),
+        [30.0234692505882], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_linear_function_inverse():
+    y = univariate_function("linear", [10, 0.5, 20], 400)
+    np.testing.assert_allclose(
+        univariate_function("linear", [10, 0.5, 20], y, inverse=True), [400], atol=1e-6
+    )
+    yy = univariate_function("linear", [10, 0.5, 20], 400, confidence_level=0.75)
+    np.testing.assert_allclose(
+        univariate_function("linear", [10, 0.5, 20], yy, inverse=True, confidence_level=0.75),
+        [400], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_power_function():
+    np.testing.assert_allclose(
+        univariate_function("power", [1, 1.5, 0, 0], 6), [1 * (6 - 0) ** 1.5], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6), [5 * (6 - 0) ** 2], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6, confidence_level=0.75),
+        [1361.61408399941], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_power_function_inverse():
+    y = univariate_function("power", [10, 2, 0, 0.1], 400)
+    np.testing.assert_allclose(
+        univariate_function("power", [10, 2, 0, 0.1], y, inverse=True), [400], atol=1e-6
+    )
+    yy = univariate_function("power", [10, 2, 0, 0.1], 400, confidence_level=0.75)
+    np.testing.assert_allclose(
+        univariate_function("power", [10, 2, 0, 0.1], yy, inverse=True, confidence_level=0.75),
+        [400], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_inverse_power_function():
+    valid = [(6 / 5) ** 0.5 + 0]
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 0], 6, is_inverse=True), valid, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6, is_inverse=True), valid, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        univariate_function("power", [5, 2, 0, 3], 6, is_inverse=True, confidence_level=0.75),
+        [0.398290417772997], atol=1e-6,
+    )
+
+
+def test_univariate_function_reproduces_test_inverse_power_function_inverse():
+    y = univariate_function("power", [10, 2, 0, 0.1], 6, is_inverse=True)
+    np.testing.assert_allclose(
+        univariate_function("power", [10, 2, 0, 0.1], y, inverse=True, is_inverse=True),
+        [6], atol=1e-6,
+    )
+
+
+def test_univariate_function_rejects_is_inverse_for_type_linear():
+    with pytest.raises(ValueError, match="power"):
+        univariate_function("linear", [0, 1, 0], 6, is_inverse=True)
+
+
+def test_univariate_function_rejects_an_unknown_type():
+    with pytest.raises(ValueError, match="unknown function type"):
+        univariate_function("quadratic", [1, 1], 1)
+
+
+# The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
+# list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
+# same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs
+# and cover the binding surface (column order, 0-based indices, the unreachable row, defaults,
+# argument validation) rather than re-pinning the solver.
+
+
+def test_shortest_path_reproduces_simple_edge_graph_cost():
+    table = shortest_path(
+        [0, 0, 1, 1, 2, 4],
+        [1, 2, 2, 3, 3, 0],
+        [2, 4, 1, 7, 3, 1],
+        destinations=3,
+        edge_index=[0, 2, 2, 3, 4, 5],
+        node_count=6,
+    )
+    assert table.shape == (6, 3)
+    np.testing.assert_array_equal(table[:, 2], [6, 4, 3, 0, 7, np.inf])
+
+
+def test_shortest_path_reproduces_simple_network_routing():
+    frm = [0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 9, 9]
+    to = [5, 1, 0, 2, 6, 7, 1, 3, 7, 2, 8, 4, 3, 9, 0, 6, 5, 1, 7, 6, 1, 2, 8, 7, 3, 9, 8, 4]
+    w = [1, 30, 30, 1, 15, 2, 1, 5, 5, 5, 2, 1, 1, 30, 1, 3, 3, 15, 1, 1, 2, 5, 1, 1, 2, 2, 2, 30]
+    idx = [0, 1, 1, 2, 3, 4, 2, 5, 6, 5, 7, 8, 8, 9, 0, 10, 10, 3, 11, 11, 4, 6, 12, 12, 7, 13, 13, 9]
+    table = shortest_path(frm, to, w, destinations=9, edge_index=idx)
+    assert table.shape == (10, 3)
+    np.testing.assert_array_equal(table[:, 0], [5, 7, 1, 8, 3, 6, 7, 8, 9, 9])
+    np.testing.assert_array_equal(table[:, 2], [8, 5, 6, 4, 5, 7, 4, 3, 2, 0])
+
+
+def test_shortest_path_takes_several_destinations():
+    table = shortest_path(
+        [0, 1, 1, 2, 1],
+        [1, 0, 2, 1, 3],
+        [1, 3, 1, 2, 3],
+        destinations=[0, 3],
+        edge_index=[0, 1, 2, 3, 4],
+        node_count=4,
+    )
+    assert table[1, 0] == 0
+    assert table[1, 2] == 3
+    assert table[2, 0] == 1
+    assert table[2, 2] == 5
+
+
+def test_shortest_path_marks_an_unreachable_node():
+    table = shortest_path(
+        [0, 1, 2], [1, 0, 3], [1, 3, 1], destinations=0, edge_index=[0, 1, 2], node_count=4
+    )
+    assert np.isposinf(table[2, 2])
+    assert table[2, 0] == -1
+    assert table[2, 1] == -1
+
+
+def test_shortest_path_defaults_edge_index_to_the_edge_position():
+    table = shortest_path([0, 1, 1, 2], [1, 0, 2, 0], [1, 4, 1, 10], destinations=[0, 2])
+    assert table.shape == (3, 3)
+    np.testing.assert_array_equal(table[:, 0], [0, 2, 2])
+    np.testing.assert_array_equal(table[:, 2], [0, 1, 0])
+    np.testing.assert_array_equal(table[:, 1], [-1, 2, -1])
+
+
+def test_shortest_path_validates_its_arguments():
+    with pytest.raises(ValueError, match="same length"):
+        shortest_path([0, 1], [1, 2], [1], destinations=0)
+    with pytest.raises(ValueError, match="at least one destination"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=[])
+    with pytest.raises(ValueError, match="whole, non-negative"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0.5)
+    with pytest.raises(ValueError, match="same length"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0, edge_index=[0, 1, 2])
+    with pytest.raises(ValueError, match="at least one"):
+        shortest_path([], [], [], destinations=0)
+    with pytest.raises(ValueError, match="out of range"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=7)
+
+
+# A `node_count` too small for the graph used to reach the solver, which answered it with an
+# out-of-bounds write: a crash here and a quietly wrong routing table in corehydror. C# raises
+# IndexOutOfRangeException for the same call (measured; see dijkstra.hpp note 9), so the solver
+# now throws too, and the wrapper rejects it up front with a message naming the argument.
+def test_shortest_path_rejects_a_node_count_too_small_for_the_graph():
+    with pytest.raises(ValueError, match=r"`node_count` must be at least 6"):
+        shortest_path([0, 1], [5, 2], [1.0, 1.0], destinations=0, node_count=2)
+    with pytest.raises(ValueError, match="must be a single positive number"):
+        shortest_path([0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=0)
+    # The boundary itself is fine, and so is anything above it.
+    assert shortest_path(
+        [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=3
+    ).shape == (3, 3)
+    assert shortest_path(
+        [0, 1], [1, 2], [1.0, 1.0], destinations=0, node_count=5
+    ).shape == (5, 3)
+
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# numerics/data/hypothesis_tests.hpp. The oracle values live in fixtures/toolbox/hypothesis.json;
+# the assertions below are the same C# literals scraped from
+# Test_Numerics/Data/Statistics/Test_HypothesisTests.cs and cover the binding surface (return
+# shape, the 1-based `index` default, argument validation) rather than re-pinning the tests.
+# Mirrors corehydror's test-toolbox.R assertion for assertion.
+
+HARRICANA69 = [
+    122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8,
+    149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161,
+    201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230,
+    158, 262, 154, 164, 182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173,
+    174,
+]
+
+
+def test_hypothesis_test_reproduces_test_mann_kendall():
+    r = hypothesis_test(HARRICANA69, method="mann_kendall")
+    assert r["p_value"] == pytest.approx(0.7757, abs=1e-4)
+
+
+def test_hypothesis_test_f_models_returns_a_length_2_named_result():
+    r = hypothesis_test(0, method="f_models", sse_restricted=1224.32, sse_full=720.27,
+                        df_restricted=49, df_full=48)
+    assert set(r.keys()) == {"f_statistic", "p_value"}
+    assert r["f_statistic"] == pytest.approx(33.5899, abs=1e-3)
+    assert r["p_value"] == pytest.approx(0, abs=1e-6)
+
+
+def test_hypothesis_test_linear_trend_defaults_index_to_1_based_range():
+    time = list(range(1, 101))
+    x = [np.cos(t) for t in time]
+    r1 = hypothesis_test(x, method="linear_trend")
+    r2 = hypothesis_test(x, method="linear_trend", index=time)
+    assert r1["p_value"] == pytest.approx(r2["p_value"])
+    assert r1["p_value"] == pytest.approx(0.9092, abs=1e-4)
+
+
+def test_hypothesis_test_validates_its_arguments():
+    with pytest.raises(ValueError, match="`y` is required"):
+        hypothesis_test([1, 2, 3], method="equal_variance_t")
+    with pytest.raises(ValueError, match="sse_full"):
+        hypothesis_test(0, method="f_models", sse_restricted=1224.32, df_restricted=49, df_full=48)
+    with pytest.raises(ValueError, match="must be one of"):
+        hypothesis_test([1, 2, 3], method="not_a_method")
+
+
+def test_hypothesis_test_f_models_is_callable_without_x():
+    # C1 (P4 whole-branch review): `x` is documented as ignored for "f_models". corehydror could
+    # already omit it (only by accident, via R's lazy evaluation never forcing an unused
+    # argument); Python required it since it had no default. `x` now defaults to None in both.
+    r = hypothesis_test(method="f_models", sse_restricted=1224.32, sse_full=720.27,
+                        df_restricted=49, df_full=48)
+    assert r["f_statistic"] == pytest.approx(33.5899, abs=1e-3)
+
+
+def test_hypothesis_test_rejects_a_non_none_y_for_a_one_sample_method():
+    # C2 (P4 whole-branch review): a one-sample method used to silently DISCARD `y` --
+    # hypothesis_test(a, b) at the default method equalled hypothesis_test(a).
+    a = [4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25]
+    b = [1, 2, 3]
+    with pytest.raises(ValueError, match=r'`y` is not used by method "jarque_bera"; leave it None'):
+        hypothesis_test(a, b, method="jarque_bera")
+
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
+# group. Oracle values are C# test literals transcribed verbatim into
+# core/tests/test_ordered_paired_data.cpp / test_uncertain_paired_data.cpp; see
+# fixtures/toolbox/paired_data.json for the full pinned set. Mirrors corehydror's
+# test-toolbox.R assertion for assertion.
+
+
+def test_curve_interpolate_reproduces_test_lin_and_test_loglin():
+    x = [50, 100, 150, 200, 250]
+    y = [100, 200, 300, 400, 500]
+    assert curve_interpolate(x, y, xout=75)[0] == pytest.approx(150.0, abs=1e-6)
+    assert curve_interpolate(x, y, xout=75, x_transform="logarithmic")[0] == pytest.approx(
+        158.496250072116, abs=1e-6
+    )
+
+
+def test_curve_area_reproduces_test_trapezoidal_area_dataset_1():
+    ctor_x = [230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+             691223, 748825, 806427, 864029, 921631, 1036834, 1152038]
+    ctor_y = [1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+             1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7]
+    assert curve_area(ctor_x, ctor_y) == pytest.approx(1413175623, abs=1)
+
+
+def test_curve_simplify_reproduces_the_three_algorithms_on_the_sin_curve():
+    x = [0, 1.57, 3.14, 4.71, 6.28]
+    y = [0, 1, 0, -1, 0]
+    rdp = curve_simplify(x, y, method="rdp", tolerance=0.01, strict_y=False, order_y="none")
+    vis = curve_simplify(x, y, method="visvalingam", num_to_keep=4, strict_y=False, order_y="none")
+    assert rdp.shape == (4, 2)
+    assert vis.shape == (4, 2)
+    assert rdp[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
+    assert vis[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
+
+    # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
+    # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here
+    # is THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test
+    # claims.
+    lang = curve_simplify(x, y, method="lang", tolerance=0.01, look_ahead=2, strict_y=False,
+                          order_y="none")
+    assert lang.shape == (3, 2)
+    assert lang[:, 0] == pytest.approx([0, 1.57, 4.71], abs=1e-6)
+    assert lang[:, 1] == pytest.approx([0, 1, -1], abs=1e-6)
+
+
+def test_uncertain_curve_sample_reproduces_test_curve_sample_probability():
+    x = [1, 2, 3, 5]
+    d = [
+        Distribution("Triangular", [1, 2, 3]),
+        Distribution("Triangular", [2, 4, 5]),
+        Distribution("Triangular", [6, 8, 12]),
+        Distribution("Triangular", [13, 19, 20]),
+    ]
+    r = uncertain_curve_sample(x, d, probability=0.5)
+    assert r[:, 0] == pytest.approx(x)
+    assert r[:, 1] == pytest.approx([2, 3.732051, 8.535898, 17.58258], abs=1e-5)
+
+
+def test_uncertain_curve_sample_recycles_a_single_distribution_across_x():
+    x = [1, 2, 3]
+    r = uncertain_curve_sample(x, Distribution("Triangular", [1, 2, 3]), probability=0.5)
+    assert r.shape == (3, 2)
+
+
+def test_uncertain_curve_sample_rejects_probability_outside_0_1():
+    # C3 (P4 whole-branch review): the core clamp (a faithful port of C# CurveSample(double)) is
+    # untouched -- probability=50 silently returned the 100% quantile core-side. This host-layer
+    # check is what actually rejects the mistake.
+    x = [1, 2, 3]
+    d = Distribution("Triangular", [1, 2, 3])
+    msg = r"`probability` must be a single number in \[0, 1\]"
+    with pytest.raises(ValueError, match=msg):
+        uncertain_curve_sample(x, d, probability=50)
+    with pytest.raises(ValueError, match=msg):
+        uncertain_curve_sample(x, d, probability=-3)
+
+
+def test_tabular_function_reproduces_test_tabular_function():
+    x = [50, 100, 150, 200, 250]
+    d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
+    y = tabular_function(x, d, at=50, x_transform="logarithmic")
+    assert y[0] == pytest.approx(100.0, abs=1e-12)
+
+
+def test_paired_data_verbs_validate_their_arguments_identically_to_corehydror():
+    x = [50, 100, 150, 200, 250]
+    y = [100, 200, 300, 400, 500]
+    with pytest.raises(ValueError, match="exactly one of `xout` or `yout`"):
+        curve_interpolate(x, y, xout=75, yout=100)
+    with pytest.raises(ValueError, match="exactly one of `xout` or `yout`"):
+        curve_interpolate(x, y)
+    with pytest.raises(ValueError, match='must be one of "rdp", "visvalingam", "lang"'):
+        curve_simplify(x, y, method="not_a_method", tolerance=0.01)
+    d = [Distribution("Triangular", [1, 2, 3]), Distribution("Triangular", [2, 4, 5])]
+    with pytest.raises(ValueError, match=r"must have length 1 or length\(x\)"):
+        uncertain_curve_sample([1, 2, 3], d, probability=0.5)
+    with pytest.raises(ValueError, match=r"must have length 1 or length\(x\)"):
+        tabular_function([1, 2, 3], d, at=1)
+
+
+def test_curve_simplify_rejects_num_to_keep_below_2_for_visvalingam_instead_of_crashing():
+    # M1 (P4 whole-branch review): num_to_keep of 0 or -1 used to crash both R and Python
+    # outright (a bus error / SIGSEGV); 1 silently returned a value read out of bounds. All
+    # three are now rejected at the host layer with the identical message corehydror raises.
+    x = [0, 1.57, 3.14, 4.71, 6.28]
+    y = [0, 1, 0, -1, 0]
+    msg = r"`num_to_keep` must be a single integer of at least 2"
+    for bad in (0, -1, 1):
+        with pytest.raises(ValueError, match=msg):
+            curve_simplify(x, y, method="visvalingam", num_to_keep=bad)
+    # num_to_keep = 2 is the smallest value that succeeds.
+    ok = curve_simplify(x, y, method="visvalingam", num_to_keep=2, strict_y=False, order_y="none")
+    assert ok.shape[0] == 2
+
+
+def test_log_and_logarithmic_are_equivalent_everywhere_a_transform_argument_appears():
+    # M2 (P4 whole-branch review): interpolate()/interpolate_2d() only accepted "log" and
+    # curve_interpolate()/tabular_function() only accepted "logarithmic", so a value valid for
+    # one host verb raised ValueError on the other.
+    storage = [230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+               691223, 748825, 806427, 864029, 921631, 1036834, 1152038]
+    elevation = [1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+                 1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7]
+    a = curve_interpolate(storage, elevation, xout=500000, x_transform="log")
+    b = curve_interpolate(storage, elevation, xout=500000, x_transform="logarithmic")
+    assert a == pytest.approx(b)
+
+    x = [1, 2, 3, 4]
+    y = [10, 20, 30, 40]
+    ia = interpolate(x, y, [2.5], x_transform="log")
+    ib = interpolate(x, y, [2.5], x_transform="logarithmic")
+    assert ia == pytest.approx(ib)

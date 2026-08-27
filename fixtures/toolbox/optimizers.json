@@ -1,7 +1,7 @@
 {
   "kind": "optimizer",
-  "source": "Numerics/Mathematics/Optimization/{Global/Test_DifferentialEvolution.cs, Local/Test_BFGS.cs, Local/Test_Powell.cs, Global/Test_MLSL.cs, Local/Test_NelderMead.cs, Local/Test_BrentSearch.cs}",
-  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_optimizer (core/include/corehydro/numerics/support/optimizer_runner.hpp) against the built-in objectives named by `construct.objective`, mapping onto the same TestFunctions.cs formulas the upstream MSTest classes call (FXYZ/DeJong/Booth/McCormick/FX -- see core/tests/optimization_test_functions.hpp). `parameter` assertions read `OptimResult.parameters[args[0]]`; `value` reads `OptimResult.value` (the raw objective at the optimum, in its own sign convention -- see optimizer_runner.hpp's fill_optimizer_result). Every case's tolerance matches the upstream MSTest `Assert.AreEqual(actual, expected, delta)` literal exactly. Every expected value is the upstream test file's own literal, transcribed verbatim -- never a value computed by this repo's own C++.",
+  "source": "Numerics/Mathematics/Optimization/{Global/Test_DifferentialEvolution.cs, Global/Test_ParticleSwarm.cs, Global/Test_ShuffledComplexEvolution.cs, Global/Test_SimulatedAnnealing.cs, Global/Test_MultiStart.cs, Global/Test_MLSL.cs, Local/Test_BFGS.cs, Local/Test_Powell.cs, Local/Test_Adam.cs, Local/Test_GradientDescent.cs, Local/Test_NelderMead.cs, Local/Test_BrentSearch.cs, Local/Test_GoldenSection.cs}",
+  "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_optimizer (core/include/corehydro/numerics/support/optimizer_runner.hpp) against the built-in objectives named by `construct.objective`, mapping onto the same TestFunctions.cs formulas the upstream MSTest classes call (FXYZ/DeJong/Booth/McCormick/FX -- see core/tests/optimization_test_functions.hpp). `parameter` assertions read `OptimResult.parameters[args[0]]`; `value` reads `OptimResult.value` (the raw objective at the optimum, in its own sign convention -- see optimizer_runner.hpp's fill_optimizer_result). Every case's tolerance matches the upstream MSTest `Assert.AreEqual(actual, expected, delta)` literal exactly. Every expected value is the upstream test file's own literal, transcribed verbatim -- never a value computed by this repo's own C++. The optional `construct.gradient` key names an analytic gradient in the same four catalogs (`Grad_FXYZ`/`Grad_DeJong`/`Grad_Booth`), the second host-language callback the `\"adam\"` and `\"gradient_descent\"` methods take; omitted, both classes differentiate numerically exactly as a null C# `Gradient` delegate makes them. The three gradient cases additionally pin `iterations` and `function_evaluations` at exact equality: they are the only quantity that distinguishes a run driven by the supplied gradient from one that silently ignored it (1518 evaluations against 12137 for adam_fxyz), and all three counts were measured identical in the real C# library, in the C++ core compiled with and without floating-point contraction, in R and in Python.",
   "cases": [
     {
       "name": "de_fxyz",
@@ -144,6 +144,355 @@
         { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" },
         { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" },
         { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_NelderMead.Test_Booth" }
+      ]
+    },
+    {
+      "name": "particle_swarm_fxyz",
+      "construct": {
+        "method": "particle_swarm", "objective": "FXYZ",
+        "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_FXYZ" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "particle_swarm_eggholder",
+      "construct": {
+        "method": "particle_swarm", "objective": "Eggholder",
+        "lower": [-512, -512], "upper": [512, 512],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": -959.6407, "mode": "abs", "tol": 1e-4, "source": "Test_ParticleSwarm.Test_Eggholder" },
+        { "method": "parameter", "args": [0], "expected": 512.0, "mode": "abs", "tol": 1e-3, "source": "Test_ParticleSwarm.Test_Eggholder" },
+        { "method": "parameter", "args": [1], "expected": 404.2319, "mode": "abs", "tol": 1e-3, "source": "Test_ParticleSwarm.Test_Eggholder" }
+      ]
+    },
+    {
+      "name": "sce_dejong",
+      "construct": {
+        "method": "sce", "objective": "DeJong",
+        "lower": [-5.12, -5.12, -5.12, -5.12, -5.12], "upper": [5.12, 5.12, 5.12, 5.12, 5.12],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_DeJong" },
+        { "method": "parameter", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_DeJong" },
+        { "method": "parameter", "args": [4], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_DeJong" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "sce_booth",
+      "construct": {
+        "method": "sce", "objective": "Booth",
+        "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_ShuffledComplexEvolution.Test_Booth" }
+      ]
+    },
+    {
+      "name": "simulated_annealing_booth",
+      "construct": {
+        "method": "simulated_annealing", "objective": "Booth",
+        "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-2, "source": "Test_SimulatedAnnealing.Test_Booth" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-2, "source": "Test_SimulatedAnnealing.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-2, "source": "Test_SimulatedAnnealing.Test_Booth" },
+        { "method": "status", "expected": "MaximumIterationsReached", "source": "Numerics/Mathematics/Optimization/Global/SimulatedAnnealing.cs -- the class never converges early (no CheckConvergence call anywhere in Optimize), so a completed run always ends on the iteration cap" }
+      ]
+    },
+    {
+      "name": "multi_start_fxyz",
+      "construct": {
+        "method": "multi_start", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_FXYZ" },
+        { "method": "status", "expected": "MaximumIterationsReached", "source": "Numerics/Mathematics/Optimization/Global/MultiStart.cs -- the restart loop runs to MaxIterations (100, set in the ctor) rather than converging early" }
+      ]
+    },
+    {
+      "name": "multi_start_rosenbrock",
+      "construct": {
+        "method": "multi_start", "objective": "Rosenbrock",
+        "initial": [0, 0, 0, 0, 0],
+        "lower": [-2.048, -2.048, -2.048, -2.048, -2.048],
+        "upper": [2.048, 2.048, 2.048, 2.048, 2.048],
+        "seed": 12345
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Rosenbrock" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Rosenbrock" },
+        { "method": "parameter", "args": [4], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Rosenbrock" }
+      ]
+    },
+    {
+      "name": "multi_start_booth_powell",
+      "construct": {
+        "method": "multi_start", "objective": "Booth",
+        "initial": [0, 0], "lower": [-10, -10], "upper": [10, 10],
+        "seed": 12345,
+        "control": { "local_method": "powell" }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Booth (the C# test runs the default BFGS local method; this case drives the same construct through LocalMethod.Powell, which converges on the same Booth optimum -- the dotnet gate reproduces it against the real C# MultiStart)" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_MultiStart.Test_Booth" }
+      ]
+    },
+    {
+      "name": "golden_section_fx_minimize",
+      "construct": {
+        "method": "golden_section", "objective": "FX",
+        "lower": [-3], "upper": [3]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Minimize" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Minimize" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "golden_section_fx_maximize",
+      "construct": {
+        "method": "golden_section", "objective": "FX",
+        "lower": [-3], "upper": [3], "maximize": true
+      },
+      "assertions": [
+        { "method": "value", "expected": 9.4815, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Maximize" },
+        { "method": "parameter", "args": [0], "expected": -1.6667, "mode": "abs", "tol": 1e-4, "source": "Test_GoldenSection.Test_Maximize" }
+      ]
+    },
+    {
+      "name": "adam_fxyz",
+      "construct": {
+        "method": "adam", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "adam_booth",
+      "construct": {
+        "method": "adam", "objective": "Booth",
+        "initial": [0.0, 0.0], "lower": [-10, -10], "upper": [10, 10],
+        "control": { "max_iterations": 100000 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_Booth (which sets MaxIterations = 100000 -- 'Requires a lot of iterations')" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_Booth" }
+      ]
+    },
+    {
+      "name": "gradient_descent_fxyz",
+      "construct": {
+        "method": "gradient_descent", "objective": "FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_FXYZ" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "gradient_descent_sum_of_power_functions",
+      "construct": {
+        "method": "gradient_descent", "objective": "SumOfPowerFunctions",
+        "initial": [0.5, -0.5], "lower": [-1, -1], "upper": [1, 1],
+        "control": { "max_iterations": 100000 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_SumOfPowerFunctions" },
+        { "method": "parameter", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-2, "source": "Test_GradientDescent.Test_SumOfPowerFunctions ('Level of precision in parameters is not great' -- the parameters are asserted at 1E-2 where the fitness is at 1E-4)" },
+        { "method": "parameter", "args": [1], "expected": 0.0, "mode": "abs", "tol": 1e-2, "source": "Test_GradientDescent.Test_SumOfPowerFunctions" },
+        { "method": "status", "expected": "MaximumIterationsReached", "source": "Numerics/Mathematics/Optimization/Local/GradientDescent.cs -- this objective's cubic term flattens near the optimum, so the run exhausts the 100000-iteration cap the C# test raises it to rather than tripping CheckConvergence" }
+      ]
+    },
+    {
+      "name": "adam_fxyz_analytic_gradient",
+      "construct": {
+        "method": "adam", "objective": "FXYZ", "gradient": "Grad_FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ -- the same construct, driven through the ctor's optional Gradient delegate instead of the finite-difference fallback. No upstream test supplies a gradient, so the optimum literals are the C# test's own and the two counts below are reproduced against the real C# ADAM by the dotnet gate." },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "iterations", "expected": 1516, "mode": "equal", "source": "the real C# ADAM driven with the same Grad_FXYZ delegate" },
+        { "method": "function_evaluations", "expected": 1518, "mode": "equal", "source": "the real C# ADAM driven with the same Grad_FXYZ delegate -- one evaluation per iteration plus the initial one, against 12137 for the identical finite-difference run (adam_fxyz above), which is what proves the supplied gradient is actually used" }
+      ]
+    },
+    {
+      "name": "adam_fxyz_tuned_decay",
+      "construct": {
+        "method": "adam", "objective": "FXYZ", "gradient": "Grad_FXYZ",
+        "initial": [0.2, 0.5, 0.5], "lower": [0, 0, 0], "upper": [1, 1, 1],
+        "control": { "beta1": 0.8, "beta2": 0.99 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ -- the same construct with the two decay factors moved off their defaults. No upstream test sets Beta1/Beta2, so the optimum literals are the C# test's own; the two counts below are the ONLY thing that separates a correctly wired Beta1/Beta2 from a transposed pair, and they are reproduced against the real C# ADAM by the dotnet gate." },
+        { "method": "parameter", "args": [0], "expected": 0.125, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [1], "expected": 0.2, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "parameter", "args": [2], "expected": 0.35, "mode": "abs", "tol": 1e-4, "source": "Test_Adam.Test_FXYZ" },
+        { "method": "iterations", "expected": 753, "mode": "equal", "source": "the real C# ADAM at Beta1 = 0.8, Beta2 = 0.99 (1516 at the defaults; 3011 with the two swapped onto 0.99/0.999)" },
+        { "method": "function_evaluations", "expected": 755, "mode": "equal", "source": "the real C# ADAM at Beta1 = 0.8, Beta2 = 0.99" }
+      ]
+    },
+    {
+      "name": "gradient_descent_booth_analytic_gradient",
+      "construct": {
+        "method": "gradient_descent", "objective": "Booth", "gradient": "Grad_Booth",
+        "initial": [0.0, 0.0], "lower": [-10, -10], "upper": [10, 10],
+        "control": { "max_iterations": 100000 }
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_Booth -- the same construct (including its MaxIterations = 100000), driven through the ctor's optional Gradient delegate" },
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_Booth" },
+        { "method": "parameter", "args": [1], "expected": 3.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_Booth" },
+        { "method": "iterations", "expected": 8169, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_Booth delegate" },
+        { "method": "function_evaluations", "expected": 8171, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_Booth delegate" }
+      ]
+    },
+    {
+      "name": "gradient_descent_dejong_analytic_gradient",
+      "construct": {
+        "method": "gradient_descent", "objective": "DeJong", "gradient": "Grad_DeJong",
+        "initial": [1.0, -1.0, 2.0, -2.0, 1.0],
+        "lower": [-5.12, -5.12, -5.12, -5.12, -5.12],
+        "upper": [5.12, 5.12, 5.12, 5.12, 5.12]
+      },
+      "assertions": [
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_DeJong -- the same construct, driven through the ctor's optional Gradient delegate. This is the only gradient case above one dimension per term, so it is the one that would catch a gradient wired up transposed or truncated." },
+        { "method": "parameter", "args": [0], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_DeJong" },
+        { "method": "parameter", "args": [4], "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_GradientDescent.Test_DeJong" },
+        { "method": "iterations", "expected": 8594, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_DeJong delegate" },
+        { "method": "function_evaluations", "expected": 8596, "mode": "equal", "source": "the real C# GradientDescent driven with the same Grad_DeJong delegate -- against 103141 for the identical finite-difference run" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_test1",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "AL1_Objective",
+        "initial": [7, 7, 8],
+        "lower": [-1.7976931348623157e+308, -1.7976931348623157e+308, -1.7976931348623157e+308],
+        "upper": [1.7976931348623157e+308, 1.7976931348623157e+308, 1.7976931348623157e+308],
+        "constraints": [{ "function": "SumAll", "type": "eq", "value": 22 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 7.583082, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "parameter", "args": [1], "expected": 7.341390, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "parameter", "args": [2], "expected": 7.075529, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "value", "expected": -188.5655, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1 -- the C# test asserts 188.5655 against -BestParameterSet.Fitness, because this objective returns a NEGATED net benefit; `value` reports the objective's own sign, so the literal is negated here and nowhere else" },
+        { "method": "multiplier", "args": ["lambda", 0], "expected": 4.833835, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_1" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_test2",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "AL2_Objective",
+        "initial": [50, 50],
+        "lower": [-1.7976931348623157e+308, -1.7976931348623157e+308],
+        "upper": [1.7976931348623157e+308, 1.7976931348623157e+308],
+        "constraints": [{ "function": "SumAll", "type": "eq", "value": 100 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 50.4, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2" },
+        { "method": "parameter", "args": [1], "expected": 49.6, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2" },
+        { "method": "value", "expected": -3050.133, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2 -- negated for the same reason as Test_1 above" },
+        { "method": "multiplier", "args": ["lambda", 0], "expected": 9.6, "mode": "abs", "tol": 1e-3, "source": "Test_AugmentedLagrange.Test_2" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_haimes",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "Haimes_Primary",
+        "initial": [5, 5], "lower": [0, 0], "upper": [10, 10],
+        "constraints": [{ "function": "Haimes_Secondary", "type": "le", "value": 13.31 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 4.5, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2" },
+        { "method": "parameter", "args": [1], "expected": 7.75, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2" },
+        { "method": "value", "expected": 25.31, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2" },
+        { "method": "multiplier", "args": ["mu", 0], "expected": 1.67, "mode": "abs", "tol": 1e-2, "source": "Test_AugmentedLagrange.Test_Haimes_5_2 -- the only upstream oracle on the \"lesser than\" multiplier set" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_rosenbrock_disk",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "RosenbrockDisk_Objective",
+        "initial": [0, 0], "lower": [-1.5, -1.5], "upper": [1.5, 1.5],
+        "constraints": [{ "function": "Disk", "type": "le", "value": 2 }]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk" },
+        { "method": "parameter", "args": [1], "expected": 1.0, "mode": "abs", "tol": 1e-4, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk" },
+        { "method": "value", "expected": 0.0, "mode": "abs", "tol": 1e-4, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk" },
+        { "method": "multiplier", "args": ["mu", 0], "expected": 0.0, "mode": "abs", "tol": 0, "source": "Test_AugmentedLagrange.Test_RosenbrockDisk -- the one upstream assertion with NO delta argument, so it is EXACT equality: the constraint never binds here, and an untouched multiplier is still the 0 the constructor set" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_mixed",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "Disk",
+        "initial": [1, 3], "lower": [-10, -10], "upper": [10, 10],
+        "constraints": [
+          { "function": "SumXY", "type": "eq", "value": 4.0 },
+          { "function": "X0", "type": "le", "value": 3.0 },
+          { "function": "X1", "type": "ge", "value": 0.5 }
+        ]
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 2.0, "mode": "abs", "tol": 0.1, "source": "Test_AugmentedLagrange.Test_MixedConstraints -- the only upstream test using all three constraint types at once, and therefore the only one that indexes all three multiplier vectors. Its objective is written x[0]*x[0] + x[1]*x[1], the identical expression to Test_RosenbrockDisk's `Disk` constraint above, so one catalog entry serves both." },
+        { "method": "parameter", "args": [1], "expected": 2.0, "mode": "abs", "tol": 0.1, "source": "Test_AugmentedLagrange.Test_MixedConstraints" },
+        { "method": "value", "expected": 8.0, "mode": "abs", "tol": 0.5, "source": "Test_AugmentedLagrange.Test_MixedConstraints" },
+        { "method": "multiplier", "args": ["nu", 0], "expected": 0.0, "mode": "abs", "tol": 0, "source": "the greater-than constraint y >= 0.5 is slack at the solution y = 2, so its multiplier is never moved off the 0 the constructor set -- the assertion that the THIRD vector exists and was indexed on its own, which no upstream assertion reaches" }
+      ]
+    },
+    {
+      "name": "augmented_lagrange_haimes_inner_powell",
+      "construct": {
+        "method": "augmented_lagrange", "objective": "Haimes_Primary",
+        "initial": [5, 5], "lower": [0, 0], "upper": [10, 10],
+        "constraints": [{ "function": "Haimes_Secondary", "type": "le", "value": 13.31 }],
+        "inner": { "method": "powell" }
+      },
+      "assertions": [
+        { "method": "parameter", "args": [0], "expected": 5.4793811558833845, "mode": "abs", "tol": 1e-6, "source": "the REAL C# AugmentedLagrange over Test_Haimes_5_2 with the inner optimizer switched from the default BFGS to Powell, reproduced by the dotnet gate. No upstream test does this (all six construct a BFGS), and the switch is not cosmetic: a Powell inner converges to a DIFFERENT local solution, 28.3078 at (5.4794, 7.3469) instead of the 25.31 at (4.5, 7.75) the C# test asserts for a BFGS inner -- in C# and in the port alike, which is exactly why this case pins the C# numbers rather than that test's literals. What it adds is the only oracle on the `inner` sub-spec, including the fallback filling its omitted initial/lower/upper from the top-level ones. Tolerance 1e-6: the port reproduces the four C# values here to at worst 3.1e-8 (mu[0]: 3.5117858813163139 in C# against 3.5117858507355493 in the port), the fused-multiply-add residual core/tests/test_augmented_lagrange.cpp's header already measures for this class -- with -ffp-contract=off the port is bit-identical to C#." },
+        { "method": "parameter", "args": [1], "expected": 7.3468969075532176, "mode": "abs", "tol": 1e-6, "source": "the real C# AugmentedLagrange with a Powell inner" },
+        { "method": "value", "expected": 28.307812137705689, "mode": "abs", "tol": 1e-6, "source": "the real C# AugmentedLagrange with a Powell inner" },
+        { "method": "multiplier", "args": ["mu", 0], "expected": 3.5117858813163139, "mode": "abs", "tol": 1e-6, "source": "the real C# AugmentedLagrange with a Powell inner" },
+        { "method": "status", "expected": "Success", "source": "Numerics/Mathematics/Optimization/Support/Optimizer.cs -- a converged run's own Status" }
       ]
     },
     {

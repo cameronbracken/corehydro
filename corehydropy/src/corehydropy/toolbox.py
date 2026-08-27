@@ -11,6 +11,7 @@ from importlib.resources import files
 import numpy as np
 
 from . import _core
+from .distributions import Distribution, _as_spec
 
 __all__ = [
     "correlation",
@@ -44,6 +45,19 @@ __all__ = [
     "trend_predict",
     "trend_parameters",
     "trend_names",
+    "qr_decomposition",
+    "qr_solve",
+    "gauss_jordan",
+    "debye",
+    "polynomial_eval",
+    "univariate_function",
+    "shortest_path",
+    "hypothesis_test",
+    "curve_interpolate",
+    "curve_area",
+    "curve_simplify",
+    "uncertain_curve_sample",
+    "tabular_function",
 ]
 
 
@@ -66,22 +80,33 @@ def _check_pair(x, y, x_name: str = "x", y_name: str = "y"):
     return xa, ya
 
 
-def correlation(x, y, method: str = "pearson") -> float:
-    """Correlation between two samples.
+def correlation(x, y=None, method: str = "pearson"):
+    """Correlation between two samples, or a correlation matrix.
 
-    Mirrors the C# ``Correlation`` class of the Numerics library. Upstream's matrix overloads
-    are not ported, so only the paired-vector forms are available here.
+    Mirrors the C# ``Correlation`` class of the Numerics library: the paired-vector forms
+    (``Correlation.Pearson``/``Spearman``/``KendallsTau``, both ``IList<double>`` overloads) and
+    the Pearson/Spearman column-pairwise matrix overloads (``Pearson(double[,])``/
+    ``Spearman(double[,])``).
 
     Parameters
     ----------
-    x, y : array_like
-        Numeric vectors of equal length, at least two elements.
+    x : array_like
+        A numeric vector (paired-vector form, ``y`` required), or a 2D array-like (a NumPy
+        array, nested list, or pandas-style object coercible via ``numpy.asarray``) with one
+        column per variable (matrix form, ``y`` omitted).
+    y : array_like, optional
+        A numeric vector of the same length as ``x``, or ``None`` (the default) to compute the
+        correlation matrix of ``x``'s columns instead.
     method : {"pearson", "spearman", "kendall"}
-        Which coefficient to compute.
+        Which coefficient to compute. ``"kendall"`` is rejected when ``y`` is ``None``: upstream
+        has no ``KendallsTau(double[,])`` overload, so there is no Kendall matrix form to
+        compute.
 
     Returns
     -------
-    float
+    float or numpy.ndarray
+        With ``y`` given, a single correlation coefficient; with ``y`` ``None``, a
+        ``(p, p)`` array, ``p`` the number of columns of ``x``.
 
     Examples
     --------
@@ -91,6 +116,18 @@ def correlation(x, y, method: str = "pearson") -> float:
     """
     if method not in ("pearson", "spearman", "kendall"):
         raise ValueError(f"`method` must be one of 'pearson', 'spearman', 'kendall'; got {method!r}")
+    if y is None:
+        if method == "kendall":
+            raise ValueError(
+                "`method = \"kendall\"` has no matrix form; upstream Correlation has no "
+                "KendallsTau(double[,]) overload"
+            )
+        xa = np.asarray(x, dtype=float)
+        if xa.ndim != 2:
+            raise ValueError("`x` must be a 2D array (observations in rows, variables in columns)")
+        columns = [xa[:, j] for j in range(xa.shape[1])]
+        r = _toolbox_run("correlation", f"{method}_matrix", columns)
+        return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
     xa, ya = _check_pair(x, y)
     return float(_toolbox_run("correlation", method, [xa, ya])["values"][0])
 
@@ -570,12 +607,16 @@ def histogram(x, bins=None) -> dict:
     return out
 
 
-def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none",
+def interpolate(x, y, xout, method: str = "linear", order: int | None = None,
+                x_transform: str = "none", y_transform: str = "none",
                 sort_order: str = "ascending", extrapolate: bool = False) -> np.ndarray:
     """Interpolate a paired series.
 
-    Mirrors the C# ``Linear`` interpolater of the Numerics library, including its x and y
-    transforms.
+    Mirrors the C# ``Linear``, ``CubicSpline``, and ``Polynomial`` interpolaters of the
+    Numerics library. ``x_transform``, ``y_transform``, and ``extrapolate`` are Linear-only in
+    C# (neither ``CubicSpline`` nor ``Polynomial`` has a transform surface or an
+    ``Extrapolate()`` method), so they must be left at their defaults for
+    ``method="cubic_spline"`` or ``"polynomial"``.
 
     Parameters
     ----------
@@ -583,13 +624,22 @@ def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none"
         Equal-length knots.
     xout : array_like
         Positions to interpolate at.
-    x_transform, y_transform : {"none", "log", "normal_z"}
+    method : {"linear", "cubic_spline", "polynomial"}
+    order : int, optional
+        The polynomial order -- there are ``order + 1`` terms for each polynomial function.
+        Required when ``method="polynomial"``; must be ``None`` otherwise.
+    x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        Linear-only. ``"logarithmic"`` and ``"log"`` are equivalent aliases for the same
+        ``Transform.Logarithmic`` value everywhere a transform argument appears in this module
+        (:func:`interpolate`, :func:`interpolate_2d`, :func:`curve_interpolate`,
+        :func:`tabular_function`); ``"logarithmic"`` (matching the C# enum member name) is the
+        spelling used in this package's own examples and documentation.
     sort_order : {"ascending", "descending"}
         Describes ``x``.
     extrapolate : bool
         Whether to extend the end segments beyond the knots. ``False`` (the default) clamps to
         the end knot, matching the C# ``Interpolate()`` default; ``True`` calls the C#
-        ``Extrapolate()`` method instead.
+        ``Extrapolate()`` method instead. Linear-only.
 
     Returns
     -------
@@ -601,26 +651,50 @@ def interpolate(x, y, xout, x_transform: str = "none", y_transform: str = "none"
     >>> from corehydropy import interpolate
     >>> interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5, 2.5])
     array([15., 25.])
+    >>> interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5, 2.5], method="cubic_spline")
+    array([15., 25.])
+    >>> interpolate([1, 2, 3, 4], [10, 20, 30, 40], [1.5, 2.5], method="polynomial", order=3)
+    array([15., 25.])
     """
     xa, ya = _check_pair(x, y)
-    if x_transform not in ("none", "log", "normal_z"):
+    if method not in ("linear", "cubic_spline", "polynomial"):
         raise ValueError(
-            f"`x_transform` must be one of 'none', 'log', 'normal_z'; got {x_transform!r}"
+            f"`method` must be one of 'linear', 'cubic_spline', 'polynomial'; got {method!r}"
         )
-    if y_transform not in ("none", "log", "normal_z"):
+    if x_transform not in ("none", "logarithmic", "log", "normal_z"):
         raise ValueError(
-            f"`y_transform` must be one of 'none', 'log', 'normal_z'; got {y_transform!r}"
+            "`x_transform` must be one of 'none', 'logarithmic', 'log', 'normal_z'; got "
+            f"{x_transform!r}"
+        )
+    if y_transform not in ("none", "logarithmic", "log", "normal_z"):
+        raise ValueError(
+            "`y_transform` must be one of 'none', 'logarithmic', 'log', 'normal_z'; got "
+            f"{y_transform!r}"
         )
     if sort_order not in ("ascending", "descending"):
         raise ValueError(f"`sort_order` must be one of 'ascending', 'descending'; got {sort_order!r}")
+    if method != "linear" and (x_transform != "none" or y_transform != "none" or extrapolate):
+        raise ValueError(
+            "`x_transform`, `y_transform`, and `extrapolate` are linear-only; the C# "
+            "CubicSpline/Polynomial classes have neither a transform surface nor an "
+            "Extrapolate() method"
+        )
+    if method == "polynomial":
+        if order is None:
+            raise ValueError('`order` is required when method="polynomial"')
+    elif order is not None:
+        raise ValueError('`order` only applies when method="polynomial"')
     xouta = np.asarray(xout, dtype=float).ravel()
-    options = {
-        "x_transform": x_transform,
-        "y_transform": y_transform,
-        "sort_order": sort_order,
-        "extrapolate": bool(extrapolate),
-    }
-    return np.asarray(_toolbox_run("interpolation", "linear", [xa, ya, xouta], options)["values"])
+    options: dict = {"sort_order": sort_order}
+    if method == "linear":
+        options.update({
+            "x_transform": x_transform,
+            "y_transform": y_transform,
+            "extrapolate": bool(extrapolate),
+        })
+    elif method == "polynomial":
+        options["order"] = int(order)
+    return np.asarray(_toolbox_run("interpolation", method, [xa, ya, xouta], options)["values"])
 
 
 def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_transform: str = "none",
@@ -638,7 +712,10 @@ def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_trans
         ``(x1[i], x2[j])``.
     x1out, x2out : array_like
         Equal-length positions to interpolate at.
-    x1_transform, x2_transform, y_transform : {"none", "log", "normal_z"}
+    x1_transform, x2_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        ``"logarithmic"`` and ``"log"`` are equivalent (see the module note on
+        :func:`interpolate`); ``"logarithmic"`` is the spelling used in this package's own
+        examples.
     sort_order : {"ascending", "descending"}
         Describes ``x1`` and ``x2``.
 
@@ -667,8 +744,10 @@ def interpolate_2d(x1, x2, y, x1out, x2out, x1_transform: str = "none", x2_trans
         raise ValueError("`x1out` and `x2out` must be the same length")
     for name, t in (("x1_transform", x1_transform), ("x2_transform", x2_transform),
                     ("y_transform", y_transform)):
-        if t not in ("none", "log", "normal_z"):
-            raise ValueError(f"`{name}` must be one of 'none', 'log', 'normal_z'; got {t!r}")
+        if t not in ("none", "logarithmic", "log", "normal_z"):
+            raise ValueError(
+                f"`{name}` must be one of 'none', 'logarithmic', 'log', 'normal_z'; got {t!r}"
+            )
     if sort_order not in ("ascending", "descending"):
         raise ValueError(f"`sort_order` must be one of 'ascending', 'descending'; got {sort_order!r}")
     options = {
@@ -1317,3 +1396,999 @@ def trend_names() -> list[str]:
     ['Constant', 'Cubic', 'Exponential', 'Linear', 'Logistic', 'Power', 'Quadratic', 'Reciprocal', 'Sinusoidal', 'StepFunction', 'GeneralLinear']
     """
     return list(_toolbox_run("trend", "names")["names"])
+
+
+# The "linalg" toolbox group (P2 "math extras" Task 9): QRDecomposition (Householder
+# reflections) and GaussJordanElimination. Matrices cross the runner boundary as ONE
+# flattened row-major vector plus `rows`/`cols` options, the same convention
+# linear_regression()'s predictor matrix uses above; numpy's default `ravel()`/`reshape()`
+# are already row-major (C order), so -- unlike the R verbs, which must transpose first --
+# these need no extra flattening step.
+
+
+def qr_decomposition(a) -> dict:
+    """QR decomposition.
+
+    Mirrors the C# ``QRDecomposition`` class (Householder reflections): decomposes the
+    ``M x N`` array ``a`` into an ``M x M`` orthogonal array ``q`` and an ``M x N`` upper
+    triangular array ``r`` such that ``q @ r`` reproduces ``a``. The C# ``RMatrix`` property
+    is named ``r`` here (``R`` has no naming collision in this package, unlike in the C#
+    codebase).
+
+    Parameters
+    ----------
+    a : array_like
+        A 2D array, M x N.
+
+    Returns
+    -------
+    dict
+        ``{"q": ndarray (M, M), "r": ndarray (M, N)}``.
+
+    Examples
+    --------
+    >>> from corehydropy import qr_decomposition
+    >>> a = [[1, 1, 1], [0, 2, 5], [2, 5, -1]]
+    >>> qr = qr_decomposition(a)
+    >>> import numpy as np
+    >>> np.allclose(qr["q"] @ qr["r"], a)
+    True
+    """
+    aa = np.asarray(a, dtype=float)
+    if aa.ndim != 2:
+        raise ValueError("`a` must be a 2D array")
+    rows, cols = aa.shape
+    options = {"rows": int(rows), "cols": int(cols)}
+    data = [aa.ravel()]
+    q = _toolbox_run("linalg", "qr_q", data, options)
+    r = _toolbox_run("linalg", "qr_r", data, options)
+    return {
+        "q": np.asarray(q["values"], dtype=float).reshape(q["dims"][0], q["dims"][1]),
+        "r": np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1]),
+    }
+
+
+def qr_solve(a, b):
+    """Solve a linear system by QR decomposition.
+
+    Mirrors the C# ``QRDecomposition.Solve`` overloads (vector and matrix right-hand
+    sides). ``a`` need not be square: an overdetermined system is solved in the
+    least-squares sense; an underdetermined system leaves the trailing
+    ``a.shape[1] - min(a.shape)`` unknowns at zero (matching ``QRDecomposition.Solve``'s
+    own truncated back-substitution, which only ever fills indices below
+    ``min(m, n)``).
+
+    Parameters
+    ----------
+    a : array_like
+        A 2D array, M x N.
+    b : array_like
+        A 1D array of length M, or a 2D array with M rows.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 1D array of length N when ``b`` is 1D, or an ``N x b.shape[1]`` array when ``b``
+        is 2D.
+
+    Examples
+    --------
+    >>> from corehydropy import qr_solve
+    >>> a = [[1, 2, 3], [0, 1, 4], [5, 6, 0]]
+    >>> qr_solve(a, [1, 2, 3])
+    array([27., -22.,   6.])
+    """
+    aa = np.asarray(a, dtype=float)
+    if aa.ndim != 2:
+        raise ValueError("`a` must be a 2D array")
+    rows, cols = aa.shape
+    options = {"rows": int(rows), "cols": int(cols)}
+    ba = np.asarray(b, dtype=float)
+    if ba.ndim == 2:
+        if ba.shape[0] != rows:
+            raise ValueError(f"`b` must have {rows} rows, matching `a`; got {ba.shape[0]}")
+        options["b_cols"] = int(ba.shape[1])
+        r = _toolbox_run("linalg", "qr_solve_matrix", [aa.ravel(), ba.ravel()], options)
+        return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
+    bv = ba.ravel()
+    if bv.size != rows:
+        raise ValueError(f"`b` must have length {rows}, matching `a`'s rows; got {bv.size}")
+    r = _toolbox_run("linalg", "qr_solve", [aa.ravel(), bv], options)
+    return np.asarray(r["values"], dtype=float)
+
+
+def gauss_jordan(a, b=None) -> dict:
+    """Gauss-Jordan elimination.
+
+    Mirrors the C# ``GaussJordanElimination.Solve(ref Matrix A, ref Matrix B)``: one
+    full-pivot Gauss-Jordan reduction that produces ``a``'s inverse and, when ``b`` is
+    supplied, the solution set of ``a @ x = b``. Unlike the C# ``ref, ref`` in-place API,
+    ``a`` and ``b`` are never mutated in Python -- both results come back as new arrays.
+
+    Parameters
+    ----------
+    a : array_like
+        A square 2D array, N x N.
+    b : array_like, optional
+        A 1D array of length N, or a 2D array with N rows (the right-hand sides). Omit for
+        the inverse alone, in which case ``solution`` is an ``N x 0`` array.
+
+    Returns
+    -------
+    dict
+        ``{"inverse": ndarray (N, N), "solution": ndarray (N, b.shape[1])}``.
+
+    Examples
+    --------
+    >>> from corehydropy import gauss_jordan
+    >>> a = [[1, 3, 3], [1, 4, 3], [1, 3, 4]]
+    >>> gauss_jordan(a)["inverse"]
+    array([[ 7., -3., -3.],
+           [-1.,  1.,  0.],
+           [-1.,  0.,  1.]])
+    """
+    aa = np.asarray(a, dtype=float)
+    if aa.ndim != 2 or aa.shape[0] != aa.shape[1]:
+        raise ValueError("`a` must be a square 2D array")
+    n = aa.shape[0]
+    if b is None:
+        ba = np.zeros((n, 0))
+    else:
+        ba = np.asarray(b, dtype=float)
+        if ba.ndim == 1:
+            ba = ba.reshape(-1, 1)
+        if ba.shape[0] != n:
+            raise ValueError(f"`b` must have {n} rows, matching `a`; got {ba.shape[0]}")
+    options = {"rows": int(n), "cols": int(n), "b_cols": int(ba.shape[1])}
+    data = [aa.ravel(), ba.ravel()]
+    inv = _toolbox_run("linalg", "gauss_jordan_inverse", data, options)
+    sol = _toolbox_run("linalg", "gauss_jordan_solution", data, options)
+    return {
+        "inverse": np.asarray(inv["values"], dtype=float).reshape(inv["dims"][0], inv["dims"][1]),
+        "solution": np.asarray(sol["values"], dtype=float).reshape(sol["dims"][0], sol["dims"][1]),
+    }
+
+
+# The "special" toolbox group (P2 "math extras" Task 10): the ported Debye and Evaluate special
+# functions. Both verbs vectorize over ``x``, returning one value per element -- there is no
+# matrix result here, so no flatten/reshape step like ``linalg``'s above.
+
+
+def debye(x) -> np.ndarray:
+    """The Debye function.
+
+    Mirrors the C# ``Debye.Function``: a piecewise approximation of
+    ``D(x) = (n/x**n) * integral_0^x t**n / (e**t - 1) dt``, vectorized over ``x``.
+
+    Parameters
+    ----------
+    x : array_like
+        Non-negative values.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import debye
+    >>> debye(0.5)
+    array([0.8249631])
+    """
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    r = _toolbox_run("special", "debye", [xa], {})
+    return np.asarray(r["values"], dtype=float)
+
+
+def polynomial_eval(coefficients, x, variant: str = "standard", n: int | None = None) -> np.ndarray:
+    """Evaluate a polynomial.
+
+    Mirrors the C# ``Evaluate`` class's three polynomial evaluators (Horner's method),
+    vectorized over ``x`` against one shared ``coefficients`` array: ``variant="standard"``
+    calls ``Evaluate.Polynomial`` (coefficients in ASCENDING order, ``coefficients[0]`` the
+    constant term); ``"reverse"`` calls ``Evaluate.PolynomialRev`` (coefficients in DESCENDING
+    order, ``coefficients[0]`` the highest-order term), optionally truncated to order ``n + 1``
+    via ``n``; ``"reverse_unit"`` calls ``Evaluate.PolynomialRev_1`` (DESCENDING order with an
+    implicit leading coefficient of 1).
+
+    Parameters
+    ----------
+    coefficients : array_like
+        Polynomial coefficients.
+    x : array_like
+        Points at which to evaluate.
+    variant : {"standard", "reverse", "reverse_unit"}
+    n : int, optional
+        Redefines the polynomial's order to ``n + 1``. Only valid with ``variant="reverse"``.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import polynomial_eval
+    >>> polynomial_eval([3, 5, 7], 4)
+    array([135.])
+    >>> polynomial_eval([3, 5, 7], 4, variant="reverse")
+    array([75.])
+    >>> polynomial_eval([3, 5, 7], 4, variant="reverse", n=1)
+    array([17.])
+    """
+    if variant not in ("standard", "reverse", "reverse_unit"):
+        raise ValueError(
+            f"`variant` must be one of 'standard', 'reverse', 'reverse_unit'; got {variant!r}"
+        )
+    if n is not None and variant != "reverse":
+        raise ValueError('`n` is only valid with variant="reverse"')
+    method = {"standard": "polynomial", "reverse": "polynomial_rev",
+              "reverse_unit": "polynomial_rev_1"}[variant]
+    ca = np.atleast_1d(np.asarray(coefficients, dtype=float))
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    options = {} if n is None else {"n": int(n)}
+    r = _toolbox_run("special", method, [ca, xa], options)
+    return np.asarray(r["values"], dtype=float)
+
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
+# The severed third implementation, TabularFunction, depends on the unported Paired Data
+# subsystem (see upstream/CLAUDE.md) and is not exposed.
+
+
+def univariate_function(
+    type: str,
+    parameters,
+    x,
+    inverse: bool = False,
+    is_inverse: bool = False,
+    confidence_level: float | None = None,
+) -> np.ndarray:
+    """Evaluate a univariate function.
+
+    Mirrors the Numerics ``LinearFunction`` (``Y = alpha + beta*X + epsilon``) and
+    ``PowerFunction`` (``Y = alpha * (X - xi)**beta * epsilon``), both over optional normally
+    distributed noise (``epsilon ~ Normal(0, sigma)``) via ``confidence_level``. ``is_inverse``
+    (``PowerFunction``'s own ``IsInverse`` switch) selects which of the forward power law or its
+    algebraic inverse ``Function()``/``inverse=True`` evaluates -- an independent axis from
+    ``inverse`` itself, which picks ``Function()`` vs. ``InverseFunction()`` on whichever of the
+    two ``is_inverse`` selects.
+
+    Parameters
+    ----------
+    type : {"linear", "power"}
+        Matched case-insensitively.
+    parameters : array_like
+        ``[alpha, beta, sigma]`` for ``"linear"``; ``[alpha, beta, xi, sigma]`` for ``"power"``.
+        ``sigma`` is still required (e.g. 0) when ``confidence_level`` is ``None`` -- it only
+        enters the calculation on the non-deterministic path.
+    x : array_like
+        The values to evaluate the function at, or (when ``inverse=True``) the values to
+        evaluate the inverse function at.
+    inverse : bool, default False
+        If ``True``, evaluates the inverse function (``InverseFunction()``) instead of the
+        forward function (``Function()``).
+    is_inverse : bool, default False
+        ``"power"``-only: ``PowerFunction``'s own ``IsInverse`` property. An error for
+        ``type="linear"``.
+    confidence_level : float, optional
+        If given, evaluates the non-deterministic path at this quantile level; if ``None``
+        (default), evaluates deterministically.
+
+    Returns
+    -------
+    numpy.ndarray
+
+    Examples
+    --------
+    >>> from corehydropy import univariate_function
+    >>> univariate_function("linear", [0, 1, 0], [1, 2, 3])
+    array([1., 2., 3.])
+    >>> univariate_function("power", [5, 2, 0, 3], 6)
+    array([180.])
+    >>> univariate_function("power", [5, 2, 0, 3], 6, confidence_level=0.75)
+    array([1361.614084])
+    """
+    known = ("linear", "power")
+    match = [t for t in known if t == str(type).lower()]
+    if not match:
+        raise ValueError(f"unknown function type '{type}'; expected one of {', '.join(known)}")
+    ftype = match[0]
+    if is_inverse and ftype != "power":
+        raise ValueError(f"`is_inverse` is only used for type 'power'; got type '{ftype}'")
+    pa = np.atleast_1d(np.asarray(parameters, dtype=float))
+    if pa.size == 0:
+        raise ValueError("`parameters` must be a non-empty array")
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    if xa.size == 0:
+        raise ValueError("`x` must be a non-empty array")
+    options: dict = {"function": ftype, "parameters": pa.tolist()}
+    if ftype == "power":
+        options["is_inverse"] = bool(is_inverse)
+    if confidence_level is not None:
+        options["confidence_level"] = float(confidence_level)
+    method = "inverse" if inverse else "evaluate"
+    r = _toolbox_run("functions", method, [xa], options)
+    return np.asarray(r["values"], dtype=float)
+
+
+# The "network" toolbox group (P3 optimizers Task 10): the Dijkstra shortest-path solver over an
+# edge list. Edges cross the runner boundary as four parallel numeric vectors -- from, to, weight,
+# edge index -- with the destinations in the options object, and the result table comes back
+# flattened row-major with dims = {node_count, 3}, the same convention the `linalg` matrix results
+# use above. Mirrors corehydror's shortest_path().
+
+
+def _check_node_indices(x: np.ndarray, what: str) -> None:
+    """Internal: a node index is a whole, non-negative number.
+
+    The shared C++ group header checks this too (a fixture case reaches it directly), but
+    checking here as well keeps the message naming the Python argument and keeps the two
+    packages' errors identical.
+    """
+    if not np.all(np.isfinite(x)) or np.any(x != np.floor(x)) or np.any(x < 0):
+        raise ValueError(f"`{what}` must be whole, non-negative node indices")
+
+
+def shortest_path(
+    frm,
+    to,
+    weight,
+    destinations,
+    edge_index=None,
+    node_count: int | None = None,
+) -> np.ndarray:
+    """Solve the shortest paths through a network.
+
+    Mirrors the C# ``Dijkstra.Solve`` overloads: solves the cheapest route from EVERY node of a
+    directed, weighted graph to a set of destination nodes at once, running the search backwards
+    from the destinations. The answer is a routing table -- for each node, which neighbour to
+    step to, along which edge, and at what remaining cost.
+
+    Node indices are 0-based in both ``corehydropy`` and ``corehydror``, matching the C# result
+    table the two packages share; a graph with ``n`` nodes uses indices ``0`` to ``n - 1``.
+    Unreachable nodes carry ``cost = inf`` with ``next_node = -1`` and ``edge_index = -1``, and a
+    destination node carries ``cost = 0`` with ``next_node`` equal to its own index.
+
+    Costs accumulate in single precision, because the ported solver does (C# declares
+    ``float Weight`` and its own tests assert the table by exact ``float`` equality). Fractional
+    weights therefore round to ``float`` before they are summed.
+
+    Parameters
+    ----------
+    frm, to, weight : array_like
+        Arrays of the same length, one element per directed edge: the start node index, the end
+        node index, and the cost of traversing the edge. ``frm`` and ``to`` must be whole,
+        non-negative numbers. (``frm``, not ``from``, because ``from`` is a Python keyword; the R
+        twin spells it ``from``.)
+    destinations : array_like or int
+        One or more destination node indices. With several destinations, each node keeps
+        whichever destination it reaches most cheaply.
+    edge_index : array_like, optional
+        An array the same length as ``frm``, labelling each edge (typically an index into
+        whatever the edges came from -- a river reach, a road segment). Defaults to
+        ``range(len(frm))``. These labels are what the ``edge_index`` result column reports, and
+        they need not be distinct.
+    node_count : int, optional
+        Defaults to ``max(frm, to) + 1``; supply a larger value to include isolated nodes
+        carrying no edge, which then report ``cost = inf``. A value below ``max(frm, to) + 1``
+        is an error: the graph would not fit the routing table it asks for.
+
+    Returns
+    -------
+    numpy.ndarray
+        One row per node, in node-index order, with columns ``[next_node, edge_index, cost]``.
+
+    Examples
+    --------
+    >>> from corehydropy import shortest_path
+    >>> shortest_path([0, 1], [1, 2], [1, 1], destinations=2, node_count=4)
+    array([[ 1.,  0.,  2.],
+           [ 2.,  1.,  1.],
+           [ 2., -1.,  0.],
+           [-1., -1., inf]])
+    """
+    f = np.atleast_1d(np.asarray(frm, dtype=float)).ravel()
+    t = np.atleast_1d(np.asarray(to, dtype=float)).ravel()
+    w = np.atleast_1d(np.asarray(weight, dtype=float)).ravel()
+    n = f.size
+    if n == 0:
+        raise ValueError("`frm`, `to` and `weight` must describe at least one edge")
+    if t.size != n or w.size != n:
+        raise ValueError(
+            "`frm`, `to` and `weight` must have the same length; "
+            f"got {n}, {t.size} and {w.size}"
+        )
+    if edge_index is None:
+        idx = np.arange(n, dtype=float)
+    else:
+        idx = np.atleast_1d(np.asarray(edge_index, dtype=float)).ravel()
+        if idx.size != n:
+            raise ValueError(
+                "`edge_index` must be an array the same length as `frm`; "
+                f"got {idx.size} for {n}"
+            )
+    dest = np.atleast_1d(np.asarray(destinations, dtype=float)).ravel()
+    if dest.size == 0:
+        raise ValueError("`destinations` must name at least one destination node")
+    _check_node_indices(f, "frm")
+    _check_node_indices(t, "to")
+    _check_node_indices(dest, "destinations")
+    options: dict = {"destinations": dest.tolist()}
+    n_nodes = float(max(f.max(), t.max())) + 1.0
+    if node_count is not None:
+        if float(node_count) < 1:
+            raise ValueError("`node_count` must be a single positive number")
+        # A `node_count` below `max(frm, to) + 1` cannot describe the edge list. The ported
+        # solver raises the C# IndexOutOfRangeException message from inside itself when it
+        # reaches the offending index, which is both late and unhelpful here, so reject it up
+        # front and name the argument. This is deliberately STRICTER than the C# solver, whose
+        # bounds check is lazy: it accepts a too-small count as long as no out-of-range index is
+        # ever reached (see dijkstra.hpp note 9). That input is a graph the caller cannot have
+        # meant.
+        if float(node_count) < n_nodes:
+            raise ValueError(
+                f"`node_count` must be at least {int(n_nodes)}, the number of nodes `frm` and "
+                f"`to` describe; got {int(node_count)}"
+            )
+        n_nodes = float(node_count)
+        options["node_count"] = n_nodes
+    if bool(np.any(dest >= n_nodes)):
+        raise ValueError(
+            f"`destinations` is out of range for a network of {int(n_nodes)} nodes"
+        )
+    r = _toolbox_run("network", "dijkstra", [f, t, w, idx], options)
+    values = np.asarray(r["values"], dtype=float)
+    return values.reshape(int(r["dims"][0]), int(r["dims"][1]))
+
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# numerics/data/hypothesis_tests.hpp (a port of the C# `HypothesisTests` static class). Mirrors
+# corehydror's own hypothesis_test() verb; both packages share this signature and produce
+# identical error text so a change here is not one-sided.
+
+_HYPOTHESIS_METHODS = (
+    "one_sample_t", "equal_variance_t", "unequal_variance_t", "paired_t", "f", "f_models",
+    "jarque_bera", "wald_wolfowitz", "ljung_box", "mann_whitney", "mann_kendall", "linear_trend",
+)
+_HYPOTHESIS_TWO_SAMPLE = ("equal_variance_t", "unequal_variance_t", "paired_t", "f", "mann_whitney")
+
+
+def hypothesis_test(
+    x=None,
+    y=None,
+    method: str = "jarque_bera",
+    population_mean: float = 0.0,
+    lag_max: int | None = None,
+    index=None,
+    sse_restricted: float | None = None,
+    sse_full: float | None = None,
+    df_restricted: int | None = None,
+    df_full: int | None = None,
+) -> dict:
+    """Hypothesis tests.
+
+    Mirrors the C# ``HypothesisTests`` static class: twelve one- and two-sample parametric and
+    nonparametric hypothesis tests, reached through the shared ``hypothesis`` toolbox group.
+    Every method but ``"f_models"`` returns the 2-sided p-value of its test statistic;
+    ``"f_models"`` (the F-test comparing two nested regression models) additionally returns the
+    F statistic itself.
+
+    ``HypothesisTests`` has a thirteenth static, ``UnimodalityTest``, that is NOT exposed here:
+    it trains a ``Numerics.MachineLearning.GaussianMixtureModel`` at k = 1 and k = 2, and the
+    Machine Learning layer has no port yet. It is deferred, not permanently out of scope -- see
+    ``site/status.qmd`` for the tracking note.
+
+    Argument use by method, and the C# guard each one inherits:
+
+    - ``"one_sample_t"``: ``x``, ``population_mean`` (default 0). Needs at least 2 observations.
+    - ``"equal_variance_t"`` / ``"unequal_variance_t"``: ``x``, ``y``. ``equal_variance_t``
+      needs a combined length of at least 3; ``unequal_variance_t`` has no length guard
+      (upstream has none either).
+    - ``"paired_t"``: ``x``, ``y``, which must be the same length.
+    - ``"f"``: ``x``, ``y``, each needing at least 2 observations.
+    - ``"f_models"``: ``sse_restricted``, ``sse_full``, ``df_restricted``, ``df_full`` (all
+      required; ``x`` and ``y`` are ignored). ``df_restricted`` must differ from ``df_full``,
+      and ``df_full`` must be positive.
+    - ``"jarque_bera"`` / ``"wald_wolfowitz"``: ``x``. No length guard.
+    - ``"ljung_box"``: ``x``, ``lag_max`` (default ``None``, meaning
+      ``floor(min(10 * log10(len(x)), len(x) - 1))``, the C# default rule).
+    - ``"mann_whitney"``: ``x``, ``y``. ``x`` must be no longer than ``y``, each must have more
+      than 3 observations, and the combined length must exceed 20.
+    - ``"mann_kendall"``: ``x``. Needs at least 10 observations.
+    - ``"linear_trend"``: ``x`` (the sample), ``index`` (default ``1..len(x)`` -- a VALUE the
+      regression is fit against, not an index into ``x``). ``index`` and ``x`` must be the same
+      length.
+
+    Parameters
+    ----------
+    x : array_like
+        The sample (the two-sample methods' first sample, or the response series for
+        ``"linear_trend"``). Ignored for ``"f_models"``.
+    y : array_like, optional
+        The second sample. Required for the two-sample methods listed above, and rejected (must
+        be ``None``) for every other method -- earlier versions silently discarded a ``y``
+        supplied to a one-sample method instead of raising.
+    method : str
+        One of ``"one_sample_t"``, ``"equal_variance_t"``, ``"unequal_variance_t"``,
+        ``"paired_t"``, ``"f"``, ``"f_models"``, ``"jarque_bera"``, ``"wald_wolfowitz"``,
+        ``"ljung_box"``, ``"mann_whitney"``, ``"mann_kendall"``, ``"linear_trend"``.
+    population_mean : float
+        The hypothesized mean for ``"one_sample_t"``. Default 0.
+    lag_max : int, optional
+        The max lag for ``"ljung_box"``. Default ``None`` (use the C# default rule).
+    index : array_like, optional
+        The index (x-axis) vector for ``"linear_trend"``. Default ``None``, meaning
+        ``1..len(x)``.
+    sse_restricted, sse_full, df_restricted, df_full : float, optional
+        The four ``"f_models"`` inputs: the restricted and full models' sum of squared errors
+        and degrees of freedom.
+
+    Returns
+    -------
+    dict
+        ``{"p_value": ...}`` for every method but ``"f_models"``, which returns
+        ``{"f_statistic": ..., "p_value": ...}``.
+
+    Examples
+    --------
+    >>> from corehydropy import hypothesis_test
+    >>> round(
+    ...     hypothesis_test(
+    ...         [4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25], method="jarque_bera"
+    ...     )["p_value"],
+    ...     6,
+    ... )
+    0.592128
+    """
+    if method not in _HYPOTHESIS_METHODS:
+        known = ", ".join(f'"{m}"' for m in _HYPOTHESIS_METHODS)
+        raise ValueError(f'`method` must be one of {known}; got "{method}"')
+    if method in _HYPOTHESIS_TWO_SAMPLE and y is None:
+        raise ValueError(f'`y` is required for method "{method}"')
+    # C2 (P4 whole-branch review): a one-sample method silently DISCARDED a non-None `y` --
+    # `hypothesis_test(a, b)` at the default method equalled `hypothesis_test(a)`. Reject it
+    # instead, mirroring corehydror's own check.
+    if method not in _HYPOTHESIS_TWO_SAMPLE and y is not None:
+        raise ValueError(f'`y` is not used by method "{method}"; leave it None')
+
+    if method == "f_models":
+        if sse_restricted is None or sse_full is None or df_restricted is None or df_full is None:
+            raise ValueError(
+                "`sse_restricted`, `sse_full`, `df_restricted`, and `df_full` are all "
+                'required for method "f_models"'
+            )
+        r = _toolbox_run(
+            "hypothesis",
+            "f_models",
+            [],
+            {
+                "sse_restricted": float(sse_restricted),
+                "sse_full": float(sse_full),
+                "df_restricted": float(df_restricted),
+                "df_full": float(df_full),
+            },
+        )
+        return dict(zip(r["names"], r["values"]))
+
+    if method == "linear_trend":
+        xa = np.asarray(x, dtype=float).ravel()
+        idx = np.arange(1, xa.size + 1, dtype=float) if index is None else np.asarray(index, dtype=float).ravel()
+        r = _toolbox_run("hypothesis", "linear_trend", [idx, xa])
+        return {"p_value": r["values"][0]}
+
+    if method in _HYPOTHESIS_TWO_SAMPLE:
+        data = [np.asarray(x, dtype=float).ravel(), np.asarray(y, dtype=float).ravel()]
+    else:
+        data = [np.asarray(x, dtype=float).ravel()]
+
+    options: dict = {}
+    if method == "one_sample_t":
+        options = {"population_mean": float(population_mean)}
+    elif method == "ljung_box":
+        options = {"lag_max": float(-1 if lag_max is None else lag_max)}
+
+    r = _toolbox_run("hypothesis", method, data, options)
+    return {"p_value": r["values"][0]}
+
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification (numerics/data/paired_data/, P4 Tasks 7-9), plus TabularFunction's
+# tabular/tabular_inverse arm on the "functions" group. Mirrors corehydror's toolbox.R verb for
+# verb. Every curve verb below reads the same strict_x/strict_y/order_x/order_y shape contract
+# paired_data.hpp documents; curve_interpolate() additionally reads x_transform/y_transform. Only
+# five verbs are exported -- line_simplify, search, and is_valid are reachable through the
+# fixture/oracle-gate surface but are not given a Python-facing wrapper by this task.
+
+_SORT_ORDERS = ("ascending", "descending", "none")
+# "logarithmic" (matching the C# enum member name `Transform.Logarithmic`) is this package's
+# documented spelling; "log" is accepted as an equivalent alias (both parse to the same value
+# core-side) so a value valid for interpolate()/interpolate_2d() is also valid here -- see the P4
+# whole-branch-review finding M2.
+_PAIRED_TRANSFORMS = ("none", "logarithmic", "log", "normal_z")
+
+
+def _check_sort_order(value: str, what: str) -> None:
+    # Message format mirrors corehydror's check_choice() (R/fit.R:22) so the two languages raise
+    # textually identical text for the identical mistake -- see the P4 whole-branch-review
+    # finding M3.
+    if value not in _SORT_ORDERS:
+        raise ValueError(f"unknown {what} '{value}'; expected one of {', '.join(_SORT_ORDERS)}")
+
+
+def _check_paired_transform(value: str, what: str) -> None:
+    if value not in _PAIRED_TRANSFORMS:
+        raise ValueError(
+            f"unknown {what} '{value}'; expected one of {', '.join(_PAIRED_TRANSFORMS)}"
+        )
+
+
+def _paired_data_shape_opts(strict_x: bool, strict_y: bool, order_x: str, order_y: str) -> dict:
+    _check_sort_order(order_x, "order_x")
+    _check_sort_order(order_y, "order_y")
+    return {
+        "strict_x": bool(strict_x),
+        "strict_y": bool(strict_y),
+        "order_x": order_x,
+        "order_y": order_y,
+    }
+
+
+def _paired_data_distributions(distributions, x) -> list:
+    """Internal: build a list of Distribution specs, recycling a single one across every `x`.
+
+    Shared by uncertain_curve_sample() and tabular_function(), which use identical recycling
+    and error text (see corehydror's paired_data_distributions()).
+    """
+    if isinstance(distributions, Distribution):
+        distributions = [distributions]
+    if (
+        not isinstance(distributions, (list, tuple))
+        or len(distributions) == 0
+        or not all(isinstance(d, Distribution) for d in distributions)
+    ):
+        raise ValueError("`distributions` must be a Distribution or a list of Distribution objects")
+    distributions = list(distributions)
+    if len(distributions) == 1 and len(x) > 1:
+        distributions = distributions * len(x)
+    if len(distributions) != len(x):
+        raise ValueError(
+            f"`distributions` must have length 1 or length(x) ({len(x)}); got {len(distributions)}"
+        )
+    return distributions
+
+
+def curve_interpolate(
+    x,
+    y,
+    xout=None,
+    yout=None,
+    x_transform: str = "none",
+    y_transform: str = "none",
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> np.ndarray:
+    """Interpolate a paired x-y curve.
+
+    Mirrors the C# ``OrderedPairedData.GetYFromX``/``GetXFromY``: linear interpolation over a
+    curve that keeps itself sorted/validated against a caller-chosen monotonicity contract, with
+    optional per-axis transforms (log10 or the standard normal z-score) applied before/after
+    interpolation. Exactly one of ``xout``/``yout`` must be supplied.
+
+    Parameters
+    ----------
+    x, y : array_like
+        Equal-length curve ordinates, at least two elements.
+    xout : array_like, optional
+        Positions to interpolate y at.
+    yout : array_like, optional
+        Positions to interpolate x at.
+    x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
+        is the spelling used in this package's own examples.
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+        Require x/y to strictly increase/decrease (per ``order_x``/``order_y``) between
+        consecutive ordinates. Default ``True``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Same length as whichever of ``xout``/``yout`` was supplied.
+
+    Examples
+    --------
+    >>> from corehydropy import curve_interpolate
+    >>> curve_interpolate([50, 100, 150, 200, 250], [100, 200, 300, 400, 500], xout=75)
+    array([150.])
+    """
+    xa, ya = _check_pair(x, y)
+    if (xout is None) == (yout is None):
+        raise ValueError("exactly one of `xout` or `yout` must be supplied")
+    _check_paired_transform(x_transform, "x_transform")
+    _check_paired_transform(y_transform, "y_transform")
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    options["x_transform"] = x_transform
+    options["y_transform"] = y_transform
+    if xout is not None:
+        xouta = np.atleast_1d(np.asarray(xout, dtype=float))
+        r = _toolbox_run("paired_data", "interpolate_y", [xa, ya, xouta], options)
+    else:
+        youta = np.atleast_1d(np.asarray(yout, dtype=float))
+        r = _toolbox_run("paired_data", "interpolate_x", [xa, ya, youta], options)
+    return np.asarray(r["values"], dtype=float)
+
+
+def curve_area(
+    x,
+    y,
+    under: str = "y",
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> float:
+    """Area under a paired x-y curve.
+
+    Mirrors the C# ``OrderedPairedData.TrapezoidalAreaUnderY``/``TrapezoidalAreaUnderX``: the
+    trapezoidal-rule area between the curve and the x-axis (``under="y"``) or the y-axis
+    (``under="x"``). Requires x (for ``under="y"``) or y (for ``under="x"``) to be sorted
+    ascending or descending -- ``order_x``/``order_y="none"`` raises the same error the C#
+    method does.
+
+    Parameters
+    ----------
+    x, y : array_like
+        Equal-length curve ordinates, at least two elements.
+    under : {"y", "x"}
+        ``"y"`` (default) is the area against the x-axis; ``"x"`` is the area against the y-axis.
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+
+    Returns
+    -------
+    float
+
+    Examples
+    --------
+    >>> from corehydropy import curve_area
+    >>> curve_area([1, 2, 3, 4], [1, 4, 9, 16])
+    21.5
+    """
+    xa, ya = _check_pair(x, y)
+    if under not in ("y", "x"):
+        raise ValueError(f"unknown under '{under}'; expected one of y, x")
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    method = "area_under_y" if under == "y" else "area_under_x"
+    r = _toolbox_run("paired_data", method, [xa, ya], options)
+    return float(r["values"][0])
+
+
+def curve_simplify(
+    x,
+    y,
+    method: str = "rdp",
+    tolerance: float | None = None,
+    num_to_keep: int | None = None,
+    look_ahead: int | None = None,
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> np.ndarray:
+    """Simplify a paired x-y curve.
+
+    Mirrors the C# ``OrderedPairedData``'s three curve-simplification algorithms:
+    Douglas-Peucker (``method="rdp"``, needs ``tolerance``), Visvalingam-Whyatt
+    (``method="visvalingam"``, needs ``num_to_keep``), and Lang (``method="lang"``, needs
+    ``tolerance`` and ``look_ahead``). NOTE: unlike ``rdp``/``visvalingam``, which always keep
+    the curve's first and last point, ``lang`` does not force-keep the trailing point -- a real,
+    verified-against-the-real-C#-library upstream behavior (see ``ordered_paired_data.hpp``'s
+    sixth transcription note), not a port bug.
+
+    Parameters
+    ----------
+    x, y : array_like
+        Equal-length curve ordinates, at least two elements.
+    method : {"rdp", "visvalingam", "lang"}
+    tolerance : float, optional
+        Perpendicular-distance tolerance; required for ``method`` ``"rdp"`` or ``"lang"``.
+    num_to_keep : int, optional
+        Number of points to keep; required for ``method="visvalingam"``, and must be at least 2
+        (the algorithm always keeps the curve's first and last point, and needs at least 3
+        ordinates to triangulate at every intermediate step).
+    look_ahead : int, optional
+        The Lang algorithm's look-ahead window; required for ``method="lang"``.
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+
+    Returns
+    -------
+    numpy.ndarray
+        An ``(n, 2)`` array with columns ``[x, y]``.
+
+    Examples
+    --------
+    >>> from corehydropy import curve_simplify
+    >>> x = [0, 1.57, 3.14, 4.71, 6.28]
+    >>> y = [0, 1, 0, -1, 0]
+    >>> curve_simplify(x, y, method="rdp", tolerance=0.01, strict_y=False, order_y="none")
+    array([[ 0.  ,  0.  ],
+           [ 1.57,  1.  ],
+           [ 4.71, -1.  ],
+           [ 6.28,  0.  ]])
+    """
+    xa, ya = _check_pair(x, y)
+    if method not in ("rdp", "visvalingam", "lang"):
+        raise ValueError(f'`method` must be one of "rdp", "visvalingam", "lang"; got "{method}"')
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    options["algorithm"] = method
+    if method == "rdp":
+        if tolerance is None:
+            raise ValueError('`tolerance` is required when method="rdp"')
+        options["tolerance"] = float(tolerance)
+    elif method == "visvalingam":
+        if num_to_keep is None:
+            raise ValueError('`num_to_keep` is required when method="visvalingam"')
+        # Visvalingam-Whyatt always keeps the curve's first and last point, so it needs at
+        # least 3 ordinates to triangulate; below that the C++ layer throws (matching the C#
+        # List<T> indexer's ArgumentOutOfRangeException) rather than reading out of bounds.
+        # Checked here too so the caller gets one clear message instead of the runner's
+        # internal one.
+        if num_to_keep < 2:
+            raise ValueError("`num_to_keep` must be a single integer of at least 2")
+        options["num_to_keep"] = int(num_to_keep)
+    else:
+        if tolerance is None or look_ahead is None:
+            raise ValueError('`tolerance` and `look_ahead` are both required when method="lang"')
+        options["tolerance"] = float(tolerance)
+        options["look_ahead"] = int(look_ahead)
+    r = _toolbox_run("paired_data", "simplify", [xa, ya], options)
+    values = np.asarray(r["values"], dtype=float)
+    return values.reshape(r["dims"][0], r["dims"][1])
+
+
+def uncertain_curve_sample(
+    x,
+    distributions,
+    probability: float | None = None,
+    order_x: str = "ascending",
+    order_y: str = "ascending",
+    strict_x: bool = True,
+    strict_y: bool = True,
+) -> np.ndarray:
+    """Sample an uncertain paired curve.
+
+    Mirrors the C# ``UncertainOrderedPairedData.CurveSample()``/``CurveSample(double)``:
+    collapses a curve whose Y-coordinate is a whole distribution at each x down to a plain x-y
+    curve, either at the distributions' means (``probability=None``, the default) or at a
+    shared quantile (``probability`` in ``[0, 1]``).
+
+    Parameters
+    ----------
+    x : array_like
+        x positions, at least one element.
+    distributions : Distribution or list of Distribution
+        One distribution per element of ``x``, or a single distribution recycled across every
+        ``x``.
+    probability : float, optional
+        Quantile in ``[0, 1]`` to sample at; ``None`` (default) samples the mean. Values
+        outside ``[0, 1]`` are rejected -- the underlying C# ``CurveSample(double)`` silently
+        clamps them instead, so this range check is enforced here rather than core-side.
+    order_x, order_y : {"ascending", "descending", "none"}
+    strict_x, strict_y : bool
+
+    Returns
+    -------
+    numpy.ndarray
+        An ``(n, 2)`` array with columns ``[x, y]``.
+
+    Examples
+    --------
+    >>> from corehydropy import Distribution, uncertain_curve_sample
+    >>> x = [1, 2, 3, 5]
+    >>> d = [Distribution("Triangular", [1, 2, 3]), Distribution("Triangular", [2, 4, 5]),
+    ...      Distribution("Triangular", [6, 8, 12]), Distribution("Triangular", [13, 19, 20])]
+    >>> uncertain_curve_sample(x, d, probability=0.5)
+    array([[ 1.        ,  2.        ],
+           [ 2.        ,  3.732051  ],
+           [ 3.        ,  8.535898  ],
+           [ 5.        , 17.58258   ]])
+    """
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    if xa.size == 0:
+        raise ValueError("`x` must be a non-empty array")
+    dists = _paired_data_distributions(distributions, xa)
+    options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
+    options["distributions"] = [_as_spec(d) for d in dists]
+    if probability is not None:
+        # C3 (P4 whole-branch review): the core clamp (uncertain_ordered_paired_data.hpp) is a
+        # faithful port of C# CurveSample(double), which silently clamps an out-of-range
+        # quantile instead of raising -- `probability=50` silently returned the 100% quantile.
+        # That core behavior is untouched; this host-layer range check is what actually rejects
+        # the mistake.
+        if not (0.0 <= probability <= 1.0):
+            raise ValueError("`probability` must be a single number in [0, 1]")
+        options["probability"] = float(probability)
+    r = _toolbox_run("paired_data", "curve_sample", [xa], options)
+    values = np.asarray(r["values"], dtype=float)
+    return values.reshape(r["dims"][0], r["dims"][1])
+
+
+def tabular_function(
+    x,
+    distributions,
+    at,
+    inverse: bool = False,
+    x_transform: str = "none",
+    y_transform: str = "none",
+    confidence_level: float | None = None,
+    allow_negative_y_values: bool = False,
+) -> np.ndarray:
+    """Evaluate a tabular function.
+
+    Mirrors the C# ``TabularFunction``: builds an uncertain paired curve from ``x`` and
+    ``distributions``, samples it once (the mean curve, or ``confidence_level`` if given), and
+    evaluates ``Function()``/``InverseFunction()`` at ``at``. Unlike :func:`curve_interpolate`
+    and friends, the underlying curve's shape contract is not configurable here --
+    ``TabularFunction`` is always built strict, ascending on both axes, matching every use in
+    the ported C# test suite.
+
+    Parameters
+    ----------
+    x : array_like
+        The curve's x positions, at least one element.
+    distributions : Distribution or list of Distribution
+        One distribution per element of ``x``, or a single distribution recycled across every
+        ``x``.
+    at : array_like
+        Points to evaluate at (or, when ``inverse=True``, points to evaluate the inverse
+        function at).
+    inverse : bool, default False
+        If ``True``, evaluates ``InverseFunction()`` instead of ``Function()``.
+    x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
+        "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
+        is the spelling used in this package's own examples.
+    confidence_level : float, optional
+        Quantile in ``[0, 1]`` to sample the curve at; ``None`` (default) samples the mean.
+    allow_negative_y_values : bool, default False
+        Allow a negative or NaN result to pass through unmodified, rather than clamping it to 0.
+        Default ``False`` (clamp), matching every use in the ported C# test suite -- the C#
+        class default is ``True``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Same length as ``at``.
+
+    Examples
+    --------
+    >>> from corehydropy import Distribution, tabular_function
+    >>> x = [50, 100, 150, 200, 250]
+    >>> d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
+    >>> tabular_function(x, d, at=50, x_transform="logarithmic")
+    array([100.])
+    """
+    xa = np.atleast_1d(np.asarray(x, dtype=float))
+    if xa.size == 0:
+        raise ValueError("`x` must be a non-empty array")
+    dists = _paired_data_distributions(distributions, xa)
+    ata = np.atleast_1d(np.asarray(at, dtype=float))
+    if ata.size == 0:
+        raise ValueError("`at` must be a non-empty array")
+    _check_paired_transform(x_transform, "x_transform")
+    _check_paired_transform(y_transform, "y_transform")
+    options: dict = {
+        "x": xa.tolist(),
+        "distributions": [_as_spec(d) for d in dists],
+        "x_transform": x_transform,
+        "y_transform": y_transform,
+        "allow_negative_y_values": bool(allow_negative_y_values),
+    }
+    if confidence_level is not None:
+        options["confidence_level"] = float(confidence_level)
+    method = "tabular_inverse" if inverse else "tabular"
+    r = _toolbox_run("functions", method, [ata], options)
+    return np.asarray(r["values"], dtype=float)

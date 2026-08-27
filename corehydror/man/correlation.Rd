@@ -2,26 +2,34 @@
 % Please edit documentation in R/toolbox.R
 \name{correlation}
 \alias{correlation}
-\title{Correlation between two samples}
+\title{Correlation between two samples, or a correlation matrix}
 \usage{
-correlation(x, y, method = c("pearson", "spearman", "kendall"))
+correlation(x, y = NULL, method = c("pearson", "spearman", "kendall"))
 }
 \arguments{
-\item{x, y}{numeric vectors of equal length, at least two elements.}
+\item{x}{a numeric vector (paired-vector form, \code{y} required), or a numeric matrix or data
+frame (matrix form, \code{y} omitted) with one column per variable.}
 
-\item{method}{one of \code{"pearson"} (the default), \code{"spearman"}, or \code{"kendall"}.}
+\item{y}{a numeric vector of the same length as \code{x}, or \code{NULL} (the default) to compute the
+correlation matrix of \code{x}'s columns instead.}
+
+\item{method}{one of \code{"pearson"} (the default), \code{"spearman"}, or \code{"kendall"}. \code{"kendall"} is
+rejected when \code{y} is \code{NULL}: upstream has no \code{KendallsTau(double[,])} overload, so there is
+no Kendall matrix form to compute.}
 }
 \value{
-a single numeric correlation coefficient.
+with \code{y} given, a single numeric correlation coefficient; with \code{y} \code{NULL}, a numeric
+\code{ncol(x)}-by-\code{ncol(x)} matrix, dimnamed from \code{x}'s columns when \code{x} has column names.
 }
 \description{
-Mirrors the C# \code{Correlation} class of the Numerics library. Upstream's matrix overloads
-(\code{Pearson(double[,])}, \code{Spearman(double[,])}) are not ported, so only the paired-vector forms
-are available here.
+Mirrors the C# \code{Correlation} class of the Numerics library: the paired-vector forms
+(\code{Correlation.Pearson}/\code{Spearman}/\code{KendallsTau}, both \verb{IList<double>} overloads) and the
+Pearson/Spearman column-pairwise matrix overloads (\code{Pearson(double[,])}/\code{Spearman(double[,])}).
 }
 \examples{
 x <- c(14, 8, 32, 7, 3, 15)
 y <- c(10, 5, 7, 4, 3, 8)
 correlation(x, y)
 correlation(x, y, method = "kendall")
+correlation(cbind(x, y))
 }

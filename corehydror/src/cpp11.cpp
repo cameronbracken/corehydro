@@ -62,6 +62,27 @@ extern "C" SEXP _corehydror_ch_callback_math_(SEXP method, SEXP options_json, SE
   END_CPP11
 }
 // callback.cpp
+list ch_callback_math2_(std::string method, std::string options_json, function f, function g);
+extern "C" SEXP _corehydror_ch_callback_math2_(SEXP method, SEXP options_json, SEXP f, SEXP g) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_callback_math2_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(f), cpp11::as_cpp<cpp11::decay_t<function>>(g)));
+  END_CPP11
+}
+// callback.cpp
+list ch_callback_math_xy_(std::string method, std::string options_json, function f);
+extern "C" SEXP _corehydror_ch_callback_math_xy_(SEXP method, SEXP options_json, SEXP f) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_callback_math_xy_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(f)));
+  END_CPP11
+}
+// callback.cpp
+list ch_callback_math_vw_(std::string method, std::string options_json, function f);
+extern "C" SEXP _corehydror_ch_callback_math_vw_(SEXP method, SEXP options_json, SEXP f) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_callback_math_vw_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json), cpp11::as_cpp<cpp11::decay_t<function>>(f)));
+  END_CPP11
+}
+// callback.cpp
 list ch_callback_mcmc_(std::string options_json, function f, sexp proposal, sexp gradient);
 extern "C" SEXP _corehydror_ch_callback_mcmc_(SEXP options_json, SEXP f, SEXP proposal, SEXP gradient) {
   BEGIN_CPP11
@@ -129,6 +150,13 @@ list ch_threshold_diagnostics_(doubles data, std::string method, double u_min, d
 extern "C" SEXP _corehydror_ch_threshold_diagnostics_(SEXP data, SEXP method, SEXP u_min, SEXP u_max, SEXP n_thresholds, SEXP confidence_level) {
   BEGIN_CPP11
     return cpp11::as_sexp(ch_threshold_diagnostics_(cpp11::as_cpp<cpp11::decay_t<doubles>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<double>>(u_min), cpp11::as_cpp<cpp11::decay_t<double>>(u_max), cpp11::as_cpp<cpp11::decay_t<int>>(n_thresholds), cpp11::as_cpp<cpp11::decay_t<double>>(confidence_level)));
+  END_CPP11
+}
+// data.cpp
+list ch_data_frame_run_(std::string method, list data, std::string data_frame_json, std::string options_json);
+extern "C" SEXP _corehydror_ch_data_frame_run_(SEXP method, SEXP data, SEXP data_frame_json, SEXP options_json) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_data_frame_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(method), cpp11::as_cpp<cpp11::decay_t<list>>(data), cpp11::as_cpp<cpp11::decay_t<std::string>>(data_frame_json), cpp11::as_cpp<cpp11::decay_t<std::string>>(options_json)));
   END_CPP11
 }
 // dist.cpp
@@ -572,6 +600,20 @@ extern "C" SEXP _corehydror_ch_optim_run_(SEXP spec_json, SEXP objective) {
     return cpp11::as_sexp(ch_optim_run_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<function>>(objective)));
   END_CPP11
 }
+// toolbox.cpp
+list ch_optim_run_grad_(std::string spec_json, function objective, function gradient);
+extern "C" SEXP _corehydror_ch_optim_run_grad_(SEXP spec_json, SEXP objective, SEXP gradient) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_optim_run_grad_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<function>>(objective), cpp11::as_cpp<cpp11::decay_t<function>>(gradient)));
+  END_CPP11
+}
+// toolbox.cpp
+list ch_optim_run_constrained_(std::string spec_json, function objective, list constraints);
+extern "C" SEXP _corehydror_ch_optim_run_constrained_(SEXP spec_json, SEXP objective, SEXP constraints) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(ch_optim_run_constrained_(cpp11::as_cpp<cpp11::decay_t<std::string>>(spec_json), cpp11::as_cpp<cpp11::decay_t<function>>(objective), cpp11::as_cpp<cpp11::decay_t<list>>(constraints)));
+  END_CPP11
+}
 
 extern "C" {
 static const R_CallMethodDef CallEntries[] = {
@@ -589,11 +631,15 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_bve_cdf_after_set_parameters_", (DL_FUNC) &_corehydror_ch_bve_cdf_after_set_parameters_, 11},
     {"_corehydror_ch_callback_bootstrap_",           (DL_FUNC) &_corehydror_ch_callback_bootstrap_,            6},
     {"_corehydror_ch_callback_gmm_",                 (DL_FUNC) &_corehydror_ch_callback_gmm_,                  4},
+    {"_corehydror_ch_callback_math2_",               (DL_FUNC) &_corehydror_ch_callback_math2_,                4},
     {"_corehydror_ch_callback_math_",                (DL_FUNC) &_corehydror_ch_callback_math_,                 3},
+    {"_corehydror_ch_callback_math_vw_",             (DL_FUNC) &_corehydror_ch_callback_math_vw_,              3},
+    {"_corehydror_ch_callback_math_xy_",             (DL_FUNC) &_corehydror_ch_callback_math_xy_,              3},
     {"_corehydror_ch_callback_mcmc_",                (DL_FUNC) &_corehydror_ch_callback_mcmc_,                 4},
     {"_corehydror_ch_cop_val_",                      (DL_FUNC) &_corehydror_ch_cop_val_,                       8},
     {"_corehydror_ch_copula_run_",                   (DL_FUNC) &_corehydror_ch_copula_run_,                    3},
     {"_corehydror_ch_cr_dependency_change_",         (DL_FUNC) &_corehydror_ch_cr_dependency_change_,         10},
+    {"_corehydror_ch_data_frame_run_",               (DL_FUNC) &_corehydror_ch_data_frame_run_,                4},
     {"_corehydror_ch_data_frame_summary_",           (DL_FUNC) &_corehydror_ch_data_frame_summary_,            2},
     {"_corehydror_ch_dirichlet_val_",                (DL_FUNC) &_corehydror_ch_dirichlet_val_,                 3},
     {"_corehydror_ch_dist_cdf_",                     (DL_FUNC) &_corehydror_ch_dist_cdf_,                      3},
@@ -646,6 +692,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_corehydror_ch_mvn_val_",                      (DL_FUNC) &_corehydror_ch_mvn_val_,                       4},
     {"_corehydror_ch_mvt_val_",                      (DL_FUNC) &_corehydror_ch_mvt_val_,                       5},
     {"_corehydror_ch_optim_run_",                    (DL_FUNC) &_corehydror_ch_optim_run_,                     2},
+    {"_corehydror_ch_optim_run_constrained_",        (DL_FUNC) &_corehydror_ch_optim_run_constrained_,         3},
+    {"_corehydror_ch_optim_run_grad_",               (DL_FUNC) &_corehydror_ch_optim_run_grad_,                3},
     {"_corehydror_ch_plotting_positions_",           (DL_FUNC) &_corehydror_ch_plotting_positions_,            2},
     {"_corehydror_ch_plotting_positions_alpha_",     (DL_FUNC) &_corehydror_ch_plotting_positions_alpha_,      2},
     {"_corehydror_ch_rng_integers_",                 (DL_FUNC) &_corehydror_ch_rng_integers_,                  4},

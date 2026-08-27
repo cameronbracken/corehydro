@@ -56,6 +56,39 @@ std::function<double(double)> as_scalar_fn(function f) {
     };
 }
 
+// Converts an R closure of two arguments into the (x, y) -> z signature math/quadrature_2d takes
+// (P2 "math extras"). Mirrors as_scalar_fn's shape check and error wording.
+std::function<double(double, double)> as_scalar_xy_fn(function f) {
+    return [f](double x, double y) mutable -> double {
+        sexp out = f(writable::doubles({x}), writable::doubles({y}));
+        doubles v = as_doubles(out);
+        if (v.size() != 1)
+            throw std::runtime_error(
+                "the function must return a single number; got a value of length " +
+                std::to_string(static_cast<long long>(v.size())));
+        return v[0];
+    };
+}
+
+// Converts an R closure of two arguments into the (x, weight) -> z signature math/quadrature_vegas
+// takes (P2 "math extras"), upstream's own Vegas integrand shape -- `x` the sample point (a numeric
+// vector) and `weight` the importance weight Vegas has already computed for it. Mirrors
+// as_scalar_xy_fn's shape check and error wording, with `x` marshaled the way as_vector_scalar_fn
+// does.
+std::function<double(const std::vector<double>&, double)> as_vector_weight_fn(function f) {
+    return [f](const std::vector<double>& x, double weight) mutable -> double {
+        writable::doubles par(static_cast<R_xlen_t>(x.size()));
+        for (std::size_t i = 0; i < x.size(); ++i) par[static_cast<R_xlen_t>(i)] = x[i];
+        sexp out = f(par, writable::doubles({weight}));
+        doubles v = as_doubles(out);
+        if (v.size() != 1)
+            throw std::runtime_error(
+                "the function must return a single number; got a value of length " +
+                std::to_string(static_cast<long long>(v.size())));
+        return v[0];
+    };
+}
+
 std::function<double(const std::vector<double>&)> as_vector_scalar_fn(function f) {
     return [f](const std::vector<double>& p) mutable -> double {
         writable::doubles par(static_cast<R_xlen_t>(p.size()));
@@ -445,6 +478,59 @@ list ch_callback_math_(std::string method, std::string options_json, function f)
         cbs.scalar = as_scalar_fn(f);
     else
         cbs.vector_scalar = as_vector_scalar_fn(f);
+    return pack(sup::run_callback("math", method, options_json, cbs));
+}
+
+// The two-callback half of the math group (P2 "math extras"): `root_find_newton` (f, its analytic
+// derivative df) and `root_find_system` (F, its Jacobian J). Split from ch_callback_math_ above
+// rather than folded in because cpp11 functions are fixed-arity -- every other math method takes
+// exactly one R function, and these two need a second. `f`/`g` play different roles by method: for
+// "root_find_newton" they are the scalar function and its scalar derivative
+// (`cbs.scalar`/`cbs.scalar_deriv`); for "root_find_system" they are the vector-valued system
+// function and its Jacobian (`cbs.vector_vector`/`cbs.vector_matrix`, the same shapes the mcmc
+// gradient and gmm jacobian callbacks already use).
+[[cpp11::register]]
+list ch_callback_math2_(std::string method, std::string options_json, function f, function g) {
+    sup::CallbackSet cbs;
+    if (method == "root_find_newton") {
+        cbs.scalar = as_scalar_fn(f);
+        cbs.scalar_deriv = as_scalar_fn(g);
+    } else if (method == "root_find_system") {
+        cbs.vector_vector = as_vector_vector_fn(f);
+        cbs.vector_matrix = as_matrix_fn(g, "the jacobian function");
+    } else {
+        stop("unknown two-callback math method: %s", method.c_str());
+    }
+    return pack(sup::run_callback("math", method, options_json, cbs));
+}
+
+// The (x, y) half of the math group (P2 "math extras"): "quadrature_2d" and "ode_solve", split
+// from ch_callback_math_ above for the same reason ch_callback_math2_ is -- the arity differs
+// from every other math method's. `f` marshals through as_scalar_xy_fn into `cbs.scalar_xy`;
+// "ode_solve" reuses the same shape with `t` playing `x`'s role (see callback/math.hpp's
+// ode_solve arm).
+[[cpp11::register]]
+list ch_callback_math_xy_(std::string method, std::string options_json, function f) {
+    sup::CallbackSet cbs;
+    if (method == "quadrature_2d" || method == "ode_solve") {
+        cbs.scalar_xy = as_scalar_xy_fn(f);
+    } else {
+        stop("unknown xy-callback math method: %s", method.c_str());
+    }
+    return pack(sup::run_callback("math", method, options_json, cbs));
+}
+
+// The (x, weight) half of the math group (P2 "math extras"): "quadrature_vegas" alone, split from
+// ch_callback_math_ for the same reason ch_callback_math_xy_ is -- the callback shape differs from
+// every other math method's. `f` marshals through as_vector_weight_fn into `cbs.vector_weight`.
+[[cpp11::register]]
+list ch_callback_math_vw_(std::string method, std::string options_json, function f) {
+    sup::CallbackSet cbs;
+    if (method == "quadrature_vegas") {
+        cbs.vector_weight = as_vector_weight_fn(f);
+    } else {
+        stop("unknown vector-weight-callback math method: %s", method.c_str());
+    }
     return pack(sup::run_callback("math", method, options_json, cbs));
 }
 

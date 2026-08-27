@@ -1,0 +1,56 @@
+{
+ "kind": "toolbox",
+ "group": "special",
+ "source": "Numerics/Mathematics/Special Functions/Debye.cs, Evaluate.cs; values scraped verbatim from Test_Numerics/Mathematics/Special Functions/Test_SpecialFunctions.cs (Test_Debye, Test_Polynomial, Test_PolynomialRev, Test_PolynomialRev_1).",
+ "reference": "Numerics @ 2a0357a. Test_Debye asserts each Debye.Function(x) against its own literal at tol 1E-4 (matched here); Test_Polynomial/Test_PolynomialRev/Test_PolynomialRev_1 instead assert Evaluate.* against a hand-computed formula over one shared coeffs=[3,5,7], x=4 (Test_PolynomialRev also covers the optional n=1 argument) -- those four expected values are computed the same way here and asserted exactly (tol 0), since they are integer arithmetic with no rounding.",
+ "datasets": {
+  "debye_x": [0.1, 1.0, 2.8, 9.5, 10, 15, 25, 100],
+  "poly_coeffs": [3, 5, 7],
+  "poly_x": [4]
+ },
+ "cases": [
+  {
+   "name": "debye",
+   "data": ["debye_x"],
+   "assertions": [
+    {"method": "debye", "index": 0, "expected": 0.9629999, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[0] (x=0.1)"},
+    {"method": "debye", "index": 1, "expected": 0.6744156, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[1] (x=1.0)"},
+    {"method": "debye", "index": 2, "expected": 0.3099952, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[2] (x=2.8)"},
+    {"method": "debye", "index": 3, "expected": 0.02241066, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[3] (x=9.5)"},
+    {"method": "debye", "index": 4, "expected": 0.01929577, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[4] (x=10)"},
+    {"method": "debye", "index": 5, "expected": 0.005771263, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[5] (x=15)"},
+    {"method": "debye", "index": 6, "expected": 0.001246836, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[6] (x=25)"},
+    {"method": "debye", "index": 7, "expected": 1.948182e-05, "mode": "abs", "tol": 1e-4, "source": "Test_Debye testValid[7] (x=100)"}
+   ]
+  },
+  {
+   "name": "polynomial",
+   "data": ["poly_coeffs", "poly_x"],
+   "assertions": [
+    {"method": "polynomial", "index": 0, "expected": 135, "mode": "abs", "tol": 0, "source": "Test_Polynomial: valid = 3 + 5*4 + 7*4*4"}
+   ]
+  },
+  {
+   "name": "polynomial_rev_default_n",
+   "data": ["poly_coeffs", "poly_x"],
+   "assertions": [
+    {"method": "polynomial_rev", "index": 0, "expected": 75, "mode": "abs", "tol": 0, "source": "Test_PolynomialRev: valid = 3*4*4 + 5*4 + 7 (no n given)"}
+   ]
+  },
+  {
+   "name": "polynomial_rev_explicit_n",
+   "data": ["poly_coeffs", "poly_x"],
+   "options": {"n": 1},
+   "assertions": [
+    {"method": "polynomial_rev", "index": 0, "expected": 17, "mode": "abs", "tol": 0, "source": "Test_PolynomialRev: validN = 3*4 + 5 (n = 1)"}
+   ]
+  },
+  {
+   "name": "polynomial_rev_1",
+   "data": ["poly_coeffs", "poly_x"],
+   "assertions": [
+    {"method": "polynomial_rev_1", "index": 0, "expected": 139, "mode": "abs", "tol": 0, "source": "Test_PolynomialRev_1: valid = 4*4*4 + 3*4*4 + 5*4 + 7"}
+   ]
+  }
+ ]
+}

@@ -13,6 +13,7 @@ guard's own sentinel can never replace it.
 from __future__ import annotations
 
 import json
+from importlib.resources import files
 from typing import Callable, Sequence
 
 import numpy as np
@@ -22,8 +23,12 @@ from .distributions import Distribution, _as_spec
 
 __all__ = [
     "root_find",
+    "root_find_system",
     "quadrature",
+    "quadrature_2d",
+    "quadrature_nd",
     "QuadratureResult",
+    "ode_solve",
     "derivative",
     "gradient",
     "hessian",
@@ -57,29 +62,45 @@ class QuadratureResult(float):
         One of ``"Success"``, ``"MaximumFunctionEvaluationsReached"``,
         ``"MaximumIterationsReached"``, ``"Failure"`` or ``"None"`` -- the ported Numerics
         ``IntegrationStatus``.
-    function_evaluations : int
-        The number of times ``f`` was called.
-    standard_error : float
+    function_evaluations : int or None
+        The number of times ``f`` was called. ``None`` for one of the five fixed-rule
+        ``quadrature()`` methods (P2 "math extras": ``"gauss_legendre"``, ``"gauss_legendre20"``,
+        ``"simpsons_fixed"``, ``"trapezoidal_fixed"``, ``"midpoint"``), whose ported Numerics
+        statics report no such count.
+    standard_error : float or None
         The rule's own error estimate, the ported ``StandardError``: the square root of the
-        accumulated squared differences between the Gauss and Kronrod estimates. Zero when the
-        interval never needed subdividing.
+        accumulated squared differences between the two nested estimates the adaptive methods
+        compare. Zero when the interval never needed subdividing, or when the driven class (P2
+        "math extras": ``"simpsons"``, ``"trapezoidal"``, ``"gauss_lobatto"``) has no such
+        estimate at all; ``None`` for the same five fixed-rule methods
+        ``function_evaluations`` is.
+    chi_squared : float or None
+        The Chi-Squared statistic, an approximate diagnostic for a run's own internal consistency
+        across its independent evaluations. Only :func:`quadrature_nd` with ``method="vegas"``
+        (P2 "math extras") sets this; every other caller of ``QuadratureResult`` leaves it
+        ``None``.
     """
 
     status: str
-    function_evaluations: int
-    standard_error: float
+    function_evaluations: int | None
+    standard_error: float | None
+    chi_squared: float | None
 
     def __new__(
         cls,
         value: float,
         status: str,
-        function_evaluations: int,
-        standard_error: float,
+        function_evaluations: int | None,
+        standard_error: float | None,
+        chi_squared: float | None = None,
     ) -> "QuadratureResult":
         self = super().__new__(cls, value)
         self.status = status
-        self.function_evaluations = int(function_evaluations)
-        self.standard_error = float(standard_error)
+        self.function_evaluations = (
+            None if function_evaluations is None else int(function_evaluations)
+        )
+        self.standard_error = None if standard_error is None else float(standard_error)
+        self.chi_squared = None if chi_squared is None else float(chi_squared)
         return self
 
     # A float subclass whose __new__ takes more than the value cannot be reconstructed by the
@@ -88,14 +109,21 @@ class QuadratureResult(float):
     # required positional arguments" -- and OptimResult, the other object this surface returns,
     # is picklable. Returning the full argument tuple restores both round trips.
     def __getnewargs__(self) -> tuple:
-        return (float(self), self.status, self.function_evaluations, self.standard_error)
+        return (
+            float(self),
+            self.status,
+            self.function_evaluations,
+            self.standard_error,
+            self.chi_squared,
+        )
 
     def __repr__(self) -> str:
-        # The bare float repr would hide the two fields the R twin prints as attributes.
+        # The bare float repr would hide the fields the R twin prints as attributes.
+        chi_squared = f", chi_squared={self.chi_squared!r}" if self.chi_squared is not None else ""
         return (
             f"{float(self)!r} (status={self.status!r}, "
             f"function_evaluations={self.function_evaluations}, "
-            f"standard_error={self.standard_error!r})"
+            f"standard_error={self.standard_error!r}{chi_squared})"
         )
 
 
@@ -114,28 +142,72 @@ def _check_point(x: object) -> np.ndarray:
     return point
 
 
+_ROOT_FIND_METHODS = ("brent", "bisection", "secant", "newton")
+# The ten `quadrature()` methods (P2 "math extras"): the default plus four more adaptive rules
+# (each a ported Integrator subclass, with a real status/function_evaluations/standard_error to
+# report) and five fixed rules with no adaptive refinement (ported Integration statics, which
+# report only the integral). corehydror carries the same two lists in R/callback.R.
+_QUADRATURE_METHODS = (
+    "gauss_kronrod",
+    "simpsons",
+    "trapezoidal",
+    "adaptive_simpsons",
+    "gauss_lobatto",
+    "gauss_legendre",
+    "gauss_legendre20",
+    "simpsons_fixed",
+    "trapezoidal_fixed",
+    "midpoint",
+)
+_FIXED_QUADRATURE_METHODS = (
+    "gauss_legendre",
+    "gauss_legendre20",
+    "simpsons_fixed",
+    "trapezoidal_fixed",
+    "midpoint",
+)
+
+
 def root_find(
     f: Callable[[float], float],
-    lower: float,
-    upper: float,
+    lower: float | None = None,
+    upper: float | None = None,
+    method: str = "brent",
+    df: Callable[[float], float] | None = None,
+    first_guess: float | None = None,
     tolerance: float | None = None,
     max_iterations: int | None = None,
 ) -> float:
     """Find a root of a user-written function.
 
-    Solves ``f(x) = 0`` on ``[lower, upper]`` with the ported Numerics Brent root finder. ``f``
-    must change sign across the interval.
+    Solves ``f(x) = 0`` with a ported Numerics root finder: Brent (the default), Bisection,
+    Secant, or Newton-Raphson. ``method`` ``"brent"``, ``"bisection"``, and ``"secant"`` all
+    bracket the root on ``[lower, upper]``, over which ``f`` must change sign; ``method =
+    "newton"`` takes an analytic derivative ``df`` and a ``first_guess`` instead, with the
+    bracket optional (see below).
 
     Parameters
     ----------
     f : callable
         A function taking one number and returning one number.
-    lower, upper : float
-        The bracketing interval.
+    lower, upper : float, optional
+        The bracketing interval. Required for ``method`` ``"brent"``, ``"bisection"``, and
+        ``"secant"``. For ``"newton"`` they are optional, and it is their PRESENCE -- both
+        together -- that selects the robust (bracket-aware) Newton-Raphson variant over the plain
+        one, matching the ported class's own two entry points rather than a method sub-argument.
+    method : {"brent", "bisection", "secant", "newton"}
+        The root finder to use.
+    df : callable, optional
+        The analytic derivative of ``f``, a function taking one number and returning one number.
+        Required for, and only used by, ``method = "newton"``.
+    first_guess : float, optional
+        The running root Bisection and Newton-Raphson seed themselves with (the bracket only
+        seeds their initial step direction / bracket maintenance). Required for ``method =
+        "bisection"`` and ``method = "newton"``; unused by ``"brent"`` and ``"secant"``, which
+        pick their own starting point off the bracket.
     tolerance : float, optional
-        The convergence tolerance on the bracket width. Left unset, the ported Brent solver's own
-        default (1e-8) applies; the value is not restated here, so a change to it lands in one
-        place.
+        The convergence tolerance on the root. Left unset, the ported solver's own default
+        (1e-8) applies; the value is not restated here, so a change to it lands in one place.
     max_iterations : int, optional
         The iteration cap; the search raises if it is reached. Left unset, the ported solver's own
         default (1000) applies.
@@ -150,18 +222,40 @@ def root_find(
     >>> import corehydropy as ch
     >>> round(ch.root_find(lambda x: x**2 - 2, lower=0, upper=2), 6)
     1.414214
+    >>> round(ch.root_find(lambda x: x**2 - 2, lower=0, upper=4,
+    ...                    method="bisection", first_guess=1), 6)
+    1.414214
+    >>> round(ch.root_find(lambda x: x**3 - x - 1, lower=-1, upper=5, method="secant"), 5)
+    1.32472
+    >>> round(ch.root_find(lambda x: x**2 - 2, method="newton",
+    ...                    df=lambda x: 2 * x, first_guess=1), 6)
+    1.414214
     """
+    if method not in _ROOT_FIND_METHODS:
+        raise ValueError(f"`method` must be one of {_ROOT_FIND_METHODS}")
     _check_fn(f)
-    lower = float(lower)
-    upper = float(upper)
-    if not np.isfinite(lower) or not np.isfinite(upper):
-        raise ValueError("`lower` and `upper` must each be a single finite number")
-    if lower >= upper:
-        raise ValueError("`lower` must be below `upper`")
-    # An option key is written ONLY when the caller supplied it, so an unset argument reaches the
-    # ported routine's own default rather than a copy of that default made here. Mirrors
-    # corehydror's root_find() and the same rule in callback/math.hpp and the oracle emitter.
-    options: dict[str, float | int] = {"lower": lower, "upper": upper}
+
+    def _check_bound(x: object, name: str) -> float:
+        x = float(x)
+        if not np.isfinite(x):
+            raise ValueError(f"`{name}` must be a single finite number")
+        return x
+
+    has_lower = lower is not None
+    has_upper = upper is not None
+    options: dict[str, float | int] = {}
+    if has_lower or has_upper:
+        if not (has_lower and has_upper):
+            raise ValueError("`lower` and `upper` must both be supplied, or both left None")
+        lower = _check_bound(lower, "lower")
+        upper = _check_bound(upper, "upper")
+        if lower >= upper:
+            raise ValueError("`lower` must be below `upper`")
+        # An option key is written ONLY when the caller supplied it, so an unset argument reaches
+        # the ported routine's own default rather than a copy of that default made here. Mirrors
+        # corehydror's root_find() and the same rule in callback/math.hpp and the oracle emitter.
+        options["lower"] = lower
+        options["upper"] = upper
     if tolerance is not None:
         if float(tolerance) <= 0:
             raise ValueError("`tolerance` must be a single positive number")
@@ -170,22 +264,109 @@ def root_find(
         if int(max_iterations) < 1:
             raise ValueError("`max_iterations` must be a single positive integer")
         options["max_iterations"] = int(max_iterations)
+
+    if method == "newton":
+        if df is None:
+            raise ValueError('`df`, the analytic derivative of `f`, is required for method="newton"')
+        _check_fn(df)
+        if first_guess is None:
+            raise ValueError('`first_guess` is required for method="newton"')
+        options["first_guess"] = _check_bound(first_guess, "first_guess")
+        return float(
+            _core.callback_math2("root_find_newton", json.dumps(options), f, df)["values"][0]
+        )
+
+    if method == "bisection":
+        if first_guess is None:
+            raise ValueError('`first_guess` is required for method="bisection"')
+        options["first_guess"] = _check_bound(first_guess, "first_guess")
+    if not has_lower:
+        raise ValueError(f'`lower` and `upper` are required for method="{method}"')
+    options["method"] = method
     return float(_core.callback_math("root_find", json.dumps(options), f)["values"][0])
+
+
+def root_find_system(
+    f: Callable[[Sequence[float]], Sequence[float]],
+    jacobian: Callable[[Sequence[float]], Sequence[Sequence[float]]],
+    first_guess: Sequence[float],
+    tolerance: float | None = None,
+    max_iterations: int | None = None,
+) -> np.ndarray:
+    """Solve a system of nonlinear equations.
+
+    Solves ``F(x) = 0`` for a vector-valued ``F`` with the ported Numerics multivariate
+    Newton-Raphson method, iterating ``x_(n+1) = x_n - J(x_n)^-1 F(x_n)``.
+
+    Parameters
+    ----------
+    f : callable
+        The system of equations: a function taking a sequence of numbers and returning a
+        sequence of numbers of the same length.
+    jacobian : callable
+        The Jacobian of ``f``: a function taking the same sequence and returning the square
+        matrix of partial derivatives (a sequence of rows, or a 2-D array), one ROW per equation.
+    first_guess : array_like
+        The starting vector; its length fixes the dimension of the system.
+    tolerance : float, optional
+        The convergence tolerance, applied to both the step size and the residual. Left unset,
+        the ported solver's own default (1e-8) applies.
+    max_iterations : int, optional
+        The iteration cap; the search raises if it is reached. Left unset, the ported solver's own
+        default (1000) applies.
+
+    Returns
+    -------
+    numpy.ndarray
+        The root, the length of ``first_guess``.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> f = lambda v: [3 * v[0] + v[1] - 9, v[0] + 2 * v[1] - 8]
+    >>> j = lambda v: [[3, 1], [1, 2]]
+    >>> ch.root_find_system(f, j, first_guess=[0, 0]).round(6)
+    array([2., 3.])
+    """
+    _check_fn(f)
+    _check_fn(jacobian)
+    guess = np.asarray(first_guess, dtype=float).ravel()
+    if guess.size == 0 or not np.all(np.isfinite(guess)):
+        raise ValueError("`first_guess` must be a non-empty sequence of finite numbers")
+    options: dict[str, object] = {"first_guess": guess.tolist()}
+    if tolerance is not None:
+        if float(tolerance) <= 0:
+            raise ValueError("`tolerance` must be a single positive number")
+        options["tolerance"] = float(tolerance)
+    if max_iterations is not None:
+        if int(max_iterations) < 1:
+            raise ValueError("`max_iterations` must be a single positive integer")
+        options["max_iterations"] = int(max_iterations)
+    res = _core.callback_math2("root_find_system", json.dumps(options), f, jacobian)
+    return np.asarray(res["values"], dtype=float)
 
 
 def quadrature(
     f: Callable[[float], float],
     lower: float,
     upper: float,
+    method: str = "gauss_kronrod",
     absolute_tolerance: float | None = None,
     relative_tolerance: float | None = None,
     max_function_evaluations: int | None = None,
+    steps: int | None = None,
+    min_depth: int | None = None,
+    max_depth: int | None = None,
 ) -> QuadratureResult:
     """Integrate a user-written function over a finite interval.
 
-    Computes the definite integral of ``f`` over ``[lower, upper]`` with the ported Numerics
-    adaptive Gauss-Kronrod rule (10-point Gauss, 21-point Kronrod), which subdivides the interval
-    until the two nested estimates agree to the requested tolerance.
+    Computes the definite integral of ``f`` over ``[lower, upper]``. The default ``method``,
+    ``"gauss_kronrod"``, is the ported Numerics adaptive Gauss-Kronrod rule (10-point Gauss,
+    21-point Kronrod), which subdivides the interval until the two nested estimates agree to the
+    requested tolerance. Nine other ported methods (P2 "math extras") are available: three more
+    adaptive rules (``"simpsons"``, ``"trapezoidal"``, ``"adaptive_simpsons"``,
+    ``"gauss_lobatto"``) and five fixed rules with no adaptive refinement (``"gauss_legendre"``,
+    ``"gauss_legendre20"``, ``"simpsons_fixed"``, ``"trapezoidal_fixed"``, ``"midpoint"``).
 
     Named ``quadrature`` rather than ``integrate`` to stay in step with ``corehydror``, where the
     latter would mask ``stats::integrate``.
@@ -196,19 +377,38 @@ def quadrature(
         A function taking one number and returning one number.
     lower, upper : float
         The limits of integration. ``upper`` must be above ``lower``; neither may be infinite.
+    method : str
+        One of ``"gauss_kronrod"`` (the default), ``"simpsons"``, ``"trapezoidal"``,
+        ``"adaptive_simpsons"``, ``"gauss_lobatto"``, ``"gauss_legendre"``,
+        ``"gauss_legendre20"``, ``"simpsons_fixed"``, ``"trapezoidal_fixed"``, or ``"midpoint"``.
     absolute_tolerance, relative_tolerance : float, optional
-        The convergence tolerances on the difference between the Gauss and Kronrod estimates.
-        Each must lie between 1e-15 and 1. Left unset, the ported integrator's own defaults
-        (1e-8) apply.
+        The convergence tolerances on the difference between the two nested estimates the
+        adaptive methods compare (``"gauss_kronrod"``, ``"simpsons"``, ``"trapezoidal"``,
+        ``"adaptive_simpsons"``, ``"gauss_lobatto"``). Each must lie between 1e-15 and 1. Left
+        unset, the ported integrator's own defaults (1e-8) apply. Only apply to the adaptive
+        methods; supplying either for one of the five fixed-rule methods raises ``ValueError``.
     max_function_evaluations : int, optional
-        The cap on evaluations of ``f``. Reaching it stops the subdivision and is reported in the
-        status rather than raising. Left unset, the ported integrator's own default applies.
+        The cap on evaluations of ``f``, for the adaptive methods. Reaching it stops the
+        subdivision and is reported in the status rather than raising. Left unset, the ported
+        integrator's own default applies. Supplying it for one of the five fixed-rule methods
+        raises ``ValueError``.
+    steps : int, optional
+        The number of integration steps, for ``method`` ``"simpsons_fixed"``,
+        ``"trapezoidal_fixed"``, or ``"midpoint"`` alone. Left unset, the ported static's own
+        default (2) applies.
+    min_depth, max_depth : int, optional
+        The recursion-depth bounds, for ``method="adaptive_simpsons"`` alone. Left unset, the
+        ported class's own defaults (0 and 100) apply.
 
     Returns
     -------
     QuadratureResult
         The integral, a ``float`` carrying ``status``, ``function_evaluations`` and
-        ``standard_error``.
+        ``standard_error``. For the five fixed-rule methods, which have no adaptive status or
+        evaluation count of their own, ``status`` is always ``"Success"`` and
+        ``function_evaluations``/``standard_error`` are ``None``; ``standard_error`` is also 0.0
+        for ``"simpsons"``, ``"trapezoidal"``, and ``"gauss_lobatto"``, which have no such
+        estimate of their own either.
 
     Examples
     --------
@@ -217,7 +417,13 @@ def quadrature(
     9.0
     >>> ch.quadrature(lambda x: x**2, 0, 3).status
     'Success'
+    >>> round(ch.quadrature(lambda x: x**3, 0, 1, method="gauss_lobatto"), 3)
+    0.25
+    >>> round(ch.quadrature(lambda x: x**3, 0, 1, method="midpoint", steps=1000), 3)
+    0.25
     """
+    if method not in _QUADRATURE_METHODS:
+        raise ValueError(f"`method` must be one of {_QUADRATURE_METHODS}")
     _check_fn(f)
     lower = float(lower)
     upper = float(upper)
@@ -226,7 +432,131 @@ def quadrature(
     if lower >= upper:
         raise ValueError("`lower` must be below `upper`")
     # See root_find above: a key is written only when the caller supplied it.
-    options: dict[str, float | int] = {"lower": lower, "upper": upper}
+    options: dict[str, float | int | str] = {"lower": lower, "upper": upper}
+    if method != "gauss_kronrod":
+        options["method"] = method
+    if absolute_tolerance is not None:
+        if method in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                f'`absolute_tolerance` only applies to the adaptive methods, not method="{method}"'
+            )
+        if not 1e-15 <= float(absolute_tolerance) <= 1:
+            raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
+        options["absolute_tolerance"] = float(absolute_tolerance)
+    if relative_tolerance is not None:
+        if method in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                f'`relative_tolerance` only applies to the adaptive methods, not method="{method}"'
+            )
+        if not 1e-15 <= float(relative_tolerance) <= 1:
+            raise ValueError("`relative_tolerance` must be a single number between 1e-15 and 1")
+        options["relative_tolerance"] = float(relative_tolerance)
+    if max_function_evaluations is not None:
+        if method in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                "`max_function_evaluations` only applies to the adaptive methods, not "
+                f'method="{method}"'
+            )
+        if int(max_function_evaluations) < 1:
+            raise ValueError("`max_function_evaluations` must be a single positive integer")
+        options["max_function_evaluations"] = int(max_function_evaluations)
+    if steps is not None:
+        if method not in _FIXED_QUADRATURE_METHODS:
+            raise ValueError(
+                '`steps` only applies to method="simpsons_fixed", "trapezoidal_fixed", or '
+                '"midpoint"'
+            )
+        if int(steps) < 1:
+            raise ValueError("`steps` must be a single positive integer")
+        options["steps"] = int(steps)
+    if min_depth is not None or max_depth is not None:
+        if method != "adaptive_simpsons":
+            raise ValueError('`min_depth`/`max_depth` only apply to method="adaptive_simpsons"')
+        if min_depth is not None:
+            if int(min_depth) < 0:
+                raise ValueError("`min_depth` must be a single non-negative integer")
+            options["min_depth"] = int(min_depth)
+        if max_depth is not None:
+            if int(max_depth) < 0:
+                raise ValueError("`max_depth` must be a single non-negative integer")
+            options["max_depth"] = int(max_depth)
+    res = _core.callback_math("quadrature", json.dumps(options), f)
+    # The five fixed-rule statics return values = {integral} alone (see callback/math.hpp's file
+    # header): no function_evaluations or standard_error to report, so those two fields are None
+    # rather than reading past the end of the result.
+    if len(res["values"]) >= 3:
+        return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
+    return QuadratureResult(res["values"][0], res["status"], None, None)
+
+
+def quadrature_2d(
+    f: Callable[[float, float], float],
+    min_x: float,
+    max_x: float,
+    min_y: float,
+    max_y: float,
+    absolute_tolerance: float | None = None,
+    relative_tolerance: float | None = None,
+    min_depth: int | None = None,
+    max_depth: int | None = None,
+) -> QuadratureResult:
+    """Integrate a user-written function of two variables over a rectangle.
+
+    Computes the definite integral of ``f(x, y)`` over the rectangle ``[min_x, max_x] x
+    [min_y, max_y]`` with the ported Numerics adaptive Simpson's rule in two dimensions
+    (P2 "math extras"): the tensor-product 3x3-point Simpson estimate over the whole domain is
+    compared against the sum of the four quadrant sub-estimates, and the domain is subdivided
+    into quadrants until the two agree to the requested tolerance.
+
+    Parameters
+    ----------
+    f : callable
+        A function taking two numbers (``x``, ``y``) and returning one number.
+    min_x, max_x, min_y, max_y : float
+        The bounds of the rectangle. ``max_x`` must be above ``min_x``, and ``max_y`` above
+        ``min_y``.
+    absolute_tolerance, relative_tolerance : float, optional
+        The convergence tolerances on the difference between the whole-domain and
+        quadrant-subdivided estimates. Each must lie between 1e-15 and 1. Left unset, the ported
+        integrator's own defaults (1e-8) apply.
+    min_depth, max_depth : int, optional
+        The recursion-depth bounds. Left unset, the ported class's own defaults (0 and 100)
+        apply.
+
+    Returns
+    -------
+    QuadratureResult
+        The integral, a ``float`` carrying the same three fields :func:`quadrature` returns:
+        ``status``, ``function_evaluations``, and ``standard_error``.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> round(ch.quadrature_2d(lambda x, y: x + y, 0, 1, 0, 1), 3)
+    1.0
+    """
+    _check_fn(f)
+
+    def _check_bound(x: object, name: str) -> float:
+        x = float(x)
+        if not np.isfinite(x):
+            raise ValueError(f"`{name}` must be a single finite number")
+        return x
+
+    min_x = _check_bound(min_x, "min_x")
+    max_x = _check_bound(max_x, "max_x")
+    min_y = _check_bound(min_y, "min_y")
+    max_y = _check_bound(max_y, "max_y")
+    if min_x >= max_x:
+        raise ValueError("`min_x` must be below `max_x`")
+    if min_y >= max_y:
+        raise ValueError("`min_y` must be below `max_y`")
+    options: dict[str, float | int] = {
+        "min_x": min_x,
+        "max_x": max_x,
+        "min_y": min_y,
+        "max_y": max_y,
+    }
     if absolute_tolerance is not None:
         if not 1e-15 <= float(absolute_tolerance) <= 1:
             raise ValueError("`absolute_tolerance` must be a single number between 1e-15 and 1")
@@ -235,11 +565,381 @@ def quadrature(
         if not 1e-15 <= float(relative_tolerance) <= 1:
             raise ValueError("`relative_tolerance` must be a single number between 1e-15 and 1")
         options["relative_tolerance"] = float(relative_tolerance)
+    if min_depth is not None:
+        if int(min_depth) < 0:
+            raise ValueError("`min_depth` must be a single non-negative integer")
+        options["min_depth"] = int(min_depth)
+    if max_depth is not None:
+        if int(max_depth) < 0:
+            raise ValueError("`max_depth` must be a single non-negative integer")
+        options["max_depth"] = int(max_depth)
+    res = _core.callback_math_xy("quadrature_2d", json.dumps(options), f)
+    return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
+
+
+_ODE_METHODS = ("rk4", "rk2", "rkf", "cash_karp")
+
+
+def ode_solve(
+    f: Callable[[float, float], float],
+    initial_value: float,
+    start_time: float,
+    end_time: float | None = None,
+    time_steps: int | None = None,
+    dt: float | None = None,
+    dt_min: float | None = None,
+    method: str = "rk4",
+    tolerance: float | None = None,
+) -> float | np.ndarray:
+    """Solve a user-written ordinary differential equation.
+
+    Solves ``dy/dt = f(t, y)`` forward from ``start_time`` with a ported Numerics Runge-Kutta
+    method (P2 "math extras"): fixed-step second- or fourth-order Runge-Kutta over an
+    equally-spaced grid (``method="rk2"``/``"rk4"`` with ``end_time``/``time_steps``), the
+    fourth-order method's single-step form (``method="rk4"`` with ``dt`` alone), or one of the
+    two adaptive-step-size methods, Runge-Kutta-Fehlberg or Runge-Kutta-Cash-Karp
+    (``method="rkf"``/``"cash_karp"`` with ``dt``/``dt_min``).
+
+    Parameters
+    ----------
+    f : callable
+        A function taking two numbers (``t``, ``y``) and returning ``dy/dt``, one number.
+    initial_value : float
+        The value of ``y`` at ``start_time``.
+    start_time : float
+        The time to start integrating from.
+    end_time, time_steps : float, int, optional
+        The end time and the number of equally-spaced points between ``start_time`` and
+        ``end_time`` (inclusive of both ends). Required together for ``method="rk2"``; for
+        ``method="rk4"``, supplying them selects this array form over the single-step form (see
+        ``dt`` below) -- their PRESENCE, not a separate flag.
+    dt : float, optional
+        The step size. For ``method="rk4"`` without ``end_time``/``time_steps``, the single step
+        to advance by (the ODE is solved once, at ``start_time + dt``). For
+        ``method="rkf"``/``"cash_karp"``, the maximum internal step size, required together with
+        ``dt_min``.
+    dt_min : float, optional
+        The minimum internal step size for ``method="rkf"``/``"cash_karp"``, required together
+        with ``dt``.
+    method : str, default "rk4"
+        One of ``"rk4"`` (the default), ``"rk2"``, ``"rkf"``, or ``"cash_karp"``.
+    tolerance : float, optional
+        The absolute error tolerance for ``method="rkf"``/``"cash_karp"`` alone. Left unset, the
+        ported routine's own default (1e-3) applies.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        For ``method="rk2"``, or ``"rk4"`` with ``end_time``/``time_steps``: an array of length
+        ``time_steps``, the solution at each grid point (``y[0]`` is ``initial_value``). For
+        every other case: a single number, the solution at ``start_time + dt`` (``"rk4"``'s
+        single-step form) or under the adaptive step control (``"rkf"``/``"cash_karp"``).
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> y = ch.ode_solve(lambda t, y: y, initial_value=1, start_time=0, end_time=1,
+    ...                   time_steps=100)
+    >>> round(y[-1], 5)
+    2.71828
+    """
+    _check_fn(f)
+    if method not in _ODE_METHODS:
+        raise ValueError(f"`method` must be one of {_ODE_METHODS!r}, got {method!r}")
+
+    def _check_number(x: object, name: str) -> float:
+        x = float(x)
+        if not np.isfinite(x):
+            raise ValueError(f"`{name}` must be a single finite number")
+        return x
+
+    initial_value = _check_number(initial_value, "initial_value")
+    start_time = _check_number(start_time, "start_time")
+    options: dict[str, float | int | str] = {
+        "initial_value": initial_value,
+        "start_time": start_time,
+    }
+    if method != "rk4":
+        options["method"] = method
+
+    array_form = method == "rk2" or (method == "rk4" and end_time is not None)
+    if array_form:
+        if end_time is None or time_steps is None:
+            raise ValueError(f"`end_time` and `time_steps` are both required for method={method!r}")
+        end_time = _check_number(end_time, "end_time")
+        if int(time_steps) < 2:
+            raise ValueError("`time_steps` must be an integer of at least 2")
+        options["end_time"] = end_time
+        options["time_steps"] = int(time_steps)
+    elif method == "rk4":
+        if dt is None:
+            raise ValueError("`dt` is required for method=\"rk4\" when `end_time` is not supplied")
+        options["dt"] = _check_number(dt, "dt")
+    else:
+        # rkf / cash_karp
+        if dt is None or dt_min is None:
+            raise ValueError(f"`dt` and `dt_min` are both required for method={method!r}")
+        options["dt"] = _check_number(dt, "dt")
+        options["dt_min"] = _check_number(dt_min, "dt_min")
+        if tolerance is not None:
+            if not float(tolerance) > 0:
+                raise ValueError("`tolerance` must be a single positive number")
+            options["tolerance"] = float(tolerance)
+
+    res = _core.callback_math_xy("ode_solve", json.dumps(options), f)
+    if array_form:
+        return np.asarray(res["values"], dtype=float)
+    return float(res["values"][0])
+
+
+_QUADRATURE_ND_METHODS = ("monte_carlo", "miser", "vegas")
+_QUADRATURE_ND_MC_ONLY = ("min_iterations", "max_iterations", "relative_tolerance")
+_QUADRATURE_ND_MISER_ONLY = ("fraction", "min_subregion_points", "min_bisections", "dither")
+_QUADRATURE_ND_VEGAS_ONLY = (
+    "independent_evaluations",
+    "function_calls",
+    "alpha",
+    "number_of_bins",
+    "tail_focus_parameter",
+    "initialize",
+    "check_convergence",
+    "target_probability",
+)
+
+
+def quadrature_nd(
+    f: Callable[..., float],
+    min: Sequence[float],
+    max: Sequence[float],
+    method: str = "monte_carlo",
+    seed: int | None = None,
+    use_sobol: bool = True,
+    max_function_evaluations: int | None = None,
+    min_iterations: int | None = None,
+    max_iterations: int | None = None,
+    relative_tolerance: float | None = None,
+    fraction: float | None = None,
+    min_subregion_points: int | None = None,
+    min_bisections: int | None = None,
+    dither: float | None = None,
+    independent_evaluations: int | None = None,
+    function_calls: int | None = None,
+    alpha: float | None = None,
+    number_of_bins: int | None = None,
+    tail_focus_parameter: float | None = None,
+    initialize: int | None = None,
+    check_convergence: bool | None = None,
+    target_probability: float | None = None,
+) -> QuadratureResult:
+    """Integrate a user-written function over a multidimensional box.
+
+    Computes the definite integral of ``f`` over the hyper-rectangle ``[min, max]`` (P2 "math
+    extras") with one of three ported stochastic multidimensional integrators: plain Monte Carlo
+    (``method="monte_carlo"``, the default), Miser (recursive stratified-sampling Monte Carlo,
+    Press et al. "Numerical Recipes" Sec. 7.9), or Vegas (Lepage's adaptive importance sampling,
+    Sec. 7.8, with an optional Power Transform for rare tail-event sampling). ``min``/``max`` give
+    both the per-dimension bounds and, via their length, the number of dimensions.
+
+    ``method="vegas"`` takes ``f(x, weight)`` -- ``x`` the sample point and ``weight`` the
+    importance weight Vegas has already computed for it -- rather than ``f(x)``, matching the
+    upstream C# Vegas constructor's own integrand shape; a weight-ignoring wrapper (``lambda x, w:
+    g(x)``) reproduces an ``f(x)``-only integrand under Vegas, exactly as the upstream unit tests
+    wrap theirs.
+
+    The SAMPLE STREAM -- which points ``f`` is called at -- reproduces bit-for-bit against the
+    same run in ``corehydror``, EXCEPT that ``seed`` has no effect on ``method="monte_carlo"`` or
+    a Sobol-sampled run of ``"miser"``/``"vegas"`` (the default, ``use_sobol=True``): Miser and
+    Vegas draw their sample points from a Sobol low-discrepancy sequence rather than the Mersenne
+    Twister ``seed`` seeds, and ``MonteCarloIntegration``'s own ``UseSobolSequence`` flag is a
+    documented DEAD property upstream -- declared but never consulted by ``Integrate()`` -- so a
+    ``"monte_carlo"`` run always draws from the generator ``seed`` seeds. ``use_sobol=False``
+    reroutes Miser/Vegas through that same seeded generator instead. AN HONEST LIMIT, measured
+    rather than assumed: the AGGREGATED numbers this function returns are not always bit-identical
+    between R and Python the way the sample stream is. ``MonteCarloIntegration``/``Miser``/
+    ``Vegas`` are ported CORE code, so -- unlike the callback surface's own catalog tests, which
+    the C++ side compiles with ``-ffp-contract=off`` for exactly this reason -- they compile with
+    whatever fused-multiply-add behavior each package's own build flags happen to produce (R's
+    ``-O2`` and corehydropy's CMake default are not guaranteed to agree), and the picture is
+    different per method rather than uniform across the surface. ``method="monte_carlo"`` is the
+    one case measured to reproduce ``integral`` bit-for-bit across ALL FOUR runners -- this
+    package, ``corehydror``, the C++ fixture runner under both FMA settings, and the real C#
+    library -- because its own arithmetic (a running sum of hit/miss weights divided by the sample
+    count) has no near-cancelling subtraction for a fused-multiply-add ULP to hide in;
+    ``fixtures/callback/callback_cross_language.json`` pins it at zero tolerance for exactly that
+    reason. ``"miser"`` and ``"vegas"`` do not reproduce that cleanly -- measured directly,
+    ``"miser"``'s own ``integral`` misses the C# value by 1 ULP under this package's shipped
+    build, and ``"vegas"``'s ``integral``, while itself exact against C#, sits beside a
+    ``standard_error`` (both methods) and ``chi_squared`` (``"vegas"`` only) that are not: both
+    are built from a near-cancelling subtraction (``avg2 - avg*avg``-shaped for Monte Carlo/Miser,
+    ``sum_chi_squared - sum_weighted_results * result`` for Vegas) that amplifies a
+    fused-multiply-add ULP difference, and a live R-vs-``corehydropy`` comparison of ``"vegas"``
+    at these settings showed ``integral`` itself, not just ``standard_error``/``chi_squared``,
+    moving by a few ULP language to language. This is a property of the classes' own arithmetic,
+    not a bug in either binding, and it is why
+    ``fixtures/callback/callback_cross_language.json``'s own ``quadrature_nd``/``quadrature_vegas``
+    digest asserts ``function_evaluations`` and ``status`` on every method, ``integral``
+    ADDITIONALLY on ``"monte_carlo"`` alone, and nothing else -- see that file's reference note for
+    the measurements.
+
+    Parameters
+    ----------
+    f : callable
+        A function taking a sequence of numbers and returning one number (``method="monte_carlo"``
+        /``"miser"``), or a function taking a sequence of numbers and a number (the sample weight)
+        and returning one number (``method="vegas"``).
+    min, max : sequence of float
+        Sequences of the same length giving the per-dimension lower and upper bounds; their
+        common length is the number of dimensions. Every ``max`` entry must be above the matching
+        ``min`` entry.
+    method : str
+        One of ``"monte_carlo"`` (the default), ``"miser"``, or ``"vegas"``.
+    seed : int, optional
+        A seed for the class's random number generator. Left unset, the ported class's own
+        clock-seeded default applies -- see the note above on when that still reproduces.
+    use_sobol : bool
+        Whether to draw sample points from a Sobol low-discrepancy sequence rather than the
+        (possibly seeded) generator. Default ``True``. Only ``"miser"`` and ``"vegas"`` read this.
+    max_function_evaluations : int, optional
+        The cap on evaluations of ``f``. Left unset, the ported class's own default applies.
+        Applies to ``"monte_carlo"`` and ``"miser"`` alone -- ``"miser"``'s own recursion is
+        bounded directly by it, where ``"monte_carlo"``'s loop is bounded by ``max_iterations``
+        instead (see below); supplying it for ``method="vegas"`` raises ``ValueError``.
+    min_iterations, max_iterations, relative_tolerance : optional
+        ``method="monte_carlo"`` alone: the floor on iterations before the convergence check is
+        consulted, the ceiling on iterations (``"monte_carlo"``'s real throttle, since
+        ``max_function_evaluations`` is checked only after the loop ends to choose the reported
+        status), and the relative-error convergence threshold. Left unset, the ported class's own
+        defaults apply. Supplying any for another ``method`` raises ``ValueError``.
+    fraction, min_subregion_points, min_bisections, dither : optional
+        ``method="miser"`` alone: the fraction of remaining evaluations spent exploring variance
+        at each stage, the minimum points per terminal subregion, the minimum evaluations before a
+        subregion is bisected further, and the dither applied when the integrand's active region
+        falls on a subdivision boundary. Left unset, the ported class's own defaults apply.
+        Supplying any for another ``method`` raises ``ValueError``.
+    independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter,
+    initialize, check_convergence, target_probability : optional
+        ``method="vegas"`` alone. ``independent_evaluations`` and ``function_calls`` bound the run
+        (their product is the maximum total evaluations); ``alpha`` is the grid-refinement damping
+        exponent; ``number_of_bins`` the stratification bin count; ``tail_focus_parameter`` the
+        Power Transform exponent (1.0, the default, is standard uniform sampling); ``initialize``
+        selects a cold start (0, the default), inheriting the grid alone (1), or inheriting the
+        grid and its answers (2); ``check_convergence`` whether to exit early on convergence.
+        ``target_probability``, if supplied, calls the ported ``configure_for_rare_events()``
+        helper -- applied AFTER every other option, so it may override
+        ``number_of_bins``/``alpha``/``tail_focus_parameter``, exactly as the C# helper does. Left
+        unset, the ported class's own defaults apply. Supplying any for another ``method`` raises
+        ``ValueError``.
+
+    Returns
+    -------
+    QuadratureResult
+        The integral, carrying ``status``, ``function_evaluations``, and ``standard_error``, and,
+        for ``method="vegas"`` alone, ``chi_squared``. An upstream quirk, verified against the
+        real C# source rather than assumed: ``method="miser"`` always reports ``status`` ``"None"``
+        on success -- unlike ``"monte_carlo"`` and ``"vegas"``, the ported ``Miser::integrate()``
+        (faithfully mirroring C#'s ``Miser.Integrate()``) never assigns a success status, only ever
+        writing ``"Failure"`` from its catch block.
+
+    Examples
+    --------
+    >>> import corehydropy as ch
+    >>> round(ch.quadrature_nd(lambda x: 1.0 if x[0]**2 + x[1]**2 < 1 else 0.0,
+    ...                        [-1, -1], [1, 1], seed=12345), 1)
+    3.1
+    """
+    if method not in _QUADRATURE_ND_METHODS:
+        raise ValueError(f"`method` must be one of {_QUADRATURE_ND_METHODS}")
+    _check_fn(f)
+    min_arr = np.asarray(min, dtype=float).ravel()
+    max_arr = np.asarray(max, dtype=float).ravel()
+    if min_arr.size < 1 or min_arr.size != max_arr.size:
+        raise ValueError("`min` and `max` must be sequences of the same positive length")
+    if not np.all(np.isfinite(min_arr)) or not np.all(np.isfinite(max_arr)):
+        raise ValueError("`min` and `max` must be finite")
+    if np.any(max_arr <= min_arr):
+        raise ValueError("every `max` entry must be above the matching `min` entry")
+    dimension = int(min_arr.size)
+
+    options: dict[str, object] = {"min": min_arr.tolist(), "max": max_arr.tolist()}
+    if method != "monte_carlo":
+        options["method"] = method
+    if seed is not None:
+        options["seed"] = int(seed)
+    options["use_sobol"] = bool(use_sobol)
+    # Miser and Vegas unconditionally construct a SobolSequence over `dimension`, regardless of
+    # `use_sobol` (see numerics/support/callback/math.hpp's SOBOL PATH note), so the path is
+    # resolved and supplied whenever `dimension > 1` and `method` is one of the two, exactly as
+    # sobol_sequence() above resolves its own.
+    if method in ("miser", "vegas") and dimension > 1:
+        options["sobol_path"] = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
+
+    def _scope(supplied: dict[str, object], allowed_method: str, label: str) -> None:
+        given = [k for k, v in supplied.items() if v is not None]
+        if given and method != allowed_method:
+            raise ValueError(f"{', '.join(given)!r} only appl{'y' if len(given) > 1 else 'ies'} to method={label!r}")
+
+    _scope(
+        {"min_iterations": min_iterations, "max_iterations": max_iterations,
+         "relative_tolerance": relative_tolerance},
+        "monte_carlo", "monte_carlo",
+    )
+    _scope(
+        {"fraction": fraction, "min_subregion_points": min_subregion_points,
+         "min_bisections": min_bisections, "dither": dither},
+        "miser", "miser",
+    )
+    _scope(
+        {"independent_evaluations": independent_evaluations, "function_calls": function_calls,
+         "alpha": alpha, "number_of_bins": number_of_bins,
+         "tail_focus_parameter": tail_focus_parameter, "initialize": initialize,
+         "check_convergence": check_convergence, "target_probability": target_probability},
+        "vegas", "vegas",
+    )
+    if max_function_evaluations is not None and method == "vegas":
+        raise ValueError(
+            "`max_function_evaluations` only applies to method=\"monte_carlo\" or \"miser\", not "
+            '"vegas" -- use `function_calls`/`independent_evaluations`'
+        )
+
     if max_function_evaluations is not None:
-        if int(max_function_evaluations) < 1:
-            raise ValueError("`max_function_evaluations` must be a single positive integer")
         options["max_function_evaluations"] = int(max_function_evaluations)
-    res = _core.callback_math("quadrature", json.dumps(options), f)
+    if min_iterations is not None:
+        options["min_iterations"] = int(min_iterations)
+    if max_iterations is not None:
+        options["max_iterations"] = int(max_iterations)
+    if relative_tolerance is not None:
+        options["relative_tolerance"] = float(relative_tolerance)
+    if fraction is not None:
+        options["fraction"] = float(fraction)
+    if min_subregion_points is not None:
+        options["min_subregion_points"] = int(min_subregion_points)
+    if min_bisections is not None:
+        options["min_bisections"] = int(min_bisections)
+    if dither is not None:
+        options["dither"] = float(dither)
+    if independent_evaluations is not None:
+        options["independent_evaluations"] = int(independent_evaluations)
+    if function_calls is not None:
+        options["function_calls"] = int(function_calls)
+    if alpha is not None:
+        options["alpha"] = float(alpha)
+    if number_of_bins is not None:
+        options["number_of_bins"] = int(number_of_bins)
+    if tail_focus_parameter is not None:
+        options["tail_focus_parameter"] = float(tail_focus_parameter)
+    if initialize is not None:
+        options["initialize"] = int(initialize)
+    if check_convergence is not None:
+        options["check_convergence"] = bool(check_convergence)
+    if target_probability is not None:
+        options["target_probability"] = float(target_probability)
+
+    if method == "vegas":
+        res = _core.callback_math_vw("quadrature_vegas", json.dumps(options), f)
+        return QuadratureResult(
+            res["values"][0], res["status"], res["values"][1], res["values"][2], res["values"][3]
+        )
+    res = _core.callback_math("quadrature_nd", json.dumps(options), f)
     return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
 
 

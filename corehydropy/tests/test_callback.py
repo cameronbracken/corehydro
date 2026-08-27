@@ -24,6 +24,71 @@ def test_root_find_needs_a_bracketed_root():
         ch.root_find(lambda x: x**2 + 1, lower=0, upper=2)
 
 
+def test_root_find_solves_with_bisection_secant_and_newton():
+    def quad(x):
+        return x**2 - 2
+
+    def quad_deriv(x):
+        return 2 * x
+
+    assert ch.root_find(
+        quad, lower=0, upper=4, method="bisection", first_guess=1
+    ) == pytest.approx(math.sqrt(2), abs=1e-5)
+
+    def cubic(x):
+        return x**3 - x - 1
+
+    assert ch.root_find(cubic, lower=-1, upper=5, method="secant") == pytest.approx(
+        1.32472, abs=1e-5
+    )
+
+    # The basic (unbracketed) variant.
+    assert ch.root_find(
+        quad, method="newton", df=quad_deriv, first_guess=1
+    ) == pytest.approx(math.sqrt(2), abs=1e-5)
+
+    # Both lower and upper present selects the robust (bracket-aware) variant.
+    def trig(x):
+        return 2 * math.sin(x) - 3 * math.cos(x) - 0.5
+
+    def trig_deriv(x):
+        return 2 * math.cos(x) + 3 * math.sin(x)
+
+    assert ch.root_find(
+        trig, method="newton", df=trig_deriv, first_guess=0.5, lower=0, upper=math.pi
+    ) == pytest.approx(1.12191713, abs=1e-5)
+
+    with pytest.raises(Exception, match="first_guess"):
+        ch.root_find(quad, lower=0, upper=4, method="bisection")
+    with pytest.raises(Exception, match="df"):
+        ch.root_find(quad, method="newton", first_guess=1)
+    with pytest.raises(Exception, match="first_guess"):
+        ch.root_find(quad, method="newton", df=quad_deriv)
+    with pytest.raises(Exception, match="lower.*upper"):
+        ch.root_find(quad, method="secant")
+    with pytest.raises(Exception, match="lower.*upper"):
+        ch.root_find(quad, lower=0, upper=None)
+
+
+def test_root_find_system_solves_a_linear_system():
+    # Test_NewtonRaphson.Test_Multi_LinearSystem: F([x;y]) = [3x + y - 9, x + 2y - 8], root [2, 3].
+    def f(v):
+        return [3 * v[0] + v[1] - 9, v[0] + 2 * v[1] - 8]
+
+    def j(v):
+        return [[3, 1], [1, 2]]
+
+    root = ch.root_find_system(f, j, first_guess=[0, 0])
+    np.testing.assert_allclose(root, [2, 3], atol=1e-5)
+
+    # An error inside either callback reaches the caller unchanged, the same guard contract every
+    # other callback method carries.
+    with pytest.raises(Exception, match="my own error"):
+        ch.root_find_system(_boom, j, first_guess=[0, 0])
+    with pytest.raises(Exception, match="my own error"):
+        ch.root_find_system(f, _boom, first_guess=[0, 0])
+
+
 def test_derivative_differentiates_a_python_function():
     # f(x) = x^3, f'(2) = 12
     assert ch.derivative(lambda x: x**3, 2) == pytest.approx(12.0, abs=1e-6)
@@ -97,6 +162,134 @@ def test_a_quadrature_result_reprs_its_report():
     assert "status='Success'" in text
     assert f"function_evaluations={q.function_evaluations}" in text
     assert "standard_error=" in text
+
+
+def test_quadrature_supports_method_variants():
+    # Test_AdaptiveGaussLobatto.Test_FXX: 0.5 + 24x + 3x^2 on [0, 2], true = 57.
+    assert ch.quadrature(
+        lambda x: 0.5 + 24.0 * x + 3.0 * x**2, 0, 2, method="gauss_lobatto"
+    ) == pytest.approx(57.0, abs=1e-3)
+    # Test_Integration.Test_MidPoint: x^3 on [0, 1] with 1000 fixed steps, true = 0.25.
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="midpoint", steps=1000) == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="simpsons") == pytest.approx(0.25, abs=1e-3)
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="trapezoidal") == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="adaptive_simpsons") == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="gauss_legendre") == pytest.approx(
+        0.25, abs=1e-3
+    )
+    assert ch.quadrature(lambda x: x**3, 0, 1, method="gauss_legendre20") == pytest.approx(
+        0.25, abs=1e-10
+    )
+    assert ch.quadrature(
+        lambda x: x**3, 0, 1, method="simpsons_fixed", steps=1000
+    ) == pytest.approx(0.25, abs=1e-3)
+    assert ch.quadrature(
+        lambda x: x**3, 0, 1, method="trapezoidal_fixed", steps=1000
+    ) == pytest.approx(0.25, abs=1e-3)
+    # Absent `method` still reaches the AdaptiveGaussKronrod path, byte-identical to before.
+    assert ch.quadrature(lambda x: x**2, 0, 3).status == "Success"
+
+    # `min_depth`/`max_depth` only apply to method="adaptive_simpsons".
+    with pytest.raises(ValueError, match="adaptive_simpsons"):
+        ch.quadrature(lambda x: x, 0, 1, min_depth=1)
+    # `steps` only applies to the fixed-step statics and midpoint.
+    with pytest.raises(ValueError, match="steps"):
+        ch.quadrature(lambda x: x, 0, 1, method="gauss_lobatto", steps=10)
+
+    # The tolerance-family options only apply to the five adaptive methods, not the five
+    # fixed-rule statics: a fixed-rule method silently ignoring these used to be a no-op (review
+    # finding).
+    with pytest.raises(ValueError, match="absolute_tolerance"):
+        ch.quadrature(lambda x: x, 0, 1, method="midpoint", absolute_tolerance=1e-12)
+    with pytest.raises(ValueError, match="relative_tolerance"):
+        ch.quadrature(lambda x: x, 0, 1, method="gauss_legendre", relative_tolerance=1e-12)
+    with pytest.raises(ValueError, match="max_function_evaluations"):
+        ch.quadrature(lambda x: x, 0, 1, method="simpsons_fixed", max_function_evaluations=100)
+
+
+def test_quadrature_2d_integrates_over_a_rectangle():
+    q = ch.quadrature_2d(lambda x, y: x + y, 0, 1, 0, 1)
+    assert float(q) == pytest.approx(1.0, abs=1e-3)
+    assert q.status == "Success"
+    assert q.function_evaluations > 0
+    assert q.standard_error >= 0.0
+
+    def boom(x, y):
+        raise ValueError("my own error")
+
+    with pytest.raises(ValueError, match="my own error"):
+        ch.quadrature_2d(boom, 0, 1, 0, 1)
+    with pytest.raises(ValueError, match="must be below"):
+        ch.quadrature_2d(lambda x, y: x + y, 1, 0, 0, 1)
+
+
+def test_ode_solve_rk4_on_exponential_growth():
+    # dy/dt = y, y(0) = 1: the exact solution is y(t) = exp(t), so 100 rk4 steps to t = 1 should
+    # land within 1e-5 of e. R's twin asserts the identical setup.
+    y = ch.ode_solve(lambda t, y: y, initial_value=1, start_time=0, end_time=1, time_steps=100)
+    assert len(y) == 100
+    assert y[0] == pytest.approx(1.0)
+    assert y[-1] == pytest.approx(math.e, abs=1e-5)
+
+
+def test_ode_solve_reproduces_the_test_runge_kutta_family():
+    def ode(t, y):
+        return y - t**2 + 1
+
+    valid = [0.5, 1.425639364649936, 2.640859085770477, 4.009155464830968, 5.305471950534675]
+
+    rk2 = ch.ode_solve(ode, 0.5, 0, end_time=2, time_steps=5, method="rk2")
+    assert list(rk2) == pytest.approx(valid, abs=1)
+
+    rk4 = ch.ode_solve(ode, 0.5, 0, end_time=2, time_steps=5, method="rk4")
+    assert list(rk4) == pytest.approx(valid, abs=1e-2)
+
+    # The single-step overload: dt with no end_time returns one number, called in a loop.
+    single = [0.5]
+    y0, t0 = 0.5, 0.0
+    for _ in range(4):
+        y0 = ch.ode_solve(ode, y0, t0, dt=0.5, method="rk4")
+        t0 += 0.5
+        single.append(y0)
+    assert single == pytest.approx(valid, abs=1e-2)
+
+    rkf = [0.5]
+    y0, t0 = 0.5, 0.0
+    for _ in range(4):
+        y0 = ch.ode_solve(ode, y0, t0, dt=0.5, dt_min=0.001, method="rkf")
+        t0 += 0.5
+        rkf.append(y0)
+    assert rkf == pytest.approx(valid, abs=1e-4)
+
+    rkck = [0.5]
+    y0, t0 = 0.5, 0.0
+    for _ in range(4):
+        y0 = ch.ode_solve(ode, y0, t0, dt=0.5, dt_min=0.001, method="cash_karp")
+        t0 += 0.5
+        rkck.append(y0)
+    assert rkck == pytest.approx(valid, abs=1e-3)
+
+
+def test_ode_solve_refuses_a_bad_shape_and_reports_the_users_own_error():
+    def boom(t, y):
+        raise ValueError("my own error")
+
+    with pytest.raises(ValueError, match="my own error"):
+        ch.ode_solve(boom, 1, 0, end_time=1, time_steps=10)
+    with pytest.raises(TypeError, match="must be a function"):
+        ch.ode_solve("nope", 1, 0, end_time=1, time_steps=10)
+    with pytest.raises(ValueError, match="end_time"):
+        ch.ode_solve(lambda t, y: y, 1, 0, method="rk2")
+    with pytest.raises(ValueError, match="dt_min"):
+        ch.ode_solve(lambda t, y: y, 1, 0, dt=0.5, method="rkf")
+    with pytest.raises(ValueError, match="method"):
+        ch.ode_solve(lambda t, y: y, 1, 0, end_time=1, time_steps=10, method="nope")
 
 
 def test_an_unsupplied_option_leaves_the_ported_default_in_force():

@@ -1,8 +1,8 @@
 {
  "kind": "toolbox",
  "group": "interpolation",
- "source": "Numerics/Data/Interpolation/Linear.cs; literals scraped verbatim from Test_Numerics/Data/Interpolation/Test_Linear.cs (Test_Log, Test_Log_List, Test_Z, Test_Z_R, Test_RevLin, Test_Rev_Log, Test_Rev_Z, Test_Extrapolate, Test_Extrapolate_Log, Test_Extrapolate_Z).",
- "reference": "Numerics @ 2a0357a. No other fixture in this repo pins the `linear` toolbox method (fixtures/special_functions/bilinear.json covers only Bilinear's guarded-log10-floor edge case, and fixtures/special_functions/search.json covers only the raw Interpolater search functions, not Linear's own Interpolate()/Extrapolate() surface), so this file is that pin -- the transform matrix (none/log/normal_z on x and/or y), both sort orders, and the interpolate()-clamps-vs-extrapolate()-extends distinction. Test_Linear.cs's own tolerances are preserved per case (1e-6 for the single-value and normal-z-list assertions, 1e-4 for the log-transform list assertions, matching that test file exactly).",
+ "source": "Numerics/Data/Interpolation/Linear.cs, CubicSpline.cs, Polynomial.cs; literals scraped verbatim from Test_Numerics/Data/Interpolation/Test_Linear.cs (Test_Log, Test_Log_List, Test_Z, Test_Z_R, Test_RevLin, Test_Rev_Log, Test_Rev_Z, Test_Extrapolate, Test_Extrapolate_Log, Test_Extrapolate_Z), Test_CubicSpline.cs (Test_Interpolate, Test_Interpolate_R, Test_Interpolate_List), and Test_Polynomial.cs (Test_Interpolate_Order3, Test_Interpolate_Order3_R, Test_Interpolate_List).",
+ "reference": "Numerics @ 2a0357a. No other fixture in this repo pins the `linear` toolbox method (fixtures/special_functions/bilinear.json covers only Bilinear's guarded-log10-floor edge case, and fixtures/special_functions/search.json covers only the raw Interpolater search functions, not Linear's own Interpolate()/Extrapolate() surface), so this file is that pin -- the transform matrix (none/log/normal_z on x and/or y), both sort orders, and the interpolate()-clamps-vs-extrapolate()-extends distinction. Test_Linear.cs's own tolerances are preserved per case (1e-6 for the single-value and normal-z-list assertions, 1e-4 for the log-transform list assertions, matching that test file exactly). The `cubic_spline`/`polynomial` cases are likewise this file's only pin (core/tests/test_interpolation_extras.cpp exercises the same two C# test files directly in C++ but is not itself cross-language); their datasets and tolerances are Test_CubicSpline.cs/Test_Polynomial.cs's own, unaltered.",
  "datasets": {
   "lin_x": [50, 100, 150, 200, 250],
   "lin_y": [100, 200, 300, 400, 500],
@@ -16,7 +16,11 @@
   "log_xout": [76, 80, 96, 162, 170, 216],
   "zr_xout": [0.07, 0.09, 0.12, 0.18, 0.21, 0.23],
   "extrap_xout": [300, 310, 350, 400, 440],
-  "z_extrap_xout": [0.3, 0.45, 0.5, 0.6, 0.77]
+  "z_extrap_xout": [0.3, 0.45, 0.5, 0.6, 0.77],
+  "cs_x": [6, 24, 48, 72],
+  "cs_y": [9.96, 22.13, 32.27, 37.60],
+  "cs_xout4": [8, 20, 30, 56],
+  "cs_xout34": [6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72]
  },
  "cases": [
   {
@@ -190,6 +194,65 @@
    "assertions": [
     {"method": "linear", "index": 0, "expected": 500.0, "mode": "abs", "tol": 0.0, "source": "structural invariant: interpolate() (extrapolate defaults to false) clamps any x beyond the last knot to the last knot's y (linear.hpp base_interpolate's documented first branch), not an independently-computed value"},
     {"method": "linear", "index": 4, "expected": 500.0, "mode": "abs", "tol": 0.0, "source": "same structural invariant at the largest out-of-range x"}
+   ]
+  },
+  {
+   "name": "cubic_spline_single_value",
+   "data": ["cs_x", "cs_y", [8]],
+   "assertions": [
+    {"method": "cubic_spline", "index": 0, "expected": 11.4049889205445, "mode": "abs", "tol": 1e-6, "source": "Test_CubicSpline.Test_Interpolate"}
+   ]
+  },
+  {
+   "name": "cubic_spline_list",
+   "data": ["cs_x", "cs_y", "cs_xout4"],
+   "assertions": [
+    {"method": "cubic_spline", "index": 0, "expected": 11.40499, "mode": "abs", "tol": 1e-4, "source": "Test_CubicSpline.Test_Interpolate_R"},
+    {"method": "cubic_spline", "index": 1, "expected": 19.68530, "mode": "abs", "tol": 1e-4, "source": "Test_CubicSpline.Test_Interpolate_R"},
+    {"method": "cubic_spline", "index": 2, "expected": 25.35189, "mode": "abs", "tol": 1e-4, "source": "Test_CubicSpline.Test_Interpolate_R"},
+    {"method": "cubic_spline", "index": 3, "expected": 34.35289, "mode": "abs", "tol": 1e-4, "source": "Test_CubicSpline.Test_Interpolate_R"}
+   ]
+  },
+  {
+   "name": "cubic_spline_list_34",
+   "data": ["cs_x", "cs_y", "cs_xout34"],
+   "assertions": [
+    {"method": "cubic_spline", "index": 0, "expected": 9.96, "mode": "abs", "tol": 1e-6, "source": "Test_CubicSpline.Test_Interpolate_List"},
+    {"method": "cubic_spline", "index": 1, "expected": 11.4049889205445, "mode": "abs", "tol": 1e-6, "source": "Test_CubicSpline.Test_Interpolate_List"},
+    {"method": "cubic_spline", "index": 9, "expected": 22.13, "mode": "abs", "tol": 1e-6, "source": "Test_CubicSpline.Test_Interpolate_List"},
+    {"method": "cubic_spline", "index": 21, "expected": 32.27, "mode": "abs", "tol": 1e-6, "source": "Test_CubicSpline.Test_Interpolate_List"},
+    {"method": "cubic_spline", "index": 33, "expected": 37.6, "mode": "abs", "tol": 1e-6, "source": "Test_CubicSpline.Test_Interpolate_List"}
+   ]
+  },
+  {
+   "name": "polynomial_order3_single_value",
+   "data": ["cs_x", "cs_y", [8]],
+   "options": {"order": 3},
+   "assertions": [
+    {"method": "polynomial", "index": 0, "expected": 11.5415808882467, "mode": "abs", "tol": 1e-6, "source": "Test_Polynomial.Test_Interpolate_Order3"}
+   ]
+  },
+  {
+   "name": "polynomial_order3_list",
+   "data": ["cs_x", "cs_y", "cs_xout4"],
+   "options": {"order": 3},
+   "assertions": [
+    {"method": "polynomial", "index": 0, "expected": 11.54158, "mode": "abs", "tol": 1e-5, "source": "Test_Polynomial.Test_Interpolate_Order3_R"},
+    {"method": "polynomial", "index": 1, "expected": 19.80796, "mode": "abs", "tol": 1e-5, "source": "Test_Polynomial.Test_Interpolate_Order3_R"},
+    {"method": "polynomial", "index": 2, "expected": 25.24398, "mode": "abs", "tol": 1e-5, "source": "Test_Polynomial.Test_Interpolate_Order3_R"},
+    {"method": "polynomial", "index": 3, "expected": 34.46549, "mode": "abs", "tol": 1e-5, "source": "Test_Polynomial.Test_Interpolate_Order3_R"}
+   ]
+  },
+  {
+   "name": "polynomial_order3_list_34",
+   "data": ["cs_x", "cs_y", "cs_xout34"],
+   "options": {"order": 3},
+   "assertions": [
+    {"method": "polynomial", "index": 0, "expected": 9.95999999999906, "mode": "abs", "tol": 1e-6, "source": "Test_Polynomial.Test_Interpolate_List"},
+    {"method": "polynomial", "index": 1, "expected": 11.5415808882467, "mode": "abs", "tol": 1e-6, "source": "Test_Polynomial.Test_Interpolate_List"},
+    {"method": "polynomial", "index": 9, "expected": 22.1300000000003, "mode": "abs", "tol": 1e-6, "source": "Test_Polynomial.Test_Interpolate_List"},
+    {"method": "polynomial", "index": 21, "expected": 32.2700000000031, "mode": "abs", "tol": 1e-6, "source": "Test_Polynomial.Test_Interpolate_List"},
+    {"method": "polynomial", "index": 33, "expected": 37.6000000000075, "mode": "abs", "tol": 1e-6, "source": "Test_Polynomial.Test_Interpolate_List"}
    ]
   }
  ]

@@ -59,10 +59,27 @@ struct FitWithCovarianceReturn {
 struct CallbackSet {
     // f(x) -> y. Root finding, quadrature, single-variable differentiation.
     std::function<double(double)> scalar;
+    // f'(x) -> y. The analytic derivative Newton-Raphson root finding takes alongside `scalar`
+    // (its own f). Named distinctly from `scalar` rather than reused positionally, because
+    // root_find_newton needs both live at once -- see callback/math.hpp's root_find_newton arm,
+    // which guards this and `scalar` with a SHARED abort state for the reason gmm.hpp's file
+    // header gives for its own multi-callback groups.
+    std::function<double(double)> scalar_deriv;
+    // f(x, y) -> z. The 2D integrand math/quadrature_2d takes (AdaptiveSimpsonsRule2D's
+    // function), P2 "math extras". Its own member rather than a reuse of `scalar`, because the
+    // arity differs; see callback/math.hpp's quadrature_2d arm.
+    std::function<double(double, double)> scalar_xy;
     // f(theta) -> y. Log-likelihood, gradient/hessian target, GMM penalty.
     std::function<double(const std::vector<double>&)> vector_scalar;
     // f(theta) -> vector. Gradient callback, GMM moment conditions, bootstrap statistic.
     std::function<std::vector<double>(const std::vector<double>&)> vector_vector;
+    // f(x, weight) -> y. The Vegas integrand (math/quadrature_vegas, P2 "math extras"), upstream's
+    // Vegas ctor's `Func<double[], double, double>` -- the sample point and the importance
+    // weight Vegas has already computed for it, exactly as the C# lambdas in Test_Vegas.cs wrap a
+    // weight-ignoring integrand: `(x, y) => Integrands.SumOfNormals(x)`. Its own member rather
+    // than a reuse of `vector_scalar`, because the arity differs; see callback/math.hpp's
+    // quadrature_vegas arm.
+    std::function<double(const std::vector<double>&, double)> vector_weight;
     // f(theta, rng) -> vector. Gibbs proposal.
     std::function<std::vector<double>(const std::vector<double>&,
                                       corehydro::numerics::sampling::MersenneTwister&)>

@@ -9,13 +9,16 @@ What is currently implemented, by source library for both the shared C++ core li
 no row is marked "Internal" any more; where only part of an area is exposed, the Notes
 column says which part. Every "Ported" row is validated by test suites which have also been ported and compared to the original C# libraries.
 
-Status as of v0.8.0.
+Status as of v0.11.0.
 
 ## Numerics
 
 The [Numerics](https://github.com/USACE-RMC/Numerics) library is the numerical
 foundation. The port targets its probability, sampling, and estimation layers; the
-general-purpose math, machine learning, and data-container layers are out of scope.
+general-purpose math and data-container layers are out of scope. The machine learning
+layer is not yet ported (planned for a future release, see the `MachineLearning` row
+below) -- it is what blocks `HypothesisTests.UnimodalityTest`, see the `Data.Statistics`
+row below.
 
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
@@ -25,13 +28,13 @@ general-purpose math, machine learning, and data-container layers are out of sco
 | `Sampling.MCMC` (8 samplers + R-hat / ESS) | Ported | Public | `mcmc_sample()` fits a built-in family; `mcmc_posterior()` takes a log-likelihood you write and reaches all eight samplers, Gibbs included, through the proposal callback it accepts; all drive the Bayesian analyses |
 | `Sampling` (Latin hypercube, Sobol, Stratify) | Ported | Public | `latin_hypercube()`, `sobol_sequence()`, `stratify()` |
 | `Sampling.Bootstrap` | Ported | Public | `bootstrap_analysis()` for a fitted distribution, `bootstrap_custom()` for a statistic you write, reaching all four upstream delegates (resample, fit, statistic, jackknife) and all five interval methods; `bootstrap_custom(run_type = "pivotal")` adds the covariance-aware pivotal workflow since v0.8.0 |
-| `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation, autocorrelation, goodness of fit, histogram binning, and joint probability all public; t / Mann-Whitney / KS tests, single Grubbs-Beck, and Jenks breaks not ported |
-| `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z) |
+| `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation (paired and, since v0.11.0, the Pearson/Spearman matrix form), autocorrelation, goodness of fit, histogram binning, and joint probability all public; `hypothesis_test()` exposes twelve of the thirteen `HypothesisTests` statics (one/two-sample t, F, Jarque-Bera, Wald-Wolfowitz, Ljung-Box, Mann-Whitney, Mann-Kendall, linear trend) -- `UnimodalityTest`, the thirteenth, is deferred (it needs the unported `MachineLearning.GaussianMixtureModel`); single Grubbs-Beck, KS tests, and Jenks breaks not ported |
+| `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z); the Paired Data curve subsystem (`OrderedPairedData`/`Ordinate`/`UncertainOrderedPairedData`/`LineSimplification`) is public as `curve_interpolate()`, `curve_area()`, `curve_simplify()`, `uncertain_curve_sample()`, and `tabular_function()` |
 | `Data.Regression` | Ported | Public | `linear_regression()` -- ordinary least squares, returning a `corehydro_lm` / `LinearRegressionResult` with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict` |
 | `Data` (TimeSeries container) | Not ported | -- | a thin adapter exists for the time-series models; The additional functionality (file I/O, USGS download) may be implemented later |
-| `Mathematics` (linear algebra, special functions, root finding, numerical derivatives) | Ported (as needed) | Public | `root_find()` (Brent), `derivative()`, `gradient()` and `hessian()` run over a function you write; the linear algebra and special functions stay internal, covering what the distribution / estimation layers require; general optimization is a separate row below |
-| `Mathematics.Optimization` | Partial | Public | `optim_minimize()` / `optim_maximize()` expose DE, Nelder-Mead, Brent, BFGS, Powell, MLSL (the estimators' needs); PSO, SCE-UA, simulated annealing, augmented Lagrange, multi-start not ported |
-| `Mathematics.Integration` | Partial | Public | `quadrature()` integrates a function you write with the adaptive Gauss-Kronrod rule; the Genz MVNDST integrator inside MultivariateNormal is ported too; the Simpson, Gauss-Lobatto, trapezoidal and Monte Carlo (Vegas, Miser) integrators are not |
+| `Mathematics` (linear algebra, special functions, root finding, numerical derivatives) | Ported (as needed) | Public | `root_find()` (Brent, bisection, secant, Newton), `root_find_system()`, `derivative()`, `gradient()`, `hessian()` and `ode_solve()` run over a function you write; `qr_decomposition()` / `qr_solve()` / `gauss_jordan()` and `debye()` / `polynomial_eval()` are public, and the remaining linear algebra and special functions stay internal, covering what the distribution / estimation layers require; general optimization is a separate row below |
+| `Mathematics.Optimization` | Ported | Public | `optim_minimize()` / `optim_maximize()` expose all fourteen optimizers since v0.10.0 -- DE, particle swarm, SCE-UA, simulated annealing, multi-start, MLSL, BFGS, Powell, ADAM, gradient descent, Nelder-Mead, Brent, golden section, and the constrained augmented Lagrange over `optim_constraint()`; ADAM and gradient descent take an analytic gradient you write. The `Dynamic` trio (BinaryHeap, Dijkstra, Network) is public as `shortest_path()` |
+| `Mathematics.Integration` | Ported | Public | `quadrature()` integrates a function you write with any of ten deterministic rules, `quadrature_2d()` over a rectangle, and `quadrature_nd()` over an arbitrary-dimension box with three seeded Monte Carlo families (plain, Miser, Vegas); the Genz MVNDST integrator inside MultivariateNormal is ported too |
 | `MachineLearning` (K-Means, random forest, KNN, decision trees, GMM, GLM) | Not ported | -- | Planned for future release |
 | `Functions` (link functions) | Ported | Public | `link_function()` / `link()` / `link_inverse()` / `link_derivative()` / `link_names()` expose the seven standard links; the five BestFit-specific links (ASinH, SES, LogSES, LogASinH, Centered) are used internally by the GMM / Bulletin 17C track |
 | `Random Numbers` (Mersenne Twister) | Ported (bit-exact) | Public (through callbacks) | the foundation of cross-language reproducibility; a callback that needs randomness draws from the generator the run is already using, through a handle passed to it (R `rng_uniform()` / `rng_integers()`, Python's `Rng`, which users cannot construct themselves) |
@@ -47,7 +50,7 @@ fully ported; only its WPF desktop shell is out of scope.
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
 | `Estimation` (MLE, MAP, Bayesian, GMM) | Ported | Public | `fit_mle()`, `fit_map()`, `fit_bayesian()` and `fit_gmm()` over any `model_*()`, `fit_gmm_moments()` over moment conditions you write, plus the analysis functions and `estimation_diagnostics()` |
-| `Models` (data frame, censored data, trends, all model families) | Ported | Public | flood frequency, Bulletin 17C, mixtures, competing risks, point process, AR/MA/ARIMA/ARIMAX, spatial GEV, rating curves, bivariate |
+| `Models` (data frame, censored data, trends, all model families) | Ported | Public | flood frequency, Bulletin 17C, mixtures, competing risks, point process, AR/MA/ARIMA/ARIMAX, spatial GEV, rating curves, bivariate; `analysis_data_hypothesis_test()`/`analysis_data_statistics()` expose twelve of the DataFrame's fourteen hypothesis-test/summary-statistics facade members (`UnimodalityTest`/`SummaryHypothesisTest` need the still-unported `GaussianMixtureModel`) |
 | `Analyses` (all orchestrators) | Ported | Public | the 19 analysis functions in each package |
 | `Diagnostics` (leverage, influence, prior influence, predictive checks) | Ported | Public | `estimation_diagnostics()`, `prior_predictive_check()`, `posterior_predictive_check()` |
 | Report generation | Not ported | -- | Not a planned porting target  |

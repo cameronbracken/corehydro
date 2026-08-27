@@ -149,3 +149,78 @@ test_that("print shows the series composition", {
   expect_output(print(d), "Multiple Grubbs-Beck")
   expect_output(print(analysis_data(peaks, low_outlier_threshold = 9000)), "9000")
 })
+
+# Harricana River annual peaks (Bobee & Ashkar 1991, Table 1.2, page 5); the oracle for
+# mann_kendall (0.7757) is ExactDataHypothesisTests.Test_MannKendall, also transcribed into
+# fixtures/data/data_frame_facades.json and core/tests/test_data_frame_facades.cpp.
+harricana <- c(
+  122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225,
+  174, 98.8, 149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172,
+  153, 142, 317, 161, 201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192,
+  337, 125, 166, 99.1, 202, 230, 158, 262, 154, 164, 182, 164, 183, 171, 250,
+  184, 205, 237, 177, 239, 187, 180, 173, 174
+)
+
+test_that("analysis_data_hypothesis_test reproduces the Harricana Mann-Kendall oracle", {
+  p <- analysis_data_hypothesis_test(harricana, "mann_kendall")
+  expect_named(p, "mann_kendall")
+  expect_equal(unname(p), 0.7757, tolerance = 1e-3)
+})
+
+test_that("analysis_data_hypothesis_test accepts a corehydro_data frame (exact series only)", {
+  p_vec <- analysis_data_hypothesis_test(harricana, "mann_kendall")
+  p_obj <- analysis_data_hypothesis_test(analysis_data(harricana), "mann_kendall")
+  expect_equal(p_vec, p_obj)
+})
+
+test_that("analysis_data_hypothesis_test runs a two-sample test given a split_index", {
+  p <- analysis_data_hypothesis_test(harricana, "mann_whitney", split_index = 50)
+  expect_equal(unname(p), 0.5892, tolerance = 1e-2)
+})
+
+test_that("analysis_data_hypothesis_test validates method and the two-sample split_index", {
+  # M3 (P4 whole-branch review): check_choice() replaced match.arg() here, so the message is now
+  # "unknown method '...'" (identical to corehydropy's), not match.arg's own "'arg' should be
+  # one of" text -- and a value like "jarque" no longer silently PREFIX-RESOLVES to a real method.
+  expect_error(analysis_data_hypothesis_test(harricana, "not_a_method"), "unknown method")
+  expect_error(analysis_data_hypothesis_test(harricana, "jarque"), "unknown method")
+  expect_error(analysis_data_hypothesis_test(harricana, "equal_variance_t"), "requires .split_index.")
+})
+
+test_that("analysis_data_statistics returns the twenty named summary statistics", {
+  s <- analysis_data_statistics(peaks)
+  expect_length(s$value, 20)
+  expect_named(s$value, c(
+    "Record Length", "Events Per Index (λ)", "Low Outliers", "Minimum", "Maximum", "Mean",
+    "Std Dev", "Skewness", "Kurtosis", "Mean (of log)", "Std Dev (of log)", "Skewness (of log)",
+    "Kurtosis (of log)", "1%", "5%", "25%", "50%", "75%", "95%", "99%"
+  ))
+  expect_true(is.finite(s$value[["Mean"]]))  # peaks has 15 >= 10 exact points
+})
+
+test_that("analysis_data_statistics(all_data = TRUE) uses the plotting-position fit", {
+  exact_only <- analysis_data_statistics(harricana)
+  all_data <- analysis_data_statistics(harricana, all_data = TRUE)
+  expect_equal(unname(exact_only$value[["Record Length"]]), 69)
+  expect_equal(unname(exact_only$value[["Minimum"]]), 98.8)
+  expect_equal(unname(all_data$value[["Minimum"]]), 98.8)
+  # The two methods use different estimators, so their means need not agree even with no
+  # censored data in the frame.
+  expect_false(isTRUE(all.equal(
+    unname(exact_only$value[["Mean"]]), unname(all_data$value[["Mean"]])
+  )))
+})
+
+test_that("analysis_data_statistics(standardized = TRUE) adds parallel standardized columns", {
+  s <- analysis_data_statistics(harricana, standardized = TRUE)
+  expect_length(s$standardized_value, length(harricana))
+  expect_length(s$standardized_log10_value, length(harricana))
+  expect_true(all(is.finite(s$standardized_value)))
+  expect_true(all(is.finite(s$standardized_log10_value)))
+})
+
+test_that("analysis_data_statistics reports NaN for a short record", {
+  short <- harricana[1:9]
+  s <- analysis_data_statistics(short)
+  expect_true(all(is.na(s$value)))
+})

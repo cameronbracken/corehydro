@@ -23,6 +23,14 @@
 // MT stream, so this branch is unreachable from any fixture -- it exists purely for API
 // parity/completeness with the ported virtual method). Non-deterministic by design (matches
 // C#); never exercised by an oracle-fixture assertion.
+//
+// next_doubles(n) (P2/Task 5) ports C#'s `NextDoubles(this Random random, int length)` extension
+// method (Numerics/Utilities/ExtensionMethods.cs -- not MersenneTwister.cs itself; C++ has no
+// extension methods, so it lands as a member here instead). The C# body is a simple loop over
+// `random.NextDouble()`, and this mirrors that exactly, so the stream order matches C# call for
+// call. Consumed by Vegas's per-sample draw when `use_sobol_sequence` is false (the 2-D overload,
+// `NextDoubles(this Random random, int length, int dimension)`, spins up one side PRNG per
+// dimension and is not needed by anything ported so far -- not added here).
 #pragma once
 #include <chrono>
 #include <cstdint>
@@ -94,6 +102,14 @@ class MersenneTwister {
 
     // Generates a random number on [0, 1) (matches C# GenRandReal2 / NextDouble).
     double next_double() { return gen_rand_int32() * (1.0 / 4294967296.0); }
+
+    // Returns a vector of `length` random doubles on [0, 1) (matches C# `Random.NextDoubles(int
+    // length)`; see the file header). A simple loop over next_double(), same stream order as C#.
+    std::vector<double> next_doubles(int length) {
+        std::vector<double> values(static_cast<std::size_t>(length));
+        for (int i = 0; i < length; ++i) values[static_cast<std::size_t>(i)] = next_double();
+        return values;
+    }
 
     // Generates a non-negative random int on [0, int32::max], rejecting int32::max so the
     // result is uniform over [0, int32::max) (matches C# Next(); GenRandInt31() is folded

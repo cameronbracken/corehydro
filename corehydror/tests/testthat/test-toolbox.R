@@ -49,6 +49,47 @@ test_that("percentile() rejects a non-numeric probs argument, naming it", {
   expect_error(percentile(c(1, 2, 3), probs = "half"), "probs")
 })
 
+test_that("correlation() with a matrix returns the p-by-p matrix, diagonal 1, symmetric, and off-diagonals matching the pairwise calls", {
+  c0 <- c(14, 8, 32, 7, 3, 15)
+  c1 <- c(10, 5, 7, 4, 3, 8)
+  c2 <- c(2, 9, 1, 6, 4, 11)
+  x <- cbind(a = c0, b = c1, c = c2)
+
+  m <- correlation(x)
+  expect_equal(dim(m), c(3L, 3L))
+  expect_equal(unname(diag(m)), c(1, 1, 1))
+  expect_true(isSymmetric(m))
+  expect_equal(m["a", "b"], correlation(c0, c1))
+  expect_equal(m["a", "c"], correlation(c0, c2))
+  expect_equal(m["b", "c"], correlation(c1, c2))
+  expect_equal(rownames(m), c("a", "b", "c"))
+  expect_equal(colnames(m), c("a", "b", "c"))
+
+  ms <- correlation(x, method = "spearman")
+  expect_equal(unname(diag(ms)), c(1, 1, 1))
+  expect_equal(ms["a", "b"], correlation(c0, c1, method = "spearman"))
+})
+
+test_that("correlation() accepts a data frame in matrix mode", {
+  x <- data.frame(a = c(14, 8, 32, 7, 3, 15), b = c(10, 5, 7, 4, 3, 8))
+  m <- correlation(x)
+  expect_equal(dim(m), c(2L, 2L))
+  expect_equal(m["a", "b"], correlation(x$a, x$b))
+})
+
+test_that("correlation() rejects method = 'kendall' for a matrix, naming the reason", {
+  x <- cbind(c(14, 8, 32, 7, 3, 15), c(10, 5, 7, 4, 3, 8))
+  expect_error(correlation(x, method = "kendall"), "kendall.*matrix")
+})
+
+test_that("correlation() rejects a 1D vector in matrix mode instead of silently returning a 1x1 matrix (C4)", {
+  # C4 (P4 whole-branch review): as.matrix() on a plain vector silently coerces it to an n x 1
+  # matrix, so `correlation(x)` on a bare vector used to return a 1x1 matrix of 1 in R instead of
+  # raising the way corehydropy does for the same 1D input.
+  expect_error(correlation(c(14, 8, 32, 7, 3, 15)),
+               "`x` must be a 2D array (observations in rows, variables in columns)", fixed = TRUE)
+})
+
 test_that("running_covariance() chunked matches a single call, and round-trips through state", {
   x <- matrix(c(1, 2, 3, 4, 5, 1, 2, 3, 4, 5), ncol = 2)
   whole <- running_covariance(x)
@@ -144,6 +185,42 @@ test_that("interpolate() on a log-log grid reproduces the C# Test_Log oracle", {
   y <- c(100, 200, 300, 400, 500)
   expect_equal(interpolate(x, y, 75, x_transform = "log", y_transform = "log"), 150.0,
                tolerance = 1e-6)
+})
+
+test_that("interpolate() with method = \"cubic_spline\" reproduces the C# Test_CubicSpline oracle", {
+  x <- c(6, 24, 48, 72)
+  y <- c(9.96, 22.13, 32.27, 37.60)
+  expect_equal(interpolate(x, y, 8, method = "cubic_spline"), 11.4049889205445, tolerance = 1e-6)
+})
+
+test_that("interpolate() with method = \"polynomial\" order = 3 reproduces the C# Test_Polynomial oracle", {
+  x <- c(6, 24, 48, 72)
+  y <- c(9.96, 22.13, 32.27, 37.60)
+  expect_equal(interpolate(x, y, 8, method = "polynomial", order = 3), 11.5415808882467,
+               tolerance = 1e-6)
+})
+
+test_that("interpolate() requires `order` for method = \"polynomial\"", {
+  expect_error(interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, method = "polynomial"),
+               "order")
+})
+
+test_that("interpolate() rejects `order` for a non-polynomial method", {
+  expect_error(interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, order = 3),
+               "order")
+})
+
+test_that("interpolate() rejects a non-default transform/extrapolate for a non-linear method", {
+  expect_error(
+    interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, method = "cubic_spline",
+                x_transform = "log"),
+    "linear-only"
+  )
+  expect_error(
+    interpolate(c(1, 2, 3, 4), c(10, 20, 30, 40), 1.5, method = "polynomial", order = 3,
+                extrapolate = TRUE),
+    "linear-only"
+  )
 })
 
 test_that("interpolate_2d() rejects a y matrix whose dimensions don't match x1 by x2", {
@@ -507,4 +584,480 @@ test_that("trend_names() and trend() cannot drift: every listed type constructs"
     tr <- trend("location", type)
     expect_identical(tr$type, type, info = type)
   }
+})
+
+# The "linalg" toolbox group (P2 "math extras" Task 9).
+
+test_that("qr_decomposition() reproduces a NON-symmetric a", {
+  a <- matrix(c(1, 2, 3, 0, 1, 4, 5, 6, 0), nrow = 3, byrow = TRUE)
+  qr <- qr_decomposition(a)
+  expect_equal(dim(qr$q), c(3L, 3L))
+  expect_equal(dim(qr$r), c(3L, 3L))
+  expect_equal(qr$q %*% qr$r, a, tolerance = 1e-10)
+})
+
+test_that("qr_solve() reproduces the Test_QRDecomposition square-system expected vector", {
+  # Test_QRDecomposition.cs's Test_SolveVector: A = [[1,1,1],[0,2,5],[2,5,-1]], b = [6,-4,27];
+  # the real system solves to x = [5, 3, -2].
+  a <- matrix(c(1, 1, 1, 0, 2, 5, 2, 5, -1), nrow = 3, byrow = TRUE)
+  b <- c(6, -4, 27)
+  x <- qr_solve(a, b)
+  expect_equal(x, c(5, 3, -2), tolerance = 1e-9)
+  expect_equal(as.numeric(a %*% x), b, tolerance = 1e-9)
+})
+
+test_that("qr_solve() matrix right-hand side matches the vector right-hand side", {
+  a <- matrix(c(1, 2, 3, 0, 1, 4, 5, 6, 0), nrow = 3, byrow = TRUE)
+  x_vec <- qr_solve(a, c(1, 2, 3))
+  x_mat <- qr_solve(a, matrix(c(1, 2, 3), ncol = 1))
+  expect_equal(dim(x_mat), c(3L, 1L))
+  expect_equal(x_mat[, 1], x_vec, tolerance = 1e-10)
+})
+
+test_that("qr_solve() on an underdetermined system leaves the trailing unknown at zero", {
+  a <- matrix(c(2, 3, 5, 1, 1, 0, 2, 3, 0, 1, 4, 2), nrow = 3, byrow = TRUE)
+  b <- c(1, 2, 3)
+  x <- qr_solve(a, b)
+  expect_length(x, 4L)
+  expect_equal(x[4], 0)
+  expect_equal(as.numeric(a %*% x), b, tolerance = 1e-8)
+})
+
+test_that("qr_solve() rejects a mismatched b length", {
+  a <- diag(2)
+  expect_error(qr_solve(a, c(1, 2, 3)), "rows")
+})
+
+test_that("gauss_jordan() reproduces true_IA exactly", {
+  # Test_GaussJordanElimination.cs's Test_GaussJordanElim: A = [[1,3,3],[1,4,3],[1,3,4]],
+  # true_IA = [[7,-3,-3],[-1,1,0],[-1,0,1]].
+  a <- matrix(c(1, 3, 3, 1, 4, 3, 1, 3, 4), nrow = 3, byrow = TRUE)
+  result <- gauss_jordan(a)
+  expect_equal(result$inverse, matrix(c(7, -3, -3, -1, 1, 0, -1, 0, 1), nrow = 3, byrow = TRUE))
+  expect_equal(dim(result$solution), c(3L, 0L))
+})
+
+test_that("gauss_jordan() solution solves a %*% x = b", {
+  a <- matrix(c(1, 3, 3, 1, 4, 3, 1, 3, 4), nrow = 3, byrow = TRUE)
+  b <- matrix(c(1, 0, 0), ncol = 1)
+  result <- gauss_jordan(a, b)
+  expect_equal(a %*% result$solution, b, tolerance = 1e-10)
+})
+
+test_that("gauss_jordan() rejects a non-square a", {
+  expect_error(gauss_jordan(matrix(1:6, nrow = 2)), "square")
+})
+
+# The "special" toolbox group (P2 "math extras" Task 10).
+
+test_that("debye() reproduces the Test_Debye literal at x = 1.0", {
+  # Test_SpecialFunctions.cs's Test_Debye: testX[1] = 1.0, testValid[1] = 0.6744156.
+  expect_equal(debye(1.0), 0.6744156, tolerance = 1e-4)
+})
+
+test_that("debye() is vectorized over x, reproducing the whole Test_Debye array", {
+  x <- c(0.1, 1.0, 2.8, 9.5, 10, 15, 25, 100)
+  valid <- c(0.9629999, 0.6744156, 0.3099952, 0.02241066, 0.01929577, 0.005771263,
+             0.001246836, 1.948182e-05)
+  expect_equal(debye(x), valid, tolerance = 1e-4)
+})
+
+test_that("debye() rejects a negative x", {
+  expect_error(debye(-1))
+})
+
+test_that("polynomial_eval() variant = 'standard' reproduces Test_Polynomial", {
+  # Test_PolynomialRev.cs's Test_Polynomial: coeffs = c(3, 5, 7), x = 4, valid = 135.
+  expect_equal(polynomial_eval(c(3, 5, 7), 4), 135)
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "standard"), 135)
+})
+
+test_that("polynomial_eval() variant = 'reverse' reproduces Test_PolynomialRev, with and without n", {
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "reverse"), 75)
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "reverse", n = 1), 17)
+})
+
+test_that("polynomial_eval() variant = 'reverse_unit' reproduces Test_PolynomialRev_1", {
+  expect_equal(polynomial_eval(c(3, 5, 7), 4, variant = "reverse_unit"), 139)
+})
+
+test_that("polynomial_eval() is vectorized over x", {
+  expect_equal(polynomial_eval(c(3, 5, 7), c(0, 4)), c(3, 135))
+})
+
+test_that("polynomial_eval() rejects n with a non-'reverse' variant", {
+  expect_error(polynomial_eval(c(3, 5, 7), 4, variant = "standard", n = 1), "reverse")
+  expect_error(polynomial_eval(c(3, 5, 7), 4, variant = "reverse_unit", n = 1), "reverse")
+})
+
+# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
+# IUnivariateFunction implementations. Literals transcribed from Test_Functions.cs.
+
+test_that("univariate_function() reproduces Test_Linear_Function", {
+  expect_equal(univariate_function("linear", c(0, 1, 0), 6), 6, tolerance = 1e-6)
+  expect_equal(univariate_function("linear", c(-2, 5, 3), 6), (5 * 6) + -2, tolerance = 1e-6)
+  expect_equal(
+    univariate_function("linear", c(-2, 5, 3), 6, confidence_level = 0.75),
+    30.0234692505882, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_Linear_Function_Inverse", {
+  y <- univariate_function("linear", c(10, 0.5, 20), 400)
+  expect_equal(univariate_function("linear", c(10, 0.5, 20), y, inverse = TRUE), 400,
+               tolerance = 1e-6)
+  yy <- univariate_function("linear", c(10, 0.5, 20), 400, confidence_level = 0.75)
+  expect_equal(
+    univariate_function("linear", c(10, 0.5, 20), yy, inverse = TRUE, confidence_level = 0.75),
+    400, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_Power_Function", {
+  expect_equal(univariate_function("power", c(1, 1.5, 0, 0), 6), 1 * (6 - 0)^1.5, tolerance = 1e-6)
+  expect_equal(univariate_function("power", c(5, 2, 0, 3), 6), 5 * (6 - 0)^2, tolerance = 1e-6)
+  expect_equal(
+    univariate_function("power", c(5, 2, 0, 3), 6, confidence_level = 0.75),
+    1361.61408399941, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_Power_Function_Inverse", {
+  y <- univariate_function("power", c(10, 2, 0, 0.1), 400)
+  expect_equal(univariate_function("power", c(10, 2, 0, 0.1), y, inverse = TRUE), 400,
+               tolerance = 1e-6)
+  yy <- univariate_function("power", c(10, 2, 0, 0.1), 400, confidence_level = 0.75)
+  expect_equal(
+    univariate_function("power", c(10, 2, 0, 0.1), yy, inverse = TRUE, confidence_level = 0.75),
+    400, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_InversePower_Function", {
+  valid <- sqrt(6 / 5) + 0
+  expect_equal(univariate_function("power", c(5, 2, 0, 0), 6, is_inverse = TRUE), valid,
+               tolerance = 1e-6)
+  expect_equal(univariate_function("power", c(5, 2, 0, 3), 6, is_inverse = TRUE), valid,
+               tolerance = 1e-6)
+  expect_equal(
+    univariate_function("power", c(5, 2, 0, 3), 6, is_inverse = TRUE, confidence_level = 0.75),
+    0.398290417772997, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() reproduces Test_InversePower_Function_Inverse", {
+  y <- univariate_function("power", c(10, 2, 0, 0.1), 6, is_inverse = TRUE)
+  expect_equal(
+    univariate_function("power", c(10, 2, 0, 0.1), y, inverse = TRUE, is_inverse = TRUE),
+    6, tolerance = 1e-6
+  )
+})
+
+test_that("univariate_function() rejects is_inverse for type = 'linear'", {
+  expect_error(univariate_function("linear", c(0, 1, 0), 6, is_inverse = TRUE), "power")
+})
+
+test_that("univariate_function() rejects an unknown type", {
+  expect_error(univariate_function("quadratic", c(1, 1), 1), "unknown function type")
+})
+
+# The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
+# list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
+# same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs
+# and cover the binding surface (column order, 0-based indices, the unreachable row, defaults,
+# argument validation) rather than re-pinning the solver.
+
+test_that("shortest_path() reproduces SimpleEdgeGraphCost", {
+  sp <- shortest_path(
+    from = c(0, 0, 1, 1, 2, 4),
+    to = c(1, 2, 2, 3, 3, 0),
+    weight = c(2, 4, 1, 7, 3, 1),
+    destinations = 3,
+    edge_index = c(0, 2, 2, 3, 4, 5),
+    node_count = 6
+  )
+  expect_s3_class(sp, "data.frame")
+  expect_identical(names(sp), c("next_node", "edge_index", "cost"))
+  expect_identical(nrow(sp), 6L)
+  expect_identical(sp$cost, c(6, 4, 3, 0, 7, Inf))
+})
+
+test_that("shortest_path() reproduces SimpleNetworkRouting's next-node column", {
+  from <- c(0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 9, 9)
+  to <- c(5, 1, 0, 2, 6, 7, 1, 3, 7, 2, 8, 4, 3, 9, 0, 6, 5, 1, 7, 6, 1, 2, 8, 7, 3, 9, 8, 4)
+  w <- c(1, 30, 30, 1, 15, 2, 1, 5, 5, 5, 2, 1, 1, 30, 1, 3, 3, 15, 1, 1, 2, 5, 1, 1, 2, 2, 2, 30)
+  idx <- c(0, 1, 1, 2, 3, 4, 2, 5, 6, 5, 7, 8, 8, 9, 0, 10, 10, 3, 11, 11, 4, 6, 12, 12, 7, 13, 13, 9)
+  sp <- shortest_path(from, to, w, destinations = 9, edge_index = idx)
+  expect_identical(nrow(sp), 10L)
+  expect_identical(sp$next_node, c(5L, 7L, 1L, 8L, 3L, 6L, 7L, 8L, 9L, 9L))
+  expect_identical(sp$cost, c(8, 5, 6, 4, 5, 7, 4, 3, 2, 0))
+})
+
+test_that("shortest_path() takes several destinations", {
+  sp <- shortest_path(
+    from = c(0, 1, 1, 2, 1),
+    to = c(1, 0, 2, 1, 3),
+    weight = c(1, 3, 1, 2, 3),
+    destinations = c(0, 3),
+    edge_index = c(0, 1, 2, 3, 4),
+    node_count = 4
+  )
+  expect_identical(sp$next_node[[2]], 0L)
+  expect_identical(sp$cost[[2]], 3)
+  expect_identical(sp$next_node[[3]], 1L)
+  expect_identical(sp$cost[[3]], 5)
+})
+
+test_that("shortest_path() marks an unreachable node", {
+  sp <- shortest_path(
+    from = c(0, 1, 2),
+    to = c(1, 0, 3),
+    weight = c(1, 3, 1),
+    destinations = 0,
+    edge_index = c(0, 1, 2),
+    node_count = 4
+  )
+  expect_identical(sp$cost[[3]], Inf)
+  expect_identical(sp$next_node[[3]], -1L)
+  expect_identical(sp$edge_index[[3]], -1L)
+})
+
+test_that("shortest_path() defaults edge_index to the edge position", {
+  sp <- shortest_path(
+    from = c(0, 1, 1, 2),
+    to = c(1, 0, 2, 0),
+    weight = c(1, 4, 1, 10),
+    destinations = c(0, 2)
+  )
+  expect_identical(nrow(sp), 3L)
+  expect_identical(sp$next_node, c(0L, 2L, 2L))
+  expect_identical(sp$cost, c(0, 1, 0))
+  expect_identical(sp$edge_index, c(-1L, 2L, -1L))
+})
+
+test_that("shortest_path() validates its arguments", {
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1), destinations = 0), "same length")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = numeric(0)),
+               "at least one destination")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0.5),
+               "whole, non-negative")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
+                             edge_index = c(0, 1, 2)), "same length")
+  expect_error(shortest_path(numeric(0), numeric(0), numeric(0), destinations = 0), "at least one")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 7), "out of range")
+})
+
+# A `node_count` too small for the graph used to reach the solver, which answered it with an
+# out-of-bounds write: a quietly wrong routing table here and a crash in corehydropy. C# raises
+# IndexOutOfRangeException for the same call (measured; see dijkstra.hpp note 9), so the solver
+# now throws too, and the wrapper rejects it up front with a message naming the argument.
+test_that("shortest_path() rejects a node_count too small for the graph", {
+  expect_error(
+    shortest_path(from = c(0, 1), to = c(5, 2), weight = c(1, 1), destinations = 0,
+                  node_count = 2),
+    "`node_count` must be at least 6"
+  )
+  expect_error(
+    shortest_path(from = c(0, 1), to = c(1, 2), weight = c(1, 1), destinations = 0,
+                  node_count = 0),
+    "must be a single positive number"
+  )
+  # The boundary itself is fine, and so is anything above it.
+  expect_equal(
+    nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 3)), 3L
+  )
+  expect_equal(
+    nrow(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0, node_count = 5)), 5L
+  )
+})
+
+# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# `numerics/data/hypothesis_tests.hpp`. The oracle values live in fixtures/toolbox/hypothesis.json;
+# the assertions below are the same C# literals scraped from
+# Test_Numerics/Data/Statistics/Test_HypothesisTests.cs and cover the binding surface (return
+# shape, the `index`/1-based default, argument validation) rather than re-pinning the tests.
+
+harricana69 <- c(
+  122, 244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8,
+  149, 238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161,
+  201, 204, 194, 164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230,
+  158, 262, 154, 164, 182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173,
+  174
+)
+
+test_that("hypothesis_test() reproduces Test_MannKendall", {
+  r <- hypothesis_test(harricana69, method = "mann_kendall")
+  expect_equal(unname(r[["p_value"]]), 0.7757, tolerance = 1e-4)
+})
+
+test_that("hypothesis_test() method = 'f_models' returns a length-2 named result", {
+  r <- hypothesis_test(0, method = "f_models", sse_restricted = 1224.32, sse_full = 720.27,
+                       df_restricted = 49, df_full = 48)
+  expect_identical(names(r), c("f_statistic", "p_value"))
+  expect_equal(unname(r[["f_statistic"]]), 33.5899, tolerance = 1e-3)
+  expect_equal(unname(r[["p_value"]]), 0, tolerance = 1e-6)
+})
+
+test_that("hypothesis_test() method = 'linear_trend' defaults index to seq_along(x)", {
+  time <- 1:100
+  x <- cos(time)
+  r1 <- hypothesis_test(x, method = "linear_trend")
+  r2 <- hypothesis_test(x, method = "linear_trend", index = time)
+  expect_equal(unname(r1[["p_value"]]), unname(r2[["p_value"]]))
+  expect_equal(unname(r1[["p_value"]]), 0.9092, tolerance = 1e-4)
+})
+
+test_that("hypothesis_test() validates its arguments", {
+  expect_error(hypothesis_test(c(1, 2, 3), method = "equal_variance_t"),
+               "`y` is required")
+  expect_error(
+    hypothesis_test(0, method = "f_models", sse_restricted = 1224.32, df_restricted = 49,
+                    df_full = 48),
+    "sse_full"
+  )
+  expect_error(hypothesis_test(c(1, 2, 3), method = "not_a_method"), "must be one of")
+})
+
+test_that("hypothesis_test() method = 'f_models' is callable without `x` (C1)", {
+  # C1 (P4 whole-branch review): `x` is documented as ignored for "f_models", and corehydropy
+  # already defaulted it to None; R's default was missing (only worked by accident, via lazy
+  # evaluation never forcing an unused argument), so a call omitting `x` entirely used to work
+  # in R but raise in Python. `x` now defaults to NULL in both.
+  r <- hypothesis_test(method = "f_models", sse_restricted = 1224.32, sse_full = 720.27,
+                       df_restricted = 49, df_full = 48)
+  expect_equal(unname(r[["f_statistic"]]), 33.5899, tolerance = 1e-3)
+})
+
+test_that("hypothesis_test() rejects a non-NULL `y` for a one-sample method (C2)", {
+  # C2 (P4 whole-branch review): a one-sample method used to silently DISCARD `y` --
+  # hypothesis_test(a, b) at the default method equalled hypothesis_test(a).
+  a <- c(4, 5, 5, 6, 9, 12, 13, 14, 14, 19, 22, 24, 25)
+  b <- c(1, 2, 3)
+  expect_error(hypothesis_test(a, b, method = "jarque_bera"),
+               "`y` is not used by method \"jarque_bera\"; leave it NULL", fixed = TRUE)
+})
+
+# The "paired_data" toolbox group (P4 Task 10): OrderedPairedData/UncertainOrderedPairedData/
+# LineSimplification, plus TabularFunction's tabular/tabular_inverse arm on the "functions"
+# group. Oracle values are C# test literals transcribed verbatim into
+# core/tests/test_ordered_paired_data.cpp / test_uncertain_paired_data.cpp; see
+# fixtures/toolbox/paired_data.json for the full pinned set.
+
+test_that("curve_interpolate() reproduces Test_Lin and Test_LogLin", {
+  x <- c(50, 100, 150, 200, 250)
+  y <- c(100, 200, 300, 400, 500)
+  expect_equal(curve_interpolate(x, y, xout = 75), 150.0, tolerance = 1e-6)
+  expect_equal(curve_interpolate(x, y, xout = 75, x_transform = "logarithmic"),
+              158.496250072116, tolerance = 1e-6)
+})
+
+test_that("curve_area() reproduces Test_TrapezoidalArea (dataset 1, area under y)", {
+  ctor_x <- c(230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+             691223, 748825, 806427, 864029, 921631, 1036834, 1152038)
+  ctor_y <- c(1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+             1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7)
+  expect_equal(curve_area(ctor_x, ctor_y), 1413175623, tolerance = 1)
+})
+
+test_that("curve_simplify() reproduces the three simplification algorithms on the sin curve", {
+  x <- c(0, 1.57, 3.14, 4.71, 6.28)
+  y <- c(0, 1, 0, -1, 0)
+  rdp <- curve_simplify(x, y, method = "rdp", tolerance = 0.01, strict_y = FALSE, order_y = "none")
+  vis <- curve_simplify(x, y, method = "visvalingam", num_to_keep = 4, strict_y = FALSE,
+                        order_y = "none")
+  expect_equal(nrow(rdp), 4L)
+  expect_equal(nrow(vis), 4L)
+  expect_equal(rdp$y, c(0, 1, -1, 0), tolerance = 1e-6)
+  expect_equal(vis$y, c(0, 1, -1, 0), tolerance = 1e-6)
+
+  # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
+  # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here is
+  # THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test claims.
+  lang <- curve_simplify(x, y, method = "lang", tolerance = 0.01, look_ahead = 2,
+                         strict_y = FALSE, order_y = "none")
+  expect_equal(nrow(lang), 3L)
+  expect_equal(lang$x, c(0, 1.57, 4.71), tolerance = 1e-6)
+  expect_equal(lang$y, c(0, 1, -1), tolerance = 1e-6)
+})
+
+test_that("uncertain_curve_sample() reproduces Test_Curve_Sample_Probability", {
+  x <- c(1, 2, 3, 5)
+  d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)),
+           distribution("Triangular", c(6, 8, 12)), distribution("Triangular", c(13, 19, 20)))
+  r <- uncertain_curve_sample(x, d, probability = 0.5)
+  expect_equal(r$x, x)
+  expect_equal(r$y, c(2, 3.732051, 8.535898, 17.58258), tolerance = 1e-5)
+})
+
+test_that("uncertain_curve_sample() recycles a single distribution across x", {
+  x <- c(1, 2, 3)
+  r <- uncertain_curve_sample(x, distribution("Triangular", c(1, 2, 3)), probability = 0.5)
+  expect_equal(nrow(r), 3L)
+})
+
+test_that("uncertain_curve_sample() rejects probability outside [0, 1] instead of silently clamping (C3)", {
+  # C3 (P4 whole-branch review): the core clamp (a faithful port of C# CurveSample(double)) is
+  # untouched -- probability = 50 silently returned the 100% quantile core-side. This host-layer
+  # check is what actually rejects the mistake.
+  x <- c(1, 2, 3)
+  d <- distribution("Triangular", c(1, 2, 3))
+  msg <- "`probability` must be a single number in \\[0, 1\\]"
+  expect_error(uncertain_curve_sample(x, d, probability = 50), msg)
+  expect_error(uncertain_curve_sample(x, d, probability = -3), msg)
+})
+
+test_that("tabular_function() reproduces Test_Tabular_Function", {
+  x <- c(50, 100, 150, 200, 250)
+  d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
+  y <- tabular_function(x, d, at = 50, x_transform = "logarithmic")
+  expect_equal(y, 100.0, tolerance = 1e-12)
+})
+
+test_that("paired_data verbs validate their arguments identically to corehydropy", {
+  x <- c(50, 100, 150, 200, 250)
+  y <- c(100, 200, 300, 400, 500)
+  expect_error(curve_interpolate(x, y, xout = 75, yout = 100),
+               "exactly one of `xout` or `yout`")
+  expect_error(curve_interpolate(x, y), "exactly one of `xout` or `yout`")
+  expect_error(curve_simplify(x, y, method = "not_a_method", tolerance = 0.01),
+               "must be one of")
+  d <- list(distribution("Triangular", c(1, 2, 3)), distribution("Triangular", c(2, 4, 5)))
+  expect_error(uncertain_curve_sample(c(1, 2, 3), d, probability = 0.5),
+               "must have length 1 or length\\(x\\)")
+  expect_error(tabular_function(c(1, 2, 3), d, at = 1), "must have length 1 or length\\(x\\)")
+})
+
+test_that("curve_simplify() rejects num_to_keep below 2 for visvalingam instead of crashing", {
+  # M1 (P4 whole-branch review): num_to_keep of 0 or -1 used to crash both R and Python outright
+  # (a bus error / SIGSEGV); 1 silently returned a value read out of bounds. All three are now
+  # rejected at the host layer with the identical message corehydropy raises.
+  x <- c(0, 1.57, 3.14, 4.71, 6.28)
+  y <- c(0, 1, 0, -1, 0)
+  msg <- "`num_to_keep` must be a single integer of at least 2"
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = 0), msg, fixed = TRUE)
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = -1), msg, fixed = TRUE)
+  expect_error(curve_simplify(x, y, method = "visvalingam", num_to_keep = 1), msg, fixed = TRUE)
+  # num_to_keep = 2 is the smallest value that succeeds.
+  ok <- curve_simplify(x, y, method = "visvalingam", num_to_keep = 2, strict_y = FALSE,
+                       order_y = "none")
+  expect_equal(nrow(ok), 2L)
+})
+
+test_that("\"log\" and \"logarithmic\" are equivalent everywhere a transform argument appears", {
+  # M2 (P4 whole-branch review): interpolate()/interpolate_2d() only accepted "log" and
+  # curve_interpolate()/tabular_function() only accepted "logarithmic", so a value valid for one
+  # host verb was rejected (or, worse, silently PREFIX-MATCHED via match.arg) by the other.
+  storage <- c(230408, 288010, 345611, 403213, 460815, 518417, 576019, 633612,
+               691223, 748825, 806427, 864029, 921631, 1036834, 1152038)
+  elevation <- c(1519.7, 1520.5, 1520.9, 1521.7, 1523.5, 1525.9, 1528.4, 1530.9,
+                 1533.2, 1534.7, 1535.9, 1538, 1541.3, 1547.7, 1552.7)
+  a <- curve_interpolate(storage, elevation, xout = 500000, x_transform = "log")
+  b <- curve_interpolate(storage, elevation, xout = 500000, x_transform = "logarithmic")
+  expect_equal(a, b)
+
+  x <- c(1, 2, 3, 4)
+  y <- c(10, 20, 30, 40)
+  ia <- interpolate(x, y, 2.5, x_transform = "log")
+  ib <- interpolate(x, y, 2.5, x_transform = "logarithmic")
+  expect_equal(ia, ib)
 })

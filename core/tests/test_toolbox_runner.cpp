@@ -206,6 +206,30 @@ int main() {
     CHECK_NEAR(lin.values[0], 25.0, 1e-12);
     CHECK_NEAR(lin.values[1], 30.0, 1e-12);
 
+    // P4 whole-branch-review finding M2: "log" and "logarithmic" are synonyms for
+    // Transform::Logarithmic in EVERY group that reads a "*_transform" option, not just the
+    // group each host verb historically used ("log" for interpolate()/interpolate_2d(),
+    // "logarithmic" for curve_interpolate()/tabular_function()). Both tokens must parse
+    // identically through BOTH the "interpolation" group (which only ever accepted "log" before
+    // this fix) and the "paired_data" group (which only ever accepted "logarithmic").
+    {
+        std::string opts_log = "{\"x_transform\":\"log\",\"y_transform\":\"none\"}";
+        std::string opts_logarithmic = "{\"x_transform\":\"logarithmic\",\"y_transform\":\"none\"}";
+        auto a = tb::run_toolbox("interpolation", "linear", {ix, iy, {2.5, 3.0}}, opts_log);
+        auto b = tb::run_toolbox("interpolation", "linear", {ix, iy, {2.5, 3.0}}, opts_logarithmic);
+        CHECK_EQ(a.values.size(), b.values.size());
+        for (std::size_t i = 0; i < a.values.size(); ++i) CHECK_NEAR(a.values[i], b.values[i], 0.0);
+
+        const std::vector<double> px{50.0, 100.0, 150.0, 200.0, 250.0};
+        const std::vector<double> py{100.0, 200.0, 300.0, 400.0, 500.0};
+        std::string popts_log = "{\"x_transform\":\"log\",\"y_transform\":\"none\"}";
+        std::string popts_logarithmic = "{\"x_transform\":\"logarithmic\",\"y_transform\":\"none\"}";
+        auto pa = tb::run_toolbox("paired_data", "interpolate_y", {px, py, {75.0}}, popts_log);
+        auto pb = tb::run_toolbox("paired_data", "interpolate_y", {px, py, {75.0}}, popts_logarithmic);
+        CHECK_EQ(pa.values.size(), pb.values.size());
+        for (std::size_t i = 0; i < pa.values.size(); ++i) CHECK_NEAR(pa.values[i], pb.values[i], 0.0);
+    }
+
     // --- regression group ------------------------------------------------------------------
     // A two-predictor model whose exact solution is known by construction: y = 3 + 2*x1 - x2
     // with no noise, so the fitted coefficients must recover [3, 2, -1] exactly and R^2 == 1.

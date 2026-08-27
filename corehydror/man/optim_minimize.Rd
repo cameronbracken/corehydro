@@ -10,9 +10,14 @@ optim_minimize(
   lower = NULL,
   upper = NULL,
   initial = NULL,
-  method = c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent"),
+  method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+    "bfgs", "powell", "adam", "gradient_descent", "nelder_mead", "brent",
+    "golden_section", "augmented_lagrange"),
   seed = NULL,
-  control = list()
+  control = list(),
+  gradient = NULL,
+  constraints = NULL,
+  inner = NULL
 )
 
 optim_maximize(
@@ -20,52 +25,102 @@ optim_maximize(
   lower = NULL,
   upper = NULL,
   initial = NULL,
-  method = c("de", "bfgs", "powell", "mlsl", "nelder_mead", "brent"),
+  method = c("de", "particle_swarm", "sce", "simulated_annealing", "multi_start", "mlsl",
+    "bfgs", "powell", "adam", "gradient_descent", "nelder_mead", "brent",
+    "golden_section", "augmented_lagrange"),
   seed = NULL,
-  control = list()
+  control = list(),
+  gradient = NULL,
+  constraints = NULL,
+  inner = NULL
 )
 }
 \arguments{
 \item{objective}{a function taking a numeric parameter vector and returning a single number.}
 
 \item{lower, upper}{numeric vectors of parameter bounds, the same length as the parameter
-vector. Required for every method, including \code{"de"} and \code{"brent"}, which take no \code{initial}.}
+vector. Required for every method, including \code{"de"}, \code{"brent"} and \code{"golden_section"}, which
+take no \code{initial}. \code{"brent"} and \code{"golden_section"} are one-dimensional: pass a single bound
+each.}
 
 \item{initial}{optional numeric vector of starting values, the same length as \code{lower}/\code{upper}.
-Required for \code{"bfgs"}, \code{"powell"}, \code{"mlsl"} and \code{"nelder_mead"}.}
+Required for \code{"bfgs"}, \code{"powell"}, \code{"mlsl"}, \code{"multi_start"}, \code{"adam"}, \code{"gradient_descent"}
+and \code{"nelder_mead"}.}
 
-\item{method}{one of \code{"de"} (differential evolution, the default), \code{"bfgs"}, \code{"powell"},
-\code{"mlsl"}, \code{"nelder_mead"}, or \code{"brent"}.}
+\item{method}{one of \code{"de"} (differential evolution, the default), \code{"particle_swarm"}, \code{"sce"}
+(shuffled complex evolution), \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}, \code{"bfgs"},
+\code{"powell"}, \code{"adam"}, \code{"gradient_descent"}, \code{"nelder_mead"}, \code{"brent"}, \code{"golden_section"},
+or \code{"augmented_lagrange"} (the one constrained method, and the one method
+\code{optim_maximize()} rejects -- see Details).}
 
-\item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"mlsl"}); an error for
-any other method.}
+\item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"particle_swarm"},
+\code{"sce"}, \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}); an error for any other method.}
 
-\item{control}{a named list of optimizer settings: \code{max_iterations},
-\code{max_function_evaluations}, \code{absolute_tolerance}, \code{relative_tolerance}, \code{population_size}
-(\code{"de"} only), \code{compute_hessian}, and \code{report_failure} (default \code{TRUE}, which surfaces a
-configuration failure as an R error rather than returning a failed status quietly).
-\code{max_function_evaluations}, \code{report_failure}, and \code{compute_hessian} apply only to \code{"de"},
-\code{"bfgs"}, \code{"powell"}, and \code{"mlsl"} (the four methods that derive from the ported \code{Optimizer}
-base); \code{"nelder_mead"} and \code{"brent"} accept only \code{max_iterations}, \code{absolute_tolerance}, and
-\code{relative_tolerance}, and never compute a Hessian. \code{compute_hessian} DEFAULTS TO \code{TRUE} for
-those four methods (matching the ported C# \code{Optimizer} base), so a successful \code{"de"}/\code{"bfgs"}/
-\code{"powell"}/\code{"mlsl"} run returns a Hessian, computed by extra objective evaluations, unless the
+\item{control}{a named list of optimizer settings. Every method accepts \code{max_iterations},
+\code{absolute_tolerance} and \code{relative_tolerance}. Every method except \code{"nelder_mead"} and
+\code{"brent"} (the two classes that do not derive from the ported \code{Optimizer} base) additionally
+accepts \code{max_function_evaluations}, \code{report_failure} (default \code{TRUE}, which surfaces a
+configuration failure as an R error rather than returning a failed status quietly) and
+\code{compute_hessian}. The method-specific settings are \code{population_size} (\code{"de"},
+\code{"particle_swarm"}); \code{complexes}, \code{cce_iterations} and \code{tolerance_steps} (\code{"sce"});
+\code{initial_temperature}, \code{min_temperature}, \code{cooling_rate}, \code{update_cycles},
+\code{temperature_cycles} and \code{tolerance_steps} (\code{"simulated_annealing"}); \code{local_method}
+(\code{"multi_start"}, \code{"mlsl"}, one of \code{"bfgs"}, \code{"nelder_mead"}, \code{"powell"});
+\code{local_absolute_tolerance}, \code{local_relative_tolerance}, \code{polish} (\code{"multi_start"}); \code{alpha},
+the step size or learning rate (\code{"adam"}, \code{"gradient_descent"}); and \code{beta1}, \code{beta2}, the
+two decay factors (\code{"adam"}). Passing a
+setting a method does not read is an error rather than a silent no-op. \code{compute_hessian}
+DEFAULTS TO \code{TRUE} for the \code{Optimizer}-base methods (matching the ported C# \code{Optimizer} base),
+so a successful run returns a Hessian, computed by extra objective evaluations, unless the
 caller passes \code{control = list(compute_hessian = FALSE)} to skip it.}
+
+\item{gradient}{optional function taking the parameter vector and returning one partial
+derivative per parameter. Accepted only by \code{"adam"} and \code{"gradient_descent"}, an error for
+every other method. Omitted, both methods differentiate the objective numerically, exactly as
+the upstream C# classes do with a null gradient.}
+
+\item{constraints}{a list of \code{\link[=optim_constraint]{optim_constraint()}} objects. Required by, and accepted only by,
+\code{method = "augmented_lagrange"}.}
+
+\item{inner}{an optional named list describing the inner optimizer the augmented Lagrange
+method drives, with names \code{method}, \code{initial}, \code{lower}, \code{upper}, \code{seed} and \code{control}. Any
+vector left out falls back to the top-level one, so \code{list(method = "powell")} is enough.
+Accepted only by \code{method = "augmented_lagrange"}; omitted, the inner optimizer is \code{"bfgs"}
+over the top-level \code{initial}/\code{lower}/\code{upper}. The inner method may be any method except
+\code{"augmented_lagrange"} itself and the two standalone classes \code{"nelder_mead"}/\code{"brent"}.}
 }
 \value{
 a \code{corehydro_optim} list with \code{parameters}, \code{value} (the objective's own value at the
 optimum, in its own sign convention -- not negated for \code{optim_maximize()}), \code{iterations},
-\code{function_evaluations}, \code{status}, and \code{hessian} (populated by default for \code{"de"}/\code{"bfgs"}/
-\code{"powell"}/\code{"mlsl"}; always \code{NULL} for \code{"nelder_mead"}/\code{"brent"}, or when \code{compute_hessian}
-was turned off).
+\code{function_evaluations}, \code{status}, and \code{hessian} (populated by default for every
+\code{Optimizer}-base method; always \code{NULL} for \code{"nelder_mead"}/\code{"brent"}, or when
+\code{compute_hessian} was turned off). For \code{"augmented_lagrange"} it additionally carries
+\code{multipliers}, a list of the three Lagrange multiplier vectors -- \code{equality}, \code{less_than} and
+\code{greater_than} -- each holding one entry per constraint of that type, in the order the
+constraints were given.
 }
 \description{
-Runs one of the six ported Numerics optimizers over an R function. The optimizer's random
+Runs one of the fourteen ported Numerics optimizers over an R function. The optimizer's random
 number generator lives in C++, so a seeded run reproduces exactly, and reproduces identically
 in corehydropy.
+}
+\details{
+\code{optim_maximize()} accepts every method except \code{"augmented_lagrange"}, which can only minimize:
+the upstream C# class always drives its inner optimizer through \code{Minimize()} over an augmented
+Lagrangian built from the raw objective, so a maximize request would flip the reported sign
+without flipping the search direction and hand back the constrained minimum. Negate the
+objective and call \code{optim_minimize()} instead -- minimizing \code{-f} subject to the same
+constraints is exactly maximizing \code{f}.
 }
 \examples{
 rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2
 fit <- optim_minimize(rosenbrock, lower = c(-5, -5), upper = c(5, 5), seed = 42)
+round(fit$parameters, 3)
+
+# Constrained: minimize the same function on the unit disk.
+con <- optim_constraint(function(p) p[1]^2 + p[2]^2, value = 2, type = "le")
+fit <- optim_minimize(rosenbrock, initial = c(0, 0), lower = c(-1.5, -1.5),
+                      upper = c(1.5, 1.5), method = "augmented_lagrange",
+                      constraints = list(con))
 round(fit$parameters, 3)
 }

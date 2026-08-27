@@ -107,6 +107,23 @@ set(BF_TESTS
   test_parameter_constraint_sizes
   test_linear_moments_overflow
   test_generalized_normal_jacobian
+  test_root_finding_extras
+  test_integration_extras
+  test_integration_random
+  test_runge_kutta
+  test_interpolation_extras
+  test_linalg_extras
+  test_univariate_functions
+  test_local_optimizers
+  test_global_optimizers
+  test_augmented_lagrange
+  test_network_optimization
+  test_statistics_helpers
+  test_hypothesis_tests
+  test_data_frame_facades
+  test_ordinate
+  test_ordered_paired_data
+  test_uncertain_paired_data
 )
 
 # Sobol test takes the direction-number file as its sole argument.
@@ -132,6 +149,41 @@ foreach(t ${BF_TESTS})
     $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+
+# test_integration_random (Miser/Vegas) needs the Sobol direction-numbers file for dimensions > 1,
+# but is registered through the plain BF_TESTS loop above (no argv passed, unlike test_sobol/
+# test_fixtures below); a compile definition is simpler than special-casing this one target's argv.
+target_compile_definitions(test_integration_random PRIVATE
+  SOBOL_DATA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data/new-joe-kuo-6.21201")
+
+# test_global_optimizers is compiled WITHOUT floating-point contraction, and unlike the
+# fixture_callback_catalog.cpp case further down, the flag here reaches the ported core itself,
+# on purpose. ParticleSwarm and ShuffledComplexEvolution are chaotically sensitive: their search
+# paths branch on comparisons between accumulated sums, so a last-bit difference in one arithmetic
+# expression changes which point gets replaced, and every draw after that is spent differently.
+# Clang and GCC contract `2 * g[i] - worst[i]` and `lower + rnd * (upper - lower)` into fused
+# multiply-adds by default; .NET never does. This suite's oracles ARE the C# test literals, so
+# matching .NET's arithmetic is what makes the comparison mean anything.
+#
+# MEASURED (Apple clang 21, arm64, against the REAL Numerics library at 2a0357a driven by a
+# scratch dotnet console app). With the flag, all seven configurations reproduce C# BIT-FOR-BIT --
+# same iteration count, same function-evaluation count, same fitness and coordinates at G17:
+#   ParticleSwarm         eggholder 2413/72420, booth 3073/92220, dejong-5D 3768/113070,
+#                         rosenbrock-5D 100000/10000000, mccormick 2814/84450
+#   ShuffledComplexEvol.  eggholder(30,10) 57/78216, booth 54/4786, dejong-5D 57/9483,
+#                         rosenbrock-5D 86/11586, mccormick 32/3497
+# Without it the streams part: SCE eggholder walks to 54/82511 and stops at -959.32315549476118
+# instead of -959.64066272057266, missing Test_Eggholder's 1E-4 oracle outright, and SCE mccormick,
+# SCE rosenbrock, PSO booth, PSO dejong and PSO mccormick all land on different iteration counts.
+#
+# NOTE FOR THE PACKAGE SURFACE (not a defect in this suite): the R and Python packages pass no such
+# flag, so on an FMA-enabled build they compile these two headers WITH contraction and will walk
+# the drifted path above. That is inherent to a chaotic search compiled by two toolchains and is
+# the thing to measure -- not paper over -- when the seeded cross-language digest fixtures for these
+# methods get written. The flag is inert on baseline x86-64 (no fma to contract into) and MSVC needs
+# none (/fp:precise does not contract), exactly as for fixture_callback_catalog.cpp below.
+target_compile_options(test_global_optimizers PRIVATE
+  $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffp-contract=off>)
 
 # Generic fixture-driven runner: reads the canonical fixtures/ shared by all languages. It is two
 # translation units, and the split is deliberate -- see the -ffp-contract=off comment below before

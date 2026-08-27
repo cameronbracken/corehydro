@@ -82,15 +82,30 @@ all reach both languages through this one pair of headers rather than per-family
 
 `core/include/corehydro/numerics/support/toolbox_runner.hpp` (siblings of `dist_runner.hpp` and
 `estimation/support/fit_runner.hpp`, likewise corehydro additions with no upstream C# counterpart)
-is the one place a general-purpose Numerics utility method is dispatched: eleven groups --
+is the one place a general-purpose Numerics utility method is dispatched: seventeen groups --
 `correlation`, `gof`, `statistics`, `spectra`, `histogram`, `interpolation`, `regression`,
-`sampling`, `probability`, `link`, `trend` -- each a standalone-compiling header under
+`sampling`, `probability`, `link`, `trend`, `linalg`, `special`, `functions`, `network`,
+`hypothesis`, `paired_data` -- each a standalone-compiling header under
 `numerics/support/toolbox/` (plus `common.hpp` for the shared `ToolboxResult`/data-access
 helpers), holding that group's `detail::run_<group>` function. Bulk data travels as native double
 vectors (not JSON, unlike `dist_spec`'s construct grammar) since a goodness-of-fit call carrying
 two arbitrary-length series has no business paying a JSON parse; scalars, enum names, and flags
-travel in a small `options_json`. `numerics/support/optimizer_runner.hpp` is the sibling for the
-six ported optimizers (Differential Evolution, BFGS, Powell, MLSL, Nelder-Mead, Brent): unlike
+travel in a small `options_json`. The `network` group is the outlier in that list: its subject,
+`numerics/math/optimization/dynamic/` (BinaryHeap, Dijkstra, Network), is an optimization class
+whose input is a graph rather than a callable, so it joins the toolbox rather than the optimizer
+runner and reaches users as `shortest_path()`. `hypothesis` and `paired_data` are the P4 additions:
+`hypothesis` dispatches `numerics/data/hypothesis_tests.hpp` (twelve of the thirteen
+`Numerics.Data.Statistics.HypothesisTests` statics -- `UnimodalityTest` is deferred, needing the
+unported `GaussianMixtureModel`) and reaches users as `hypothesis_test()`; `paired_data`
+dispatches the whole `numerics/data/paired_data/` subsystem (`Ordinate`, `LineSimplification`,
+`OrderedPairedData`, `UncertainOrdinate`, `UncertainOrderedPairedData`) and reaches users as
+`curve_interpolate()`/`curve_area()`/`curve_simplify()`/`uncertain_curve_sample()`, with
+`numerics/functions/tabular_function.hpp` (the subsystem's one consumer, completing the
+`IUnivariateFunction` trio) dispatched through the existing `functions` group's `tabular` method as
+`tabular_function()`. `numerics/support/optimizer_runner.hpp` is the
+sibling for the fourteen ported optimizers (Differential Evolution, ParticleSwarm,
+ShuffledComplexEvolution, SimulatedAnnealing, MultiStart, MLSL, BFGS, Powell, ADAM,
+GradientDescent, Nelder-Mead, Brent, GoldenSection, AugmentedLagrange): unlike
 every other toolbox/fixture surface, an optimizer's INPUT is a live callable, not serializable
 data, so it is a separate runner rather than a `run_toolbox` group, and `GuardedObjective` there
 is the one place a host-language (R/Python) callback crosses into the shared core, latching the
@@ -106,6 +121,20 @@ replay, and a user's `correlation()` or `optim_minimize()` call are the same cod
 a seeded DE run's parameters and two deterministic generators reproduce identically across all
 four runners in one fixture, the toolbox layer's counterpart to the estimation layer's
 `fit_cross_language.json`.
+
+`core/include/corehydro/numerics/math/optimization/` carries every ported optimizer beside
+`support/optimizer.hpp` (the shared base) and `support/parameter_set.hpp`: the global set
+(`differential_evolution.hpp`, `particle_swarm.hpp`, `shuffled_complex_evolution.hpp`,
+`simulated_annealing.hpp`, `multi_start.hpp`, `mlsl.hpp`), the local set (`bfgs.hpp`,
+`powell.hpp`, `adam.hpp`, `gradient_descent.hpp`, `golden_section.hpp`, plus the two standalone
+Phase-0 classes `nelder_mead.hpp` and `brent_search.hpp`), and the constrained
+`augmented_lagrange.hpp` over `constraint/` (`constraint_type.hpp`, `i_constraint.hpp`,
+`constraint.hpp`). `dynamic/` holds the dynamic-programming trio (`binary_heap.hpp`,
+`dijkstra.hpp`, `network.hpp`) that the `network` toolbox group dispatches. Two of these headers
+deliberately reproduce upstream array aliasing that is oracle-visible and must not be "cleaned
+up" -- `shuffled_complex_evolution.hpp`'s reused scratch point and `multi_start.hpp`'s
+re-seated initial-values array; each says so in a numbered transcription note, as does
+`network.hpp` for the three defects that make the C# `Network` class unconstructible.
 
 `core/include/corehydro/numerics/support/callback_runner.hpp` is the third runner in that family
 and the one place a ported class whose INPUT is a live host-language function is dispatched:
@@ -147,7 +176,14 @@ series), `data_frame.hpp` (`DataFrame` -- FullTimeSeries threshold expansion,
 ProcessThresholdSeries, MGBT and explicit-threshold low outliers) with `data_frame_plotting.hpp`
 (the Hirsch-Stedinger plotting positions, including a faithful port of .NET's ArraySortHelper
 introsort because `List<T>.Sort` tie order is oracle-visible), and `threshold_diagnostics.hpp`
-(mean residual life + GPD parameter stability). `models/trend_functions/` holds the ten trend
+(mean residual life + GPD parameter stability). `data_frame.hpp` also carries the P4 hypothesis-
+test and summary-statistics facades (twelve of fourteen; `unimodality_test` and
+`summary_hypothesis_test` are deferred alongside `HypothesisTests::UnimodalityTest`), dispatched
+through `models/data_frame_runner.hpp`'s `run_data_frame` -- a fourth entry point beside
+`dist_runner.hpp`/`toolbox_runner.hpp`/`optimizer_runner.hpp`, returning the same `ToolboxResult`
+the toolbox groups return so all three fixture runners reuse the existing `toolbox_select` helper
+unchanged. It reaches users as `analysis_data_hypothesis_test()` and `analysis_data_statistics()`,
+and its oracle values live in the `data_frame` fixture kind. `models/trend_functions/` holds the ten trend
 models plus `general_linear_function.hpp` on the shared `support/` base
 (ITrendModel/TrendModelBase and the type enum). `models/univariate_distribution/` holds the four
 models: `univariate_distribution_model.hpp` (with its nonstationary companion
@@ -796,3 +832,123 @@ version bump to **0.8.0** records it. Final numbers: **ctest 90/90 (test_fixture
 oracle gate 5568 reproduced, 0 failed, 11 skipped; testthat 6344/0; pytest 1520**; `R CMD check
 --as-cran` holds at the same three NOTEs with no WARNING. No `oracle_skip` and no loosened
 tolerance was added anywhere in the phase.
+
+The math-extras phase (P2, branch `port-math-extras`, August 2026) closed the last major slice of
+Numerics that is not a distribution, model, or estimator, and is the second step of the release arc
+laid out in `docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`. **Root
+finding** (`Numerics/Mathematics/Root Finding/`) folded Bisection/Secant/Newton into `root_find()`'s
+existing bracketing interface as a `method` option beside the default Brent, and added
+`root_find_system()` for a vector-valued system via multivariate Newton-Raphson. **Integration**
+(`Numerics/Mathematics/Integration/`, the seven integration classes plus the `Integration` statics)
+widened `quadrature()` to ten deterministic methods, added `quadrature_2d()` for a rectangle, and
+added `quadrature_nd()` for an arbitrary-dimension box over three seeded methods -- Monte Carlo,
+Miser, and Vegas (the last with rare-event configuration). **RungeKutta** is `ode_solve()`.
+**CubicSpline/Polynomial** extend `interpolate(method =)` beside the existing linear method, with
+the transform/extrapolation arguments enforced as linear-only (a guard, not a silent no-op),
+matching the C# classes, which have neither. Three new toolbox groups -- `linalg`
+(`qr_decomposition()`/`qr_solve()`/`gauss_jordan()`), `special` (`debye()`/`polynomial_eval()`),
+and `functions` (`univariate_function()`, the ported `LinearFunction`/`PowerFunction`) -- widen
+`toolbox_runner`'s dispatch from eleven groups to fourteen, all on the same standalone-header
+pattern the eleven established; the `CallbackSet` gains `scalar_deriv` and `vector_weight` beside
+the existing `scalar_xy`. `TabularFunction`, the third `IUnivariateFunction` implementation, is
+severed to a later release rather than silently dropped: it depends on the still-unported Paired
+Data subsystem (see `upstream/CLAUDE.md`). One worked example pair, 18, exercises the whole surface
+ending in an executable reproduction check. The honest fidelity note (established precedent: state
+it, do not paper over): at the shipped seeds, `quadrature_nd()`'s `"monte_carlo"` integral
+reproduces bit-for-bit across C++, R, Python, and the real C# library and is pinned at zero
+tolerance; `"miser"` measured 1 ULP off C#, and `"vegas"` measured 2-3 ULP between the actual
+installed R and Python packages, from floating-point contraction differences in the
+variance/chi-squared accumulation -- the affected fixture cases assert seeded evaluation counts and
+solver status instead of the integral value, with the measurements documented, and no tolerance was
+loosened and no oracle was skipped anywhere in the phase. The version bump to **0.9.0** records it.
+Final numbers: **ctest 98/98 (test_fixtures 5762 checks); oracle gate 5751 reproduced, 0 failed, 11
+skipped; testthat 6622/0; pytest 1619**; `R CMD check --as-cran` holds at the same three NOTEs with
+no WARNING.
+
+The optimizers phase (P3, branch `port-optimizers`, August 2026) closed the rest of the Numerics
+optimization layer and is the third step of the release arc laid out in
+`docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`. `optim_minimize()` /
+`optim_maximize()` went from six methods to **fourteen**: the four global optimizers
+(`particle_swarm`, `sce`, `simulated_annealing`, `multi_start`), the three local ones (`adam`,
+`gradient_descent`, `golden_section`), and the constrained `augmented_lagrange` over a new
+constraint layer (`optim_constraint()` / `Constraint`, the `constraints` and `inner` arguments, and
+the three Lagrange multiplier vectors on the result). `adam`/`gradient_descent` take an optional
+analytic `gradient` callback -- the second host-language function to cross into the shared core,
+guarded through the same `CallbackAbortState` the callback layer uses. `mlsl` gained the
+`local_method` control it had been ported with but never exposed. The dynamic-programming trio
+(BinaryHeap, Dijkstra, Network) is not an optimizer -- its input is a graph -- so it joined the
+toolbox as the fifteenth group, `network`, reaching users as `shortest_path()` (0-based node
+indices in BOTH languages, single-precision weights kept single-precision through the core).
+The ctest suites are `core/tests/test_local_optimizers.cpp`, `test_global_optimizers.cpp`,
+`test_augmented_lagrange.cpp`, and `test_network_optimization.cpp`, all transcribing the upstream
+MSTest methods 1:1 and each carrying a clearly-marked supplement where mutation testing showed the
+C# assertions guard the ANSWER but not the ALGORITHM.
+
+Four findings worth carrying forward. First, **`test_global_optimizers` is compiled
+`-ffp-contract=off`** and the reason is measured: ParticleSwarm and SCE branch on comparisons
+between accumulated sums, .NET never fuses `a*b + c` and clang/gcc do by default, so one contracted
+expression flips an accept/reject and every later PRNG draw is spent differently. With the flag the
+port is bit-identical to the real C# library on all ten configurations tried; without it SCE's
+Eggholder oracle misses outright. The shipped R and Python packages pass no such flag, so a seeded
+`particle_swarm` or `sce` run reproduces R-to-Python but NOT necessarily package-to-C# -- unlike
+P2's limit, the divergence is inside the shared core, so even the parameters drift. Those two
+fixture cases pin only what survives both paths (iteration count, evaluation count, status, a
+parameter that lands exactly on a bound); `simulated_annealing` and `multi_start` reproduce C#
+exactly down to the evaluation count and ARE pinned exactly. Second, **two ported headers reproduce
+upstream array aliasing on purpose** and must not be cleaned up: SCE reuses one scratch point across
+its beta loop and stores it by reference, so a later write silently moves an already-scored
+sub-complex entry (without it the port does not reproduce C#), and MultiStart re-seats its `values`
+pointer onto `InitialValues`, so a finished run's `InitialValues` holds the last sampled restart.
+MultiStart's polish step is the same shape with a numeric consequence: it clamps the recorded best
+point after its fitness was recorded, so the reported value need not be attained at the reported
+parameters (measured on Eggholder; C# returns the same numbers bit for bit). Third, the shipped C#
+**`Network` class is entirely unreachable code** -- its constructor sizes both edge caches one short
+and never sets `_nodeCount`, `Solve(float[])` ignores the weights it is handed, and `GetPath`
+binary-searches an `int[]` for an `Edge` so it can only throw, return null, or return an empty
+list. The port diverges on the constructor alone (a ctor that always throws has no behavior to be
+faithful to, and the fix is independently checkable: `network.solve(d)` then equals
+`dijkstra::solve(edges, d)`, which does run in C#), mirrors the other two exactly with tests
+pinning them, severs `GetPath`, and routes the user verb through the free solver. Fourth,
+**`AugmentedLagrange` cannot maximize**: `Optimize()` always drives the inner optimizer through
+`Minimize()`, so a maximize request returns the constrained minimum labelled Success. The ported
+class mirrors it (a fixture must be able to pin upstream); the guard lives on the two public verbs,
+which reject the method by name and state the exact workaround. All four are written up in
+`docs/upstream-csharp-issues.md`, and one worked example pair, **19**, exercises the whole surface
+ending in an executable reproduction check. The version bump to **0.10.0** records it. Final
+numbers: **ctest 102/102 (test_fixtures 5953 checks); oracle gate 5942 reproduced, 0 failed, 11
+skipped; testthat 6916/0; pytest 1711**; `R CMD check --as-cran` holds at the same three NOTEs with
+no WARNING. No `oracle_skip` and no loosened tolerance was added anywhere in the phase.
+
+The data-and-tests phase (P4, branch `port-data-and-tests`, August 2026) closed the data-and-
+testing layer that the earlier phases had left open, and is the fourth and last step of the release
+arc laid out in `docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`.
+**`HypothesisTests`** (`numerics/data/hypothesis_tests.hpp`) ports twelve of its thirteen public
+statics, reachable through the new `hypothesis` toolbox group as `hypothesis_test()`;
+`UnimodalityTest` is deferred to the next phase, since it trains a
+`Numerics.MachineLearning.GaussianMixtureModel` and the Machine Learning layer is unported. That
+deferral was the blocker on **the two severed RMC.BestFit `DataFrame` facades**, un-gated in this
+phase (`data_frame.hpp`, dispatched through the new `models/data_frame_runner.hpp` behind a
+`data_frame` fixture kind) as `analysis_data_hypothesis_test()` and `analysis_data_statistics()`:
+twelve of their fourteen combined members ship (nine of the Hypothesis Testing region's eleven,
+all three of the Summary Statistics region's), with `unimodality_test` and
+`summary_hypothesis_test` deferred alongside `UnimodalityTest` for the same reason.
+**`Correlation`'s matrix overloads** (`Pearson(double[,])`/`Spearman(double[,])`) join the existing
+`correlation` group as a matrix path with no Kendall equivalent, since upstream has none. **The
+whole Paired Data subsystem** -- `Ordinate`, `LineSimplification`, `OrderedPairedData`,
+`UncertainOrdinate`, `UncertainOrderedPairedData`, all under the new
+`numerics/data/paired_data/` directory -- lands with its one consumer,
+`numerics/functions/tabular_function.hpp`, completing the `IUnivariateFunction` trio, and the six
+previously-severed `Search.cs` paired-data overloads it needed un-severed alongside it. The
+subsystem reaches users through a new `paired_data` toolbox group (curve interpolation, area,
+simplification, and uncertain sampling) and the existing `functions` group's `tabular` method,
+taking `toolbox_runner.hpp` from fifteen groups to **seventeen**. Worked example **28** (examples
+20 through 27 shipped in earlier phases) exercises the whole layer end to end. The phase's headline
+upstream finding: `OrderedPairedData.LangSimplify` never force-keeps the last point of a curve, so
+it silently drops it, and upstream's own `Test_LangSimplify` cannot catch this because its
+assertion loop is bounded by the RESULT length rather than the expected length. Measured against
+the real, compiled C# library, and now pinned by ctest and by a fixture the dotnet oracle gate
+replays at exact tolerance -- one of seventeen new entries this phase adds to
+`docs/upstream-csharp-issues.md`. The version bump to **0.11.0** records it. Final numbers: **ctest
+108/108 (test_fixtures 6139 checks); oracle gate 6128 reproduced, 0 failed, 11 skipped; testthat
+7161/0; pytest 1795**; `R CMD check --as-cran` holds at the same three NOTEs with no WARNING. No
+`oracle_skip` and no loosened tolerance was added anywhere in the phase.

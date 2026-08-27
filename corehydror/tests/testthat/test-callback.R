@@ -4,6 +4,46 @@ test_that("root_find solves a user-written R function", {
   expect_error(root_find(function(x) x^2 + 1, lower = 0, upper = 2), "not bracketed")
 })
 
+test_that("root_find solves with bisection, secant, and newton (P2 math extras)", {
+  quad <- function(x) x^2 - 2
+  quad_deriv <- function(x) 2 * x
+  expect_equal(root_find(quad, lower = 0, upper = 4, method = "bisection", first_guess = 1),
+               sqrt(2), tolerance = 1e-5)
+  cubic <- function(x) x^3 - x - 1
+  expect_equal(root_find(cubic, lower = -1, upper = 5, method = "secant"), 1.32472,
+               tolerance = 1e-5)
+  # The basic (unbracketed) variant.
+  expect_equal(root_find(quad, method = "newton", df = quad_deriv, first_guess = 1), sqrt(2),
+               tolerance = 1e-5)
+  # Both lower and upper present selects the robust (bracket-aware) variant.
+  trig <- function(x) 2 * sin(x) - 3 * cos(x) - 0.5
+  trig_deriv <- function(x) 2 * cos(x) + 3 * sin(x)
+  expect_equal(root_find(trig, method = "newton", df = trig_deriv, first_guess = 0.5,
+                         lower = 0, upper = pi),
+               1.12191713, tolerance = 1e-5)
+
+  # Argument validation.
+  expect_error(root_find(quad, lower = 0, upper = 4, method = "bisection"), "first_guess")
+  expect_error(root_find(quad, method = "newton", first_guess = 1), "df")
+  expect_error(root_find(quad, method = "newton", df = quad_deriv), "first_guess")
+  expect_error(root_find(quad, method = "secant"), "lower.*upper")
+  expect_error(root_find(quad, lower = 0, method = "brent", upper = NULL), "lower.*upper")
+})
+
+test_that("root_find_system solves a linear system of equations", {
+  # Test_NewtonRaphson.Test_Multi_LinearSystem: F([x;y]) = [3x + y - 9, x + 2y - 8], root [2, 3].
+  f <- function(v) c(3 * v[1] + v[2] - 9, v[1] + 2 * v[2] - 8)
+  j <- function(v) matrix(c(3, 1, 1, 2), nrow = 2, byrow = TRUE)
+  root <- root_find_system(f, j, first_guess = c(0, 0))
+  expect_equal(root, c(2, 3), tolerance = 1e-5)
+
+  # An error inside either callback reaches the caller unchanged, the same guard contract every
+  # other callback method carries.
+  boom <- function(v) stop("my own error")
+  expect_error(root_find_system(boom, j, first_guess = c(0, 0)), "my own error")
+  expect_error(root_find_system(f, boom, first_guess = c(0, 0)), "my own error")
+})
+
 test_that("derivative differentiates a user-written R function", {
   # f(x) = x^3, f'(2) = 12
   expect_equal(derivative(function(x) x^3, 2), 12, tolerance = 1e-6)
@@ -51,6 +91,66 @@ test_that("quadrature reports the rule's own standard error", {
   expect_gt(attr(peak, "function_evaluations"), 21L)
   expect_gt(attr(peak, "standard_error"), 0)
   expect_lt(attr(peak, "standard_error"), 1e-6)
+})
+
+test_that("quadrature supports the deterministic method variants (P2 math extras)", {
+  # Test_AdaptiveGaussLobatto.Test_FXX: 0.5 + 24x + 3x^2 on [0, 2], true = 57.
+  expect_equal(as.numeric(quadrature(function(x) 0.5 + 24 * x + 3 * x^2, lower = 0, upper = 2,
+                                     method = "gauss_lobatto")),
+               57, tolerance = 1e-3)
+  # Test_Integration.Test_MidPoint: x^3 on [0, 1] with 1000 fixed steps, true = 0.25.
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "midpoint", steps = 1000)),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1, method = "simpsons")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "trapezoidal")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "adaptive_simpsons")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "gauss_legendre")),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "gauss_legendre20")),
+               0.25, tolerance = 1e-10)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "simpsons_fixed", steps = 1000)),
+               0.25, tolerance = 1e-3)
+  expect_equal(as.numeric(quadrature(function(x) x^3, lower = 0, upper = 1,
+                                     method = "trapezoidal_fixed", steps = 1000)),
+               0.25, tolerance = 1e-3)
+  # Absent `method` still reaches the AdaptiveGaussKronrod path, byte-identical to before.
+  expect_equal(attr(quadrature(function(x) x^2, lower = 0, upper = 3), "status"), "Success")
+
+  # `min_depth`/`max_depth` only apply to method = "adaptive_simpsons".
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, min_depth = 1), "adaptive_simpsons")
+  # `steps` only applies to the fixed-step statics and midpoint.
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "gauss_lobatto",
+                          steps = 10), "steps")
+  # The tolerance-family options only apply to the five adaptive methods, not the five fixed-rule
+  # statics: a fixed-rule method silently ignoring these used to be a no-op (review finding).
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "midpoint",
+                          absolute_tolerance = 1e-12), "absolute_tolerance")
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "gauss_legendre",
+                          relative_tolerance = 1e-12), "relative_tolerance")
+  expect_error(quadrature(function(x) x, lower = 0, upper = 1, method = "simpsons_fixed",
+                          max_function_evaluations = 100L), "max_function_evaluations")
+})
+
+test_that("quadrature_2d integrates a user-written R function over a 2D rectangle", {
+  q <- quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1)
+  expect_equal(as.numeric(q), 1, tolerance = 1e-3)
+  expect_equal(attr(q, "status"), "Success")
+  expect_gt(attr(q, "function_evaluations"), 0L)
+  expect_gte(attr(q, "standard_error"), 0)
+
+  boom <- function(x, y) stop("my own error")
+  expect_error(quadrature_2d(boom, min_x = 0, max_x = 1, min_y = 0, max_y = 1), "my own error")
+  expect_error(quadrature_2d(function(x, y) x + y, min_x = 1, max_x = 0, min_y = 0, max_y = 1),
+               "must be below")
 })
 
 test_that("an unsupplied option leaves the ported routine's own default in force", {
@@ -1791,4 +1891,78 @@ test_that("the model-only verbs refuse a fit_gmm_moments() fit by name", {
   expect_error(quantile_variance(f, 0.01), "no distribution to take a quantile of")
   expect_error(fit_diagnostics(f), "needs a fit built from a model")
   expect_null(f$model)
+})
+
+test_that("ode_solve solves a user-written R ODE with rk4 (P2 math extras)", {
+  # dy/dt = y, y(0) = 1: the exact solution is y(t) = exp(t), so 100 rk4 steps to t = 1 should
+  # land within 1e-5 of e. Python's twin asserts the identical setup.
+  y <- ode_solve(function(t, y) y, initial_value = 1, start_time = 0, end_time = 1,
+                 time_steps = 100)
+  expect_length(y, 100)
+  expect_equal(y[1], 1)
+  expect_equal(y[100], exp(1), tolerance = 1e-5)
+})
+
+test_that("ode_solve reproduces the Test_RungeKutta.cs family (P2 math extras)", {
+  ode <- function(t, y) y - t^2 + 1
+  valid <- c(0.5, 1.425639364649936, 2.640859085770477, 4.009155464830968, 5.305471950534675)
+
+  rk2 <- ode_solve(ode, initial_value = 0.5, start_time = 0, end_time = 2, time_steps = 5,
+                   method = "rk2")
+  expect_equal(rk2, valid, tolerance = 1)
+
+  rk4 <- ode_solve(ode, initial_value = 0.5, start_time = 0, end_time = 2, time_steps = 5,
+                   method = "rk4")
+  expect_equal(rk4, valid, tolerance = 1e-2)
+
+  # The single-step overload: dt with no end_time returns one number, called in a loop.
+  single <- numeric(5)
+  single[1] <- 0.5
+  y0 <- 0.5
+  t0 <- 0
+  for (i in 2:5) {
+    single[i] <- ode_solve(ode, initial_value = y0, start_time = t0, dt = 0.5, method = "rk4")
+    y0 <- single[i]
+    t0 <- t0 + 0.5
+  }
+  expect_length(single[1], 1)
+  expect_equal(single, valid, tolerance = 1e-2)
+
+  rkf <- numeric(5)
+  rkf[1] <- 0.5
+  y0 <- 0.5
+  t0 <- 0
+  for (i in 2:5) {
+    rkf[i] <- ode_solve(ode, initial_value = y0, start_time = t0, dt = 0.5, dt_min = 0.001,
+                        method = "rkf")
+    y0 <- rkf[i]
+    t0 <- t0 + 0.5
+  }
+  expect_equal(rkf, valid, tolerance = 1e-4)
+
+  rkck <- numeric(5)
+  rkck[1] <- 0.5
+  y0 <- 0.5
+  t0 <- 0
+  for (i in 2:5) {
+    rkck[i] <- ode_solve(ode, initial_value = y0, start_time = t0, dt = 0.5, dt_min = 0.001,
+                         method = "cash_karp")
+    y0 <- rkck[i]
+    t0 <- t0 + 0.5
+  }
+  expect_equal(rkck, valid, tolerance = 1e-3)
+})
+
+test_that("ode_solve refuses a bad shape and reports the user's own error", {
+  boom <- function(t, y) stop("my own error")
+  expect_error(ode_solve(boom, initial_value = 1, start_time = 0, end_time = 1, time_steps = 10),
+               "my own error")
+  expect_error(ode_solve("nope", initial_value = 1, start_time = 0, end_time = 1, time_steps = 10),
+               "must be a function")
+  expect_error(ode_solve(function(t, y) y, initial_value = 1, start_time = 0, method = "rk2"),
+               "end_time")
+  expect_error(ode_solve(function(t, y) y, initial_value = 1, start_time = 0, dt = 0.5,
+                         method = "rkf"), "dt_min")
+  expect_error(ode_solve(function(t, y) y, initial_value = 1, start_time = 0, end_time = 1,
+                         time_steps = 10, method = "nope"), "should be one of")
 })
