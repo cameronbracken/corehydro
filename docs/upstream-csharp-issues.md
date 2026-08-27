@@ -2850,6 +2850,26 @@ a numbered transcription note at the call site citing the C# line numbers below.
   reduction deterministic -- fix the partition count and accumulate the partial sums in partition
   order, or use a compensated (Kahan/Neumaier) sum so the partition split stops mattering.
 
+## COSMETIC — `Test_GeneralizedLinearModel.cs`'s commented-out `Summary()` transcripts are stale
+
+- **Where:** `Numerics/Test_Numerics/Machine Learning/Supervised/Test_GeneralizedLinearModel.cs`
+  @ 2a0357a, the `/* ... */` blocks after each test's `Debug.WriteLine(summary[i])` loop.
+- **What:** each test ends with a commented-out copy of the summary table the model used to
+  print. For `Test_SimpleLinearRegression` that block reads `AIC: 71.1801  AICc: 71.2453
+  BIC: 77.6423`. The shipped library returns `343.25605266374168`, `343.32127005504606` and
+  `349.71826989745085` for that exact fit -- 272.08 higher. Nothing fails, because the block is a
+  comment and the test never asserts AIC for the identity link (only `Test_Log`, `Test_Logistic`,
+  `Test_Probit` and `Test_LogLog` do, and those four are current).
+- **How it was found:** the port reproduced the shipped library's values to all 17 digits, and the
+  transcript was mistakenly used as an oracle while writing `test_generalized_linear_model.cpp`;
+  probing the real library settled it. The parameters and standard errors in the same blocks ARE
+  current, which is what makes the stale AIC line easy to trust.
+- **Port handling:** none needed -- the port matches the library exactly. The ctest pins the
+  measured values and says in place why the transcript must not be used.
+- **Lesson worth carrying:** in this corpus, only ASSERTED values in a `[TestMethod]` are oracles.
+  A commented-out `Debug.WriteLine` transcript has nothing keeping it honest.
+- **Suggested C# fix:** refresh or delete the stale block.
+
 ## BUG — `KNearestNeighbors.kNN`'s shape guard is a tautology, so `GetNeighbors` never validates its query
 
 - **Where:** `Numerics/Machine Learning/Supervised/KNearestNeighbors.cs` @ 2a0357a, the private

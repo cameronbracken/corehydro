@@ -71,6 +71,7 @@
 #include "corehydro/numerics/distributions/uniform.hpp"
 #include "corehydro/numerics/math/optimization/bfgs.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
+#include "corehydro/numerics/math/optimization/support/nelder_mead_solver.hpp"
 #include "corehydro/numerics/math/optimization/powell.hpp"
 #include "corehydro/numerics/math/optimization/support/local_method.hpp"
 #include "corehydro/numerics/math/optimization/support/optimizer.hpp"
@@ -405,41 +406,12 @@ class MLSL : public Optimizer {
         return xnan ? -1 : 1;
     }
 
-    // Wraps the standalone Phase 0 NelderMead in a real Optimizer subclass for the
-    // GetLocalOptimizer NelderMead branch (see note 5).
-    class NelderMeadLocalSolver final : public Optimizer {
-       public:
-        NelderMeadLocalSolver(Objective objective_function, int number_of_parameters,
-                              std::vector<double> initial_values,
-                              std::vector<double> lower_bounds, std::vector<double> upper_bounds)
-            : Optimizer(std::move(objective_function), number_of_parameters),
-              initial_values_(std::move(initial_values)),
-              lower_bounds_(std::move(lower_bounds)),
-              upper_bounds_(std::move(upper_bounds)) {}
-
-       protected:
-        void optimize() override {
-            bool cancel = false;
-            NelderMead solver(
-                // Route every simplex evaluation through the BASE's evaluate() so
-                // best-tracking, evaluation counting, and the budget cascade behave
-                // exactly like the real C# NelderMead subclass (see note 5).
-                [this, &cancel](std::vector<double>& x) { return evaluate(x, cancel); },
-                number_of_parameters_, initial_values_, lower_bounds_, upper_bounds_);
-            solver.max_iterations = max_iterations;
-            solver.relative_tolerance = relative_tolerance;
-            solver.absolute_tolerance = absolute_tolerance;
-            solver.minimize();
-            // The standalone class does not expose converged-vs-max-iterations; Success
-            // is reported unconditionally (documented limitation, note 5(a)).
-            update_status(OptimizationStatus::Success);
-        }
-
-       private:
-        std::vector<double> initial_values_;
-        std::vector<double> lower_bounds_;
-        std::vector<double> upper_bounds_;
-    };
+    // The NelderMead branch's Optimizer adapter (see note 5) lives in
+    // support/nelder_mead_solver.hpp: it was written here first as a private nested class and
+    // promoted to a shared header when GeneralizedLinearModel needed the same adapter for the
+    // same reason. Behavior is unchanged -- it is the same code, still routing every simplex
+    // evaluation through the base evaluate().
+    using NelderMeadLocalSolver = NelderMeadSolver;
 
     // Returns an optimizer for the local search.
     //   initial_values:     an array of initial values to evaluate (repaired IN PLACE,

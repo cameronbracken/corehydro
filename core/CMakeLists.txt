@@ -131,6 +131,8 @@ set(BF_TESTS
   test_decision_tree
   test_random_forest
   test_k_nearest_neighbors
+  test_naive_bayes
+  test_generalized_linear_model
 )
 
 # Sobol test takes the direction-number file as its sole argument.
