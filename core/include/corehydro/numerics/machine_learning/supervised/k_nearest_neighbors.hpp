@@ -256,6 +256,14 @@ class KNearestNeighbors {
         for (int idx = 0; idx < realizations; idx++) {
             std::optional<std::vector<double>> column = k_nn_bootstrap_predict(
                 x_train, y_train, x_test, seeds[static_cast<std::size_t>(idx)]);
+            // `PredictionIntervals` has no shape guard of its own (upstream has none either), so a
+            // query with the wrong column count reaches here as a null. C# dereferences it with
+            // `!` and throws NullReferenceException; throwing beats undefined behavior.
+            if (!column.has_value())
+                throw std::runtime_error(
+                    "KNearestNeighbors::prediction_intervals: the query matrix has " +
+                    std::to_string(x_test.number_of_columns()) + " columns, expected " +
+                    std::to_string(x_train.number_of_columns()));
             for (int i = 0; i < x_test.number_of_rows(); i++)
                 boot_results[static_cast<std::size_t>(i)][static_cast<std::size_t>(idx)] =
                     (*column)[static_cast<std::size_t>(i)];

@@ -263,6 +263,13 @@ void test_bootstrap_and_prediction_intervals() {
     for (int i = 0; i < 2; i++)
         for (int j = 0; j < 4; j++) CHECK_EQ(pi(i, j), again(i, j));
 
+    // prediction_intervals has no shape guard of its own (upstream has none either), so a query
+    // with the wrong column count reaches the inner predict as a null. C# dereferences it; the
+    // port throws instead of invoking undefined behavior.
+    ml::KNearestNeighbors wide(la::Matrix::from_columns({x, x}), la::Vector(y), 3);
+    CHECK_THROWS_MSG(wide.prediction_intervals(std::vector<double>{2.5}, 1, 5, 0.1),
+                     "expected 2");
+
     // Transcription note 5: prediction_intervals has NO classification branch, so a
     // classification model still gets fractional percentile/mean columns rather than floored
     // labels -- unlike RandomForest::predict.

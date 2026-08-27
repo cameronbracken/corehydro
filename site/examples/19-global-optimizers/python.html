@@ -1,0 +1,2136 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>19. Global, constrained, and network optimization – corehydro</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../">
+<link href="../../examples/20-bayesian-regression/python.html" rel="next">
+<link href="../../examples/18-numerical-methods/python.html" rel="prev">
+<script src="../../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting-dark-0a6b7249c26820e032cb0bd839ff02b1.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
+<script src="../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../site_libs/bootstrap/bootstrap-64cd02e1daf9eac17eb92a188ccaa852.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="../../site_libs/bootstrap/bootstrap-dark-371632ab90b3dc38f8a72fba4d5a27a5.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="dark">
+<link href="../../site_libs/bootstrap/bootstrap-64cd02e1daf9eac17eb92a188ccaa852.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
+  <script defer="" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+</head>
+
+<body class="nav-sidebar docked nav-fixed quarto-light"><script id="quarto-html-before-body" type="application/javascript">
+    const toggleBodyColorMode = (bsSheetEl) => {
+      const mode = bsSheetEl.getAttribute("data-mode");
+      const bodyEl = window.document.querySelector("body");
+      if (mode === "dark") {
+        bodyEl.classList.add("quarto-dark");
+        bodyEl.classList.remove("quarto-light");
+      } else {
+        bodyEl.classList.add("quarto-light");
+        bodyEl.classList.remove("quarto-dark");
+      }
+    }
+    const toggleBodyColorPrimary = () => {
+      const bsSheetEl = window.document.querySelector("link#quarto-bootstrap:not([rel=disabled-stylesheet])");
+      if (bsSheetEl) {
+        toggleBodyColorMode(bsSheetEl);
+      }
+    }
+    const setColorSchemeToggle = (alternate) => {
+      const toggles = window.document.querySelectorAll('.quarto-color-scheme-toggle');
+      for (let i=0; i < toggles.length; i++) {
+        const toggle = toggles[i];
+        if (toggle) {
+          if (alternate) {
+            toggle.classList.add("alternate");
+          } else {
+            toggle.classList.remove("alternate");
+          }
+        }
+      }
+    };
+    const toggleColorMode = (alternate) => {
+      // Switch the stylesheets
+      const primaryStylesheets = window.document.querySelectorAll('link.quarto-color-scheme:not(.quarto-color-alternate)');
+      const alternateStylesheets = window.document.querySelectorAll('link.quarto-color-scheme.quarto-color-alternate');
+      manageTransitions('#quarto-margin-sidebar .nav-link', false);
+      if (alternate) {
+        // note: dark is layered on light, we don't disable primary!
+        enableStylesheet(alternateStylesheets);
+        for (const sheetNode of alternateStylesheets) {
+          if (sheetNode.id === "quarto-bootstrap") {
+            toggleBodyColorMode(sheetNode);
+          }
+        }
+      } else {
+        disableStylesheet(alternateStylesheets);
+        enableStylesheet(primaryStylesheets)
+        toggleBodyColorPrimary();
+      }
+      manageTransitions('#quarto-margin-sidebar .nav-link', true);
+      // Switch the toggles
+      setColorSchemeToggle(alternate)
+      // Hack to workaround the fact that safari doesn't
+      // properly recolor the scrollbar when toggling (#1455)
+      if (navigator.userAgent.indexOf('Safari') > 0 && navigator.userAgent.indexOf('Chrome') == -1) {
+        manageTransitions("body", false);
+        window.scrollTo(0, 1);
+        setTimeout(() => {
+          window.scrollTo(0, 0);
+          manageTransitions("body", true);
+        }, 40);
+      }
+    }
+    const disableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        stylesheet.rel = 'disabled-stylesheet';
+      }
+    }
+    const enableStylesheet = (stylesheets) => {
+      for (let i=0; i < stylesheets.length; i++) {
+        const stylesheet = stylesheets[i];
+        if(stylesheet.rel !== 'stylesheet') { // for Chrome, which will still FOUC without this check
+          stylesheet.rel = 'stylesheet';
+        }
+      }
+    }
+    const manageTransitions = (selector, allowTransitions) => {
+      const els = window.document.querySelectorAll(selector);
+      for (let i=0; i < els.length; i++) {
+        const el = els[i];
+        if (allowTransitions) {
+          el.classList.remove('notransition');
+        } else {
+          el.classList.add('notransition');
+        }
+      }
+    }
+    const isFileUrl = () => {
+      return window.location.protocol === 'file:';
+    }
+    const hasAlternateSentinel = () => {
+      let styleSentinel = getColorSchemeSentinel();
+      if (styleSentinel !== null) {
+        return styleSentinel === "alternate";
+      } else {
+        return false;
+      }
+    }
+    const setStyleSentinel = (alternate) => {
+      const value = alternate ? "alternate" : "default";
+      if (!isFileUrl()) {
+        window.localStorage.setItem("quarto-color-scheme", value);
+      } else {
+        localAlternateSentinel = value;
+      }
+    }
+    const getColorSchemeSentinel = () => {
+      if (!isFileUrl()) {
+        const storageValue = window.localStorage.getItem("quarto-color-scheme");
+        return storageValue != null ? storageValue : localAlternateSentinel;
+      } else {
+        return localAlternateSentinel;
+      }
+    }
+    const toggleGiscusIfUsed = (isAlternate, darkModeDefault) => {
+      const baseTheme = document.querySelector('#giscus-base-theme')?.value ?? 'light';
+      const alternateTheme = document.querySelector('#giscus-alt-theme')?.value ?? 'dark';
+      let newTheme = '';
+      if(authorPrefersDark) {
+        newTheme = isAlternate ? baseTheme : alternateTheme;
+      } else {
+        newTheme = isAlternate ? alternateTheme : baseTheme;
+      }
+      const changeGiscusTheme = () => {
+        // From: https://github.com/giscus/giscus/issues/336
+        const sendMessage = (message) => {
+          const iframe = document.querySelector('iframe.giscus-frame');
+          if (!iframe) return;
+          iframe.contentWindow.postMessage({ giscus: message }, 'https://giscus.app');
+        }
+        sendMessage({
+          setConfig: {
+            theme: newTheme
+          }
+        });
+      }
+      const isGiscussLoaded = window.document.querySelector('iframe.giscus-frame') !== null;
+      if (isGiscussLoaded) {
+        changeGiscusTheme();
+      }
+    };
+    const authorPrefersDark = false;
+    const darkModeDefault = authorPrefersDark;
+      document.querySelector('link#quarto-text-highlighting-styles.quarto-color-scheme-extra').rel = 'disabled-stylesheet';
+      document.querySelector('link#quarto-bootstrap.quarto-color-scheme-extra').rel = 'disabled-stylesheet';
+    let localAlternateSentinel = darkModeDefault ? 'alternate' : 'default';
+    // Dark / light mode switch
+    window.quartoToggleColorScheme = () => {
+      // Read the current dark / light value
+      let toAlternate = !hasAlternateSentinel();
+      toggleColorMode(toAlternate);
+      setStyleSentinel(toAlternate);
+      toggleGiscusIfUsed(toAlternate, darkModeDefault);
+      window.dispatchEvent(new Event('resize'));
+    };
+    // Switch to dark mode if need be
+    if (hasAlternateSentinel()) {
+      toggleColorMode(true);
+    } else {
+      toggleColorMode(false);
+    }
+  </script>
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../../index.html">
+    <span class="navbar-title">corehydro</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link active" href="../../examples/index.html" aria-current="page"> 
+<span class="menu-text">Examples</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../status.html"> 
+<span class="menu-text">Porting Status</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../reference/index.html"> 
+<span class="menu-text">Python Reference</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../r/index.html"> 
+<span class="menu-text">R Reference</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/cameronbracken/corehydro"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+  <a href="" class="quarto-color-scheme-toggle quarto-navigation-tool  px-1" onclick="window.quartoToggleColorScheme(); return false;" title="Toggle dark mode"><i class="bi"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../examples/19-global-optimizers/python.html">19 Global Optimizers</a></li><li class="breadcrumb-item"><a href="../../examples/19-global-optimizers/python.html">19. Global, constrained, and network optimization</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Examples</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/coverage.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Upstream example coverage</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false">
+ <span class="menu-text">00 Getting Started</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/00-getting-started/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">00. Getting started</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false">
+ <span class="menu-text">01 Distributions</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/01-distributions/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">01. Probability distributions</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false">
+ <span class="menu-text">02 Distribution Fitting</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/02-distribution-fitting/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">02. Distribution fitting</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false">
+ <span class="menu-text">03 Mcmc Basics</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/03-mcmc-basics/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">03. MCMC basics</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false">
+ <span class="menu-text">04 Bayesian Inference</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/04-bayesian-inference/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">04. Bayesian inference with MCMC</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false">
+ <span class="menu-text">05 Mcmc Samplers</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/05-mcmc-samplers/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">05. Adaptive MCMC samplers</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="false">
+ <span class="menu-text">06 Mcmc Diagnostics</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-7" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/06-mcmc-diagnostics/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">06. MCMC convergence diagnostics</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-8" role="navigation" aria-expanded="false">
+ <span class="menu-text">09 Statistics</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-8" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-8" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/09-statistics/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">09. Statistics</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-9" role="navigation" aria-expanded="false">
+ <span class="menu-text">12 Model Evaluation</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-9" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-9" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/12-model-evaluation/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">12. Model evaluation</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-10" role="navigation" aria-expanded="false">
+ <span class="menu-text">13 Custom Objective</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-10" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-10" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/13-custom-objective/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">13. A custom objective</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-11" role="navigation" aria-expanded="false">
+ <span class="menu-text">14 Custom Posterior</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-11" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-11" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/14-custom-posterior/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">14. A custom posterior</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-12" role="navigation" aria-expanded="false">
+ <span class="menu-text">15 Custom Bootstrap</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-12" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-12" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/15-custom-bootstrap/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">15. A custom bootstrap</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-13" role="navigation" aria-expanded="false">
+ <span class="menu-text">16 Fifteen Candidate Fitting</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-13" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-13" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/16-fifteen-candidate-fitting/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">16. Ranking fifteen candidate families</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-14" role="navigation" aria-expanded="false">
+ <span class="menu-text">17 Pivotal Bootstrap</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-14" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-14" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/17-pivotal-bootstrap/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">17. A pivotal bootstrap</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-15" role="navigation" aria-expanded="false">
+ <span class="menu-text">18 Numerical Methods</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-15" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-15" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/18-numerical-methods/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">18. Numerical methods</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-16" role="navigation" aria-expanded="true">
+ <span class="menu-text">19 Global Optimizers</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-16" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-16" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/19-global-optimizers/python.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">19. Global, constrained, and network optimization</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-17" role="navigation" aria-expanded="false">
+ <span class="menu-text">20 Bayesian Regression</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-17" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-17" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/20-bayesian-regression/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">20. Bayesian regression</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-18" role="navigation" aria-expanded="false">
+ <span class="menu-text">21 Flood Frequency</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-18" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-18" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/21-flood-frequency/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">21. Flood frequency analysis</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-19" role="navigation" aria-expanded="false">
+ <span class="menu-text">22 Reliability</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-19" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-19" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/22-reliability/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">22. Reliability analysis</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-20" role="navigation" aria-expanded="false">
+ <span class="menu-text">23 Censored Flood Frequency</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-20" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-20" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/23-censored-flood-frequency/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">23. Censored flood frequency</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-21" role="navigation" aria-expanded="false">
+ <span class="menu-text">24 Nonstationary Trends</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-21" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-21" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/24-nonstationary-trends/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">24. Nonstationary frequency analysis</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-22" role="navigation" aria-expanded="false">
+ <span class="menu-text">25 Estimation Methods</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-22" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-22" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/25-estimation-methods/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">25. Estimation methods</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-23" role="navigation" aria-expanded="false">
+ <span class="menu-text">26 Copulas and Joint Frequency</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-23" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-23" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/26-copulas-and-joint-frequency/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">26. Copulas and joint frequency</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-24" role="navigation" aria-expanded="false">
+ <span class="menu-text">27 Composite Distributions</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-24" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-24" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/27-composite-distributions/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">27. Composite distributions</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-25" role="navigation" aria-expanded="false">
+ <span class="menu-text">28 Hypothesis Tests and Paired Data</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-25" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-25" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/28-hypothesis-tests-and-paired-data/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">28. Hypothesis tests and paired data</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-26" role="navigation" aria-expanded="false">
+ <span class="menu-text">29 Machine Learning</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-26" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-26" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/29-machine-learning/python.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">29. Machine learning</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-27" role="navigation" aria-expanded="false">
+ <span class="menu-text">00 Getting Started</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-27" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-27" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/00-getting-started/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">00. Getting started</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-28" role="navigation" aria-expanded="false">
+ <span class="menu-text">01 Distributions</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-28" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-28" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/01-distributions/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">01. Probability distributions</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-29" role="navigation" aria-expanded="false">
+ <span class="menu-text">02 Distribution Fitting</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-29" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-29" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/02-distribution-fitting/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">02. Distribution fitting</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-30" role="navigation" aria-expanded="false">
+ <span class="menu-text">03 Mcmc Basics</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-30" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-30" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/03-mcmc-basics/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">03. MCMC basics</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-31" role="navigation" aria-expanded="false">
+ <span class="menu-text">04 Bayesian Inference</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-31" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-31" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/04-bayesian-inference/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">04. Bayesian inference with MCMC</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-32" role="navigation" aria-expanded="false">
+ <span class="menu-text">05 Mcmc Samplers</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-32" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-32" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/05-mcmc-samplers/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">05. Adaptive MCMC samplers</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-33" role="navigation" aria-expanded="false">
+ <span class="menu-text">06 Mcmc Diagnostics</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-33" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-33" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/06-mcmc-diagnostics/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">06. MCMC convergence diagnostics</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-34" role="navigation" aria-expanded="false">
+ <span class="menu-text">09 Statistics</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-34" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-34" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/09-statistics/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">09. Statistics</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-35" role="navigation" aria-expanded="false">
+ <span class="menu-text">12 Model Evaluation</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-35" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-35" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/12-model-evaluation/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">12. Model evaluation</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-36" role="navigation" aria-expanded="false">
+ <span class="menu-text">13 Custom Objective</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-36" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-36" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/13-custom-objective/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">13. A custom objective</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-37" role="navigation" aria-expanded="false">
+ <span class="menu-text">14 Custom Posterior</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-37" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-37" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/14-custom-posterior/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">14. A custom posterior</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-38" role="navigation" aria-expanded="false">
+ <span class="menu-text">15 Custom Bootstrap</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-38" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-38" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/15-custom-bootstrap/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">15. A custom bootstrap</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-39" role="navigation" aria-expanded="false">
+ <span class="menu-text">16 Fifteen Candidate Fitting</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-39" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-39" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/16-fifteen-candidate-fitting/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">16. Ranking fifteen candidate families</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-40" role="navigation" aria-expanded="false">
+ <span class="menu-text">17 Pivotal Bootstrap</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-40" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-40" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/17-pivotal-bootstrap/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">17. A pivotal bootstrap</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-41" role="navigation" aria-expanded="false">
+ <span class="menu-text">18 Numerical Methods</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-41" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-41" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/18-numerical-methods/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">18. Numerical methods</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-42" role="navigation" aria-expanded="false">
+ <span class="menu-text">19 Global Optimizers</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-42" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-42" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/19-global-optimizers/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">19. Global, constrained, and network optimization</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-43" role="navigation" aria-expanded="false">
+ <span class="menu-text">20 Bayesian Regression</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-43" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-43" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/20-bayesian-regression/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">20. Bayesian regression</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-44" role="navigation" aria-expanded="false">
+ <span class="menu-text">21 Flood Frequency</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-44" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-44" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/21-flood-frequency/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">21. Flood frequency analysis</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-45" role="navigation" aria-expanded="false">
+ <span class="menu-text">22 Reliability</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-45" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-45" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/22-reliability/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">22. Reliability analysis</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-46" role="navigation" aria-expanded="false">
+ <span class="menu-text">23 Censored Flood Frequency</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-46" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-46" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/23-censored-flood-frequency/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">23. Censored flood frequency</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-47" role="navigation" aria-expanded="false">
+ <span class="menu-text">24 Nonstationary Trends</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-47" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-47" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/24-nonstationary-trends/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">24. Nonstationary frequency analysis</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-48" role="navigation" aria-expanded="false">
+ <span class="menu-text">25 Estimation Methods</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-48" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-48" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/25-estimation-methods/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">25. Estimation methods</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-49" role="navigation" aria-expanded="false">
+ <span class="menu-text">26 Copulas and Joint Frequency</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-49" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-49" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/26-copulas-and-joint-frequency/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">26. Copulas and joint frequency</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-50" role="navigation" aria-expanded="false">
+ <span class="menu-text">27 Composite Distributions</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-50" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-50" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/27-composite-distributions/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">27. Composite distributions</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-51" role="navigation" aria-expanded="false">
+ <span class="menu-text">28 Hypothesis Tests and Paired Data</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-51" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-51" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/28-hypothesis-tests-and-paired-data/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">28. Hypothesis tests and paired data</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-52" role="navigation" aria-expanded="false">
+ <span class="menu-text">29 Machine Learning</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-52" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-52" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../examples/29-machine-learning/r.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">29. Machine learning</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#what-youll-learn" id="toc-what-youll-learn" class="nav-link active" data-scroll-target="#what-youll-learn">What you’ll learn</a></li>
+  <li><a href="#setup" id="toc-setup" class="nav-link" data-scroll-target="#setup">Setup</a></li>
+  <li><a href="#four-global-optimizers-on-one-hard-surface" id="toc-four-global-optimizers-on-one-hard-surface" class="nav-link" data-scroll-target="#four-global-optimizers-on-one-hard-surface">Four global optimizers on one hard surface</a></li>
+  <li><a href="#the-defaults-are-settings-not-verdicts" id="toc-the-defaults-are-settings-not-verdicts" class="nav-link" data-scroll-target="#the-defaults-are-settings-not-verdicts">The defaults are settings, not verdicts</a></li>
+  <li><a href="#a-constrained-problem" id="toc-a-constrained-problem" class="nav-link" data-scroll-target="#a-constrained-problem">A constrained problem</a></li>
+  <li><a href="#the-inner-optimizer-picks-the-solution" id="toc-the-inner-optimizer-picks-the-solution" class="nav-link" data-scroll-target="#the-inner-optimizer-picks-the-solution">The inner optimizer picks the solution</a></li>
+  <li><a href="#an-analytic-gradient" id="toc-an-analytic-gradient" class="nav-link" data-scroll-target="#an-analytic-gradient">An analytic gradient</a></li>
+  <li><a href="#shortest-paths-through-a-network" id="toc-shortest-paths-through-a-network" class="nav-link" data-scroll-target="#shortest-paths-through-a-network">Shortest paths through a network</a></li>
+  <li><a href="#what-reproduces-across-languages-and-what-does-not" id="toc-what-reproduces-across-languages-and-what-does-not" class="nav-link" data-scroll-target="#what-reproduces-across-languages-and-what-does-not">What reproduces across languages, and what does not</a></li>
+  <li><a href="#key-takeaways" id="toc-key-takeaways" class="nav-link" data-scroll-target="#key-takeaways">Key takeaways</a></li>
+  <li><a href="#reproduction-check" id="toc-reproduction-check" class="nav-link" data-scroll-target="#reproduction-check">Reproduction check</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../examples/19-global-optimizers/python.html">19 Global Optimizers</a></li><li class="breadcrumb-item"><a href="../../examples/19-global-optimizers/python.html">19. Global, constrained, and network optimization</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">19. Global, constrained, and network optimization</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<div class="callout callout-style-simple callout-note no-icon">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon no-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>Language: <strong>Python</strong> (Jupyter notebook) - <a href="../../examples/19-global-optimizers/r.html">R version</a></p>
+</div>
+</div>
+</div>
+<p>Example 13 pointed <code>optim_minimize()</code> at a custom likelihood with the six optimizers this package shipped at the time. That list is now fourteen, and it covers three kinds of problem the earlier six could not: a rough surface with many local minima, a problem with constraints on top of the objective, and a problem whose derivative you can write down. This page works through all three, then leaves the optimizers entirely for the shortest-path solver that shares their upstream namespace.</p>
+<section id="what-youll-learn" class="level2">
+<h2 class="anchored" data-anchor-id="what-youll-learn">What you’ll learn</h2>
+<ul>
+<li>Four seeded global optimizers on the same hard surface, and how differently they spend their function evaluations.</li>
+<li>Why two of them miss the answer at their default settings, and what to change.</li>
+<li>Constrained minimization with <code>Constraint</code> and <code>method="augmented_lagrange"</code>, and what the Lagrange multiplier it reports actually tells you.</li>
+<li>That the choice of inner optimizer decides which local solution a constrained problem converges to.</li>
+<li>How supplying an analytic gradient to <code>"adam"</code> cuts its objective calls by a factor of eight.</li>
+<li><code>shortest_path()</code>, the Dijkstra routing table, over a ten-node network.</li>
+<li>Which of these reproduce bit-for-bit across R, Python, and the original C# library, and which were measured not to.</li>
+</ul>
+</section>
+<section id="setup" class="level2">
+<h2 class="anchored" data-anchor-id="setup">Setup</h2>
+<div id="89e161e4" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:51.359640Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:51.359523Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:51.521091Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:51.520630Z&quot;}}" data-execution_count="1">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> math</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> matplotlib.colors <span class="im">import</span> LinearSegmentedColormap</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> corehydropy <span class="im">as</span> ch</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+</section>
+<section id="four-global-optimizers-on-one-hard-surface" class="level2">
+<h2 class="anchored" data-anchor-id="four-global-optimizers-on-one-hard-surface">Four global optimizers on one hard surface</h2>
+<p>The Eggholder function is the standard torture test for a global optimizer: a lattice of deep basins over <span class="math inline">\([-512, 512]^2\)</span> with a global minimum of <span class="math inline">\(-959.6407\)</span> in the corner at <span class="math inline">\((512, 404.2319)\)</span>, and dozens of local minima almost as deep. Its value at a point tells a local method nothing about where to go next.</p>
+<div id="22c0fd23" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:51.522273Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:51.522201Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:51.523971Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:51.523690Z&quot;}}" data-execution_count="2">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> eggholder(p):</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    x, y <span class="op">=</span> p[<span class="dv">0</span>], p[<span class="dv">1</span>]</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> (<span class="op">-</span>(y <span class="op">+</span> <span class="dv">47</span>) <span class="op">*</span> math.sin(math.sqrt(<span class="bu">abs</span>(x <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> (y <span class="op">+</span> <span class="dv">47</span>))))</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>            <span class="op">-</span> x <span class="op">*</span> math.sin(math.sqrt(<span class="bu">abs</span>(x <span class="op">-</span> (y <span class="op">+</span> <span class="dv">47</span>)))))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>All four stochastic global methods take the same arguments – bounds and a seed – so swapping one for another is a one-word change:</p>
+<div id="fe224704" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:51.524888Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:51.524844Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:51.990813Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:51.990496Z&quot;}}" data-execution_count="3">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>methods <span class="op">=</span> [<span class="st">"de"</span>, <span class="st">"particle_swarm"</span>, <span class="st">"sce"</span>, <span class="st">"simulated_annealing"</span>]</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>runs <span class="op">=</span> {</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    m: ch.optim_minimize(eggholder, lower<span class="op">=</span>[<span class="op">-</span><span class="dv">512</span>, <span class="op">-</span><span class="dv">512</span>], upper<span class="op">=</span>[<span class="dv">512</span>, <span class="dv">512</span>], method<span class="op">=</span>m, seed<span class="op">=</span><span class="dv">12345</span>)</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> m <span class="kw">in</span> methods</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'method'</span><span class="sc">:&lt;20}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'value'</span><span class="sc">:&gt;12}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'x'</span><span class="sc">:&gt;11}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'y'</span><span class="sc">:&gt;11}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'evaluations'</span><span class="sc">:&gt;12}</span><span class="ss">"</span>)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> m <span class="kw">in</span> methods:</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    r <span class="op">=</span> runs[m]</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>m<span class="sc">:&lt;20}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>value<span class="sc">:12.4f}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>parameters[<span class="dv">0</span>]<span class="sc">:11.4f}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>parameters[<span class="dv">1</span>]<span class="sc">:11.5f}</span><span class="ss">"</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>          <span class="ss">f" </span><span class="sc">{</span>r<span class="sc">.</span>function_evaluations<span class="sc">:12d}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>method                      value           x           y  evaluations
+de                      -959.6407    512.0000   404.23175         1000
+particle_swarm          -959.6407    512.0000   404.23181        72420
+sce                     -935.3380    439.4810   453.97744         4663
+simulated_annealing     -293.2958    180.8227    71.65686       800001</code></pre>
+</div>
+</div>
+<p>Two of the four land on the global minimum and two do not. Differential evolution gets there in 1,000 objective calls; particle swarm agrees with it to ten significant digits but spends 72,420 calls doing so. Shuffled complex evolution stops in a neighbouring basin at <span class="math inline">\(-935.34\)</span>, and simulated annealing ends up at <span class="math inline">\(-293.30\)</span>, nowhere near.</p>
+<div id="106ddb3a" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:51.991688Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:51.991642Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:52.060197Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:52.059906Z&quot;}}" data-execution_count="4">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>grid <span class="op">=</span> np.linspace(<span class="op">-</span><span class="dv">512</span>, <span class="dv">512</span>, <span class="dv">220</span>)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>gx, gy <span class="op">=</span> np.meshgrid(grid, grid)</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>surface <span class="op">=</span> (<span class="op">-</span>(gy <span class="op">+</span> <span class="dv">47</span>) <span class="op">*</span> np.sin(np.sqrt(np.<span class="bu">abs</span>(gx <span class="op">/</span> <span class="dv">2</span> <span class="op">+</span> (gy <span class="op">+</span> <span class="dv">47</span>))))</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>           <span class="op">-</span> gx <span class="op">*</span> np.sin(np.sqrt(np.<span class="bu">abs</span>(gx <span class="op">-</span> (gy <span class="op">+</span> <span class="dv">47</span>)))))</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>ramp <span class="op">=</span> LinearSegmentedColormap.from_list(</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="st">"earth"</span>, [<span class="st">"#40525c"</span>, <span class="st">"#6f7f6a"</span>, <span class="st">"#a89a6b"</span>, <span class="st">"#d8c9a3"</span>, <span class="st">"#f4efe4"</span>])</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>marks <span class="op">=</span> {<span class="st">"de"</span>: <span class="st">"#b06a3b"</span>, <span class="st">"particle_swarm"</span>: <span class="st">"#7d3f4f"</span>, <span class="st">"sce"</span>: <span class="st">"#2f4858"</span>,</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>         <span class="st">"simulated_annealing"</span>: <span class="st">"#111111"</span>}</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>fig, ax <span class="op">=</span> plt.subplots(figsize<span class="op">=</span>(<span class="dv">6</span>, <span class="dv">6</span>))</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>ax.imshow(surface, origin<span class="op">=</span><span class="st">"lower"</span>, extent<span class="op">=</span>(<span class="op">-</span><span class="dv">512</span>, <span class="dv">512</span>, <span class="op">-</span><span class="dv">512</span>, <span class="dv">512</span>), cmap<span class="op">=</span>ramp, aspect<span class="op">=</span><span class="st">"equal"</span>)</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="co"># de and particle_swarm converge to the same corner, so de is drawn last as a wider open ring</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="co"># around the others rather than a filled disc that would hide them.</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> m <span class="kw">in</span> [<span class="st">"sce"</span>, <span class="st">"simulated_annealing"</span>, <span class="st">"particle_swarm"</span>]:</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>    ax.plot(runs[m].parameters[<span class="dv">0</span>], runs[m].parameters[<span class="dv">1</span>], <span class="st">"o"</span>, markersize<span class="op">=</span><span class="dv">8</span>,</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>            markerfacecolor<span class="op">=</span><span class="st">"white"</span>, markeredgecolor<span class="op">=</span>marks[m], markeredgewidth<span class="op">=</span><span class="dv">2</span>, label<span class="op">=</span>m)</span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>ax.plot(runs[<span class="st">"de"</span>].parameters[<span class="dv">0</span>], runs[<span class="st">"de"</span>].parameters[<span class="dv">1</span>], <span class="st">"o"</span>, markersize<span class="op">=</span><span class="dv">15</span>,</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>        markerfacecolor<span class="op">=</span><span class="st">"none"</span>, markeredgecolor<span class="op">=</span>marks[<span class="st">"de"</span>], markeredgewidth<span class="op">=</span><span class="fl">2.5</span>, label<span class="op">=</span><span class="st">"de"</span>)</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>ax.set_xlim(<span class="op">-</span><span class="dv">545</span>, <span class="dv">545</span>)</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>ax.set_ylim(<span class="op">-</span><span class="dv">545</span>, <span class="dv">545</span>)</span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>ax.set_xlabel(<span class="st">"x"</span>)</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>ax.set_ylabel(<span class="st">"y"</span>)</span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>ax.set_title(<span class="st">"Eggholder surface and where each method stopped"</span>)</span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>handles, labels <span class="op">=</span> ax.get_legend_handles_labels()</span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>order <span class="op">=</span> [labels.index(m) <span class="cf">for</span> m <span class="kw">in</span> methods]</span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>ax.legend([handles[i] <span class="cf">for</span> i <span class="kw">in</span> order], [labels[i] <span class="cf">for</span> i <span class="kw">in</span> order], loc<span class="op">=</span><span class="st">"lower left"</span>, fontsize<span class="op">=</span><span class="dv">8</span>)</span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="python_files/figure-html/cell-5-output-1.png" class="img-fluid figure-img"></p>
+</figure>
+</div>
+</div>
+</div>
+<p>Differential evolution and particle swarm are the two nested circles in the top right corner. The other two stopped in basins that look, from inside them, exactly as good.</p>
+</section>
+<section id="the-defaults-are-settings-not-verdicts" class="level2">
+<h2 class="anchored" data-anchor-id="the-defaults-are-settings-not-verdicts">The defaults are settings, not verdicts</h2>
+<p>Neither failure above is a verdict on the method. Shuffled complex evolution runs five complexes by default; the upstream C# test for this exact function runs thirty, with ten evolution steps each, and that run finds the corner:</p>
+<div id="0ba6fbf1" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:52.061241Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:52.061178Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:52.105074Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:52.104675Z&quot;}}" data-execution_count="5">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>sce_tuned <span class="op">=</span> ch.optim_minimize(eggholder, lower<span class="op">=</span>[<span class="op">-</span><span class="dv">512</span>, <span class="op">-</span><span class="dv">512</span>], upper<span class="op">=</span>[<span class="dv">512</span>, <span class="dv">512</span>], method<span class="op">=</span><span class="st">"sce"</span>,</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>                              seed<span class="op">=</span><span class="dv">12345</span>, control<span class="op">=</span>{<span class="st">"complexes"</span>: <span class="dv">30</span>, <span class="st">"cce_iterations"</span>: <span class="dv">10</span>})</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"default </span><span class="sc">{</span>runs[<span class="st">'sce'</span>]<span class="sc">.</span>value<span class="sc">:.4f}</span><span class="ss">   tuned </span><span class="sc">{</span>sce_tuned<span class="sc">.</span>value<span class="sc">:.4f}</span><span class="ss">   truth </span><span class="sc">{</span><span class="op">-</span><span class="fl">959.6407</span><span class="sc">:.4f}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>default -935.3380   tuned -959.6407   truth -959.6407</code></pre>
+</div>
+</div>
+<p>Thirty complexes cost 77,685 objective calls against the default’s 4,663, which is the trade: SCE searches by keeping several populations apart long enough to explore separately, and five of them are not enough separation for a surface this rough.</p>
+<p>Simulated annealing is the more honest failure. Upstream’s own test on this function asserts nothing at all, under the comment that “simulated annealing fails to converge for this test function … this test is still included as an example”. The port reproduces that failure exactly, which is the point: a method with a fixed cooling schedule and 10,000 iterations of it will spend its whole budget without ever getting cold enough near the right basin.</p>
+<div id="3bb0accf" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:52.105993Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:52.105948Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:52.107549Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:52.107281Z&quot;}}" data-execution_count="6">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>sa <span class="op">=</span> runs[<span class="st">"simulated_annealing"</span>]</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"value </span><span class="sc">{</span>sa<span class="sc">.</span>value<span class="sc">:.4f}</span><span class="ss"> after </span><span class="sc">{</span>sa<span class="sc">.</span>iterations<span class="sc">}</span><span class="ss"> iterations and "</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>      <span class="ss">f"</span><span class="sc">{</span>sa<span class="sc">.</span>function_evaluations<span class="sc">}</span><span class="ss"> objective calls (</span><span class="sc">{</span>sa<span class="sc">.</span>status<span class="sc">}</span><span class="ss">)"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>value -293.2958 after 10000 iterations and 800001 objective calls (MaximumIterationsReached)</code></pre>
+</div>
+</div>
+<p>Eight hundred thousand objective calls, and the search ends 666 units of objective short of where differential evolution finished in a thousand. Cost buys nothing if the schedule is wrong for the surface.</p>
+</section>
+<section id="a-constrained-problem" class="level2">
+<h2 class="anchored" data-anchor-id="a-constrained-problem">A constrained problem</h2>
+<p>Everything above minimizes over a box. <code>method="augmented_lagrange"</code> is the one method that takes constraints on top of the box: it builds an augmented Lagrangian from the objective and the constraint violations, and hands that to an inner optimizer, tightening the penalty until the constraints hold.</p>
+<p>Haimes problem 5.2 is the textbook case. Minimize</p>
+<p><span class="math display">\[f(x, y) = (x - 2)^2 + (y - 4)^2 + 5\]</span></p>
+<p>subject to <span class="math inline">\(g(x, y) = (x - 6)^2 + (y - 10)^2 + 6 \le 13.31\)</span>. The unconstrained minimum sits at <span class="math inline">\((2, 4)\)</span>, comfortably outside the feasible disk, so the constraint is binding and the answer must lie on its boundary:</p>
+<div id="e3358e9c" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:52.108376Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:52.108330Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:52.111358Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:52.111039Z&quot;}}" data-execution_count="7">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> primary(p):</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> (p[<span class="dv">0</span>] <span class="op">-</span> <span class="dv">2</span>) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> (p[<span class="dv">1</span>] <span class="op">-</span> <span class="dv">4</span>) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> <span class="dv">5</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> secondary(p):</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> (p[<span class="dv">0</span>] <span class="op">-</span> <span class="dv">6</span>) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> (p[<span class="dv">1</span>] <span class="op">-</span> <span class="dv">10</span>) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> <span class="dv">6</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>feasible <span class="op">=</span> ch.Constraint(secondary, value<span class="op">=</span><span class="fl">13.31</span>, <span class="bu">type</span><span class="op">=</span><span class="st">"le"</span>)</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(feasible)</span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>haimes <span class="op">=</span> ch.optim_minimize(primary, initial<span class="op">=</span>[<span class="dv">5</span>, <span class="dv">5</span>], lower<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">0</span>], upper<span class="op">=</span>[<span class="dv">10</span>, <span class="dv">10</span>],</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>                           method<span class="op">=</span><span class="st">"augmented_lagrange"</span>, constraints<span class="op">=</span>[feasible])</span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"x </span><span class="sc">{</span>haimes<span class="sc">.</span>parameters[<span class="dv">0</span>]<span class="sc">:.6f}</span><span class="ss">   y </span><span class="sc">{</span>haimes<span class="sc">.</span>parameters[<span class="dv">1</span>]<span class="sc">:.6f}</span><span class="ss">   "</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>      <span class="ss">f"value </span><span class="sc">{</span>haimes<span class="sc">.</span>value<span class="sc">:.6f}</span><span class="ss">   constraint </span><span class="sc">{</span>secondary(haimes.parameters)<span class="sc">:.6f}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>&lt;Constraint f(x) &lt;= 13.31 (tolerance 1e-08)&gt;
+x 4.501394   y 7.749627   value 25.316672   constraint 13.310000</code></pre>
+</div>
+</div>
+<p>The solution sits on the constraint boundary, <span class="math inline">\(g = 13.31\)</span> to eight digits, at the point the C# test asserts, <span class="math inline">\((4.5, 7.75)\)</span> with an objective of <span class="math inline">\(25.31\)</span>. A constrained method that stopped anywhere inside the disk would be reporting a solution the constraint had not actually shaped.</p>
+<p>The multiplier is what a penalty method gives you that a box does not:</p>
+<div id="4d37ad4d" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:52.112143Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:52.112102Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:52.113869Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:52.113652Z&quot;}}" data-execution_count="8">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>haimes.multipliers</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display" data-execution_count="8">
+<pre><code>{'equality': array([], dtype=float64),
+ 'less_than': array([1.6665948]),
+ 'greater_than': array([], dtype=float64)}</code></pre>
+</div>
+</div>
+<p><code>less_than</code> holds one entry per <code>"le"</code> constraint, in the order they were passed. Its value, <span class="math inline">\(1.667\)</span>, is the shadow price of the constraint: to first order, relaxing the bound by one unit improves the objective by that much. Moving the bound from 13.31 to 14.31 puts the claim to the test:</p>
+<div id="c7d9b451" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:52.114637Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:52.114576Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:53.788517Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:53.788141Z&quot;}}" data-execution_count="9">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>relaxed <span class="op">=</span> ch.optim_minimize(primary, initial<span class="op">=</span>[<span class="dv">5</span>, <span class="dv">5</span>], lower<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">0</span>], upper<span class="op">=</span>[<span class="dv">10</span>, <span class="dv">10</span>],</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>                            method<span class="op">=</span><span class="st">"augmented_lagrange"</span>,</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>                            constraints<span class="op">=</span>[ch.Constraint(secondary, value<span class="op">=</span><span class="fl">14.31</span>, <span class="bu">type</span><span class="op">=</span><span class="st">"le"</span>)])</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"tight </span><span class="sc">{</span>haimes<span class="sc">.</span>value<span class="sc">:.6f}</span><span class="ss">   relaxed </span><span class="sc">{</span>relaxed<span class="sc">.</span>value<span class="sc">:.6f}</span><span class="ss">   "</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>      <span class="ss">f"saving </span><span class="sc">{</span>haimes<span class="sc">.</span>value <span class="op">-</span> relaxed<span class="sc">.</span>value<span class="sc">:.6f}</span><span class="ss">   "</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>      <span class="ss">f"multiplier </span><span class="sc">{</span>haimes<span class="sc">.</span>multipliers[<span class="st">'less_than'</span>][<span class="dv">0</span>]<span class="sc">:.6f}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>tight 25.316672   relaxed 23.735008   saving 1.581665   multiplier 1.666595</code></pre>
+</div>
+</div>
+<p>The bound bought 1.58 against a predicted 1.67. The multiplier is a derivative and a whole unit is a long step on a curved boundary, so the two agreeing to 5% is the prediction working, not failing. Shrink the step and the gap shrinks with it.</p>
+</section>
+<section id="the-inner-optimizer-picks-the-solution" class="level2">
+<h2 class="anchored" data-anchor-id="the-inner-optimizer-picks-the-solution">The inner optimizer picks the solution</h2>
+<p>The augmented Lagrangian is only as good as the optimizer minimizing it. By default that is BFGS over the same bounds; <code>inner</code> swaps it for any other method, and on this problem the swap changes the answer:</p>
+<div id="122dfbbc" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:53.789512Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:53.789453Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:53.793619Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:53.793302Z&quot;}}" data-execution_count="10">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>powell_inner <span class="op">=</span> ch.optim_minimize(primary, initial<span class="op">=</span>[<span class="dv">5</span>, <span class="dv">5</span>], lower<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">0</span>], upper<span class="op">=</span>[<span class="dv">10</span>, <span class="dv">10</span>],</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>                                 method<span class="op">=</span><span class="st">"augmented_lagrange"</span>, constraints<span class="op">=</span>[feasible],</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>                                 inner<span class="op">=</span>{<span class="st">"method"</span>: <span class="st">"powell"</span>})</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'inner'</span><span class="sc">:&lt;16}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'x'</span><span class="sc">:&gt;10}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'y'</span><span class="sc">:&gt;10}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'value'</span><span class="sc">:&gt;10}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'multiplier'</span><span class="sc">:&gt;12}</span><span class="ss">"</span>)</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> name, r <span class="kw">in</span> ((<span class="st">"bfgs (default)"</span>, haimes), (<span class="st">"powell"</span>, powell_inner)):</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">:&lt;16}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>parameters[<span class="dv">0</span>]<span class="sc">:10.4f}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>parameters[<span class="dv">1</span>]<span class="sc">:10.4f}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>value<span class="sc">:10.4f}</span><span class="ss">"</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>          <span class="ss">f" </span><span class="sc">{</span>r<span class="sc">.</span>multipliers[<span class="st">'less_than'</span>][<span class="dv">0</span>]<span class="sc">:12.6f}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>inner                     x          y      value   multiplier
+bfgs (default)       4.5014     7.7496    25.3167     1.666595
+powell               5.4794     7.3469    28.3078     3.511786</code></pre>
+</div>
+</div>
+<p>Both points are feasible and both are local solutions; Powell’s is worse by three units of objective. This is not a defect in either optimizer, and it is not a port artifact – the real C# library splits the same way on the same problem, which is why the fixture for the Powell run pins its own numbers rather than the C# test’s. It is the ordinary hazard of a non-convex constrained problem: the constraint boundary has more than one point where the objective’s gradient lines up with it, and which one you get is decided by the inner search, not by the constraint.</p>
+</section>
+<section id="an-analytic-gradient" class="level2">
+<h2 class="anchored" data-anchor-id="an-analytic-gradient">An analytic gradient</h2>
+<p><code>"adam"</code> and <code>"gradient_descent"</code> are the two methods that follow a gradient. Given none, both compute one by finite differences: one extra objective call per parameter per step. Given an analytic gradient, they call it once per step instead.</p>
+<p>The objective here is a separable quadratic with a known minimum at <span class="math inline">\((0.125, 0.2, 0.35)\)</span> – three calibration parameters, each with its own target and its own sensitivity:</p>
+<div id="a478068b" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:53.794444Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:53.794398Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:53.804816Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:53.804554Z&quot;}}" data-execution_count="11">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> fxyz(p):</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> (<span class="dv">4</span> <span class="op">*</span> p[<span class="dv">0</span>] <span class="op">-</span> <span class="fl">0.5</span>) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> (<span class="dv">3</span> <span class="op">*</span> p[<span class="dv">1</span>] <span class="op">-</span> <span class="fl">0.6</span>) <span class="op">**</span> <span class="dv">2</span> <span class="op">+</span> (<span class="dv">2</span> <span class="op">*</span> p[<span class="dv">2</span>] <span class="op">-</span> <span class="fl">0.7</span>) <span class="op">**</span> <span class="dv">2</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> fxyz_gradient(p):</span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> [<span class="dv">8</span> <span class="op">*</span> (<span class="dv">4</span> <span class="op">*</span> p[<span class="dv">0</span>] <span class="op">-</span> <span class="fl">0.5</span>), <span class="dv">6</span> <span class="op">*</span> (<span class="dv">3</span> <span class="op">*</span> p[<span class="dv">1</span>] <span class="op">-</span> <span class="fl">0.6</span>), <span class="dv">4</span> <span class="op">*</span> (<span class="dv">2</span> <span class="op">*</span> p[<span class="dv">2</span>] <span class="op">-</span> <span class="fl">0.7</span>)]</span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>numeric_run <span class="op">=</span> ch.optim_minimize(fxyz, initial<span class="op">=</span>[<span class="fl">0.2</span>, <span class="fl">0.5</span>, <span class="fl">0.5</span>], lower<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">0</span>, <span class="dv">0</span>], upper<span class="op">=</span>[<span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">1</span>],</span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>                                method<span class="op">=</span><span class="st">"adam"</span>)</span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>analytic_run <span class="op">=</span> ch.optim_minimize(fxyz, initial<span class="op">=</span>[<span class="fl">0.2</span>, <span class="fl">0.5</span>, <span class="fl">0.5</span>], lower<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">0</span>, <span class="dv">0</span>], upper<span class="op">=</span>[<span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">1</span>],</span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>                                 method<span class="op">=</span><span class="st">"adam"</span>, gradient<span class="op">=</span>fxyz_gradient)</span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'gradient'</span><span class="sc">:&lt;20}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'iterations'</span><span class="sc">:&gt;11}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'objective calls'</span><span class="sc">:&gt;16}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'value'</span><span class="sc">:&gt;14}</span><span class="ss">"</span>)</span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> name, r <span class="kw">in</span> ((<span class="st">"finite difference"</span>, numeric_run), (<span class="st">"analytic"</span>, analytic_run)):</span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>name<span class="sc">:&lt;20}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>iterations<span class="sc">:11d}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>function_evaluations<span class="sc">:16d}</span><span class="ss"> </span><span class="sc">{</span>r<span class="sc">.</span>value<span class="sc">:14.6e}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>gradient              iterations  objective calls          value
+finite difference           1516            12137   1.093709e-15
+analytic                    1516             1518   1.093709e-15</code></pre>
+</div>
+</div>
+<p>Identical path, identical answer, 12,137 objective calls against 1,518. The two runs take the same 1,516 steps because ADAM’s own arithmetic is unchanged; what changes is that the finite-difference run pays eight calls a step to learn the gradient it was handed for free. On a three-parameter quadratic that is a curiosity. On a likelihood over a long record it is the difference between a fit that finishes and one you abandon.</p>
+<p>The gradient is checked on the way in: return the wrong number of partials and the call fails rather than optimizing something else.</p>
+<div id="3bd47451" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:53.805680Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:53.805627Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:53.807207Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:53.806874Z&quot;}}" data-execution_count="12">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="cf">try</span>:</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    ch.optim_minimize(fxyz, initial<span class="op">=</span>[<span class="fl">0.2</span>, <span class="fl">0.5</span>, <span class="fl">0.5</span>], lower<span class="op">=</span>[<span class="dv">0</span>, <span class="dv">0</span>, <span class="dv">0</span>], upper<span class="op">=</span>[<span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">1</span>],</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>                      method<span class="op">=</span><span class="st">"adam"</span>, gradient<span class="op">=</span><span class="kw">lambda</span> p: [<span class="dv">1</span>, <span class="dv">2</span>])</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="cf">except</span> <span class="pp">Exception</span> <span class="im">as</span> err:</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="bu">type</span>(err)<span class="sc">.</span><span class="va">__name__</span><span class="sc">}</span><span class="ss">: </span><span class="sc">{</span>err<span class="sc">}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>RuntimeError: the gradient must return one value per parameter; got a value of length 2 for 3 parameters</code></pre>
+</div>
+</div>
+</section>
+<section id="shortest-paths-through-a-network" class="level2">
+<h2 class="anchored" data-anchor-id="shortest-paths-through-a-network">Shortest paths through a network</h2>
+<p><code>shortest_path()</code> is not an optimizer – its input is a graph, not a function – but it comes from the same upstream namespace and answers the same kind of question. Given a directed, weighted graph and one or more destinations, it runs Dijkstra’s algorithm backwards from the destinations and returns a routing table: for every node, which neighbour to step to, along which edge, and what the remaining trip costs.</p>
+<p>The graph is upstream’s own routing test, two ranks of five nodes with a few rungs between them. Node indices are 0-based in both packages, matching the C# table they share:</p>
+<div id="87f34920" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:53.807981Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:53.807940Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:53.810147Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:53.809878Z&quot;}}" data-execution_count="13">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>frm <span class="op">=</span> [<span class="dv">0</span>, <span class="dv">0</span>, <span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">2</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">4</span>, <span class="dv">5</span>, <span class="dv">5</span>, <span class="dv">6</span>, <span class="dv">6</span>, <span class="dv">6</span>, <span class="dv">7</span>, <span class="dv">7</span>, <span class="dv">7</span>, <span class="dv">7</span>, <span class="dv">8</span>, <span class="dv">8</span>, <span class="dv">8</span>, <span class="dv">9</span>, <span class="dv">9</span>]</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>to <span class="op">=</span> [<span class="dv">5</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">2</span>, <span class="dv">6</span>, <span class="dv">7</span>, <span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">7</span>, <span class="dv">2</span>, <span class="dv">8</span>, <span class="dv">4</span>, <span class="dv">3</span>, <span class="dv">9</span>, <span class="dv">0</span>, <span class="dv">6</span>, <span class="dv">5</span>, <span class="dv">1</span>, <span class="dv">7</span>, <span class="dv">6</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">8</span>, <span class="dv">7</span>, <span class="dv">3</span>, <span class="dv">9</span>, <span class="dv">8</span>, <span class="dv">4</span>]</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>cost <span class="op">=</span> [<span class="dv">1</span>, <span class="dv">30</span>, <span class="dv">30</span>, <span class="dv">1</span>, <span class="dv">15</span>, <span class="dv">2</span>, <span class="dv">1</span>, <span class="dv">5</span>, <span class="dv">5</span>, <span class="dv">5</span>, <span class="dv">2</span>, <span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">30</span>, <span class="dv">1</span>, <span class="dv">3</span>, <span class="dv">3</span>, <span class="dv">15</span>, <span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">5</span>, <span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">2</span>, <span class="dv">2</span>, <span class="dv">30</span>]</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>reach <span class="op">=</span> [<span class="dv">0</span>, <span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">2</span>, <span class="dv">5</span>, <span class="dv">6</span>, <span class="dv">5</span>, <span class="dv">7</span>, <span class="dv">8</span>, <span class="dv">8</span>, <span class="dv">9</span>, <span class="dv">0</span>, <span class="dv">10</span>, <span class="dv">10</span>, <span class="dv">3</span>, <span class="dv">11</span>, <span class="dv">11</span>, <span class="dv">4</span>, <span class="dv">6</span>, <span class="dv">12</span>, <span class="dv">12</span>, <span class="dv">7</span>, <span class="dv">13</span>, <span class="dv">13</span>, <span class="dv">9</span>]</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>routes <span class="op">=</span> ch.shortest_path(frm, to, cost, destinations<span class="op">=</span><span class="dv">9</span>, edge_index<span class="op">=</span>reach)</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span><span class="st">'node'</span><span class="sc">:&gt;5}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'next_node'</span><span class="sc">:&gt;10}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'edge_index'</span><span class="sc">:&gt;11}</span><span class="ss"> </span><span class="sc">{</span><span class="st">'cost'</span><span class="sc">:&gt;6}</span><span class="ss">"</span>)</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> node, (next_node, edge_index, trip) <span class="kw">in</span> <span class="bu">enumerate</span>(routes):</span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"</span><span class="sc">{</span>node<span class="sc">:5d}</span><span class="ss"> </span><span class="sc">{</span><span class="bu">int</span>(next_node)<span class="sc">:10d}</span><span class="ss"> </span><span class="sc">{</span><span class="bu">int</span>(edge_index)<span class="sc">:11d}</span><span class="ss"> </span><span class="sc">{</span>trip<span class="sc">:6g}</span><span class="ss">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code> node  next_node  edge_index   cost
+    0          5           0      8
+    1          7           4      5
+    2          1           2      6
+    3          8           7      4
+    4          3           8      5
+    5          6          10      7
+    6          7          11      4
+    7          8          12      3
+    8          9          13      2
+    9          9          -1      0</code></pre>
+</div>
+</div>
+<p>Read the table one row at a time. From node 0 the cheapest way to node 9 costs 8 and starts by stepping to node 5 – even though node 0 has a direct edge to node 1, which is one step closer to the destination in hops. That edge costs 30 on its own, and the whole route through node 5 (0, 5, 6, 7, 8, 9) costs 8 in total. Hop count is not distance.</p>
+<div id="cfe36032" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:53.811010Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:53.810970Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:53.840815Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:53.840434Z&quot;}}" data-execution_count="14">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>pos_x <span class="op">=</span> <span class="bu">list</span>(<span class="bu">range</span>(<span class="dv">5</span>)) <span class="op">+</span> <span class="bu">list</span>(<span class="bu">range</span>(<span class="dv">5</span>))</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>pos_y <span class="op">=</span> [<span class="dv">1</span>] <span class="op">*</span> <span class="dv">5</span> <span class="op">+</span> [<span class="dv">0</span>] <span class="op">*</span> <span class="dv">5</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>fig, ax <span class="op">=</span> plt.subplots(figsize<span class="op">=</span>(<span class="dv">7</span>, <span class="dv">4</span>))</span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> a, b <span class="kw">in</span> <span class="bu">zip</span>(frm, to):</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    ax.plot([pos_x[a], pos_x[b]], [pos_y[a], pos_y[b]], color<span class="op">=</span><span class="st">"#d0d0d0"</span>, lw<span class="op">=</span><span class="dv">1</span>, zorder<span class="op">=</span><span class="dv">1</span>)</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> node <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">10</span>):</span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    nxt <span class="op">=</span> <span class="bu">int</span>(routes[node][<span class="dv">0</span>])</span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> nxt <span class="op">!=</span> node:</span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>        x0, y0 <span class="op">=</span> pos_x[node], pos_y[node]</span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>        dx, dy <span class="op">=</span> pos_x[nxt] <span class="op">-</span> x0, pos_y[nxt] <span class="op">-</span> y0</span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>        <span class="co"># stop short of the target circle so the arrowhead stays visible</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>        ax.arrow(x0, y0, <span class="fl">0.78</span> <span class="op">*</span> dx, <span class="fl">0.78</span> <span class="op">*</span> dy, color<span class="op">=</span><span class="st">"#b06a3b"</span>, lw<span class="op">=</span><span class="fl">2.5</span>,</span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>                 head_width<span class="op">=</span><span class="fl">0.06</span>, length_includes_head<span class="op">=</span><span class="va">True</span>, zorder<span class="op">=</span><span class="dv">2</span>)</span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> node <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">10</span>):</span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>    ax.plot(pos_x[node], pos_y[node], <span class="st">"o"</span>, markersize<span class="op">=</span><span class="dv">22</span>, markerfacecolor<span class="op">=</span><span class="st">"white"</span>,</span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>            markeredgecolor<span class="op">=</span><span class="st">"#2f4858"</span>, markeredgewidth<span class="op">=</span><span class="dv">2</span>, zorder<span class="op">=</span><span class="dv">3</span>)</span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>    ax.text(pos_x[node], pos_y[node], <span class="bu">str</span>(node), ha<span class="op">=</span><span class="st">"center"</span>, va<span class="op">=</span><span class="st">"center"</span>, fontsize<span class="op">=</span><span class="dv">9</span>, zorder<span class="op">=</span><span class="dv">4</span>)</span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a>    offset <span class="op">=</span> <span class="fl">0.22</span> <span class="cf">if</span> pos_y[node] <span class="op">&gt;</span> <span class="fl">0.5</span> <span class="cf">else</span> <span class="op">-</span><span class="fl">0.22</span></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>    ax.text(pos_x[node], pos_y[node] <span class="op">+</span> offset, <span class="ss">f"</span><span class="sc">{</span>routes[node][<span class="dv">2</span>]<span class="sc">:g}</span><span class="ss">"</span>, ha<span class="op">=</span><span class="st">"center"</span>, va<span class="op">=</span><span class="st">"center"</span>,</span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>            fontsize<span class="op">=</span><span class="dv">9</span>, color<span class="op">=</span><span class="st">"#6f7f6a"</span>)</span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a>ax.set_xlim(<span class="op">-</span><span class="fl">0.4</span>, <span class="fl">4.4</span>)</span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a>ax.set_ylim(<span class="op">-</span><span class="fl">0.45</span>, <span class="fl">1.45</span>)</span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a>ax.axis(<span class="st">"off"</span>)</span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>ax.set_title(<span class="st">"Cheapest route to node 9 from every node"</span>)</span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>plt.show()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="python_files/figure-html/cell-15-output-1.png" class="img-fluid figure-img"></p>
+</figure>
+</div>
+</div>
+</div>
+<p>Every arrow is one row of the table, and following them from any node walks the cheapest route to node 9. The number beside each node is its cost to get there. Pass several <code>destinations</code> and each node keeps whichever one it reaches most cheaply, which is how you route a whole basin to the nearest of several outlets in one call.</p>
+</section>
+<section id="what-reproduces-across-languages-and-what-does-not" class="level2">
+<h2 class="anchored" data-anchor-id="what-reproduces-across-languages-and-what-does-not">What reproduces across languages, and what does not</h2>
+<p>Most of this site can promise that a seeded run gives bit-identical numbers in R and Python, because the work happens in the shared C++ core. The optimizer surface needs that promise stated more carefully, in three tiers, and every tier below was measured rather than assumed.</p>
+<p><strong>Deterministic, and bit-for-bit against C#.</strong> <code>"adam"</code> and <code>"gradient_descent"</code> have no random number generator at all, and reproduce the real C# library exactly – including the evaluation counts above, 12,137 and 1,518 – with or without fused-multiply-add contraction in the compiler. <code>shortest_path()</code> is the same: integer-and-single-precision arithmetic, reproducing C#’s routing table bit-for-bit including its single-precision partial sums. <code>"augmented_lagrange"</code> has no generator either, and reproduces C# to about <span class="math inline">\(2 \times 10^{-9}\)</span> on the constructs above, becoming bit-identical when the core is compiled with <code>-ffp-contract=off</code> – the whole residual is contraction inside the inner BFGS.</p>
+<p><strong>Seeded, and completely reproducing.</strong> <code>"simulated_annealing"</code> and <code>"multi_start"</code> reproduce across all four of C++, R, Python, and C#: iteration count, evaluation count, converged value, and every parameter. <code>fixtures/toolbox/toolbox_cross_language.json</code> pins both at zero tolerance for exactly that reason.</p>
+<p><strong>Seeded, and reproducing across the two packages but not necessarily against C#.</strong> <code>"particle_swarm"</code> and <code>"sce"</code> branch on comparisons between accumulated sums, and clang and gcc contract <code>a * b + c</code> into a fused multiply-add by default where .NET never does. One contracted expression can flip an accept-or-reject and every draw after it is spent differently. Measured: particle swarm on the Booth function takes 3,073 iterations and 92,220 evaluations both in the real C# library and in an uncontracted C++ build, against 3,855 and 115,680 in a contracted one. So the same fixture pins, for particle swarm on Eggholder, only what survives both paths – the iteration count, the evaluation count, the converged value, and the parameter that lands exactly on the bound – and for SCE only the counts and the status. Nothing was skipped and no tolerance was loosened to get there; the unreproducible quantities are simply not asserted, and each run’s accuracy is pinned separately against the upstream test’s own literals.</p>
+<p>Underneath all three tiers sits the limit example 13 established, which has not changed: a seeded run’s parameters come from the shared C++ generator and reproduce, while the reported objective <em>value</em> comes from re-evaluating your own R or Python code, and the two languages do not guarantee identical rounding for the same formula. On this page they happen to agree to the last bit on every construct, which is common and is not a guarantee.</p>
+</section>
+<section id="key-takeaways" class="level2">
+<h2 class="anchored" data-anchor-id="key-takeaways">Key takeaways</h2>
+<ol type="1">
+<li>The four seeded global methods differ by more than an order of magnitude in what they spend and by hundreds of units of objective in what they find. Try more than one before believing any of them.</li>
+<li><code>control</code> is where a global method’s search strategy lives. Shuffled complex evolution finds the Eggholder minimum at thirty complexes and misses it at five; the code is identical.</li>
+<li><code>Constraint</code> plus <code>method="augmented_lagrange"</code> puts constraints on top of the box, and reports the multiplier that prices each one.</li>
+<li><code>inner</code> decides which local solution a constrained non-convex problem converges to. Change it and check whether the answer moved.</li>
+<li>An analytic gradient turns a per-parameter finite-difference bill into one call a step – an eightfold cut on three parameters, more on more.</li>
+<li><code>shortest_path()</code> answers routing questions for a whole network at once, and the cheapest route is rarely the one with the fewest hops.</li>
+</ol>
+</section>
+<section id="reproduction-check" class="level2">
+<h2 class="anchored" data-anchor-id="reproduction-check">Reproduction check</h2>
+<p>Four groups, kept separate. Values pinned against the upstream C# MSTest literals carry that test’s own tolerance. Values read off the real C# library by the dotnet oracle gate carry the tolerance the matching fixture uses. This page’s own deterministic numbers are checked directly. The particle swarm and simulated annealing runs are pinned exactly, but only on the quantities <code>fixtures/toolbox/toolbox_cross_language.json</code> itself pins – particle swarm’s second parameter is deliberately absent here for the reason given above.</p>
+<div id="237e591f" class="cell" data-quarto-private-1="{&quot;key&quot;:&quot;execution&quot;,&quot;value&quot;:{&quot;iopub.execute_input&quot;:&quot;2026-08-23T14:55:53.841717Z&quot;,&quot;iopub.status.busy&quot;:&quot;2026-08-23T14:55:53.841674Z&quot;,&quot;iopub.status.idle&quot;:&quot;2026-08-23T14:55:53.845672Z&quot;,&quot;shell.execute_reply&quot;:&quot;2026-08-23T14:55:53.845326Z&quot;}}" data-execution_count="15">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Upstream MSTest literals, at the C# test's own tolerance.</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(sce_tuned.value <span class="op">-</span> <span class="op">-</span><span class="fl">959.6407</span>) <span class="op">&lt;</span> <span class="fl">1e-4</span>              <span class="co"># SCE Test_Eggholder</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(sce_tuned.parameters[<span class="dv">0</span>] <span class="op">-</span> <span class="dv">512</span>) <span class="op">&lt;</span> <span class="fl">1e-3</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(sce_tuned.parameters[<span class="dv">1</span>] <span class="op">-</span> <span class="fl">404.2319</span>) <span class="op">&lt;</span> <span class="fl">1e-3</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(runs[<span class="st">"de"</span>].value <span class="op">-</span> <span class="op">-</span><span class="fl">959.6407</span>) <span class="op">&lt;</span> <span class="fl">1e-4</span>             <span class="co"># the textbook optimum</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(haimes.parameters[<span class="dv">0</span>] <span class="op">-</span> <span class="fl">4.5</span>) <span class="op">&lt;</span> <span class="fl">1e-2</span>               <span class="co"># AL Test_Haimes_5_2</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(haimes.parameters[<span class="dv">1</span>] <span class="op">-</span> <span class="fl">7.75</span>) <span class="op">&lt;</span> <span class="fl">1e-2</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(haimes.value <span class="op">-</span> <span class="fl">25.31</span>) <span class="op">&lt;</span> <span class="fl">1e-2</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(haimes.multipliers[<span class="st">"less_than"</span>][<span class="dv">0</span>] <span class="op">-</span> <span class="fl">1.67</span>) <span class="op">&lt;</span> <span class="fl">1e-2</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(numeric_run.value <span class="op">-</span> <span class="dv">0</span>) <span class="op">&lt;</span> <span class="fl">1e-4</span>                    <span class="co"># ADAM Test_FXYZ</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(analytic_run.parameters[<span class="dv">0</span>] <span class="op">-</span> <span class="fl">0.125</span>) <span class="op">&lt;</span> <span class="fl">1e-4</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(analytic_run.parameters[<span class="dv">2</span>] <span class="op">-</span> <span class="fl">0.35</span>) <span class="op">&lt;</span> <span class="fl">1e-4</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Read off the REAL C# library by the dotnet oracle gate.</span></span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(powell_inner.parameters[<span class="dv">0</span>] <span class="op">-</span> <span class="fl">5.4793811558833845</span>) <span class="op">&lt;</span> <span class="fl">1e-6</span></span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(powell_inner.value <span class="op">-</span> <span class="fl">28.30781213770569</span>) <span class="op">&lt;</span> <span class="fl">1e-6</span></span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(powell_inner.multipliers[<span class="st">"less_than"</span>][<span class="dv">0</span>] <span class="op">-</span> <span class="fl">3.511785881316314</span>) <span class="op">&lt;</span> <span class="fl">1e-6</span></span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> numeric_run.function_evaluations <span class="op">==</span> <span class="dv">12137</span></span>
+<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> analytic_run.function_evaluations <span class="op">==</span> <span class="dv">1518</span></span>
+<span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> analytic_run.iterations <span class="op">==</span> <span class="dv">1516</span></span>
+<span id="cb25-21"><a href="#cb25-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-22"><a href="#cb25-22" aria-hidden="true" tabindex="-1"></a><span class="co"># Seeded, and measured to reproduce exactly in C++, R, Python and C#.</span></span>
+<span id="cb25-23"><a href="#cb25-23" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> runs[<span class="st">"particle_swarm"</span>].iterations <span class="op">==</span> <span class="dv">2413</span></span>
+<span id="cb25-24"><a href="#cb25-24" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> runs[<span class="st">"particle_swarm"</span>].function_evaluations <span class="op">==</span> <span class="dv">72420</span></span>
+<span id="cb25-25"><a href="#cb25-25" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> runs[<span class="st">"particle_swarm"</span>].value <span class="op">==</span> <span class="op">-</span><span class="fl">959.640662720851</span></span>
+<span id="cb25-26"><a href="#cb25-26" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> runs[<span class="st">"particle_swarm"</span>].parameters[<span class="dv">0</span>] <span class="op">==</span> <span class="fl">512.0</span></span>
+<span id="cb25-27"><a href="#cb25-27" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> runs[<span class="st">"simulated_annealing"</span>].value <span class="op">==</span> <span class="op">-</span><span class="fl">293.29583227407102</span></span>
+<span id="cb25-28"><a href="#cb25-28" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> runs[<span class="st">"simulated_annealing"</span>].iterations <span class="op">==</span> <span class="dv">10000</span></span>
+<span id="cb25-29"><a href="#cb25-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-30"><a href="#cb25-30" aria-hidden="true" tabindex="-1"></a><span class="co"># The Dijkstra routing table, asserted by exact equality as the C# test asserts it.</span></span>
+<span id="cb25-31"><a href="#cb25-31" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">list</span>(routes[:, <span class="dv">2</span>]) <span class="op">==</span> [<span class="dv">8</span>, <span class="dv">5</span>, <span class="dv">6</span>, <span class="dv">4</span>, <span class="dv">5</span>, <span class="dv">7</span>, <span class="dv">4</span>, <span class="dv">3</span>, <span class="dv">2</span>, <span class="dv">0</span>]</span>
+<span id="cb25-32"><a href="#cb25-32" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">list</span>(routes[:, <span class="dv">0</span>]) <span class="op">==</span> [<span class="dv">5</span>, <span class="dv">7</span>, <span class="dv">1</span>, <span class="dv">8</span>, <span class="dv">3</span>, <span class="dv">6</span>, <span class="dv">7</span>, <span class="dv">8</span>, <span class="dv">9</span>, <span class="dv">9</span>]</span>
+<span id="cb25-33"><a href="#cb25-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-34"><a href="#cb25-34" aria-hidden="true" tabindex="-1"></a><span class="co"># This page's own deterministic numbers.</span></span>
+<span id="cb25-35"><a href="#cb25-35" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> haimes.value <span class="op">==</span> <span class="fl">25.316672218251753</span></span>
+<span id="cb25-36"><a href="#cb25-36" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> <span class="bu">abs</span>(secondary(haimes.parameters) <span class="op">/</span> <span class="fl">13.31</span> <span class="op">-</span> <span class="dv">1</span>) <span class="op">&lt;</span> <span class="fl">1e-9</span></span>
+<span id="cb25-37"><a href="#cb25-37" aria-hidden="true" tabindex="-1"></a><span class="cf">assert</span> numeric_run.value <span class="op">==</span> <span class="fl">1.0937092922988765e-15</span></span>
+<span id="cb25-38"><a href="#cb25-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-39"><a href="#cb25-39" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"All reproduction checks passed."</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>All reproduction checks passed.</code></pre>
+</div>
+</div>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    // Ensure there is a toggle, if there isn't float one in the top right
+    if (window.document.querySelector('.quarto-color-scheme-toggle') === null) {
+      const a = window.document.createElement('a');
+      a.classList.add('top-right');
+      a.classList.add('quarto-color-scheme-toggle');
+      a.href = "";
+      a.onclick = function() { try { window.quartoToggleColorScheme(); } catch {} return false; };
+      const i = window.document.createElement("i");
+      i.classList.add('bi');
+      a.appendChild(i);
+      window.document.body.appendChild(a);
+    }
+    setColorSchemeToggle(hasAlternateSentinel())
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/cameronbracken\.github\.io\/corehydro\/");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="../../examples/18-numerical-methods/python.html" class="pagination-link" aria-label="18. Numerical methods">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">18. Numerical methods</span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="../../examples/20-bayesian-regression/python.html" class="pagination-link" aria-label="20. Bayesian regression">
+        <span class="nav-page-text">20. Bayesian regression</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+      &nbsp;
+    </div>   
+    <div class="nav-footer-center">
+<p>corehydro is an independent open-source port of the USACE-RMC <a href="https://github.com/USACE-RMC/Numerics">Numerics</a> and <a href="https://www.rmc.usace.army.mil/Software/RMC-BestFit/">RMC-BestFit</a> libraries. 0BSD licensed.</p>
+</div>
+    <div class="nav-footer-right">
+      &nbsp;
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

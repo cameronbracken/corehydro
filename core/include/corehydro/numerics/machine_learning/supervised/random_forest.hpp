@@ -148,6 +148,12 @@ class RandomForest {
         for (int idx = 0; idx < number_of_trees_; idx++) {
             std::optional<std::vector<double>> column =
                 decision_trees_[static_cast<std::size_t>(idx)].predict(x);
+            // Unreachable given the guard above (every tree carries the same `dimensions_` and is
+            // trained), but C# dereferences this null with `!` and would throw
+            // NullReferenceException; throwing beats undefined behavior if the invariant ever
+            // changes.
+            if (!column.has_value())
+                throw std::runtime_error("RandomForest::predict: a tree returned no prediction");
             for (int i = 0; i < x.number_of_rows(); i++)
                 boot_results[static_cast<std::size_t>(i)][static_cast<std::size_t>(idx)] =
                     (*column)[static_cast<std::size_t>(i)];
