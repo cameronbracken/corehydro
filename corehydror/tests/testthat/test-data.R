@@ -187,6 +187,44 @@ test_that("analysis_data_hypothesis_test validates method and the two-sample spl
   expect_error(analysis_data_hypothesis_test(harricana, "equal_variance_t"), "requires .split_index.")
 })
 
+test_that("analysis_data_hypothesis_test runs the unimodality test (P5)", {
+  unimodal <- c(4.5, 5.2, 5.1, 4.9, 5.0, 5.3, 5.4, 4.8, 4.7, 5.2,
+                5.1, 4.6, 5.0, 5.3, 5.1, 4.9, 5.2, 5.0, 4.8, 5.3,
+                4.9, 5.1, 5.2, 4.8, 5.0, 5.1, 5.2, 4.7, 5.3, 5.0)
+  p <- analysis_data_hypothesis_test(unimodal, "unimodality")
+  expect_named(p, "unimodality")
+  expect_equal(unname(p), 0.4142441, tolerance = 1e-4)
+})
+
+test_that("analysis_data_hypothesis_test method = 'summary_hypothesis' returns all ten (P5)", {
+  s <- analysis_data_hypothesis_test(harricana, "summary_hypothesis")
+  expect_length(s, 10L)
+  expect_named(s, c(
+    "Jarque-Bera test for normality",
+    "Ljung-Box test for independence",
+    "Wald-Wolfowitz test for independence and stationarity (trend)",
+    "Mann-Whitney test for homogeneity and stationarity (jump)",
+    "Mann-Kendall test for homogeneity and stationarity (trend)",
+    "Linear trend test for stationarity (trend)",
+    "Equal variance t-test for differences in the means of two samples",
+    "Unequal variance t-test for differences in the means of two samples",
+    "F-test for differences in the variances of two samples",
+    "Mixture model test for unimodality"
+  ))
+  # Each value equals the corresponding standalone facade at the split the method clamps to
+  # (69 / 2 = 34), and split_index is optional here unlike for the two-sample facades.
+  expect_equal(unname(s[["Mann-Kendall test for homogeneity and stationarity (trend)"]]),
+               unname(analysis_data_hypothesis_test(harricana, "mann_kendall")))
+  expect_equal(unname(s[["Equal variance t-test for differences in the means of two samples"]]),
+               unname(analysis_data_hypothesis_test(harricana, "equal_variance_t",
+                                                    split_index = 34)))
+  # A record too short for Mann-Whitney NaNs every value, rather than reporting the nine that
+  # worked -- upstream's single try/catch. Documented in the help page.
+  short <- analysis_data_hypothesis_test(seq_len(12), "summary_hypothesis")
+  expect_length(short, 10L)
+  expect_true(any(is.nan(short)))
+})
+
 test_that("analysis_data_statistics returns the twenty named summary statistics", {
   s <- analysis_data_statistics(peaks)
   expect_length(s$value, 20)

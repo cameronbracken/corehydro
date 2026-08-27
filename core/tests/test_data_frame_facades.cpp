@@ -5,8 +5,11 @@
 //   upstream/RMC-BestFit/src/RMC.BestFit.Tests/DataFrame/ExactDataHypothesisTests.cs
 //   upstream/RMC-BestFit/src/RMC.BestFit.Tests/DataFrame/NonparametricEmpiricalTests.cs
 // Every applicable [TestMethod] is transcribed with its input arrays copied verbatim.
-// Test_UnimodalityTest is SKIPPED (UnimodalityTest is a locked P5 scope decision -- see
-// data_frame.hpp's header). Of NonparametricEmpiricalTests.cs, the two duplicate-value
+// P5 Task 6 added Test_UnimodalityTest, which P4 skipped because UnimodalityTest needed the
+// then-unported GaussianMixtureModel, plus a summary_hypothesis_test suite (upstream has no
+// test for that method -- its only C# caller is the WPF GUI -- so it is checked by the identity
+// that must hold: every one of its ten values equals the corresponding standalone facade on the
+// same frame). Of NonparametricEmpiricalTests.cs, the two duplicate-value
 // GetNonparametricMoments*/ROS cases are already covered by test_nonparametric_empirical.cpp
 // (ported in B9); only the two summary-statistics/standardized-value cases are new here.
 #include <cmath>
@@ -283,6 +286,105 @@ void test_empirical_consumers_all_values_identical_report_unavailable_results() 
     CHECK_TRUE(all_nan);
 }
 
+// C# Test_UnimodalityTest (ExactDataHypothesisTests.cs line 329). P5 Task 6.
+void test_unimodality_test() {
+    std::vector<double> unimodal_data{4.5, 5.2, 5.1, 4.9, 5.0, 5.3, 5.4, 4.8, 4.7, 5.2,
+                                       5.1, 4.6, 5.0, 5.3, 5.1, 4.9, 5.2, 5.0, 4.8, 5.3,
+                                       4.9, 5.1, 5.2, 4.8, 5.0, 5.1, 5.2, 4.7, 5.3, 5.0};
+    DataFrame df;
+    df.set_exact_series(ExactSeries(unimodal_data));
+    CHECK_NEAR(df.unimodality_test(), 0.4142441, 1e-4);
+
+    std::vector<double> bimodal_data{3.8, 3.9, 4.0, 3.9, 4.0, 4.1, 4.0, 3.8, 3.9, 4.0,
+                                      4.1, 4.0, 3.9, 4.0, 4.0, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3,
+                                      4.4, 4.5, 4.4, 4.3, 4.4, 4.4, 4.5, 4.4, 4.3};
+    df.set_exact_series(ExactSeries(bimodal_data));
+    CHECK_NEAR(df.unimodality_test(), 2.55425752131444e-05, 1e-9);
+
+    // COREHYDRO SUPPLEMENT: the shared 10-item guard.
+    DataFrame small;
+    small.set_exact_series(ExactSeries(std::vector<double>(9, 1.0)));
+    CHECK_THROWS_MSG(small.unimodality_test(), "at least 10 items");
+}
+
+// COREHYDRO SUPPLEMENT -- summary_hypothesis_test has no upstream test (its only C# caller is
+// the WPF GUI). It is a facade over the other ten members, so the identity "each of its ten
+// values equals the corresponding standalone facade on the same frame" is the right oracle and
+// needs no new literal. The one place they can legitimately differ is the split index, which
+// this method clamps itself, so the standalone two-sample facades are called with the clamped
+// index this test recomputes the same way.
+void test_summary_hypothesis_test() {
+    // The 69-year Harricana annual peaks, the same series the Mann-Kendall case above uses.
+    std::vector<double> harricana{
+        122,  244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8,
+        149,  238, 262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161,
+        201,  204, 194, 164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230,
+        158,  262, 154, 164, 182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173,
+        174};
+    DataFrame df;
+    df.set_exact_series(ExactSeries(harricana));
+
+    std::vector<std::pair<std::string, double>> summary = df.summary_hypothesis_test();
+    CHECK_EQ(static_cast<int>(summary.size()), 10);
+
+    // The ten keys, in C# insertion order -- read by label, so the order is part of the API.
+    const char* const expected_keys[10] = {
+        "Jarque-Bera test for normality",
+        "Ljung-Box test for independence",
+        "Wald-Wolfowitz test for independence and stationarity (trend)",
+        "Mann-Whitney test for homogeneity and stationarity (jump)",
+        "Mann-Kendall test for homogeneity and stationarity (trend)",
+        "Linear trend test for stationarity (trend)",
+        "Equal variance t-test for differences in the means of two samples",
+        "Unequal variance t-test for differences in the means of two samples",
+        "F-test for differences in the variances of two samples",
+        "Mixture model test for unimodality"};
+    for (int i = 0; i < 10; i++)
+        CHECK_TRUE(summary[static_cast<std::size_t>(i)].first == expected_keys[i]);
+
+    // The clamped split index (transcription note 2): the default -1 is out of range, so the
+    // method falls back to ExactSeries[values.size() / 2].Index -- here 69 / 2 = 34.
+    int split = 34;
+
+    // Each value equals its standalone facade on the same frame.
+    CHECK_EQ(find_value(summary, expected_keys[0]), df.jarque_bera_test());
+    CHECK_EQ(find_value(summary, expected_keys[1]), df.ljung_box_test());
+    CHECK_EQ(find_value(summary, expected_keys[2]), df.wald_wolfowitz_test());
+    CHECK_EQ(find_value(summary, expected_keys[3]), df.mann_whitney_test(split));
+    CHECK_EQ(find_value(summary, expected_keys[4]), df.mann_kendall_test());
+    CHECK_EQ(find_value(summary, expected_keys[5]), df.linear_trend_test());
+    CHECK_EQ(find_value(summary, expected_keys[6]), df.equal_variance_t_test(split));
+    CHECK_EQ(find_value(summary, expected_keys[7]), df.unequal_variance_t_test(split));
+    CHECK_EQ(find_value(summary, expected_keys[8]), df.f_test(split));
+    CHECK_EQ(find_value(summary, expected_keys[9]), df.unimodality_test());
+
+    // An explicit in-range index is honored rather than clamped.
+    std::vector<std::pair<std::string, double>> at_30 = df.summary_hypothesis_test(30);
+    CHECK_EQ(find_value(at_30, expected_keys[3]), df.mann_whitney_test(30));
+    CHECK_TRUE(find_value(at_30, expected_keys[6]) != find_value(summary, expected_keys[6]));
+
+    // Transcription note 1: fewer than ten exact items NaNs all ten keys rather than throwing.
+    DataFrame small;
+    small.set_exact_series(ExactSeries(std::vector<double>{1, 2, 3, 4, 5}));
+    std::vector<std::pair<std::string, double>> nans = small.summary_hypothesis_test();
+    CHECK_EQ(static_cast<int>(nans.size()), 10);
+    for (int i = 0; i < 10; i++) {
+        CHECK_TRUE(nans[static_cast<std::size_t>(i)].first == expected_keys[i]);
+        CHECK_TRUE(std::isnan(nans[static_cast<std::size_t>(i)].second));
+    }
+
+    // Transcription note 1 again, on the other path: a frame with enough items but a split that
+    // makes a two-sample test throw NaNs the whole result rather than propagating.
+    DataFrame twelve;
+    twelve.set_exact_series(ExactSeries(std::vector<double>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}));
+    std::vector<std::pair<std::string, double>> too_few = twelve.summary_hypothesis_test();
+    CHECK_EQ(static_cast<int>(too_few.size()), 10);
+    bool any_nan = false;
+    for (int i = 0; i < 10; i++)
+        if (std::isnan(too_few[static_cast<std::size_t>(i)].second)) any_nan = true;
+    CHECK_TRUE(any_nan);  // Mann-Whitney needs 20+ combined, so the catch fires
+}
+
 }  // namespace
 
 int main() {
@@ -295,6 +397,8 @@ int main() {
     test_mann_whitney_test();
     test_mann_kendall_test();
     test_linear_trend_test();
+    test_unimodality_test();
+    test_summary_hypothesis_test();
     test_summary_and_standardized_values_duplicate_values_return_finite_results();
     test_empirical_consumers_all_values_identical_report_unavailable_results();
     return chtest::summary("test_data_frame_facades");

@@ -1,6 +1,6 @@
 // corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
-// Holds the `hypothesis` group's dispatch arms over the twelve ported hypothesis tests
+// Holds the `hypothesis` group's dispatch arms over the thirteen ported hypothesis tests
 // (numerics/data/hypothesis_tests.hpp, itself a port of the C# `Numerics.Data.Statistics.
 // HypothesisTests` static class). Every method but `f_models` reads one data vector (a
 // one-sample test) or two (a two-sample test) and returns `detail::scalar(p)`, the 2-sided
@@ -23,6 +23,8 @@
 //   ljung_box                no guard (returns NaN if the ACF cannot be computed)
 //   mann_whitney              sample1.size() <= sample2.size(); each > 3; combined > 20
 //   linear_trend              indices and sample the same length
+//   unimodality               sample.size() >= 10 (and returns NaN, not a throw, if either
+//                             internal GaussianMixtureModel fit fails -- upstream catches)
 #pragma once
 
 #include <string>
@@ -83,6 +85,8 @@ inline ToolboxResult run_hypothesis(const std::string& method,
     if (method == "linear_trend")
         return scalar(ht::linear_trend_test(data_at(data, 0, "hypothesis", method),
                                              data_at(data, 1, "hypothesis", method)));
+    if (method == "unimodality")
+        return scalar(ht::unimodality_test(data_at(data, 0, "hypothesis", method)));
 
     throw std::runtime_error("unknown hypothesis method: " + method);
 }

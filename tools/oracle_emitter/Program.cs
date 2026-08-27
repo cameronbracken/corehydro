@@ -5065,8 +5065,9 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
 }
 
 // Mirrors models/data_frame_runner.hpp's run_data_frame dispatch against a real
-// BestFitModels.DataFrame (P4 Task 6). The nine hypothesis facades and "summary_exact" return a
-// single scalar (no dims); "summary_all" returns the same twenty-key named result; "standardized"
+// BestFitModels.DataFrame (P4 Task 6; "unimodality" and "summary_hypothesis" added in P5 Task 6).
+// The ten hypothesis facades return a single scalar (no dims); "summary_hypothesis" returns a
+// ten-key named result and "summary_all" the same twenty-key named result; "standardized"
 // flattens {StandardizedValue, StandardizedLog10Value} per exact-series item row-major, dims
 // {Count, 2}.
 static double DataFrameDispatch(string method, BestFitModels.DataFrame df, JsonElement options,
@@ -5105,6 +5106,17 @@ static double DataFrameDispatch(string method, BestFitModels.DataFrame df, JsonE
             return ToolboxSelectFlatNoDims(asrt, new[] { df.MannWhitneyTest(OptIndex(), useLog10) });
         case "mann_kendall":
             return ToolboxSelectFlatNoDims(asrt, new[] { df.MannKendallTest(useLog10) });
+        case "unimodality":
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.UnimodalityTest(useLog10) });
+        case "summary_hypothesis":
+        {
+            // `index` is OPTIONAL here (unlike the two-sample facades above): the method clamps
+            // an out-of-range value itself and its C# default is -1.
+            int idx = options.ValueKind == JsonValueKind.Object &&
+                      options.TryGetProperty("index", out var shi) ? shi.GetInt32() : -1;
+            var summary = df.SummaryHypothesisTest(idx, useLog10);
+            return ToolboxSelectNamed(asrt, summary.Keys.ToArray(), summary.Values.ToArray());
+        }
         case "summary_exact":
         {
             var summary = df.SummaryStatisticsExactDataOnly();
@@ -5384,6 +5396,8 @@ static double HypothesisDispatch(string method, List<double[]> data, JsonElement
         return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.MannWhitneyTest(data[0], data[1]) });
     if (method == "linear_trend")
         return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.LinearTrendTest(data[0], data[1]) });
+    if (method == "unimodality")
+        return ToolboxSelectFlatNoDims(asrt, new[] { HypothesisTests.UnimodalityTest(data[0]) });
     throw new Exception($"unknown hypothesis method: {method}");
 }
 

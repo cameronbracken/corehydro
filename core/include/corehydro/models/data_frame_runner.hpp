@@ -16,9 +16,12 @@
 //                                      vector, or at the model's own current values.
 //   run_threshold_diagnostics(...)  -- the two ThresholdDiagnostics statics behind one
 //                                      name-dispatched call, flattened to parallel vectors.
-//   run_data_frame(...)             -- the nine hypothesis-test facades, the two summary-
-//                                      statistics facades, and the standardized-value facade
-//                                      (P4 Task 6), behind one name-dispatched call. Returns the
+//   run_data_frame(...)             -- the ten hypothesis-test facades, the summary-hypothesis
+//                                      facade, the two summary-statistics facades, and the
+//                                      standardized-value facade (P4 Task 6; `unimodality` and
+//                                      `summary_hypothesis` added in P5 Task 6 once
+//                                      GaussianMixtureModel landed), behind one name-dispatched
+//                                      call. Returns the
 //                                      SAME numerics::support::ToolboxResult the toolbox groups
 //                                      return, so the three fixture runners' existing
 //                                      `toolbox_select` helper (index / label / select:
@@ -271,6 +274,8 @@ inline numerics::support::ToolboxResult run_data_frame(const std::string& method
         p = df.wald_wolfowitz_test(use_log10);
     } else if (method == "mann_kendall") {
         p = df.mann_kendall_test(use_log10);
+    } else if (method == "unimodality") {
+        p = df.unimodality_test(use_log10);
     } else if (method == "equal_variance_t" || method == "unequal_variance_t" ||
               method == "f" || method == "mann_whitney") {
         if (!options.contains("index"))
@@ -291,6 +296,20 @@ inline numerics::support::ToolboxResult run_data_frame(const std::string& method
     }
 
     if (matched) return numerics::support::detail::scalar(p);
+
+    if (method == "summary_hypothesis") {
+        // The ten-key facade over the other ten members. Its `index` option is OPTIONAL (unlike
+        // the two-sample facades' above) because the method clamps an out-of-range value itself,
+        // and its C# default is -1 -- which is always out of range, so omitting it selects the
+        // midpoint split. See data_frame.hpp's transcription note 2.
+        ToolboxResult r;
+        for (const auto& [key, value] :
+             df.summary_hypothesis_test(options.value_or("index", -1), use_log10)) {
+            r.names.push_back(key);
+            r.values.push_back(value);
+        }
+        return r;
+    }
 
     if (method == "summary_exact") {
         ToolboxResult r;

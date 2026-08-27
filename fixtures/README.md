@@ -1670,10 +1670,12 @@ stateless, locks the C# stream bit-for-bit).
 
 ### `data_frame`
 
-P4 Task 6 (data and tests) added this kind for the twelve `DataFrame` facades Task 5 un-gated:
-the nine hypothesis-test methods (`jarque_bera`, `ljung_box`, `equal_variance_t`,
-`unequal_variance_t`, `f`, `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`) and
-the three summary methods (`summary_exact`, `summary_all`, `standardized`), reached through
+P4 Task 6 (data and tests) added this kind for the twelve `DataFrame` facades Task 5 un-gated,
+and P5 Task 6 completed it with the two more that landed alongside `GaussianMixtureModel`: the ten
+hypothesis-test methods (`jarque_bera`, `ljung_box`, `equal_variance_t`, `unequal_variance_t`,
+`f`, `linear_trend`, `wald_wolfowitz`, `mann_whitney`, `mann_kendall`, `unimodality`), the
+ten-test `summary_hypothesis` facade, and the three summary methods (`summary_exact`,
+`summary_all`, `standardized`), reached through
 `corehydro::models::runner::run_data_frame` (`models/data_frame_runner.hpp`). Every one of these
 reads the EXACT series only -- no censoring filter, no threshold machinery -- so `run_data_frame`
 returns the SAME `numerics::support::ToolboxResult` the toolbox groups return, and every runner's
@@ -1712,16 +1714,20 @@ dotnet emitter all support it, for parity with `run_data_frame`'s own two-path c
 function's header comment in `models/data_frame_runner.hpp`).
 
 Options: `use_log10` (default `false`, every method); `index` (the two-sample split, required by
-`equal_variance_t`/`unequal_variance_t`/`f`/`mann_whitney`, an error if omitted); `lag_max`
-(`ljung_box` only, default `-1`, meaning "use the library's own default rule"). `summary_exact`
+`equal_variance_t`/`unequal_variance_t`/`f`/`mann_whitney`, an error if omitted, and OPTIONAL for
+`summary_hypothesis`, which clamps an out-of-range value to the midpoint split itself and defaults
+to `-1`); `lag_max` (`ljung_box` only, default `-1`, meaning "use the library's own default rule";
+`summary_hypothesis` ignores it and always uses the default lag). `summary_hypothesis` returns a
+ten-key named result selected by `label` or `index`, in the C# dictionary's insertion order.
+`summary_exact`
 and `summary_all` return the twenty-key named result (`values` parallel to `names`, selected by
 `label` or `index`); `standardized` returns the exact series' standardized values followed by its
 standardized log10 values, `dims = {n, 2}` (row-major: row `i` is
 `[standardized_value[i], standardized_log10_value[i]]`), selected by `index` or `select:
 "rows"`/`"columns"`. `run_data_frame` calls `calculate_plotting_positions()` before `summary_all`
 and `standardized` (the C# tests do this explicitly, and both methods read plotting-position
-complements) but NOT before the nine hypothesis facades or `summary_exact`, none of which read
-plotting positions.
+complements) but NOT before the ten hypothesis facades, `summary_hypothesis`, or `summary_exact`,
+none of which read plotting positions.
 
 `fixtures/data/data_frame_facades.json` carries one or more cases per
 `ExactDataHypothesisTests.cs` `[TestMethod]` -- the SAME literals and datasets already
@@ -1738,7 +1744,9 @@ numbers for what is meant to be the same dataset. `summary_exact`, `summary_all`
 upstream test literal at all -- `NonparametricEmpiricalTests.cs`'s two DataFrame cases only assert
 finiteness/NaN patterns for these three methods, never a value -- so every one of their assertions
 is curated with `python3 tools/verify_oracles.py --dump` against the real C# `DataFrame`, and says
-so in its own `source`.
+so in its own `source`. `summary_hypothesis` is curated the same way and for the same reason --
+its only C# caller is the WPF GUI, so upstream has no test for it at all; `unimodality` does have
+C# literals (`ExactDataHypothesisTests.Test_UnimodalityTest`) and uses them.
 
 The dotnet emitter's `data_frame` branch DOES honor `oracle_skip` (the `toolbox` branch above does
 not), joining several other kinds that also honor it (`analysis`, `model_estimation`, ...) --
@@ -1904,9 +1912,10 @@ weights are `1/4/1/10` and pins the ORIGINAL-weight answer: honoring the weights
 defects are written up in `docs/upstream-csharp-issues.md`, and the user-facing `shortest_path()`
 verb in both packages calls `dijkstra`, never `network_solve_weights`.
 
-P4 "data and tests" (Task 3) added the `hypothesis` group, the sixteenth, over the twelve ported
+P4 "data and tests" (Task 3) added the `hypothesis` group, the sixteenth, over the ported
 hypothesis tests (`numerics/data/hypothesis_tests.hpp`, itself a port of the C#
-`Numerics.Data.Statistics.HypothesisTests` static class). Every method but `f_models` reads one
+`Numerics.Data.Statistics.HypothesisTests` static class) -- twelve at P4, completed to all
+thirteen in P5 with `unimodality`, which needed the then-unported `GaussianMixtureModel`. Every method but `f_models` reads one
 data vector (a one-sample test) or two (a two-sample test) and returns the 2-sided p-value with
 no `dims`/`names`, the same shape `correlation`'s methods use; `f_models` (the F-test comparing
 two nested regression models) takes NO data -- its four inputs
@@ -1917,9 +1926,11 @@ option (default `0`); `ljung_box` reads an optional `lag_max` option (default `-
 the C# default rule").
 
 `fixtures/toolbox/hypothesis.json` carries one case per `Test_HypothesisTests.cs` `[TestMethod]`
-(`Test_UnimodalityTest`, `Test_GrubbsBeck`, and `Test_MultipleGrubbsBeck` excluded -- the first is
-a documented P4 severance, the other two exercise the already-ported `MultipleGrubbsBeckTest`, not
-this class). Every value is `Test_HypothesisTests.cs`'s own literal at its own tolerance; the
+(`Test_GrubbsBeck` and `Test_MultipleGrubbsBeck` excluded -- they exercise the already-ported
+`MultipleGrubbsBeckTest`, not this class). `Test_UnimodalityTest` was excluded at P4 as a
+documented severance and joined in P5 as two cases, one per sample; note its two C# tolerances
+differ by five orders of magnitude (`1E-4` unimodal, `1E-9` bimodal) and are reproduced as
+written. Every value is `Test_HypothesisTests.cs`'s own literal at its own tolerance; the
 `datasets` block reuses the arrays already transcribed (and independently verified byte-identical
 against the checked-out submodule) into `core/tests/test_hypothesis_tests.cpp`, including the
 69-value Harricana River record shared by `wald_wolfowitz` and `mann_kendall` and the 126-value

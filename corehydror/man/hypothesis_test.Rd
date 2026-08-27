@@ -27,7 +27,7 @@ a \code{y} supplied to a one-sample method instead of raising.}
 
 \item{method}{one of \code{"one_sample_t"}, \code{"equal_variance_t"}, \code{"unequal_variance_t"},
 \code{"paired_t"}, \code{"f"}, \code{"f_models"}, \code{"jarque_bera"}, \code{"wald_wolfowitz"}, \code{"ljung_box"},
-\code{"mann_whitney"}, \code{"mann_kendall"}, \code{"linear_trend"}.}
+\code{"mann_whitney"}, \code{"mann_kendall"}, \code{"linear_trend"}, \code{"unimodality"}.}
 
 \item{population_mean}{the hypothesized mean for \code{"one_sample_t"}. Default 0.}
 
@@ -44,17 +44,12 @@ a named numeric vector: \code{p_value} for every method but \code{"f_models"}, w
 \code{c(f_statistic =, p_value =)}.
 }
 \description{
-Mirrors the C# \code{HypothesisTests} static class: twelve one- and two-sample parametric and
+Mirrors the C# \code{HypothesisTests} static class: thirteen one- and two-sample parametric and
 nonparametric hypothesis tests, reached through the shared \code{hypothesis} toolbox group. Every
 method but \code{"f_models"} returns the 2-sided p-value of its test statistic; \code{"f_models"} (the
 F-test comparing two nested regression models) additionally returns the F statistic itself.
 }
 \details{
-\code{HypothesisTests} has a thirteenth static, \code{UnimodalityTest}, that is NOT exposed here: it
-trains a \code{Numerics.MachineLearning.GaussianMixtureModel} at k = 1 and k = 2, and the Machine
-Learning layer has no port yet. It is deferred, not permanently out of scope -- see
-\code{site/status.qmd} for the tracking note.
-
 Argument use by method, and the C# guard each one inherits:
 \itemize{
 \item \code{"one_sample_t"}: \code{x}, \code{population_mean} (default 0). Needs at least 2 observations.
@@ -75,6 +70,11 @@ observations, and the combined length must exceed 20.
 \item \code{"linear_trend"}: \code{x} (the sample), \code{index} (default \code{seq_along(x)}, i.e. \code{1:length(x)} --
 a VALUE the regression is fit against, not an index into \code{x}). \code{index} and \code{x} must be the
 same length.
+\item \code{"unimodality"}: \code{x}. Needs at least 10 observations. Fits a 1-component and a 2-component
+Gaussian mixture model (both at the hard-coded seed 12345, so the result is deterministic)
+and returns the p-value of the likelihood-ratio statistic against a chi-square with 3
+degrees of freedom, so a SMALL p-value is evidence against unimodality. If either mixture
+fit fails numerically the result is \code{NaN} rather than an error, matching upstream.
 }
 }
 \examples{

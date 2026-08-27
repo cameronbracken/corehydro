@@ -42,8 +42,8 @@
 // `public static` (access modifier only, per the ThresholdData::set_number_below
 // internal->public precedent) so the arm-by-arm shift is directly testable.
 //
-// P4 TASK 5 (hypothesis-test and summary-statistics facades): nine of the eleven C#
-// `#region Hypothesis Testing` members are ported over the P4 Task 2 numerics::data::
+// P4 TASK 5 + P5 TASK 6 (hypothesis-test and summary-statistics facades): all eleven C#
+// `#region Hypothesis Testing` members are ported over the numerics::data::
 // hypothesis_tests free functions -- jarque_bera_test, ljung_box_test,
 // equal_variance_t_test, unequal_variance_t_test, f_test, linear_trend_test,
 // wald_wolfowitz_test, mann_whitney_test, mann_kendall_test -- and all three
@@ -52,16 +52,14 @@
 // set_standardized_values (GetNonparametricMoments/GetNonparametricMomentsROS were
 // already ported additively in B9; the two summary methods and set_standardized_values
 // share their `create_empirical_distribution_with_unique_values` private static tail).
-// Still NOT ported, both deferred to P5 together (a locked scope decision, not an
-// oversight): UnimodalityTest and SummaryHypothesisTest. Both need
-// Numerics.MachineLearning.GaussianMixtureModel, which is unported (see
-// numerics/data/hypothesis_tests.hpp's own header note on UnimodalityTest).
-// SummaryHypothesisTest is the more consequential of the two to defer correctly: it calls
-// all ten hypothesis-test facades (the nine above plus Unimodality) inside ONE try/catch
-// that NaNs the entire ten-key result dictionary if ANY single call throws -- so shipping
-// it with a throwing UnimodalityTest arm would silently NaN nine otherwise-working test
-// results rather than surface the real gap. Both wait for P5, when GaussianMixtureModel
-// lands and UnimodalityTest can be un-gated alongside SummaryHypothesisTest in one commit.
+// P5 landed the two P4 had deferred, together in one commit as planned: unimodality_test
+// and summary_hypothesis_test, both un-gated by
+// numerics/machine_learning/unsupervised/gaussian_mixture_model.hpp. summary_hypothesis_test
+// was the consequential one to defer correctly, because it calls all ten hypothesis-test
+// facades inside ONE try/catch that NaNs the entire ten-key result dictionary if ANY single
+// call throws -- shipping it earlier with a throwing UnimodalityTest arm would have silently
+// NaN'd nine otherwise-working results rather than surfacing the real gap. Both C# regions
+// are now ported in full.
 //
 // Deliberately NOT ported (unrelated to the above):
 //   - CreateBlockSeries / CreatePeaksOverThresholdSeries (need the unported TimeSeries
@@ -518,8 +516,8 @@ class DataFrame {
     // the C# `useLog10 ? ... Log10Value ... : ... Value` ternaries. The two-sample splits
     // filter on Data::index() (matching C#'s `x.Index < index` / `x.Index >= index`), NOT
     // on array position, so a non-contiguous or out-of-order index still splits correctly.
-    // UnimodalityTest and SummaryHypothesisTest are a locked P5 scope decision -- see the
-    // file header. ---
+    // unimodality_test and summary_hypothesis_test landed in P5 alongside the
+    // GaussianMixtureModel port; the region is complete. ---
 
     // Returns the sample of the exact series' Value or Log10Value column, in series order
     // (the common `useLog10 ? Select(Log10Value) : Select(Value)` projection every
@@ -677,6 +675,131 @@ class DataFrame {
                 "The exact data series must have at least 10 items before performing "
                 "hypothesis tests.");
         return numerics::data::hypothesis_tests::mann_kendall_test(exact_sample(use_log10));
+    }
+
+    // The Gaussian-mixture-model test for unimodality; exact data only (C# UnimodalityTest,
+    // line 1021). P5: deferred at P4 because it needs the then-unported
+    // Numerics.MachineLearning.GaussianMixtureModel. A SMALL p-value is evidence against
+    // unimodality; a numerically failed mixture fit returns NaN rather than throwing (the
+    // catch lives in the numerics static, matching C#).
+    double unimodality_test(bool use_log10 = false) const {
+        if (exact_series_.count() < 10)
+            throw std::invalid_argument(
+                "The exact data series must have at least 10 items before performing "
+                "hypothesis tests.");
+        return numerics::data::hypothesis_tests::unimodality_test(exact_sample(use_log10));
+    }
+
+    // Returns all ten hypothesis-test p-values in one ordered key/value list (C#
+    // SummaryHypothesisTest, line 1077). P5: deferred at P4 alongside unimodality_test,
+    // which it calls.
+    //
+    // The result is an ORDERED list, not a map: C# builds a Dictionary<string, double> whose
+    // INSERTION ORDER is what the GUI and the fixture (which selects by label) read.
+    //
+    // Five transcription notes, each an upstream oddity a "cleanup" would silently change:
+    //
+    //  1. All ten calls sit in ONE try/catch that CLEARS the dictionary and refills all ten
+    //     keys with NaN if ANY single call throws. This is exactly why P4 could not ship the
+    //     method with a throwing unimodality arm -- it would have silently NaN'd nine
+    //     otherwise-working results.
+    //  2. The split index is clamped with
+    //     `if (index < 0 || index <= minIndex || index > maxIndex) index =
+    //      ExactSeries[(int)((double)values.Length / 2)].Index;`
+    //     -- the clamp reads `values.Length`, which under use_log10 counts only the POSITIVE
+    //     values, but then indexes ExactSeries, which is NOT filtered. The mismatch is
+    //     reproduced.
+    //  3. Under use_log10 the `indexes`/`values` arrays and the v1/v2 splits filter on
+    //     `Value > 0`; the real-space branch does not. The two branches are not symmetric.
+    //  4. LjungBoxTest is called with the DEFAULT lagMax here, unlike the standalone
+    //     ljung_box_test facade, which takes one.
+    //  5. The Mann-Whitney call builds each argument with its own ternary
+    //     (`v1.Count <= v2.Count ? v1 : v2` and `v1.Count > v2.Count ? v1 : v2`). That reads
+    //     oddly next to the standalone facade's single ternary but is equivalent at every
+    //     count relationship -- checked against the actual semantics and recorded in
+    //     docs/upstream-csharp-issues.md rather than re-derived here.
+    std::vector<std::pair<std::string, double>> summary_hypothesis_test(
+        int index = -1, bool use_log10 = false) const {
+        static const char* const kKeys[10] = {
+            "Jarque-Bera test for normality",
+            "Ljung-Box test for independence",
+            "Wald-Wolfowitz test for independence and stationarity (trend)",
+            "Mann-Whitney test for homogeneity and stationarity (jump)",
+            "Mann-Kendall test for homogeneity and stationarity (trend)",
+            "Linear trend test for stationarity (trend)",
+            "Equal variance t-test for differences in the means of two samples",
+            "Unequal variance t-test for differences in the means of two samples",
+            "F-test for differences in the variances of two samples",
+            "Mixture model test for unimodality"};
+        // (The NaN is spelled inline rather than hoisted to a local constant: a function-local
+        // `const`/`constexpr` used inside a capture-less lambda is what raises MSVC C3493, and
+        // capturing it explicitly then trips clang's -Wunused-lambda-capture. `kKeys` has static
+        // storage duration, so it needs no capture.)
+        auto all_nan = []() {
+            std::vector<std::pair<std::string, double>> r;
+            r.reserve(10);
+            for (int i = 0; i < 10; i++)
+                r.emplace_back(kKeys[i], std::numeric_limits<double>::quiet_NaN());
+            return r;
+        };
+
+        if (exact_series_.count() < 10) return all_nan();
+
+        // Note 3: the log10 branch filters on Value > 0; the real-space branch does not.
+        std::vector<double> indexes;
+        std::vector<double> values;
+        for (std::size_t i = 0; i < exact_series_.count(); i++) {
+            if (use_log10 && !(exact_series_[i].value() > 0.0)) continue;
+            indexes.push_back(static_cast<double>(exact_series_[i].index()));
+            values.push_back(use_log10 ? exact_series_[i].log10_value()
+                                       : exact_series_[i].value());
+        }
+
+        // Note 2: clamp the split index to the data range so that both samples have at least
+        // one value. An out-of-range index (e.g. 0 from an uninitialized slider) would leave
+        // one sample empty, causing the two-sample tests to throw. The fallback indexes
+        // ExactSeries by `values.size() / 2`, which under use_log10 counts a DIFFERENT
+        // collection -- mirrored as written.
+        int min_index = exact_series_[0].index();
+        int max_index = exact_series_[exact_series_.count() - 1].index();
+        if (index < 0 || index <= min_index || index > max_index)
+            index = exact_series_[static_cast<std::size_t>(
+                                      static_cast<int>(static_cast<double>(values.size()) / 2.0))]
+                        .index();
+
+        std::vector<double> v1;
+        std::vector<double> v2;
+        for (std::size_t i = 0; i < exact_series_.count(); i++) {
+            if (use_log10 && !(exact_series_[i].value() > 0.0)) continue;
+            double v = use_log10 ? exact_series_[i].log10_value() : exact_series_[i].value();
+            if (exact_series_[i].index() < index) {
+                v1.push_back(v);
+            } else {
+                v2.push_back(v);
+            }
+        }
+
+        namespace ht = numerics::data::hypothesis_tests;
+        try {
+            std::vector<std::pair<std::string, double>> result;
+            result.reserve(10);
+            result.emplace_back(kKeys[0], ht::jarque_bera_test(values));
+            result.emplace_back(kKeys[1], ht::ljung_box_test(values));  // note 4: default lag
+            result.emplace_back(kKeys[2], ht::wald_wolfowitz_test(values));
+            result.emplace_back(kKeys[3],
+                                ht::mann_whitney_test(v1.size() <= v2.size() ? v1 : v2,
+                                                       v1.size() > v2.size() ? v1 : v2));
+            result.emplace_back(kKeys[4], ht::mann_kendall_test(values));
+            result.emplace_back(kKeys[5], ht::linear_trend_test(indexes, values));
+            result.emplace_back(kKeys[6], ht::equal_variance_t_test(v1, v2));
+            result.emplace_back(kKeys[7], ht::unequal_variance_t_test(v1, v2));
+            result.emplace_back(kKeys[8], ht::f_test(v1, v2));
+            result.emplace_back(kKeys[9], ht::unimodality_test(values));
+            return result;
+        } catch (...) {
+            // Note 1: any single failure NaNs the whole ten-key result.
+            return all_nan();
+        }
     }
 
     // Computes nonparametric central moments [mean, stdDev, skewness, kurtosis] of the

@@ -128,6 +128,7 @@ set(BF_TESTS
   test_jenks_natural_breaks
   test_k_means
   test_gaussian_mixture_model
+  test_decision_tree
 )
 
 # Sobol test takes the direction-number file as its sole argument.

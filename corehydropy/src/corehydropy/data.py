@@ -389,6 +389,8 @@ _HYPOTHESIS_METHODS = (
     "wald_wolfowitz",
     "mann_whitney",
     "mann_kendall",
+    "unimodality",
+    "summary_hypothesis",
 )
 _TWO_SAMPLE_METHODS = ("equal_variance_t", "unequal_variance_t", "f", "mann_whitney")
 
@@ -402,22 +404,36 @@ def analysis_data_hypothesis_test(
 ) -> dict:
     """A hypothesis test on an observation record.
 
-    Runs one of the nine ``DataFrame`` hypothesis-test facades over the exact series of an
-    :class:`AnalysisData` frame (or a plain sequence). The four two-sample tests split the record
-    at ``split_index``, comparing observations with a data index below it against those at or
-    above it -- the split is on the record's INDEX, not on array position, so it agrees with the
-    split a caller would get by re-running the test on a record whose observations were supplied
-    out of order.
+    Runs one of the ten ``DataFrame`` hypothesis-test facades over the exact series of an
+    :class:`AnalysisData` frame (or a plain sequence), or all ten at once with
+    ``method="summary_hypothesis"``. The four two-sample tests split the record at
+    ``split_index``, comparing observations with a data index below it against those at or above
+    it -- the split is on the record's INDEX, not on array position, so it agrees with the split a
+    caller would get by re-running the test on a record whose observations were supplied out of
+    order.
+
+    ``method="summary_hypothesis"`` is the library's own ten-test summary, and it behaves
+    differently from calling the ten tests individually in three ways worth knowing, all
+    inherited from upstream:
+
+    - ``split_index`` is OPTIONAL. Left ``None`` (or given a value outside the record's index
+      range) it selects the midpoint split rather than erroring.
+    - Any single test that fails turns the WHOLE result to ``nan``, rather than reporting the
+      nine that worked. A record shorter than the 20 observations ``"mann_whitney"`` needs will
+      therefore come back all-``nan``.
+    - ``"ljung_box"`` is run at the library's default lag, ignoring ``lag_max``.
 
     Parameters
     ----------
     data : AnalysisData or array_like
         The observations, or an :class:`AnalysisData` frame (only its exact series is read).
     method : {"jarque_bera", "ljung_box", "equal_variance_t", "unequal_variance_t", "f",
-        "linear_trend", "wald_wolfowitz", "mann_whitney", "mann_kendall"}
+        "linear_trend", "wald_wolfowitz", "mann_whitney", "mann_kendall", "unimodality",
+        "summary_hypothesis"}
         Which facade to run: normality, autocorrelation, difference in means (Student's /
         Welch's), difference in variances, trend, runs test for independence, homogeneity /
-        jump, and homogeneity / trend, respectively.
+        jump, homogeneity / trend, and a Gaussian-mixture likelihood-ratio test where a SMALL
+        p-value is evidence AGAINST unimodality. ``"summary_hypothesis"`` runs all ten at once.
     split_index : int, optional
         The record index to split the sample at; required by ``"equal_variance_t"``,
         ``"unequal_variance_t"``, ``"f"``, and ``"mann_whitney"``, ignored otherwise.
@@ -430,7 +446,9 @@ def analysis_data_hypothesis_test(
     Returns
     -------
     dict
-        A single-key dict ``{method: p_value}``, the 2-sided p-value.
+        A single-key dict ``{method: p_value}``, the 2-sided p-value. For
+        ``method="summary_hypothesis"``, a ten-key dict carrying every test's p-value, keyed by
+        the library's own descriptive test names and in its own order.
 
     Examples
     --------
@@ -453,6 +471,8 @@ def analysis_data_hypothesis_test(
     if lag_max is not None:
         options["lag_max"] = int(lag_max)
     r = _core.data_frame_run(method, [values], "", json.dumps(options))
+    if method == "summary_hypothesis":
+        return dict(zip(r["names"], r["values"]))
     return {method: r["values"][0]}
 
 

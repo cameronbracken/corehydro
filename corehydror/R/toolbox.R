@@ -1180,30 +1180,27 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
   )
 }
 
-# The "hypothesis" toolbox group (P4 Task 3): the twelve ported hypothesis tests over
+# The "hypothesis" toolbox group (P4 Task 3, completed in P5): the thirteen ported hypothesis
+# tests over
 # numerics/data/hypothesis_tests.hpp (a port of the C# `HypothesisTests` static class). Mirrors
 # corehydropy's own hypothesis_test() verb; both packages share this signature and produce
 # identical error text so a change here is not one-sided.
 
 .hypothesis_methods <- c(
   "one_sample_t", "equal_variance_t", "unequal_variance_t", "paired_t", "f", "f_models",
-  "jarque_bera", "wald_wolfowitz", "ljung_box", "mann_whitney", "mann_kendall", "linear_trend"
+  "jarque_bera", "wald_wolfowitz", "ljung_box", "mann_whitney", "mann_kendall", "linear_trend",
+  "unimodality"
 )
 .hypothesis_two_sample <- c("equal_variance_t", "unequal_variance_t", "paired_t", "f", "mann_whitney")
 
 #' Hypothesis tests
 #'
-#' Mirrors the C# `HypothesisTests` static class: twelve one- and two-sample parametric and
+#' Mirrors the C# `HypothesisTests` static class: thirteen one- and two-sample parametric and
 #' nonparametric hypothesis tests, reached through the shared `hypothesis` toolbox group. Every
 #' method but `"f_models"` returns the 2-sided p-value of its test statistic; `"f_models"` (the
 #' F-test comparing two nested regression models) additionally returns the F statistic itself.
 #'
 #' @details
-#' `HypothesisTests` has a thirteenth static, `UnimodalityTest`, that is NOT exposed here: it
-#' trains a `Numerics.MachineLearning.GaussianMixtureModel` at k = 1 and k = 2, and the Machine
-#' Learning layer has no port yet. It is deferred, not permanently out of scope -- see
-#' `site/status.qmd` for the tracking note.
-#'
 #' Argument use by method, and the C# guard each one inherits:
 #' * `"one_sample_t"`: `x`, `population_mean` (default 0). Needs at least 2 observations.
 #' * `"equal_variance_t"` / `"unequal_variance_t"`: `x`, `y`. `equal_variance_t` needs a
@@ -1223,6 +1220,11 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
 #' * `"linear_trend"`: `x` (the sample), `index` (default `seq_along(x)`, i.e. `1:length(x)` --
 #'   a VALUE the regression is fit against, not an index into `x`). `index` and `x` must be the
 #'   same length.
+#' * `"unimodality"`: `x`. Needs at least 10 observations. Fits a 1-component and a 2-component
+#'   Gaussian mixture model (both at the hard-coded seed 12345, so the result is deterministic)
+#'   and returns the p-value of the likelihood-ratio statistic against a chi-square with 3
+#'   degrees of freedom, so a SMALL p-value is evidence against unimodality. If either mixture
+#'   fit fails numerically the result is `NaN` rather than an error, matching upstream.
 #'
 #' @param x numeric vector: the sample (the two-sample methods' first sample, or the response
 #'   series for `"linear_trend"`). Ignored for `"f_models"`.
@@ -1231,7 +1233,7 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
 #'   a `y` supplied to a one-sample method instead of raising.
 #' @param method one of `"one_sample_t"`, `"equal_variance_t"`, `"unequal_variance_t"`,
 #'   `"paired_t"`, `"f"`, `"f_models"`, `"jarque_bera"`, `"wald_wolfowitz"`, `"ljung_box"`,
-#'   `"mann_whitney"`, `"mann_kendall"`, `"linear_trend"`.
+#'   `"mann_whitney"`, `"mann_kendall"`, `"linear_trend"`, `"unimodality"`.
 #' @param population_mean the hypothesized mean for `"one_sample_t"`. Default 0.
 #' @param lag_max the max lag for `"ljung_box"`. Default `NULL` (use the C# default rule).
 #' @param index the index (x-axis) vector for `"linear_trend"`. Default `NULL`, meaning

@@ -2850,6 +2850,37 @@ a numbered transcription note at the call site citing the C# line numbers below.
   reduction deterministic -- fix the partition count and accumulate the partial sums in partition
   order, or use a compensated (Kahan/Neumaier) sum so the partition split stops mattering.
 
+## ROBUSTNESS — a default `DecisionTree` regression fit always recurses to one observation per leaf
+
+- **Where:** `Numerics/Machine Learning/Supervised/DecisionTree.cs` @ 2a0357a, `GrowTree`.
+- **What:** the stopping criteria are `bestIndex == -1 || depth >= MaxDepth || numberOfLabels <= 1
+  || numberOfSamples < MinimumSplitSize`, and for regression `numberOfLabels` is set to
+  `yTrain.Length` (the SAMPLE COUNT) rather than the distinct-value count. So the
+  `numberOfLabels <= 1` test only fires on a one-row node, making it redundant with the
+  `numberOfSamples < MinimumSplitSize` test at the default `MinimumSplitSize = 2`. Nor does the
+  purity of a node stop it: `VarianceReduction` on a node whose responses are all equal returns
+  `0 - 0 = 0`, which still beats `BestSplit`'s `double.MinValue` seed, so `bestIndex` is always
+  set. The result is that a default regression tree keeps splitting until every leaf holds a
+  single training observation -- it memorizes the training set.
+- **Evidence (measured against the real library):** `new DecisionTree(x, y, 7).Train()` on twelve
+  points whose responses are only two distinct values (six 10s at x = 1..6, six 100s at
+  x = 100..105) builds a 23-node tree: the root splits at 6, and each side is then a
+  right-leaning chain splitting off one point at a time (thresholds 1, 2, 3, 4, 5 and 100, 101,
+  102, 103, 104), ending in twelve singleton leaves. A tree that stopped on purity would have two
+  leaves. The full probe transcript is pinned in `core/tests/test_decision_tree.cpp`.
+- **Consequence:** it is why upstream's own `Test_DecisionTree_Regression` asserts that the tree
+  LOSES to a linear model, and why its remark says to "use a Random Forest to get better
+  performance" -- bagging is what recovers the variance the unregularized tree throws away. A user
+  reaching for a regression tree directly gets a memorizer unless they set `MinimumSplitSize` or
+  `MaxDepth` themselves. Classification is unaffected: there `numberOfLabels` IS the distinct
+  count, so a pure node stops.
+- **Port handling:** mirrored exactly (the tree shape above is pinned as a C#-measured oracle),
+  with the ordering recorded as a numbered transcription note in `decision_tree.hpp`.
+- **Suggested C# fix:** for regression, stop on variance rather than on count -- either set
+  `numberOfLabels` to the distinct count for both modes, or have `VarianceReduction` return
+  `double.MinValue` when the parent variance is 0. Either changes fitted trees, so it needs
+  re-pinned oracles.
+
 ## BUG — `GaussianMixtureModel.MStep`'s positive-definite repair is a no-op (the return value is discarded)
 
 - **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a, the last
