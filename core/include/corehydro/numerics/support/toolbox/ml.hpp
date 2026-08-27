@@ -54,6 +54,7 @@
 //   glm_predict            n_test values        same
 //   glm_predict_intervals  dims {n_test, 3}     same plus alpha; names lower/mean/upper
 #pragma once
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -235,6 +236,21 @@ inline ToolboxResult run_ml(const std::string& method,
     }
 
     // --- Supervised: they all take a response in data[1] -----------------------------------
+    //
+    // The method name is validated BEFORE the training data is read, so an unknown method reports
+    // itself rather than surfacing "ml method 'bogus' needs 2 data vector(s)" from `data_at` --
+    // the same single-dispatch discipline models/data_frame_runner.hpp adopted after the P4
+    // whole-branch review (finding C7).
+    static const std::vector<std::string> kSupervised = {
+        "decision_tree_predict",  "random_forest_predict", "knn_predict",
+        "knn_neighbors",          "knn_bootstrap_predict", "knn_prediction_intervals",
+        "naive_bayes_means",      "naive_bayes_sds",       "naive_bayes_priors",
+        "naive_bayes_classes",    "naive_bayes_predict",   "glm_fit",
+        "glm_covariance",         "glm_residuals",         "glm_predict",
+        "glm_predict_intervals"};
+    if (std::find(kSupervised.begin(), kSupervised.end(), method) == kSupervised.end())
+        throw std::runtime_error("unknown ml method: " + method);
+
     math::linalg::Matrix x = build_ml_x(data, options, method);
     math::linalg::Vector y(data_at(data, 1, "ml", method));
 
@@ -245,11 +261,11 @@ inline ToolboxResult run_ml(const std::string& method,
         tree.set_minimum_split_size(options.value_or("minimum_split_size", 2));
         tree.set_max_depth(options.value_or("max_depth", 100));
         tree.train();
-        std::optional<std::vector<double>> p = tree.predict(build_ml_newdata(data, options, method));
+        math::linalg::Matrix nd = build_ml_newdata(data, options, method);
+        std::optional<std::vector<double>> p = tree.predict(nd);
         if (!p.has_value())
             throw std::runtime_error("ml decision_tree_predict: the new data has " +
-                                     std::to_string(build_ml_newdata(data, options, method)
-                                                        .number_of_columns()) +
+                                     std::to_string(nd.number_of_columns()) +
                                      " columns, expected " + std::to_string(tree.dimensions()));
         return ml_vector_result(*p);
     }
