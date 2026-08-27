@@ -7,6 +7,87 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-27
+
+The Machine Learning layer -- the last major slice of `Numerics` with no R or Python binding.
+All ten files of `Numerics/Machine Learning/` are ported: the five supervised learners
+(`DecisionTree`, `RandomForest`, `KNearestNeighbors`, `NaiveBayes`, `GeneralizedLinearModel`),
+the three unsupervised ones (`KMeans`, `GaussianMixtureModel`, `JenksNaturalBreaks`) and their
+two support types (`DecisionNode`, `JenksCluster`). `GaussianMixtureModel` landing also un-gates
+the three members P4 deferred to this phase. This closes branch `port-machine-learning`.
+
+### Added
+
+- **Eight `ml_*` verbs** in both packages, over a new `ml` toolbox group (the eighteenth) and its
+  twenty-seven methods. Unsupervised: `ml_kmeans()`, `ml_gaussian_mixture()`,
+  `ml_jenks_breaks()`. Supervised: `ml_decision_tree()`, `ml_random_forest()`, `ml_knn()`,
+  `ml_naive_bayes()`, `ml_glm()`. Each trains and answers in one call, the shape
+  `linear_regression()` already uses; there is no fitted-object handle to keep alive across the
+  binding boundary. The group takes the `regression` group's matrix-shaped data layout (flat
+  row-major predictors, response, optional new data) rather than the one-vector-per-series
+  convention the other groups use, because these methods take a predictor matrix.
+- **`ml_glm()`** covers five families through its `link` argument: `"identity"` (Normal),
+  `"log"` (Poisson), and `"logit"`, `"probit"`, `"complementary_log_log"` (Binomial). It returns
+  coefficients, standard errors, z-values, p-values, AIC/AICc/BIC, the covariance matrix and the
+  residuals, with optional predictions and confidence bands; `robust_se` switches the covariance
+  to the sandwich form.
+- **`hypothesis_test(method = "unimodality")`**, completing `Numerics.Data.Statistics.
+  HypothesisTests` at all thirteen of its public statics. Deferred in 0.11.0 because it fits a
+  `GaussianMixtureModel` at k = 1 and k = 2.
+- **`analysis_data_hypothesis_test(method = "unimodality")` and `method = "summary_hypothesis"`**,
+  the two `RMC.BestFit` `DataFrame` facades deferred alongside it. Both `#region Hypothesis
+  Testing` and `#region Summary Statistics` are now ported in full.
+  `"summary_hypothesis"` returns all ten p-values at once; its three inherited quirks (an
+  optional and self-clamping split index, an all-or-nothing NaN on any single failure, and a
+  fixed Ljung-Box lag) are documented at the verb.
+- **`fixtures/ml/machine_learning.json`** pins every C# test literal this layer has -- the
+  k-means means, the GMM weights and means, the full naive-Bayes oracle, the sixty kNN
+  predictions, and two GLM fits -- and curates the rest against the real library.
+  **`fixtures/ml/ml_cross_language.json`** is the layer's cross-language proof, three seeded fits
+  at zero tolerance, with its two deliberate omissions and the measurements behind them recorded
+  in the file.
+- **Worked example 29**, machine learning, in both languages: regionalization, hazard
+  classification, regional regression, a Poisson count model, an out-of-sample comparison where
+  the parametric model beats the forest and the page says why, and two classifiers.
+
+### Changed
+
+- The .NET introsort port moved verbatim out of `models/data_frame/data_frame_plotting.hpp` into
+  `numerics/utilities/dotnet_sort.hpp`, so `KNearestNeighbors` can reach it without depending on
+  the models layer. `KNearestNeighbors`'s distance sort needs it: its tie permutation is
+  oracle-visible.
+- The `NelderMead`-to-`Optimizer` adapter moved out of MLSL's private section into
+  `numerics/math/optimization/support/nelder_mead_solver.hpp`, shared by MLSL and the new GLM.
+- `numerics/data/statistics.hpp` gains `population_variance`, `population_standard_deviation`,
+  `parallel_mean`, `five_number_summary`, `entropy` and `standardize`;
+  `numerics/math/linalg/matrix.hpp` gains `row`, `column`, a single-column constructor and a
+  `from_columns` factory.
+
+### Fixed
+
+- R's `ml_matrix()` helper checked numeric-ness after coercing, so `ml_kmeans(letters)` would
+  have built an all-NA matrix and run where Python raises. Caught by writing the paired tests.
+
+### Upstream behaviours documented
+
+Eight measured findings joined `docs/upstream-csharp-issues.md`, each verified against the real
+C# library rather than inferred, and each mirrored rather than silently corrected:
+
+- `Statistics.ParallelMean` is not reproducible against itself across machines: its PLINQ
+  partitioned sum diverges from a serial sum at every size from n = 16 up. The port sums
+  serially, and the affected prediction-interval mean column is left unpinned against C#.
+- `GaussianMixtureModel.MStep`'s positive-definite repair discards the return value of a pure
+  method, so it never happens.
+- `GaussianMixtureModel.LogLikelihood` omits the `-0.5 * D * log(2 * pi)` normalizing constant.
+  It cancels in the one place upstream consumes it.
+- `KMeans` with `k = 1` never runs an M-step, so it reports a random observation as the mean.
+- `JenksNaturalBreaks` throws on all-identical input.
+- A default `DecisionTree` regression fit recurses to one observation per leaf.
+- `RandomForest.Predict` has no column-count guard; `KNearestNeighbors.kNN`'s guard compares a
+  value against its own definition, so `GetNeighbors` never validates its query.
+- `Test_GeneralizedLinearModel.cs`'s commented-out summary transcripts are stale for the identity
+  link -- the shipped library returns AIC 343.256, not the 71.180 the comment shows.
+
 ## [0.11.0] - 2026-08-25
 
 The data-and-testing layer that closes out the port: `Numerics.Data.Statistics.HypothesisTests`,

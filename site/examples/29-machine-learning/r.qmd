@@ -1,0 +1,357 @@
+---
+title: "29. Machine learning"
+---
+
+::: {.callout-note appearance="minimal" icon=false}
+Language: **R** (Quarto) - [Python version](python.ipynb)
+:::
+
+The Numerics `MachineLearning` layer, which had no R or Python binding until this release: three
+unsupervised methods (k-means, Gaussian mixture models, Jenks natural breaks) and five supervised
+ones (decision trees, random forests, k-nearest neighbors, Gaussian naive Bayes, and generalized
+linear models). This page works through all eight on one regional flood-frequency problem -- the
+kind of regionalization and prediction-in-ungauged-basins task these methods actually get used for
+in hydrology.
+
+## What you'll learn
+
+- How to group catchments into homogeneous regions with `ml_kmeans()` and `ml_gaussian_mixture()`,
+  and what the mixture model tells you that k-means cannot.
+- How `ml_jenks_breaks()` cuts a continuous variable into hazard classes, and why it will happily
+  give you a class of one.
+- How to fit a regional flood-frequency regression with `ml_glm()`, and a Poisson count model with
+  the same verb and a different link.
+- How `ml_random_forest()` compares against that regression out of sample -- including a case
+  where the parametric model wins, and why.
+- How `ml_naive_bayes()` and `ml_knn()` classify catchments above and below a flood threshold.
+- Why every fit on this page is reproducible, and what the seeds are actually doing.
+
+## Setup
+
+```{r}
+library(corehydror)
+```
+
+## A regional dataset
+
+Thirty-six gauged catchments, each with a drainage area (km^2^), mean annual precipitation (mm),
+mean basin slope (m/m), and mean annual flood (m^3^/s). The values are illustrative rather than
+observed -- they are generated from a power-law regional relation with a deterministic wobble, so
+the page's numbers are stable and the R and Python versions define byte-identical inputs -- but
+the shape and the ranges are those of a real regional study.
+
+```{r}
+area <- c(
+  14.1, 11.4, 10.0, 13.1, 13.7, 10.5,
+  10.7, 13.9, 12.9, 9.9, 11.7, 14.2,
+  165.0, 133.6, 116.7, 152.5, 160.1, 122.4,
+  124.4, 161.7, 150.0, 115.8, 136.2, 165.2,
+  1060.6, 858.6, 750.0, 980.0, 1029.4, 786.6,
+  799.9, 1039.2, 964.3, 744.3, 875.9, 1062.0
+)
+precip <- c(
+  606, 634, 682, 590, 665, 657,
+  593, 686, 626, 613, 690, 600,
+  928, 971, 1044, 904, 1018, 1006,
+  908, 1051, 958, 938, 1057, 919,
+  1373, 1437, 1545, 1337, 1506, 1488,
+  1343, 1554, 1418, 1388, 1564, 1359
+)
+slope <- c(
+  0.0911, 0.0821, 0.0677, 0.0589, 0.0622, 0.0753,
+  0.0881, 0.0910, 0.0818, 0.0675, 0.0588, 0.0624,
+  0.0389, 0.0350, 0.0289, 0.0251, 0.0266, 0.0321,
+  0.0376, 0.0388, 0.0349, 0.0288, 0.0251, 0.0266,
+  0.0134, 0.0120, 0.0099, 0.0086, 0.0091, 0.0110,
+  0.0129, 0.0133, 0.0120, 0.0099, 0.0086, 0.0092
+)
+flood <- c(
+  2.18, 1.90, 1.79, 1.69, 2.13, 1.80,
+  1.73, 2.47, 2.09, 1.50, 1.98, 1.83,
+  15.67, 15.17, 12.87, 13.48, 15.24, 14.37,
+  12.41, 19.79, 14.91, 12.05, 14.15, 14.68,
+  68.03, 66.88, 55.60, 59.71, 65.53, 63.93,
+  53.11, 88.39, 63.52, 54.04, 60.00, 66.11
+)
+length(area)
+```
+
+Basin characteristics span orders of magnitude, so every method on this page works in log10 space.
+That is not a detail: k-means and k-nearest neighbors measure Euclidean distance, so an untransformed
+area column would swamp a slope column outright.
+
+```{r}
+X <- cbind(log10(area), log10(precip), log10(slope))
+colnames(X) <- c("log_area", "log_precip", "log_slope")
+round(head(X, 3), 4)
+```
+
+## Regionalization: k-means
+
+Regionalization is the task of grouping catchments that behave alike, so a flood estimate can be
+transferred from gauged to ungauged basins within a group. `ml_kmeans()` does it by minimizing
+within-cluster distance.
+
+```{r}
+km <- ml_kmeans(X, k = 3, seed = 20260827)
+table(km$labels)
+```
+
+`labels` are **0-based** in both R and Python, matching the library's own indexing -- add 1 before
+using them to subset an R object. Here the three clusters recover the three catchment size classes
+exactly, twelve each:
+
+```{r}
+round(km$means, 4)
+```
+
+The centroids are in log10 space, so the third cluster's `log_area` of 2.96 is a catchment of
+about 900 km^2^. The fit converged in `r km$iterations` iterations.
+
+## Regionalization: a Gaussian mixture
+
+`ml_gaussian_mixture()` fits the same kind of grouping but carries a full covariance matrix per
+component rather than only a centre, so it can represent clusters that are elongated or correlated
+rather than spherical. That matters here because area, precipitation and slope co-vary strongly.
+
+```{r}
+gmm <- ml_gaussian_mixture(X, k = 3, seed = 20260827)
+round(gmm$weights, 6)
+```
+
+Equal mixing weights, and the same three groups. What the mixture adds is the covariance:
+
+```{r}
+round(gmm$sigmas[[3]], 5)
+```
+
+The off-diagonal terms are the useful part -- within the largest catchments, `log_area` and
+`log_slope` move together (steeper basins in this set are smaller), which k-means has no way to
+express.
+
+::: {.callout-warning appearance="simple"}
+`log_likelihood` follows the library's own definition, which omits the multivariate-normal
+normalizing constant. It is short of the true mixture log-likelihood by
+`nrow(X) * ncol(X) / 2 * log(2 * pi)`. That constant cancels when comparing two fits of the same
+data, which is what the library uses it for, but do not feed this value straight to AIC.
+:::
+
+## Hazard classes: Jenks natural breaks
+
+`ml_jenks_breaks()` cuts a continuous variable into classes that minimize within-class variance --
+the standard way to build a legend for a hazard map.
+
+```{r}
+jn <- ml_jenks_breaks(flood, n_clusters = 4)
+round(jn$breaks, 2)
+jn$clusters[, c("count", "min", "max")]
+```
+
+Note the fourth class: a single catchment. Jenks minimizes within-class variance and nothing else,
+so a genuine outlier (the 88.4 m^3^/s catchment) gets a class to itself rather than being absorbed.
+That is correct behaviour and usually a signal to look at that gauge, not to change `n_clusters`.
+
+```{r}
+round(jn$gvf, 6)
+```
+
+The goodness-of-variance-fit measure runs from 0 to 1; 0.988 says four classes explain nearly all
+the variance in the flood column.
+
+## Regional regression: `ml_glm()`
+
+The classic regional flood-frequency model is a power law in the basin characteristics, which is a
+linear model in log space. Split the catchments into a training set and a held-out test set of nine:
+
+```{r}
+train <- c(1:9, 13:21, 25:33)
+test <- setdiff(seq_along(flood), train)
+fit <- ml_glm(X[train, ], log10(flood[train]))
+round(fit$coefficients, 5)
+```
+
+Read as a power law, the fitted exponents are 0.930 on area, -0.178 on precipitation and 0.204 on
+slope. Their standard errors say how much to trust each:
+
+```{r}
+round(fit$standard_errors, 5)
+round(fit$p_values, 5)
+```
+
+Only the area exponent is well determined -- unsurprising, since area spans two orders of magnitude
+here while precipitation spans less than one.
+
+## A Poisson model with the same verb
+
+`ml_glm()`'s `link` argument selects the response family as well as the transform, so a count
+response needs only a different link. Here the count is the number of days per year each catchment
+exceeds its local flood threshold:
+
+```{r}
+exceedances <- c(
+  1, 2, 3, 1, 2, 2, 1, 3, 2, 1, 3, 1,
+  4, 5, 7, 4, 6, 6, 4, 7, 5, 4, 7, 4,
+  9, 11, 14, 8, 12, 12, 8, 14, 10, 9, 14, 9
+)
+Xp <- cbind(log10(precip), log10(area))
+pois <- ml_glm(Xp, exceedances, link = "log")
+round(pois$coefficients, 5)
+round(pois$aic, 3)
+```
+
+The fitted counts track the observed ones closely:
+
+```{r}
+fitted_counts <- exp(as.vector(cbind(1, Xp) %*% pois$coefficients))
+round(cor(fitted_counts, exceedances), 6)
+```
+
+The other three links, `"logit"`, `"probit"` and `"complementary_log_log"`, take a 0/1 response and
+fit the corresponding binomial model.
+
+## Random forest, and when it loses
+
+`ml_random_forest()` grows many trees on bootstrap resamples and reports the spread of their
+predictions as an interval, which is what makes it attractive when the functional form is unknown.
+
+```{r}
+rf <- ml_random_forest(X[train, ], log10(flood[train]), newdata = X[test, ],
+                       seed = 20260827, number_of_trees = 200)
+round(head(rf, 3), 4)
+```
+
+Compare both models out of sample:
+
+```{r}
+rmse <- function(a, b) sqrt(mean((a - b)^2))
+lm_pred <- as.vector(cbind(1, X[test, ]) %*% fit$coefficients)
+c(
+  glm = rmse(lm_pred, log10(flood[test])),
+  random_forest = rmse(rf[, "median"], log10(flood[test]))
+)
+```
+
+The regression wins, by a factor of about 1.7 in RMSE. That is the right answer, and it is worth
+being explicit about why, because the usual demonstration runs the other way:
+
+- The data really is a power law, so a model that assumes one is using information the forest has
+  to rediscover from 27 training points.
+- A tree predicts by averaging the training responses in a leaf, so it **cannot extrapolate**.
+  Every prediction is inside the range of the training data, which is exactly wrong for a regional
+  relation you want to apply to an ungauged basin outside the gauged range.
+
+Reach for the forest when you suspect interactions or thresholds you cannot write down, not as a
+default. The same trade-off is why a bare `ml_decision_tree()` is rarely the end of an analysis:
+at its defaults a regression tree recurses until every leaf holds one training observation, so it
+memorizes the training set.
+
+## Classification: above or below a threshold
+
+Recast the problem as a yes-or-no question -- will this catchment's mean annual flood exceed
+20 m^3^/s? -- and two classifiers answer it.
+
+```{r}
+big <- as.numeric(flood > 20)
+nb <- ml_naive_bayes(X[train, ], big[train], newdata = X[test, ])
+knn_pred <- ml_knn(X[train, ], big[train], newdata = X[test, ], k = 3, regression = FALSE)
+
+data.frame(truth = big[test], naive_bayes = nb$prediction, knn = knn_pred)
+```
+
+Both classify all nine held-out catchments correctly. Naive Bayes also reports the per-class
+feature distributions it fitted, which is often more informative than the predictions:
+
+```{r}
+round(nb$means, 4)
+round(nb$priors, 4)
+```
+
+::: {.callout-note appearance="simple"}
+`classes` follows the order the labels **first appear** in the training response, not sorted order,
+and every row of `means`, `standard_deviations` and `priors` is indexed to match.
+:::
+
+`ml_knn()` can also report which training catchments a prediction came from, which is exactly the
+"donor catchment" idea regional hydrology uses directly:
+
+```{r}
+neighbours <- ml_knn(X[train, ], big[train], newdata = X[test, , drop = FALSE],
+                     k = 3, what = "neighbors")
+head(neighbours, 3)
+```
+
+These are **0-based** indices into the training rows, like the cluster labels.
+
+## Reproducibility
+
+Every method on this page that draws a random number takes a `seed`, and a seeded fit is
+reproducible: repeated calls agree bit for bit, and so do the R and Python versions of this page,
+because the entire computation happens in the shared compiled core with the same bit-exact
+Mersenne Twister.
+
+```{r}
+identical(
+  ml_random_forest(X[train, ], log10(flood[train]), newdata = X[test, ],
+                   seed = 20260827, number_of_trees = 200),
+  rf
+)
+```
+
+Leave `seed` at its default and the generator is seeded from the clock instead, which is the right
+choice when you want an honest sense of run-to-run variability and the wrong one when you want a
+result you can publish.
+
+## Reproduction check
+
+Every value below is deterministic given the fixed inputs and seeds above, checked at 1e-15
+relative tolerance against this page's own executed values. The k-means and naive-Bayes paths are
+additionally pinned against the upstream C# oracles in `fixtures/ml/machine_learning.json`, which
+the dotnet gate replays against the real library; those fixtures use the iris measurements the C#
+tests use, so what is checked here is that this page's own numbers do not drift.
+
+```{r}
+near <- \(x, literal, tol = 1e-15) abs(x / literal - 1) < tol
+
+stopifnot(
+  # Clustering recovers the three size classes exactly.
+  identical(as.integer(table(km$labels)), c(12L, 12L, 12L)),
+  km$iterations == 2L,
+  near(km$means[1, 1], 2.9565201679743947),
+  near(km$means[1, 3], -1.9713001801472083),
+
+  # The mixture puts equal weight on the three components and its covariances are symmetric.
+  all(abs(gmm$weights - 1 / 3) < 1e-12),
+  near(gmm$log_likelihood, 238.87583471023325),
+  all(abs(gmm$sigmas[[3]] - t(gmm$sigmas[[3]])) < 1e-12),
+
+  # Jenks, including the single-member top class.
+  near(jn$breaks[4], 88.390000000000001),
+  identical(as.integer(jn$clusters[, "count"]), c(12L, 12L, 11L, 1L)),
+  near(jn$gvf, 0.98755725105630288),
+
+  # The regional regression.
+  near(fit$coefficients[2], 0.92989165483884118),
+  near(fit$standard_errors[2], 0.066834707598246085),
+  near(fit$sigma, 0.04726688233226619),
+  fit$n == 27L, fit$df == 23L,
+
+  # The Poisson model.
+  near(pois$coefficients[3], 0.92861744959233672),
+  near(pois$aic, 142.87786000842539),
+  near(cor(fitted_counts, exceedances), 0.91146273024268387),
+
+  # The forest is seeded-reproducible, its interval is ordered, and the regression beats it here.
+  all(rf[, "lower"] <= rf[, "median"]), all(rf[, "median"] <= rf[, "upper"]),
+  near(rmse(lm_pred, log10(flood[test])), 0.040685221310457167),
+  near(rmse(rf[, "median"], log10(flood[test])), 0.068570459600494127),
+  rmse(lm_pred, log10(flood[test])) < rmse(rf[, "median"], log10(flood[test])),
+
+  # Both classifiers get all nine held-out catchments right.
+  identical(as.numeric(nb$prediction), big[test]),
+  identical(as.numeric(knn_pred), big[test]),
+  identical(as.numeric(nb$classes), c(0, 1)),
+  all(neighbours >= 0 & neighbours < 27),
+  identical(dim(neighbours), c(9L, 3L))
+)
+cat("All reproduction checks passed.\n")
+```

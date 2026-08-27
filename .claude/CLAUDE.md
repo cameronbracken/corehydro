@@ -93,7 +93,11 @@ two arbitrary-length series has no business paying a JSON parse; scalars, enum n
 travel in a small `options_json`. The `network` group is the outlier in that list: its subject,
 `numerics/math/optimization/dynamic/` (BinaryHeap, Dijkstra, Network), is an optimization class
 whose input is a graph rather than a callable, so it joins the toolbox rather than the optimizer
-runner and reaches users as `shortest_path()`. `hypothesis` and `paired_data` are the P4 additions:
+runner and reaches users as `shortest_path()`. `ml` is the P5 addition, dispatching the whole ported Machine Learning layer (see the next
+paragraph) and reaching users as the eight `ml_*()` verbs; it takes the `regression` group's
+matrix-shaped data layout (flat row-major predictors in `data[0]`, response in `data[1]`, optional
+new data in `data[2]`) rather than the one-vector-per-series convention, because these methods
+take a predictor matrix. `hypothesis` and `paired_data` are the P4 additions:
 `hypothesis` dispatches `numerics/data/hypothesis_tests.hpp` (twelve of the thirteen
 `Numerics.Data.Statistics.HypothesisTests` statics -- `UnimodalityTest` is deferred, needing the
 unported `GaussianMixtureModel`) and reaches users as `hypothesis_test()`; `paired_data`
@@ -135,6 +139,24 @@ deliberately reproduce upstream array aliasing that is oracle-visible and must n
 up" -- `shuffled_complex_evolution.hpp`'s reused scratch point and `multi_start.hpp`'s
 re-seated initial-values array; each says so in a numbered transcription note, as does
 `network.hpp` for the three defects that make the C# `Network` class unconstructible.
+
+`core/include/corehydro/numerics/machine_learning/` holds the P5 Machine Learning port, mirroring
+the C# `Numerics.MachineLearning` namespace: `supervised/` (`decision_tree.hpp`,
+`random_forest.hpp`, `k_nearest_neighbors.hpp`, `naive_bayes.hpp`,
+`generalized_linear_model.hpp`), `unsupervised/` (`k_means.hpp`, `gaussian_mixture_model.hpp`,
+`jenks_natural_breaks.hpp`), and `support/` (`decision_node.hpp`, `jenks_cluster.hpp`, plus
+`linq_order.hpp`, a corehydro addition holding the two LINQ ORDERING semantics three call sites
+depend on -- `Distinct()`'s first-appearance order and the stable-`OrderByDescending` mode). Two
+shared helpers were extracted for it and must stay shared rather than re-copied:
+`numerics/utilities/dotnet_sort.hpp` (the .NET introsort, moved VERBATIM out of
+`models/data_frame/data_frame_plotting.hpp` so `KNearestNeighbors` can reach it without depending
+on `models/` -- its tie permutation is oracle-visible for both callers) and
+`numerics/math/optimization/support/nelder_mead_solver.hpp` (the `NelderMead`-to-`Optimizer`
+adapter, moved out of MLSL's private section so `GeneralizedLinearModel` uses the same code).
+`GeneralizedLinearModel.Summary()` is the layer's one severance, presentation-only text alongside
+the Bulletin17C GMM report. Every one of these classes carries numbered transcription notes for
+the upstream behaviours a "cleanup" would silently change; eight of them are also written up in
+`docs/upstream-csharp-issues.md` with the measurement behind each.
 
 `core/include/corehydro/numerics/support/callback_runner.hpp` is the third runner in that family
 and the one place a ported class whose INPUT is a live host-language function is dispatched:
