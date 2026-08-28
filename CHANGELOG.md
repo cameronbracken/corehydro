@@ -7,6 +7,19 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Split the upstream C# issues log: `docs/upstream-csharp-issues.md` now carries only open
+  findings, and the confirmed-resolved entries (37, including the July 2026 reconciliation-pass
+  summary) moved verbatim to `docs/upstream-csharp-issues-resolved.md`. Two entries were newly
+  marked resolved during the split, both retired by earlier phases without the log being updated:
+  the PriorInfluenceDiagnostics parameter-prior collapse (fixed by Phase 10's `ParameterNames`
+  port; its three `oracle_skip` assertions are long gone) and the TimeSeries integer-index
+  divergence (retired when P6 replaced the thin adapter with the full `DateTime`-indexed
+  container). Every remaining open entry was re-verified against the vendored upstream source at
+  the pins and the v0.13.0 packages; the two issues filed with RMC (Numerics#146, RMC-BestFit#18)
+  are still open upstream, and upstream `main` has no code commits beyond the pins.
+
 ## [0.13.0] - 2026-08-27
 
 The heavy `TimeSeries` container -- the last unported portable slice of `Numerics`, and the one

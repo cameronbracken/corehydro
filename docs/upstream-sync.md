@@ -108,7 +108,8 @@ Two further additions the run showed were needed. For the BestFit agent: its sou
 valid UTF-8 in the working tree, so instruct it to read them with `git show <tag>:<path>` rather
 than grepping the checkout, and to separate the analysis orchestrators' numeric changes from their
 GUI progress, report-text, and XML-persistence churn rather than classifying those files whole. For
-both agents: have them cross-reference `docs/upstream-csharp-issues.md` file by file, since upstream
+both agents: have them cross-reference `docs/upstream-csharp-issues.md` (and, for historical
+context, `docs/upstream-csharp-issues-resolved.md`) file by file, since upstream
 fixes entries from it and each such fix flips an oracle the C++ deliberately pinned to the old
 behavior.
 
@@ -211,11 +212,14 @@ A dedicated closeout task, after the last porting task and before the docs task:
 
 ## Step 8: docs, versions, ship
 
-- Reconcile `docs/upstream-csharp-issues.md` in ONE pass at the end, not per task. Doing it per
+- Reconcile the issues log in ONE pass at the end, not per task. Doing it per
   task produced an inconsistent file in July 2026: six tasks updated their entries inline and four
   deferred, and the deferred ones had to be reconstructed later. For every entry, check the shipped
   source at the new tag and append a Status bullet. Update the header pins. Keep the historical
-  entries; the point of the file is the trail.
+  entries; the point of the file is the trail. Since August 2026 the log is split: open findings
+  live in `docs/upstream-csharp-issues.md` and confirmed-resolved entries are moved verbatim to
+  `docs/upstream-csharp-issues-resolved.md` -- newly resolved entries get their Status bullet and
+  then move.
 - Run the provenance sweep (below).
 - Update the status sections of `.claude/CLAUDE.md` and `upstream/CLAUDE.md`: validated-against
   versions, final oracle counts, retired divergences, new severances.
