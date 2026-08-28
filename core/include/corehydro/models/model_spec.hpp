@@ -529,7 +529,7 @@ inline std::vector<double> time_series_values(const JsonValue& spec,
 // `orders` carries p/d/q/b as the subtype needs; `transform` names a TransformType; `include_
 // intercept` defaults true. ARIMAX adds `trend` (Trend enum), `include_seasonality`, and inline
 // `covariates` (a list of value arrays). The series data comes from the file-level datasets map
-// (or an inline `data` array), wrapped into the P2 TimeSeries adapter.
+// (or an inline `data` array), wrapped into a TimeSeries.
 inline std::unique_ptr<ModelBase> build_time_series_model(const JsonValue& model,
                                                           const std::vector<double>& dataset) {
     std::string subtype = model.at("subtype").as_string();

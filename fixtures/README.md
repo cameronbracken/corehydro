@@ -1125,7 +1125,7 @@ like every other fixture kind) and passed alongside the spec as a flat vector.
   //   dedicated build_bulletin17c_from_json entry point returning the concrete type.
   // -- Phase 7a families (P3): --------------------------------------------------------------
   // time_series (AR/MA/ARIMA/ARIMAX): the series data comes from `dataset` (or an inline `data`
-  //   array), wrapped into the P2 TimeSeries adapter (`time_interval` default OneDay,
+  //   array), wrapped into a TimeSeries (`time_interval` default OneDay,
   //   `start_index` default 0 -- the index is a sequence position / join key, never calendar
   //   arithmetic).
   "type": "time_series", "subtype": "arima",  // "ar" | "ma" | "arima" | "arimax"

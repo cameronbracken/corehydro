@@ -125,9 +125,9 @@ class ARIMAX : public ModelBase, public ISimulatable<std::vector<double>> {
     // Trend types for the deterministic polynomial trend (ARIMAX.cs:158).
     enum class Trend { None, Linear, Quadratic, Cubic };
 
-    // Methods for extending covariate data beyond available observations (ARIMAX.cs:175).
-    // DEFERRED with the heavy TimeSeries container -- see the file header. The enum is ported for
-    // structural parity; BlockBootstrap/KNN resampling is not.
+    // Methods for extending covariate data beyond available observations (ARIMAX.cs:175). All
+    // three arms are live as of P6 -- see the file header for the three ways Predict and
+    // GenerateRandomValues apply them differently.
     enum class CovariateExtensionMethod { None, BlockBootstrap, KNN };
 
     // Prediction decomposition (C# tuple (Y, InterceptPart, TrendPart, SeasonalityPart,
@@ -990,7 +990,8 @@ class ARIMAX : public ModelBase, public ISimulatable<std::vector<double>> {
     }
 
     // --- GenerateRandomValues (C#:2146): ISimulatable entry point. Bit-exact MersenneTwister.
-    //     The covariate forecast-tail extension is DEFERRED (see file header). ---
+    //     Extends the covariates per CovariateExtension when the requested sample runs past them
+    //     (P6); unlike Predict, this path has no deterministic branch. ---
     std::vector<double> generate_random_values(int sample_size, int seed = -1) const override {
         if (sample_size <= 0) throw std::out_of_range("Sample size must be positive.");
 

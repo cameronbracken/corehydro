@@ -38,10 +38,10 @@
 //     notification is threaded through it).
 //   - IModel Clone() (AutoRegressive.cs:813): the C++ core has no virtual IModel::Clone (see
 //     model_base.hpp) and no T1 fit path needs a clone, so it is omitted (S4 precedent).
-//   - GenerateRandomSeries (AutoRegressive.cs:788): returns the heavy Numerics TimeSeries
-//     container; deferred (the required simulation entry point is generate_random_values below,
-//     the ISimulatable member). GenerateRandomSeries can be added trivially over the P2 adapter
-//     if a caller needs it.
+//   - GenerateRandomSeries (AutoRegressive.cs:788): returns a date-stamped TimeSeries rather
+//     than the bare vector generate_random_values (the ISimulatable member) returns. Not ported:
+//     no caller in scope needs the dates. Since P6 ported the container, this is a one-method
+//     addition whenever one does.
 //
 // RNG deviation (documented): C# Predict() draws its stochastic-forecast noise from
 // System.Random (a .NET LCG with no ported equivalent); this port substitutes the ported
