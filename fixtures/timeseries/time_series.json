@@ -532,12 +532,12 @@
       ],
       "options": {
         "time_interval": "one_month",
-        "function": "interpolate",
         "max_missing": 2,
         "missing_indexes": [
           10,
           11
-        ]
+        ],
+        "func": "interpolate"
       },
       "assertions": [
         {
@@ -592,12 +592,12 @@
       ],
       "options": {
         "time_interval": "one_month",
-        "function": "replace",
         "value": -1,
         "missing_indexes": [
           10,
           11
-        ]
+        ],
+        "func": "replace"
       },
       "assertions": [
         {

@@ -6115,7 +6115,7 @@ static double TimeSeriesToolboxDispatch(string method, List<double[]> data, Json
         }
         case "math":
         {
-            string function = OptS("function", "add").ToLowerInvariant();
+            string function = OptS("func", "add").ToLowerInvariant();
             bool indexed = data.Count > 2;
             int[] idx = indexed ? data[2].Select(v => (int)v).ToArray() : Array.Empty<int>();
             double constant = OptD("constant", 0.0);

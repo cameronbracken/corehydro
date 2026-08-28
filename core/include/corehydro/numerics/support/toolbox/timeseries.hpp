@@ -267,7 +267,7 @@ inline ToolboxResult run_timeseries(const std::string& method,
     // The whole in-place math region behind one method name, selected by `function` (the
     // `MathFunctionType` member names). `indexes` in data[2] selects the indexed overload.
     if (method == "math") {
-        std::string function = options.value_or("function", "add");
+        std::string function = options.value_or("func", "add");
         bool indexed = data.size() > 2;
         std::vector<int> idx = indexed ? timeseries_indexes(data, method) : std::vector<int>{};
         double constant = options.value_or("constant", 0.0);
