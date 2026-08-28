@@ -1,0 +1,2012 @@
+{
+  "kind": "toolbox",
+  "group": "timeseries",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a. Every value is a Test_TimeSeries.cs literal (Test_MovingAverage, Test_MovingSum, Test_Difference, Test_Cumulative, Test_Missing, Test_ConvertTimeInterval_1hr_to_6hr, Test_SummaryStats, Test_Stats, Test_MonthlyStats, Test_MonthlyFrequency) except the SummaryHypothesisTest case, whose upstream literals are R's own outputs compared at 1E-1; those seven were harvested with verify_oracles.py --dump so the gate pins the C# values rather than the looser R reference. core/tests/test_time_series_container.cpp asserts the R literals separately at the C# tolerance.",
+  "reference": "Dates travel as seconds since 1970-01-01; a series result is a row-major {date, value} matrix, so an even index selects a date and an odd index the value beside it.",
+  "cases": [
+    {
+      "name": "moving_average_period_5",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month",
+        "period": 5
+      },
+      "assertions": [
+        {
+          "method": "moving_average",
+          "select": "rows",
+          "expected": 8,
+          "mode": "equal",
+          "source": "Count - period + 1"
+        },
+        {
+          "method": "moving_average",
+          "index": 1,
+          "expected": 17.6,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 3,
+          "expected": 20.4,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 5,
+          "expected": 26.8,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 7,
+          "expected": 22.2,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 9,
+          "expected": 24.8,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 11,
+          "expected": 25.4,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 13,
+          "expected": 22.6,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 15,
+          "expected": 15.6,
+          "mode": "abs",
+          "source": "Test_MovingAverage",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_average",
+          "index": 0,
+          "expected": 1682899200.0,
+          "mode": "equal",
+          "source": "the first window ends at the fifth ordinate"
+        }
+      ]
+    },
+    {
+      "name": "moving_sum_period_5",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month",
+        "period": 5
+      },
+      "assertions": [
+        {
+          "method": "moving_sum",
+          "index": 1,
+          "expected": 88,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_sum",
+          "index": 3,
+          "expected": 102,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_sum",
+          "index": 5,
+          "expected": 134,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_sum",
+          "index": 7,
+          "expected": 111,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_sum",
+          "index": 9,
+          "expected": 124,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_sum",
+          "index": 11,
+          "expected": 127,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_sum",
+          "index": 13,
+          "expected": 113,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        },
+        {
+          "method": "moving_sum",
+          "index": 15,
+          "expected": 78,
+          "mode": "abs",
+          "source": "Test_MovingSum",
+          "tol": 1e-10
+        }
+      ]
+    },
+    {
+      "name": "difference_lag_1",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "difference",
+          "select": "rows",
+          "expected": 11,
+          "mode": "equal",
+          "source": "Test_Difference"
+        },
+        {
+          "method": "difference",
+          "index": 1,
+          "expected": -6,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 3,
+          "expected": 17,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 5,
+          "expected": -28,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 7,
+          "expected": 7,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 9,
+          "expected": 24,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 11,
+          "expected": 12,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 13,
+          "expected": -38,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 15,
+          "expected": 8,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 17,
+          "expected": -3,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 19,
+          "expected": 7,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 21,
+          "expected": -9,
+          "mode": "abs",
+          "source": "Test_Difference",
+          "tol": 1e-10
+        },
+        {
+          "method": "difference",
+          "index": 0,
+          "expected": 1672531200.0,
+          "mode": "equal",
+          "source": "the differenced series keeps the ORIGINAL start date"
+        }
+      ]
+    },
+    {
+      "name": "cumulative_sum",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "cumulative_sum",
+          "index": 1,
+          "expected": 22,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 3,
+          "expected": 38,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 5,
+          "expected": 71,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 7,
+          "expected": 76,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 9,
+          "expected": 88,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 11,
+          "expected": 124,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 13,
+          "expected": 172,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 15,
+          "expected": 182,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 17,
+          "expected": 200,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 19,
+          "expected": 215,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 21,
+          "expected": 237,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        },
+        {
+          "method": "cumulative_sum",
+          "index": 23,
+          "expected": 250,
+          "mode": "abs",
+          "source": "Test_Cumulative",
+          "tol": 1e-10
+        }
+      ]
+    },
+    {
+      "name": "interpolate_missing_trailing_extrapolation",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          0,
+          0
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month",
+        "function": "interpolate",
+        "max_missing": 2,
+        "missing_indexes": [
+          10,
+          11
+        ]
+      },
+      "assertions": [
+        {
+          "method": "math",
+          "index": 21,
+          "expected": 11.9,
+          "mode": "abs",
+          "source": "Test_Missing: extrapolated from the two preceding ordinates in OA-date space",
+          "tol": 1e-06
+        },
+        {
+          "method": "math",
+          "index": 23,
+          "expected": 8.9,
+          "mode": "abs",
+          "source": "Test_Missing",
+          "tol": 1e-06
+        }
+      ]
+    },
+    {
+      "name": "replace_missing",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          0,
+          0
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month",
+        "function": "replace",
+        "value": -1,
+        "missing_indexes": [
+          10,
+          11
+        ]
+      },
+      "assertions": [
+        {
+          "method": "math",
+          "index": 21,
+          "expected": -1,
+          "mode": "equal",
+          "source": "Test_Missing"
+        },
+        {
+          "method": "math",
+          "index": 23,
+          "expected": -1,
+          "mode": "equal",
+          "source": "Test_Missing"
+        }
+      ]
+    },
+    {
+      "name": "convert_one_hour_to_six_hour",
+      "data": [
+        [
+          105062400.0,
+          105066000.0,
+          105069600.0,
+          105073200.0,
+          105076800.0,
+          105080400.0,
+          105084000.0,
+          105087600.0,
+          105091200.0,
+          105094800.0,
+          105098400.0,
+          105102000.0,
+          105105600.0,
+          105109200.0,
+          105112800.0,
+          105116400.0,
+          105120000.0,
+          105123600.0,
+          105127200.0,
+          105130800.0,
+          105134400.0,
+          105138000.0,
+          105141600.0,
+          105145200.0,
+          105148800.0,
+          105152400.0,
+          105156000.0,
+          105159600.0,
+          105163200.0,
+          105166800.0,
+          105170400.0,
+          105174000.0,
+          105177600.0,
+          105181200.0,
+          105184800.0,
+          105188400.0,
+          105192000.0,
+          105195600.0,
+          105199200.0,
+          105202800.0,
+          105206400.0,
+          105210000.0,
+          105213600.0,
+          105217200.0,
+          105220800.0,
+          105224400.0,
+          105228000.0,
+          105231600.0,
+          105235200.0,
+          105238800.0,
+          105242400.0,
+          105246000.0,
+          105249600.0,
+          105253200.0,
+          105256800.0,
+          105260400.0,
+          105264000.0,
+          105267600.0,
+          105271200.0,
+          105274800.0,
+          105278400.0,
+          105282000.0,
+          105285600.0,
+          105289200.0,
+          105292800.0,
+          105296400.0,
+          105300000.0,
+          105303600.0,
+          105307200.0,
+          105310800.0,
+          105314400.0,
+          105318000.0,
+          105321600.0,
+          105325200.0,
+          105328800.0,
+          105332400.0,
+          105336000.0,
+          105339600.0,
+          105343200.0,
+          105346800.0,
+          105350400.0,
+          105354000.0,
+          105357600.0,
+          105361200.0,
+          105364800.0,
+          105368400.0,
+          105372000.0,
+          105375600.0,
+          105379200.0,
+          105382800.0,
+          105386400.0,
+          105390000.0,
+          105393600.0,
+          105397200.0,
+          105400800.0,
+          105404400.0,
+          105408000.0
+        ],
+        [
+          43.0,
+          42.0,
+          42.0,
+          46.0,
+          51.0,
+          56.0,
+          58.0,
+          60.0,
+          67.0,
+          278.0,
+          278.0,
+          218.0,
+          256.0,
+          243.0,
+          225.0,
+          199.0,
+          262.0,
+          616.0,
+          1440.0,
+          2180.0,
+          3140.0,
+          4520.0,
+          4700.0,
+          4340.0,
+          4190.0,
+          3720.0,
+          3120.0,
+          2550.0,
+          2110.0,
+          1720.0,
+          1350.0,
+          1110.0,
+          950.0,
+          830.0,
+          755.0,
+          696.0,
+          664.0,
+          612.0,
+          572.0,
+          520.0,
+          458.0,
+          410.0,
+          362.0,
+          315.0,
+          273.0,
+          270.0,
+          277.0,
+          246.0,
+          247.0,
+          248.0,
+          261.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          233.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0,
+          162.0
+        ]
+      ],
+      "options": {
+        "time_interval": "one_hour",
+        "to_interval": "six_hour",
+        "average": true
+      },
+      "assertions": [
+        {
+          "method": "convert_interval",
+          "index": 1,
+          "expected": 46.67,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 3,
+          "expected": 159.83,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 5,
+          "expected": 300.17,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 7,
+          "expected": 3386.67,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 9,
+          "expected": 2901.67,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 11,
+          "expected": 948.5,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 13,
+          "expected": 539.33,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 15,
+          "expected": 290.5,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 17,
+          "expected": 242.5,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 19,
+          "expected": 233.0,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 21,
+          "expected": 233.0,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 23,
+          "expected": 233.0,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 25,
+          "expected": 209.33,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 27,
+          "expected": 162.0,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 29,
+          "expected": 162.0,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 31,
+          "expected": 162.0,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        },
+        {
+          "method": "convert_interval",
+          "index": 33,
+          "expected": 162.0,
+          "mode": "abs",
+          "source": "Test_ConvertTimeInterval_1hr_to_6hr",
+          "tol": 0.01
+        }
+      ]
+    },
+    {
+      "name": "summary_statistics",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "summary_statistics",
+          "label": "Record Length",
+          "expected": 12,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "Missing Values",
+          "expected": 0,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "Minimum",
+          "expected": 5,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "Maximum",
+          "expected": 48,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "Mean",
+          "expected": 20.83333333333,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "Std Dev",
+          "expected": 12.4011240937215,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "Skewness",
+          "expected": 1.06382220138287,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "Kurtosis",
+          "expected": 0.682181791356259,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "5%",
+          "expected": 7.75,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "25%",
+          "expected": 12.75,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "50%",
+          "expected": 17.0,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "75%",
+          "expected": 24.75,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "summary_statistics",
+          "label": "95%",
+          "expected": 41.4,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        }
+      ]
+    },
+    {
+      "name": "percentiles",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13
+        ],
+        [
+          0.1,
+          0.2,
+          0.3,
+          0.4,
+          0.6,
+          0.7,
+          0.8,
+          0.9
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "percentiles",
+          "index": 0,
+          "expected": 10.2,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "percentiles",
+          "index": 1,
+          "expected": 12.2,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "percentiles",
+          "index": 2,
+          "expected": 13.6,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "percentiles",
+          "index": 3,
+          "expected": 15.4,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "percentiles",
+          "index": 4,
+          "expected": 20.4,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "percentiles",
+          "index": 5,
+          "expected": 22.0,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "percentiles",
+          "index": 6,
+          "expected": 30.8,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        },
+        {
+          "method": "percentiles",
+          "index": 7,
+          "expected": 35.7,
+          "mode": "abs",
+          "source": "Test_SummaryStats",
+          "tol": 1e-10
+        }
+      ]
+    },
+    {
+      "name": "duration_curve",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "duration",
+          "index": 0,
+          "expected": 7.69230769230769,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 2,
+          "expected": 15.3846153846154,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 4,
+          "expected": 23.0769230769231,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 6,
+          "expected": 30.7692307692308,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 8,
+          "expected": 38.4615384615385,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 10,
+          "expected": 46.1538461538462,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 12,
+          "expected": 53.8461538461538,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 14,
+          "expected": 61.5384615384615,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 16,
+          "expected": 69.2307692307692,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 18,
+          "expected": 76.9230769230769,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 20,
+          "expected": 84.6153846153846,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 22,
+          "expected": 92.3076923076923,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 1,
+          "expected": 48,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 3,
+          "expected": 36,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 5,
+          "expected": 33,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 7,
+          "expected": 22,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 9,
+          "expected": 22,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 11,
+          "expected": 18,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 13,
+          "expected": 16,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 15,
+          "expected": 15,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 17,
+          "expected": 13,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 19,
+          "expected": 12,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 21,
+          "expected": 10,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        },
+        {
+          "method": "duration",
+          "index": 23,
+          "expected": 5,
+          "mode": "abs",
+          "source": "Test_Stats",
+          "tol": 1e-10
+        }
+      ]
+    },
+    {
+      "name": "monthly_statistics",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0,
+          1704067200.0,
+          1706745600.0,
+          1709251200.0,
+          1711929600.0,
+          1714521600.0,
+          1717200000.0,
+          1719792000.0,
+          1722470400.0,
+          1725148800.0,
+          1727740800.0,
+          1730419200.0,
+          1733011200.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13,
+          38,
+          17,
+          3,
+          6,
+          27,
+          11,
+          2,
+          41,
+          44,
+          37,
+          50,
+          8
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "minimum",
+          "expected": 22,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "p05",
+          "expected": 22.8,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "p25",
+          "expected": 26.0,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "p50",
+          "expected": 30.0,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "p75",
+          "expected": 34.0,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "p95",
+          "expected": 37.2,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "maximum",
+          "expected": 38,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_summary_statistics",
+          "index": 0,
+          "label": "mean",
+          "expected": 30,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 0,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 1,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 2,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 3,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 4,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 5,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 6,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 7,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 8,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 9,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 10,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        },
+        {
+          "method": "monthly_frequency",
+          "index": 11,
+          "expected": 2,
+          "mode": "equal",
+          "source": "Test_MonthlyFrequency"
+        }
+      ]
+    },
+    {
+      "name": "monthly_percentiles",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0,
+          1704067200.0,
+          1706745600.0,
+          1709251200.0,
+          1711929600.0,
+          1714521600.0,
+          1717200000.0,
+          1719792000.0,
+          1722470400.0,
+          1725148800.0,
+          1727740800.0,
+          1730419200.0,
+          1733011200.0
+        ],
+        [
+          22,
+          16,
+          33,
+          5,
+          12,
+          36,
+          48,
+          10,
+          18,
+          15,
+          22,
+          13,
+          38,
+          17,
+          3,
+          6,
+          27,
+          11,
+          2,
+          41,
+          44,
+          37,
+          50,
+          8
+        ],
+        [
+          0.1,
+          0.2,
+          0.3,
+          0.4,
+          0.6,
+          0.7,
+          0.8,
+          0.9
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "monthly_percentiles",
+          "index": 0,
+          "expected": 23.6,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_percentiles",
+          "index": 1,
+          "expected": 25.2,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_percentiles",
+          "index": 2,
+          "expected": 26.8,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_percentiles",
+          "index": 3,
+          "expected": 28.4,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_percentiles",
+          "index": 4,
+          "expected": 31.6,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_percentiles",
+          "index": 5,
+          "expected": 33.2,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_percentiles",
+          "index": 6,
+          "expected": 34.8,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        },
+        {
+          "method": "monthly_percentiles",
+          "index": 7,
+          "expected": 36.4,
+          "mode": "abs",
+          "source": "Test_MonthlyStats January row",
+          "tol": 1e-10
+        }
+      ]
+    },
+    {
+      "name": "summary_hypothesis_test",
+      "data": [
+        [
+          1672531200.0,
+          1675209600.0,
+          1677628800.0,
+          1680307200.0,
+          1682899200.0,
+          1685577600.0,
+          1688169600.0,
+          1690848000.0,
+          1693526400.0,
+          1696118400.0,
+          1698796800.0,
+          1701388800.0,
+          1704067200.0,
+          1706745600.0,
+          1709251200.0,
+          1711929600.0,
+          1714521600.0,
+          1717200000.0,
+          1719792000.0,
+          1722470400.0,
+          1725148800.0,
+          1727740800.0,
+          1730419200.0,
+          1733011200.0,
+          1735689600.0,
+          1738368000.0,
+          1740787200.0,
+          1743465600.0,
+          1746057600.0,
+          1748736000.0,
+          1751328000.0,
+          1754006400.0,
+          1756684800.0,
+          1759276800.0,
+          1761955200.0,
+          1764547200.0,
+          1767225600.0,
+          1769904000.0,
+          1772323200.0,
+          1775001600.0,
+          1777593600.0,
+          1780272000.0,
+          1782864000.0,
+          1785542400.0,
+          1788220800.0,
+          1790812800.0,
+          1793491200.0,
+          1796083200.0,
+          1798761600.0,
+          1801440000.0,
+          1803859200.0,
+          1806537600.0,
+          1809129600.0,
+          1811808000.0,
+          1814400000.0,
+          1817078400.0,
+          1819756800.0,
+          1822348800.0,
+          1825027200.0,
+          1827619200.0,
+          1830297600.0,
+          1832976000.0,
+          1835481600.0,
+          1838160000.0,
+          1840752000.0,
+          1843430400.0,
+          1846022400.0,
+          1848700800.0,
+          1851379200.0
+        ],
+        [
+          122,
+          244,
+          214,
+          173,
+          229,
+          156,
+          212,
+          263,
+          146,
+          183,
+          161,
+          205,
+          135,
+          331,
+          225,
+          174,
+          98.8,
+          149,
+          238,
+          262,
+          132,
+          235,
+          216,
+          240,
+          230,
+          192,
+          195,
+          172,
+          173,
+          172,
+          153,
+          142,
+          317,
+          161,
+          201,
+          204,
+          194,
+          164,
+          183,
+          161,
+          167,
+          179,
+          185,
+          117,
+          192,
+          337,
+          125,
+          166,
+          99.1,
+          202,
+          230,
+          158,
+          262,
+          154,
+          164,
+          182,
+          164,
+          183,
+          171,
+          250,
+          184,
+          205,
+          237,
+          177,
+          239,
+          187,
+          180,
+          173,
+          174
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month"
+      },
+      "assertions": [
+        {
+          "method": "summary_hypothesis_test",
+          "label": "Jarque-Bera test for normality",
+          "expected": 0.0010565797084871598,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
+          "tol": 1e-09
+        },
+        {
+          "method": "summary_hypothesis_test",
+          "label": "Ljung-Box test for independence",
+          "expected": 0.8204107252215712,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
+          "tol": 1e-09
+        },
+        {
+          "method": "summary_hypothesis_test",
+          "label": "Wald-Wolfowitz test for independence and stationarity (trend)",
+          "expected": 0.24359142152435065,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
+          "tol": 1e-09
+        },
+        {
+          "method": "summary_hypothesis_test",
+          "label": "Mann-Whitney test for homogeneity and stationarity (jump)",
+          "expected": 0.60158433966534,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
+          "tol": 1e-09
+        },
+        {
+          "method": "summary_hypothesis_test",
+          "label": "Mann-Kendall test for homogeneity and stationarity (trend)",
+          "expected": 0.775729412824826,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
+          "tol": 1e-09
+        },
+        {
+          "method": "summary_hypothesis_test",
+          "label": "t-test for differences in the means of two samples",
+          "expected": 0.437341220982423,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
+          "tol": 1e-09
+        },
+        {
+          "method": "summary_hypothesis_test",
+          "label": "F-test for differences in the variances of two samples",
+          "expected": 0.299290664405013,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
+          "tol": 1e-09
+        }
+      ]
+    }
+  ]
+}

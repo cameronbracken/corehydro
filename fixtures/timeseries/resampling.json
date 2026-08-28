@@ -1,0 +1,351 @@
+{
+  "kind": "toolbox",
+  "group": "timeseries",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a, ResampleWithKNN (Lall and Sharma 1996) and ResampleWithBlockBootstrap (Kuensch 1989). Upstream's own tests build their input from System.Random, which has no ported equivalent, so they assert statistical properties rather than values and cannot be scraped; every value here was harvested with verify_oracles.py --dump against the real library over a literal input series.",
+  "reference": "Both resamplers draw from the ported MersenneTwister inside the shared core, so a seeded run is bit-identical across C++, R and Python -- these are asserted at ZERO tolerance. The kNN path also exercises the P5 KNearestNeighbors learner, whose distance sort is the ported .NET introsort, so a tie in the neighbour distances is resolved the same way in all four runners.",
+  "cases": [
+    {
+      "name": "resample_knn_seeded",
+      "data": [
+        [
+          946684800.0,
+          946771200.0,
+          946857600.0,
+          946944000.0,
+          947030400.0,
+          947116800.0,
+          947203200.0,
+          947289600.0,
+          947376000.0,
+          947462400.0,
+          947548800.0,
+          947635200.0,
+          947721600.0,
+          947808000.0,
+          947894400.0,
+          947980800.0,
+          948067200.0,
+          948153600.0,
+          948240000.0,
+          948326400.0,
+          948412800.0,
+          948499200.0,
+          948585600.0,
+          948672000.0,
+          948758400.0,
+          948844800.0,
+          948931200.0,
+          949017600.0,
+          949104000.0,
+          949190400.0
+        ],
+        [
+          122,
+          244,
+          214,
+          173,
+          229,
+          156,
+          212,
+          263,
+          146,
+          183,
+          161,
+          205,
+          135,
+          331,
+          225,
+          174,
+          98.8,
+          149,
+          238,
+          262,
+          132,
+          235,
+          216,
+          240,
+          230,
+          192,
+          195,
+          172,
+          173,
+          172
+        ]
+      ],
+      "options": {
+        "time_interval": "one_day",
+        "time_steps": 12,
+        "k": 5,
+        "seed": 42
+      },
+      "assertions": [
+        {
+          "method": "resample_knn",
+          "select": "rows",
+          "expected": 12,
+          "mode": "equal",
+          "source": "the requested length"
+        },
+        {
+          "method": "resample_knn",
+          "index": 1,
+          "expected": 214,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 3,
+          "expected": 263,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 5,
+          "expected": 132,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 7,
+          "expected": 238,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 9,
+          "expected": 230,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 11,
+          "expected": 192,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 13,
+          "expected": 195,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 15,
+          "expected": 263,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 17,
+          "expected": 146,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 19,
+          "expected": 331,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 21,
+          "expected": 214,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        },
+        {
+          "method": "resample_knn",
+          "index": 23,
+          "expected": 174,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded Lall-Sharma conditional bootstrap draw sequence"
+        }
+      ]
+    },
+    {
+      "name": "resample_block_bootstrap_seeded",
+      "data": [
+        [
+          946684800.0,
+          946771200.0,
+          946857600.0,
+          946944000.0,
+          947030400.0,
+          947116800.0,
+          947203200.0,
+          947289600.0,
+          947376000.0,
+          947462400.0,
+          947548800.0,
+          947635200.0,
+          947721600.0,
+          947808000.0,
+          947894400.0,
+          947980800.0,
+          948067200.0,
+          948153600.0,
+          948240000.0,
+          948326400.0,
+          948412800.0,
+          948499200.0,
+          948585600.0,
+          948672000.0,
+          948758400.0,
+          948844800.0,
+          948931200.0,
+          949017600.0,
+          949104000.0,
+          949190400.0
+        ],
+        [
+          122,
+          244,
+          214,
+          173,
+          229,
+          156,
+          212,
+          263,
+          146,
+          183,
+          161,
+          205,
+          135,
+          331,
+          225,
+          174,
+          98.8,
+          149,
+          238,
+          262,
+          132,
+          235,
+          216,
+          240,
+          230,
+          192,
+          195,
+          172,
+          173,
+          172
+        ]
+      ],
+      "options": {
+        "time_interval": "one_day",
+        "time_steps": 12,
+        "block_size": 4,
+        "seed": 42
+      },
+      "assertions": [
+        {
+          "method": "resample_block_bootstrap",
+          "select": "rows",
+          "expected": 12,
+          "mode": "equal",
+          "source": "the requested length"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 1,
+          "expected": 212,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 3,
+          "expected": 263,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 5,
+          "expected": 146,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 7,
+          "expected": 183,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 9,
+          "expected": 240,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 11,
+          "expected": 230,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 13,
+          "expected": 192,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 15,
+          "expected": 195,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 17,
+          "expected": 263,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 19,
+          "expected": 146,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 21,
+          "expected": 183,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 23,
+          "expected": 161,
+          "mode": "equal",
+          "source": "curated with verify_oracles.py --dump against the real library: the seeded fixed-block bootstrap draw sequence"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 0,
+          "expected": 946684800.0,
+          "mode": "equal",
+          "source": "the resampled series keeps the source's start date"
+        }
+      ]
+    }
+  ]
+}

@@ -5077,6 +5077,8 @@ static double ToolboxDispatch(string group, string method, List<double[]> data, 
             return PairedDataDispatch(method, data, options, asrt);
         case "ml":
             return MLDispatch(method, data, options, asrt);
+        case "timeseries":
+            return TimeSeriesToolboxDispatch(method, data, options, asrt);
         default:
             throw new Exception($"unknown toolbox group: {group}");
     }
@@ -5951,6 +5953,309 @@ static double FunctionsDispatch(string method, List<double[]> data, JsonElement 
 // which used to read index 0 in the emitter while the C++/R/Python runners honored `label`
 // correctly. Was a documented known limitation (CHANGELOG.md's v0.6.0 entry); now closed by making
 // the mismatch loud instead of silent.
+
+// Mirrors numerics/support/toolbox/timeseries.hpp's run_timeseries against the real
+// Numerics.Data.TimeSeries (P6). data[0] is the ordinate dates as SECONDS since 1970-01-01 (see
+// that header for why epoch seconds rather than ticks), data[1] the values, data[2] whatever the
+// method needs beside them. A series result is flattened row-major as {date, value} pairs, exactly
+// as the C++ group flattens it, so a fixture index means the same thing on both sides.
+static double TimeSeriesToolboxDispatch(string method, List<double[]> data, JsonElement options,
+                                        JsonElement asrt)
+{
+    int Opt(string key, int dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetInt32() : dflt;
+    double OptD(string key, double dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetDouble() : dflt;
+    bool OptB(string key, bool dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetBoolean() : dflt;
+    string OptS(string key, string dflt) => options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty(key, out var e) ? e.GetString()! : dflt;
+
+    static DateTime FromEpoch(double seconds) => new DateTime(1970, 1, 1).AddSeconds(seconds);
+    static double ToEpoch(DateTime d) => (d - new DateTime(1970, 1, 1)).TotalSeconds;
+
+    static TimeInterval ParseInterval(string s)
+    {
+        string k = new string(s.Where(c => c != '_' && c != '-').ToArray()).ToLowerInvariant();
+        return k switch
+        {
+            "oneminute" => TimeInterval.OneMinute,
+            "fiveminute" => TimeInterval.FiveMinute,
+            "fifteenminute" => TimeInterval.FifteenMinute,
+            "thirtyminute" => TimeInterval.ThirtyMinute,
+            "onehour" => TimeInterval.OneHour,
+            "sixhour" => TimeInterval.SixHour,
+            "twelvehour" => TimeInterval.TwelveHour,
+            "oneday" => TimeInterval.OneDay,
+            "sevenday" => TimeInterval.SevenDay,
+            "onemonth" => TimeInterval.OneMonth,
+            "onequarter" => TimeInterval.OneQuarter,
+            "oneyear" => TimeInterval.OneYear,
+            "irregular" => TimeInterval.Irregular,
+            _ => throw new Exception($"unknown time interval: {s}")
+        };
+    }
+    static BlockFunctionType ParseBlock(string s) => s.ToLowerInvariant() switch
+    {
+        "minimum" => BlockFunctionType.Minimum,
+        "maximum" => BlockFunctionType.Maximum,
+        "average" => BlockFunctionType.Average,
+        "sum" => BlockFunctionType.Sum,
+        _ => throw new Exception($"unknown block function: {s}")
+    };
+    static SmoothingFunctionType ParseSmoothing(string s) =>
+        new string(s.Where(c => c != '_').ToArray()).ToLowerInvariant() switch
+        {
+            "none" => SmoothingFunctionType.None,
+            "difference" => SmoothingFunctionType.Difference,
+            "movingaverage" => SmoothingFunctionType.MovingAverage,
+            "movingsum" => SmoothingFunctionType.MovingSum,
+            _ => throw new Exception($"unknown smoothing function: {s}")
+        };
+
+    double[] FlattenSeries(TimeSeries t)
+    {
+        var flat = new double[t.Count * 2];
+        for (int i = 0; i < t.Count; i++)
+        {
+            flat[i * 2] = ToEpoch(t[i].Index);
+            flat[i * 2 + 1] = t[i].Value;
+        }
+        return flat;
+    }
+    double SeriesResult(TimeSeries t) => ToolboxSelectFlat(asrt, FlattenSeries(t), t.Count, 2);
+
+    // --- Date arithmetic (no series involved). ---
+    if (method == "date_add" || method == "date_subtract")
+    {
+        var interval = ParseInterval(OptS("time_interval", "one_day"));
+        int steps = Opt("steps", 1);
+        var outv = new double[data[0].Length];
+        for (int i = 0; i < data[0].Length; i++)
+        {
+            var t = FromEpoch(data[0][i]);
+            for (int s2 = 0; s2 < steps; s2++)
+                t = method == "date_add" ? TimeSeries.AddTimeInterval(t, interval)
+                                         : TimeSeries.SubtractTimeInterval(t, interval);
+            outv[i] = ToEpoch(t);
+        }
+        return ToolboxSelectFlatNoDims(asrt, outv);
+    }
+    if (method == "date_components")
+    {
+        var names = new[] { "year", "month", "day", "hour", "minute", "second", "day_of_year", "day_of_week", "oa_date" };
+        var flat = new List<double>();
+        foreach (var d in data[0])
+        {
+            var t = FromEpoch(d);
+            flat.Add(t.Year); flat.Add(t.Month); flat.Add(t.Day);
+            flat.Add(t.Hour); flat.Add(t.Minute); flat.Add(t.Second);
+            flat.Add(t.DayOfYear); flat.Add((int)t.DayOfWeek); flat.Add(t.ToOADate());
+        }
+        return ToolboxSelectNamedFlat(asrt, names, flat.ToArray(), data[0].Length, 9);
+    }
+    if (method == "date_add_months" || method == "date_add_years" || method == "date_add_days")
+    {
+        double amount = OptD("amount", 1.0);
+        var outv = new double[data[0].Length];
+        for (int i = 0; i < data[0].Length; i++)
+        {
+            var t = FromEpoch(data[0][i]);
+            t = method == "date_add_months" ? t.AddMonths((int)amount)
+              : method == "date_add_years" ? t.AddYears((int)amount)
+              : t.AddDays(amount);
+            outv[i] = ToEpoch(t);
+        }
+        return ToolboxSelectFlatNoDims(asrt, outv);
+    }
+    if (method == "interval_in_hours")
+        return ToolboxSelectFlatNoDims(asrt,
+            new[] { TimeSeries.TimeIntervalInHours(ParseInterval(OptS("time_interval", "one_day"))) });
+
+    // --- Everything below operates on a built series. ---
+    var ts = new TimeSeries(ParseInterval(OptS("time_interval", "one_day")));
+    for (int i = 0; i < data[0].Length; i++)
+        ts.Add(new SeriesOrdinate<DateTime, double>(FromEpoch(data[0][i]), data[1][i]));
+    // Mirrors the C++ group's `missing_indexes` transport convenience: JSON has no NaN literal,
+    // so a fixture marks missing ordinates by index rather than by value.
+    if (options.ValueKind == JsonValueKind.Object &&
+        options.TryGetProperty("missing_indexes", out var miss))
+        foreach (var m in miss.EnumerateArray())
+        {
+            int k = m.GetInt32();
+            if (k >= 0 && k < ts.Count) ts[k].Value = double.NaN;
+        }
+
+    switch (method)
+    {
+        case "moving_average":
+        {
+            int mv = Opt("min_valid_count", -1);
+            return SeriesResult(ts.MovingAverage(Opt("period", 2), mv < 0 ? null : mv));
+        }
+        case "moving_sum":
+        {
+            int mv = Opt("min_valid_count", -1);
+            return SeriesResult(ts.MovingSum(Opt("period", 2), mv < 0 ? null : mv));
+        }
+        case "cumulative_sum":
+            return SeriesResult(ts.CumulativeSum());
+        case "difference":
+            return SeriesResult(ts.Difference(Opt("lag", 1), Opt("differences", 1)));
+        case "standardize":
+            ts.Standardize();
+            return SeriesResult(ts);
+        case "sort":
+        {
+            var order = OptS("order", "ascending") == "descending"
+                ? System.ComponentModel.ListSortDirection.Descending
+                : System.ComponentModel.ListSortDirection.Ascending;
+            if (OptS("by", "time") == "value") ts.SortByValue(order); else ts.SortByTime(order);
+            return SeriesResult(ts);
+        }
+        case "math":
+        {
+            string function = OptS("function", "add").ToLowerInvariant();
+            bool indexed = data.Count > 2;
+            int[] idx = indexed ? data[2].Select(v => (int)v).ToArray() : Array.Empty<int>();
+            double constant = OptD("constant", 0.0);
+            switch (function)
+            {
+                case "add": if (indexed) ts.Add(constant, idx); else ts.Add(constant); break;
+                case "subtract": if (indexed) ts.Subtract(constant, idx); else ts.Subtract(constant); break;
+                case "multiply": if (indexed) ts.Multiply(constant, idx); else ts.Multiply(constant); break;
+                case "divide": if (indexed) ts.Divide(constant, idx); else ts.Divide(constant); break;
+                case "absolute_value": if (indexed) ts.AbsoluteValue(idx); else ts.AbsoluteValue(); break;
+                case "exponentiate":
+                    if (indexed) ts.Exponentiate(OptD("power", 1.0), idx); else ts.Exponentiate(OptD("power", 1.0));
+                    break;
+                case "logarithm":
+                    if (indexed) ts.LogTransform(idx, OptD("base", 10.0)); else ts.LogTransform(OptD("base", 10.0));
+                    break;
+                case "inverse": if (indexed) ts.Inverse(idx); else ts.Inverse(); break;
+                case "replace":
+                    if (indexed) ts.ReplaceMissingData(idx, OptD("value", 0.0)); else ts.ReplaceMissingData(OptD("value", 0.0));
+                    break;
+                case "interpolate":
+                    if (indexed) ts.InterpolateMissingData(Opt("max_missing", 1), idx); else ts.InterpolateMissingData(Opt("max_missing", 1));
+                    break;
+                default: throw new Exception($"unknown time-series math function: {function}");
+            }
+            return SeriesResult(ts);
+        }
+        case "fill_missing_dates":
+            return SeriesResult(TimeSeries.FillMissingDates(ts, FromEpoch(data[2][0]),
+                                                            FromEpoch(data[2][1]), OptD("value", 0.0)));
+        case "clip":
+            return SeriesResult(ts.ClipTimeSeries(FromEpoch(data[2][0]), FromEpoch(data[2][1])));
+        case "shift":
+        {
+            string by = OptS("by", "day");
+            int amount = Opt("amount", 0);
+            if (by == "day") return SeriesResult(ts.ShiftDatesByDay(amount));
+            if (by == "month") return SeriesResult(ts.ShiftDatesByMonth(amount));
+            if (by == "year") return SeriesResult(ts.ShiftDatesByYear(amount));
+            if (by == "start") { ts.ShiftAllDates(FromEpoch(data[2][0])); return SeriesResult(ts); }
+            throw new Exception($"unknown time-series shift: {by}");
+        }
+        case "convert_interval":
+        {
+            var converted = ts.ConvertTimeInterval(ParseInterval(OptS("to_interval", "one_day")),
+                                                   OptB("average", true));
+            if (converted == null) throw new Exception("the time series cannot be converted between these intervals");
+            return SeriesResult(converted);
+        }
+        case "summary_statistics":
+        {
+            var stats = ts.SummaryStatistics();
+            return ToolboxSelectNamed(asrt, stats.Keys.ToArray(), stats.Values.ToArray());
+        }
+        case "summary_hypothesis_test":
+        {
+            var h = ts.SummaryHypothesisTest(Opt("split_location", -1));
+            return ToolboxSelectNamed(asrt, h.Keys.ToArray(), h.Values.ToArray());
+        }
+        case "percentiles":
+        {
+            var probs = data.Count > 2 ? data[2] : new[] { 0.05, 0.25, 0.5, 0.75, 0.95 };
+            return ToolboxSelectFlatNoDims(asrt, ts.Percentiles(probs));
+        }
+        case "duration":
+        {
+            var d = ts.Duration();
+            var flat = new double[d.GetLength(0) * 2];
+            for (int i = 0; i < d.GetLength(0); i++) { flat[i * 2] = d[i, 0]; flat[i * 2 + 1] = d[i, 1]; }
+            return ToolboxSelectFlat(asrt, flat, d.GetLength(0), 2);
+        }
+        case "monthly_percentiles":
+        {
+            var probs = data.Count > 2 ? data[2] : new[] { 0.05, 0.25, 0.5, 0.75, 0.95 };
+            var m = ts.MonthlyPercentiles(probs);
+            var flat = new double[12 * probs.Length];
+            for (int i = 0; i < 12; i++)
+                for (int j = 0; j < probs.Length; j++) flat[i * probs.Length + j] = m[i, j];
+            return ToolboxSelectFlat(asrt, flat, 12, probs.Length);
+        }
+        case "monthly_summary_statistics":
+        {
+            var m = ts.MonthlySummaryStatistics();
+            var flat = new double[12 * 8];
+            for (int i = 0; i < 12; i++)
+                for (int j = 0; j < 8; j++) flat[i * 8 + j] = m[i, j];
+            var names = new[] { "minimum", "p05", "p25", "p50", "p75", "p95", "maximum", "mean" };
+            return ToolboxSelectNamedFlat(asrt, names, flat, 12, 8);
+        }
+        case "monthly_frequency":
+            return ToolboxSelectFlatNoDims(asrt, ts.MonthlyFrequency());
+        case "block_series":
+        {
+            var bf = ParseBlock(OptS("block_function", "maximum"));
+            var sf = ParseSmoothing(OptS("smoothing", "none"));
+            int period = Opt("period", 1);
+            string block = OptS("block", "water_year");
+            return block switch
+            {
+                "calendar_year" => SeriesResult(ts.CalendarYearSeries(bf, sf, period)),
+                "water_year" => SeriesResult(ts.CustomYearSeries(Opt("start_month", 10), bf, sf, period)),
+                "custom_year" => SeriesResult(ts.CustomYearSeries(Opt("start_month", 10), Opt("end_month", 9), bf, sf, period)),
+                "quarter" => SeriesResult(ts.QuarterlySeries(bf, sf, period)),
+                "month" => SeriesResult(ts.MonthlySeries(bf, sf, period)),
+                _ => throw new Exception($"unknown time block: {block}")
+            };
+        }
+        case "peaks_over_threshold":
+            return SeriesResult(ts.PeaksOverThresholdSeries(OptD("threshold", 0.0),
+                                                            Opt("min_steps_between_events", 1),
+                                                            ParseSmoothing(OptS("smoothing", "none")),
+                                                            Opt("period", 1)));
+        case "seasonal_decompose":
+        {
+            int period = Opt("period", 12);
+            int n = ts.Count;
+            var sorted = ts.Clone();
+            sorted.SortByTime();
+            var (trend, seasonal, residual) = ts.SeasonalDecompose(period);
+            var flat = new double[n * 4];
+            int trendStart = period - 1;
+            for (int i = 0; i < n; i++)
+            {
+                int t = i - trendStart;
+                flat[i * 4] = ToEpoch(sorted[i].Index);
+                flat[i * 4 + 1] = t >= 0 && t < trend.Count ? trend[t].Value : double.NaN;
+                flat[i * 4 + 2] = seasonal[i];
+                flat[i * 4 + 3] = t >= 0 && t < residual.Count ? residual[t].Value : double.NaN;
+            }
+            return ToolboxSelectNamedFlat(asrt, new[] { "date", "trend", "seasonal", "residual" }, flat, n, 4);
+        }
+        case "resample_knn":
+            return SeriesResult(ts.ResampleWithKNN(Opt("time_steps", 1), Opt("k", 5), Opt("seed", 12345)));
+        case "resample_block_bootstrap":
+            return SeriesResult(ts.ResampleWithBlockBootstrap(Opt("time_steps", 1), Opt("block_size", 5), Opt("seed", 12345)));
+        default:
+            throw new Exception($"unknown timeseries method: {method}");
+    }
+}
+
 static double ToolboxSelectFlat(JsonElement asrt, double[] flat, int rows, int cols)
 {
     if (asrt.ValueKind == JsonValueKind.Object && asrt.TryGetProperty("label", out var lbl))

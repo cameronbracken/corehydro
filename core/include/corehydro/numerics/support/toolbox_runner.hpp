@@ -14,9 +14,10 @@
 //
 // Stateless by construction: one call builds whatever it needs, evaluates once, and drops it.
 //
-// The eighteen groups (correlation, gof, statistics, spectra, histogram, interpolation,
+// The nineteen groups (correlation, gof, statistics, spectra, histogram, interpolation,
 // regression, sampling, probability, link, trend, linalg, special, functions, network,
-// hypothesis, paired_data, ml) each live in their own header under numerics/support/toolbox/, holding
+// hypothesis, paired_data, ml, timeseries) each live in their own header under
+// numerics/support/toolbox/, holding
 // that group's detail::run_<group> function and any helper used only by it. Shared types and
 // helpers are in toolbox/common.hpp. This file includes all group headers and the run_toolbox
 // dispatch table.
@@ -45,6 +46,7 @@
 #include "corehydro/numerics/support/toolbox/hypothesis.hpp"
 #include "corehydro/numerics/support/toolbox/paired_data.hpp"
 #include "corehydro/numerics/support/toolbox/ml.hpp"
+#include "corehydro/numerics/support/toolbox/timeseries.hpp"
 
 namespace corehydro::numerics::support {
 
@@ -70,6 +72,7 @@ inline ToolboxResult run_toolbox(const std::string& group, const std::string& me
     if (group == "hypothesis") return detail::run_hypothesis(method, data, options);
     if (group == "paired_data") return detail::run_paired_data(method, data, options);
     if (group == "ml") return detail::run_ml(method, data, options);
+    if (group == "timeseries") return detail::run_timeseries(method, data, options);
     throw std::runtime_error("unknown toolbox group: " + group);
 }
 
