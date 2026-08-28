@@ -68,6 +68,7 @@ set(BF_TESTS
   test_bulletin17c_clone_with_data_frame
   test_p1_iunivariate_model
   test_box_cox
+  test_date_time
   test_time_series
   test_spatial_correlation
   test_cached_mvn_gaussian_copula
