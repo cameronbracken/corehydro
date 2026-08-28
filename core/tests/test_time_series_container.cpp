@@ -24,13 +24,16 @@
 #include <vector>
 
 #include "check.hpp"
+#include "corehydro/numerics/tools.hpp"
 #include "corehydro/numerics/data/time_series/time_series.hpp"
+#include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "data/time_series_convert_data.hpp"
 
 using corehydro::numerics::data::BlockFunctionType;
 using corehydro::numerics::data::DateTime;
 using corehydro::numerics::data::ListSortDirection;
 using corehydro::numerics::data::TimeInterval;
+using corehydro::numerics::data::SmoothingFunctionType;
 using corehydro::numerics::data::TimeSeries;
 
 namespace {
@@ -621,6 +624,500 @@ void test_series_mutation() {
     CHECK_EQ(ins.count(), 2);
 }
 
+// --- Task 4: statistics, block series, decomposition and resampling. ---
+
+// The 69-value monthly series the statistics and block-series tests share, read from
+// Test_TimeSeries.cs (Test_SummaryHypothesisTest / Test_CalendarYearSeries / Test_WaterYearSeries /
+// Test_CustomYearSeries / Test_MonthlySeries / Test_QuarterlySeries / Test_PeaksOverThreshold all
+// build on it).
+const std::vector<double> kLongValues = {
+    122,  244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8, 149,
+    238,  262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161, 201,  204,
+    194,  164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230, 158, 262, 154,
+    164,  182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173, 174};
+
+// C# Test_Stats: MinValue, MaxValue, MeanValue, StandardDeviation and Duration.
+void test_stats() {
+    TimeSeries ts = monthly();
+    CHECK_NEAR(ts.min_value(), 5, 0.0);
+    CHECK_NEAR(ts.max_value(), 48, 0.0);
+    CHECK_NEAR(ts.mean_value(), 20.83333333333, 1e-10);
+    CHECK_NEAR(ts.standard_deviation(), 12.40112, 1e-3);
+
+    std::vector<std::vector<double>> duration = ts.duration();
+    const std::vector<double> d_values = {48, 36, 33, 22, 22, 18, 16, 15, 13, 12, 10, 5};
+    const std::vector<double> d_valid = {
+        7.69230769230769,  15.3846153846154, 23.0769230769231, 30.7692307692308,
+        38.4615384615385,  46.1538461538462, 53.8461538461538, 61.5384615384615,
+        69.2307692307692,  76.9230769230769, 84.6153846153846, 92.3076923076923};
+    CHECK_EQ(static_cast<int>(duration.size()), 12);
+    for (std::size_t i = 0; i < d_valid.size(); ++i) {
+        CHECK_NEAR(duration[i][0], d_valid[i], 1e-10);
+        CHECK_NEAR(duration[i][1], d_values[i], 1e-10);
+    }
+
+    // corehydro supplement: min_value and max_value return their SENTINELS, not NaN, on a series
+    // with nothing observed -- upstream initializes them to double.MaxValue / double.MinValue and
+    // never revisits that if no value passes the NaN filter.
+    TimeSeries all_nan(TimeInterval::OneDay, DateTime(2024, 1, 1), std::vector<double>{kNaN, kNaN});
+    CHECK_NEAR(all_nan.min_value(), std::numeric_limits<double>::max(), 0.0);
+    CHECK_NEAR(all_nan.max_value(), std::numeric_limits<double>::lowest(), 0.0);
+}
+
+// C# Test_SummaryStats: SummaryPercentiles, Percentiles and SummaryStatistics.
+void test_summary_stats() {
+    TimeSeries ts = monthly();
+
+    std::vector<double> summary_p = ts.summary_percentiles();
+    const std::vector<double> sp_valid = {7.75, 12.75, 17.00, 24.75, 41.40};
+    CHECK_EQ(static_cast<int>(summary_p.size()), 5);
+    for (std::size_t i = 0; i < sp_valid.size(); ++i)
+        CHECK_NEAR(summary_p[i], sp_valid[i], 1e-10);
+
+    std::vector<double> pct = ts.percentiles({0.10, 0.20, 0.30, 0.40, 0.60, 0.70, 0.80, 0.90});
+    const std::vector<double> p_valid = {10.2, 12.2, 13.6, 15.4, 20.4, 22.0, 30.8, 35.7};
+    for (std::size_t i = 0; i < p_valid.size(); ++i) CHECK_NEAR(pct[i], p_valid[i], 1e-10);
+
+    std::vector<std::pair<std::string, double>> stats = ts.summary_statistics();
+    CHECK_EQ(static_cast<int>(stats.size()), 15);
+    auto stat = [&stats](const std::string& key) {
+        for (const auto& kv : stats)
+            if (kv.first == key) return kv.second;
+        return kNaN;
+    };
+    CHECK_NEAR(stat("Record Length"), 12, 1e-10);
+    CHECK_NEAR(stat("Missing Values"), 0, 1e-10);
+    CHECK_NEAR(stat("Minimum"), 5, 1e-10);
+    CHECK_NEAR(stat("Maximum"), 48, 1e-10);
+    CHECK_NEAR(stat("Mean"), 20.83333333333, 1e-10);
+    CHECK_NEAR(stat("Std Dev"), 12.4011240937215, 1e-10);
+    CHECK_NEAR(stat("Skewness"), 1.06382220138287, 1e-10);
+    CHECK_NEAR(stat("Kurtosis"), 0.682181791356259, 1e-10);
+    CHECK_NEAR(stat("5%"), 7.75, 1e-10);
+    CHECK_NEAR(stat("25%"), 12.75, 1e-10);
+    CHECK_NEAR(stat("50%"), 17.00, 1e-10);
+    CHECK_NEAR(stat("75%"), 24.75, 1e-10);
+    CHECK_NEAR(stat("95%"), 41.40, 1e-10);
+
+    // corehydro supplement: the key ORDER is the contract (C# reads a Dictionary back by key, but
+    // every host binding reads this as an ordered pair list), and the `Count <= 2` guard is on the
+    // ORDINATE count.
+    CHECK_EQ(stats[0].first, std::string("Record Length"));
+    CHECK_EQ(stats[7].first, std::string("Kurtosis"));
+    CHECK_EQ(stats[14].first, std::string("99%"));
+    TimeSeries two(TimeInterval::OneDay, DateTime(2024, 1, 1), std::vector<double>{1.0, 2.0});
+    auto small = two.summary_statistics();
+    CHECK_TRUE(std::isnan(small[4].second));   // Mean
+    CHECK_NEAR(small[0].second, 2, 0.0);       // Record Length still reported
+}
+
+// C# Test_SummaryHypothesisTest. The C# tolerance is 1E-1 because the reference values come from
+// R, not from C#; it is kept.
+void test_summary_hypothesis_test() {
+    TimeSeries ts(TimeInterval::OneMonth, DateTime(2023, 1, 1), kLongValues);
+    auto h = ts.summary_hypothesis_test();
+    CHECK_EQ(static_cast<int>(h.size()), 7);
+    const std::vector<double> valid = {0.0012195, 0.8204, 0.2436, 0.5956, 0.7757, 0.4691, 0.2287};
+    for (std::size_t i = 0; i < valid.size(); ++i) CHECK_NEAR(h[i].second, valid[i], 1e-1);
+
+    // corehydro supplement: the seven key strings, in order. They are NOT the ten of the
+    // RMC.BestFit DataFrame facade of the same name.
+    CHECK_EQ(h[0].first, std::string("Jarque-Bera test for normality"));
+    CHECK_EQ(h[3].first,
+             std::string("Mann-Whitney test for homogeneity and stationarity (jump)"));
+    CHECK_EQ(h[5].first, std::string("t-test for differences in the means of two samples"));
+    CHECK_EQ(h[6].first, std::string("F-test for differences in the variances of two samples"));
+}
+
+// C# Test_MonthlyStats and Test_MonthlyFrequency.
+void test_monthly_stats() {
+    const std::vector<double> values = {22, 16, 33, 5,  12, 36, 48, 10, 18, 15, 22, 13,
+                                        38, 17, 3,  6,  27, 11, 2,  41, 44, 37, 50, 8};
+    TimeSeries ts(TimeInterval::OneMonth, DateTime(2023, 1, 1), values);
+
+    std::vector<std::vector<double>> pct =
+        ts.monthly_percentiles({0.10, 0.20, 0.30, 0.40, 0.60, 0.70, 0.80, 0.90});
+    const double valid_p[12][8] = {
+        {23.6, 25.2, 26.8, 28.4, 31.6, 33.2, 34.8, 36.4},
+        {16.1, 16.2, 16.3, 16.4, 16.6, 16.7, 16.8, 16.9},
+        {6, 9, 12, 15, 21, 24, 27, 30},
+        {5.1, 5.2, 5.3, 5.4, 5.6, 5.7, 5.8, 5.9},
+        {13.5, 15.0, 16.5, 18.0, 21.0, 22.5, 24.0, 25.5},
+        {13.5, 16.0, 18.5, 21.0, 26.0, 28.5, 31.0, 33.5},
+        {6.6, 11.2, 15.8, 20.4, 29.6, 34.2, 38.8, 43.4},
+        {13.1, 16.2, 19.3, 22.4, 28.6, 31.7, 34.8, 37.9},
+        {20.6, 23.2, 25.8, 28.4, 33.6, 36.2, 38.8, 41.4},
+        {17.2, 19.4, 21.6, 23.8, 28.2, 30.4, 32.6, 34.8},
+        {24.8, 27.6, 30.4, 33.2, 38.8, 41.6, 44.4, 47.2},
+        {8.5, 9.0, 9.5, 10.0, 11.0, 11.5, 12.0, 12.5}};
+
+    std::vector<std::vector<double>> summary = ts.monthly_summary_statistics();
+    const double valid_s[12][8] = {
+        {22, 22.8, 26.0, 30.0, 34.0, 37.2, 38, 30},
+        {16, 16.05, 16.25, 16.50, 16.75, 16.95, 17, 16.5},
+        {3, 4.5, 10.5, 18.0, 25.5, 31.5, 33, 18},
+        {5, 5.05, 5.25, 5.50, 5.75, 5.95, 6, 5.5},
+        {12, 12.75, 15.75, 19.50, 23.25, 26.25, 27, 19.5},
+        {11, 12.25, 17.25, 23.50, 29.75, 34.75, 36, 23.5},
+        {2, 4.3, 13.5, 25.0, 36.5, 45.7, 48, 25},
+        {10, 11.55, 17.75, 25.50, 33.25, 39.45, 41, 25.5},
+        {18, 19.3, 24.5, 31.0, 37.5, 42.7, 44, 31},
+        {15, 16.1, 20.5, 26.0, 31.5, 35.9, 37, 26},
+        {22, 23.4, 29.0, 36.0, 43.0, 48.6, 50, 36},
+        {8, 8.25, 9.25, 10.50, 11.75, 12.75, 13, 10.5}};
+
+    // The C# loop stops at i < 11, leaving December unasserted; this transcription runs all 12
+    // (the twelfth row is in the C# literal table, just never compared).
+    for (int i = 0; i < 12; ++i) {
+        for (int j = 0; j < 8; ++j) {
+            CHECK_NEAR(pct[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)],
+                       valid_p[i][j], 1e-10);
+            CHECK_NEAR(summary[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)],
+                       valid_s[i][j], 1e-10);
+        }
+    }
+
+    std::vector<double> frequencies = ts.monthly_frequency();
+    CHECK_EQ(static_cast<int>(frequencies.size()), 12);
+    for (double f : frequencies) CHECK_NEAR(f, 2, 0.0);
+
+    // corehydro supplement: a month with no observation keeps an all-zero summary row, and
+    // monthly_percentiles does NOT filter NaN (unlike monthly_summary_statistics), so a missing
+    // value poisons that month's percentiles.
+    TimeSeries partial(TimeInterval::OneMonth, DateTime(2023, 1, 1),
+                       std::vector<double>{1.0, kNaN});
+    auto part_summary = partial.monthly_summary_statistics();
+    CHECK_NEAR(part_summary[2][0], 0.0, 0.0);   // March: no data at all
+    CHECK_NEAR(part_summary[1][0], 0.0, 0.0);   // February: one NaN, filtered out, row untouched
+    auto part_pct = partial.monthly_percentiles({0.5});
+    CHECK_TRUE(std::isnan(part_pct[1][0]));
+}
+
+// C# Test_CalendarYearSeries, Test_WaterYearSeries, Test_CustomYearSeries, Test_MonthlySeries,
+// Test_QuarterlySeries.
+void test_block_series() {
+    TimeSeries ts(TimeInterval::OneMonth, DateTime(2023, 1, 1), kLongValues);
+
+    TimeSeries annual = ts.calendar_year_series();
+    const std::vector<double> annual_max = {263, 331, 317, 337, 262, 239};
+    CHECK_EQ(annual.count(), static_cast<int>(annual_max.size()));
+    for (std::size_t i = 0; i < annual_max.size(); ++i)
+        CHECK_NEAR(annual[static_cast<int>(i)].value(), annual_max[i], 0.0);
+
+    TimeSeries water = ts.custom_year_series();
+    const std::vector<double> water_max = {263, 331, 317, 204, 337, 250};
+    CHECK_EQ(water.count(), static_cast<int>(water_max.size()));
+    for (std::size_t i = 0; i < water_max.size(); ++i)
+        CHECK_NEAR(water[static_cast<int>(i)].value(), water_max[i], 0.0);
+
+    TimeSeries custom_cal = ts.custom_year_series(1, 12);
+    for (std::size_t i = 0; i < annual_max.size(); ++i)
+        CHECK_NEAR(custom_cal[static_cast<int>(i)].value(), annual_max[i], 0.0);
+
+    TimeSeries custom_overlap = ts.custom_year_series(10, 3);
+    const std::vector<double> overlap_max = {244, 331, 240, 204, 337, 250};
+    for (std::size_t i = 0; i < overlap_max.size(); ++i)
+        CHECK_NEAR(custom_overlap[static_cast<int>(i)].value(), overlap_max[i], 0.0);
+
+    TimeSeries monthly_ts = ts.monthly_series();
+    for (int i = 0; i < monthly_ts.count(); ++i)
+        CHECK_NEAR(monthly_ts[i].value(), kLongValues[static_cast<std::size_t>(i)], 0.0);
+
+    TimeSeries weekly(TimeInterval::SevenDay, DateTime(2023, 1, 1), kLongValues);
+    TimeSeries monthly2 = weekly.monthly_series();
+    const std::vector<double> monthly2_max = {244, 263, 205, 331, 262, 240, 195, 317,
+                                              204, 185, 337, 262, 182, 250, 239, 180};
+    for (std::size_t i = 0; i < monthly2_max.size(); ++i)
+        CHECK_NEAR(monthly2[static_cast<int>(i)].value(), monthly2_max[i], 0.0);
+
+    TimeSeries quarterly = ts.quarterly_series();
+    const std::vector<double> quarterly_max = {244, 229, 263, 205, 331, 174, 262, 240,
+                                               230, 173, 317, 204, 194, 179, 192, 337,
+                                               230, 262, 182, 250, 237, 239, 180};
+    for (std::size_t i = 0; i < quarterly_max.size(); ++i)
+        CHECK_NEAR(quarterly[static_cast<int>(i)].value(), quarterly_max[i], 0.0);
+
+    // corehydro supplement: the block-series guards, and the block-function contract that the four
+    // upstream Maximum-only tests never reach -- Sum and Average stamp the LAST ordinate's date
+    // while Minimum and Maximum stamp the extremum's own.
+    CHECK_THROWS(ts.custom_year_series(0));
+    CHECK_THROWS(ts.custom_year_series(13));
+    CHECK_THROWS(ts.custom_year_series(1, 13));
+    TimeSeries year1(TimeInterval::OneMonth, DateTime(2023, 1, 1),
+                     std::vector<double>{5.0, 9.0, 1.0});
+    TimeSeries sum_series = year1.calendar_year_series(BlockFunctionType::Sum);
+    CHECK_NEAR(sum_series[0].value(), 15.0, 1e-12);
+    CHECK_TRUE(sum_series[0].index() == DateTime(2023, 3, 1));   // last ordinate's date
+    TimeSeries avg_series = year1.calendar_year_series(BlockFunctionType::Average);
+    CHECK_NEAR(avg_series[0].value(), 5.0, 1e-12);
+    TimeSeries min_series = year1.calendar_year_series(BlockFunctionType::Minimum);
+    CHECK_NEAR(min_series[0].value(), 1.0, 0.0);
+    CHECK_TRUE(min_series[0].index() == DateTime(2023, 3, 1));
+    TimeSeries max_series = year1.calendar_year_series(BlockFunctionType::Maximum);
+    CHECK_NEAR(max_series[0].value(), 9.0, 0.0);
+    CHECK_TRUE(max_series[0].index() == DateTime(2023, 2, 1));   // extremum's own date
+    CHECK_TRUE(sum_series.time_interval() == TimeInterval::Irregular);
+}
+
+// C# Test_CalendarYearSeries_NaN and Test_MonthlySeries_NaN: how a missing value propagates
+// through each block function.
+void test_block_series_nan() {
+    const std::vector<double> values = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                                        1, kNaN, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    TimeSeries ts(TimeInterval::OneMonth, DateTime(2023, 1, 1), values);
+
+    TimeSeries sum_ts = ts.calendar_year_series(BlockFunctionType::Sum);
+    CHECK_EQ(sum_ts.count(), 1);
+    CHECK_NEAR(sum_ts[0].value(), 78.0, 0.0);
+    CHECK_EQ(sum_ts[0].index().year(), 2023);
+
+    TimeSeries avg_ts = ts.calendar_year_series(BlockFunctionType::Average);
+    CHECK_EQ(avg_ts.count(), 1);
+    CHECK_NEAR(avg_ts[0].value(), 78.0 / 12.0, 1e-9);
+
+    // Maximum survives both years: the comparison is false against NaN, so the missing value is
+    // simply never chosen.
+    TimeSeries max_ts = ts.calendar_year_series(BlockFunctionType::Maximum);
+    CHECK_EQ(max_ts.count(), 2);
+    CHECK_NEAR(max_ts[0].value(), 12.0, 0.0);
+    CHECK_NEAR(max_ts[1].value(), 12.0, 0.0);
+
+    const std::vector<double> weekly_values = {10, 20, 30, 40, 50, 60, kNaN, 80};
+    TimeSeries weekly(TimeInterval::SevenDay, DateTime(2023, 1, 1), weekly_values);
+    TimeSeries monthly_sum = weekly.monthly_series(BlockFunctionType::Sum);
+    CHECK_EQ(monthly_sum.count(), 1);
+    CHECK_NEAR(monthly_sum[0].value(), 150.0, 1e-9);
+}
+
+// C# Test_PeaksOverThreshold and Test_PeaksOverThreshold_MovingSum_NaN.
+void test_peaks_over_threshold() {
+    TimeSeries ts(TimeInterval::OneMonth, DateTime(2023, 1, 1), kLongValues);
+
+    TimeSeries pot1 = ts.peaks_over_threshold_series(100, 2);
+    const std::vector<double> valid1 = {331, 337, 262};
+    CHECK_EQ(pot1.count(), static_cast<int>(valid1.size()));
+    for (std::size_t i = 0; i < valid1.size(); ++i)
+        CHECK_NEAR(pot1[static_cast<int>(i)].value(), valid1[i], 0.0);
+
+    TimeSeries pot2 = ts.peaks_over_threshold_series(90, 1);
+    const std::vector<double> valid2 = {337};
+    CHECK_EQ(pot2.count(), static_cast<int>(valid2.size()));
+    CHECK_NEAR(pot2[0].value(), valid2[0], 0.0);
+
+    TimeSeries pot3 = ts.peaks_over_threshold_series(150, 5);
+    const std::vector<double> valid3 = {331, 240, 317, 337};
+    CHECK_EQ(pot3.count(), static_cast<int>(valid3.size()));
+    for (std::size_t i = 0; i < valid3.size(); ++i)
+        CHECK_NEAR(pot3[static_cast<int>(i)].value(), valid3[i], 0.0);
+
+    TimeSeries pot4 = ts.peaks_over_threshold_series(200, 2);
+    const std::vector<double> valid4 = {263, 331, 262, 317, 337, 250};
+    CHECK_EQ(pot4.count(), static_cast<int>(valid4.size()));
+    for (std::size_t i = 0; i < valid4.size(); ++i)
+        CHECK_NEAR(pot4[static_cast<int>(i)].value(), valid4[i], 0.0);
+
+    // The MovingSum-smoothed case: a window touching a missing day is NaN and cannot exceed the
+    // threshold, so the trailing 8.0 produces no event.
+    const std::vector<double> gappy = {0.1, 0.2, 5.0, 6.0, 0.1, 0.0, 0.1, 0.2, 0.0, kNaN, 8.0};
+    TimeSeries daily(TimeInterval::OneDay, DateTime(2023, 1, 1), gappy);
+    TimeSeries pot5 =
+        daily.peaks_over_threshold_series(7.0, 1, SmoothingFunctionType::MovingSum, 2);
+    CHECK_EQ(pot5.count(), 1);
+    CHECK_NEAR(pot5[0].value(), 11.0, 1e-9);
+
+    // corehydro supplement: the result is an irregular series carrying each peak's own date.
+    CHECK_TRUE(pot1.time_interval() == TimeInterval::Irregular);
+    CHECK_TRUE(pot2[0].index() == DateTime(2026, 10, 1));
+}
+
+// C# Test_SeasonalDecompose and Test_SeasonalDecompose_InvalidInputs.
+void test_seasonal_decompose() {
+    const int period = 12;
+    const int n = period * 5;
+    TimeSeries ts(TimeInterval::OneMonth);
+    DateTime start(2000, 1, 1);
+    std::vector<double> true_trend(static_cast<std::size_t>(n));
+    std::vector<double> true_seasonal(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        std::size_t k = static_cast<std::size_t>(i);
+        true_trend[k] = 100.0 + 0.5 * i;
+        true_seasonal[k] = 10.0 * std::sin(2.0 * corehydro::numerics::kPi * i / period);
+        ts.add(TimeSeries::Ordinate(start.add_months(i), true_trend[k] + true_seasonal[k]));
+    }
+
+    TimeSeries::SeasonalDecomposition d = ts.seasonal_decompose(period);
+    CHECK_TRUE(d.trend.count() > 0);
+    CHECK_TRUE(d.trend.count() <= n);
+    CHECK_EQ(static_cast<int>(d.seasonal.size()), n);
+    CHECK_TRUE(d.residual.count() > 0);
+
+    // The additive identity: original == trend + seasonal + residual, wherever the trend exists.
+    for (int i = 0; i < d.residual.count(); ++i) {
+        DateTime at = d.residual[i].index();
+        int orig = -1;
+        for (int k = 0; k < n; ++k)
+            if (ts[k].index() == at) {
+                orig = k;
+                break;
+            }
+        int trend_idx = -1;
+        for (int k = 0; k < d.trend.count(); ++k)
+            if (d.trend[k].index() == at) {
+                trend_idx = k;
+                break;
+            }
+        if (orig >= 0 && trend_idx >= 0) {
+            double reconstructed = d.trend[trend_idx].value() +
+                                   d.seasonal[static_cast<std::size_t>(orig)] +
+                                   d.residual[i].value();
+            CHECK_NEAR(reconstructed, ts[orig].value(), 1e-6);
+        }
+    }
+
+    double max_seasonal = *std::max_element(d.seasonal.begin(), d.seasonal.end());
+    double min_seasonal = *std::min_element(d.seasonal.begin(), d.seasonal.end());
+    CHECK_TRUE(max_seasonal - min_seasonal > 1.0);
+
+    TimeSeries short_ts(TimeInterval::OneMonth);
+    for (int i = 0; i < 10; ++i)
+        short_ts.add(TimeSeries::Ordinate(start.add_months(i), i));
+    CHECK_THROWS(short_ts.seasonal_decompose(1));
+    CHECK_THROWS(short_ts.seasonal_decompose(12));
+}
+
+// The AR(1) series the eleven upstream resampling tests share. DEVIATION, documented: C#'s
+// `MakeAR1` draws from `System.Random`, a .NET LCG with no ported equivalent, so this builds the
+// same AR(1) process from the ported MersenneTwister instead. Every assertion those tests make is
+// a statistical property of the RESAMPLER (length, determinism, drift, preserved moments), not of
+// the particular input path, so the substitution costs nothing -- the same precedent
+// rating_curve.hpp's seeded Predict already documents.
+TimeSeries make_ar1(int n, double phi, double sigma, int seed) {
+    corehydro::numerics::sampling::MersenneTwister rng(seed);
+    std::vector<double> values(static_cast<std::size_t>(n), 0.0);
+    for (int i = 1; i < n; ++i) {
+        double u1 = 1.0 - rng.next_double();
+        double u2 = 1.0 - rng.next_double();
+        double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * corehydro::numerics::kPi * u2);
+        values[static_cast<std::size_t>(i)] =
+            phi * values[static_cast<std::size_t>(i - 1)] + sigma * z;
+    }
+    return TimeSeries(TimeInterval::OneDay, DateTime(2000, 1, 1), values);
+}
+
+double lag1_autocorrelation(const TimeSeries& ts) {
+    int n = ts.count();
+    if (n < 3) return kNaN;
+    double mean = ts.mean_value();
+    double num = 0, den = 0;
+    for (int i = 1; i < n; ++i) num += (ts[i].value() - mean) * (ts[i - 1].value() - mean);
+    for (int i = 0; i < n; ++i) den += (ts[i].value() - mean) * (ts[i].value() - mean);
+    return den > 0 ? num / den : kNaN;
+}
+
+// The seven C# Test_ResampleWithKNN_* methods.
+void test_resample_knn() {
+    TimeSeries ts = make_ar1(100, 0.5, 1.0, 1);
+    TimeSeries a = ts.resample_with_knn(50, 10, 42);
+    TimeSeries b = ts.resample_with_knn(50, 10, 42);
+    CHECK_EQ(a.count(), b.count());
+    for (int i = 0; i < a.count(); ++i) CHECK_NEAR(a[i].value(), b[i].value(), 1e-12);
+
+    for (int len : {1, 7, 50, 250}) {
+        TimeSeries r = ts.resample_with_knn(len, 10, 42);
+        CHECK_EQ(r.count(), len);
+    }
+
+    // On a strictly increasing series the conditional bootstrap must ADVANCE through the trend:
+    // this is the regression guard for the `selected + 1` step.
+    std::vector<double> ramp(200);
+    for (int i = 0; i < 200; ++i) ramp[static_cast<std::size_t>(i)] = i;
+    TimeSeries trend_ts(TimeInterval::OneDay, DateTime(2000, 1, 1), ramp);
+    const int steps = 50;
+    const int trials = 20;
+    double avg_drift = 0;
+    for (int seed = 1; seed <= trials; ++seed) {
+        TimeSeries r = trend_ts.resample_with_knn(steps, 10, seed);
+        avg_drift += r[steps - 1].value() - r[0].value();
+    }
+    avg_drift /= trials;
+    CHECK_TRUE(avg_drift > 25.0);
+
+    TimeSeries ar = make_ar1(200, 0.5, 1.0, 7);
+    double input_mean = ar.mean_value();
+    double input_std = ar.standard_deviation();
+    const int m_trials = 200;
+    const int m_steps = 100;
+    double sum_of_tail_means = 0;
+    double sum_of_tail_vars = 0;
+    for (int seed = 1; seed <= m_trials; ++seed) {
+        TimeSeries r = ar.resample_with_knn(m_steps, 10, seed);
+        sum_of_tail_means += r.mean_value();
+        double s = r.standard_deviation();
+        sum_of_tail_vars += s * s;
+    }
+    double grand_mean = sum_of_tail_means / m_trials;
+    double standard_error = input_std / std::sqrt(static_cast<double>(m_steps * m_trials));
+    CHECK_TRUE(std::fabs(grand_mean - input_mean) < 4.0 * standard_error + 0.05);
+
+    double input_var = input_std * input_std;
+    double ratio = (sum_of_tail_vars / m_trials) / input_var;
+    CHECK_TRUE(ratio > 0.5 && ratio < 2.0);
+
+    TimeSeries ar7 = make_ar1(300, 0.7, 1.0, 7);
+    double sum_lag1 = 0;
+    for (int seed = 1; seed <= m_trials; ++seed)
+        sum_lag1 += lag1_autocorrelation(ar7.resample_with_knn(m_steps, 10, seed));
+    double avg_lag1 = sum_lag1 / m_trials;
+    CHECK_TRUE(avg_lag1 > 0.4 && avg_lag1 < 0.95);
+
+    CHECK_THROWS(make_ar1(10, 0.5, 1.0, 1).resample_with_knn(5, 5, 42));
+    // corehydro supplement: the other two guards.
+    CHECK_THROWS(ts.resample_with_knn(0, 10, 42));
+}
+
+// The four C# Test_ResampleWithBlockBootstrap_* methods.
+void test_resample_block_bootstrap() {
+    TimeSeries ts = make_ar1(100, 0.5, 1.0, 1);
+    TimeSeries a = ts.resample_with_block_bootstrap(50, 5, 42);
+    TimeSeries b = ts.resample_with_block_bootstrap(50, 5, 42);
+    CHECK_EQ(a.count(), b.count());
+    for (int i = 0; i < a.count(); ++i) CHECK_NEAR(a[i].value(), b[i].value(), 1e-12);
+
+    for (int len : {1, 7, 50, 250}) {
+        TimeSeries r = ts.resample_with_block_bootstrap(len, 5, 42);
+        CHECK_EQ(r.count(), len);
+    }
+
+    TimeSeries ar = make_ar1(200, 0.5, 1.0, 7);
+    double input_mean = ar.mean_value();
+    double input_std = ar.standard_deviation();
+    const int trials = 200;
+    const int steps = 100;
+    double sum_of_tail_means = 0;
+    double sum_of_tail_vars = 0;
+    for (int seed = 1; seed <= trials; ++seed) {
+        TimeSeries r = ar.resample_with_block_bootstrap(steps, 5, seed);
+        sum_of_tail_means += r.mean_value();
+        double s = r.standard_deviation();
+        sum_of_tail_vars += s * s;
+    }
+    double grand_mean = sum_of_tail_means / trials;
+    double standard_error = input_std / std::sqrt(static_cast<double>(steps * trials));
+    CHECK_TRUE(std::fabs(grand_mean - input_mean) < 4.0 * standard_error + 0.05);
+    double ratio = (sum_of_tail_vars / trials) / (input_std * input_std);
+    CHECK_TRUE(ratio > 0.5 && ratio < 2.0);
+
+    // corehydro supplement: the three guards, and that the result keeps the source's start date
+    // and interval.
+    CHECK_THROWS(TimeSeries(TimeInterval::OneDay, DateTime(2000, 1, 1),
+                            std::vector<double>{1.0})
+                     .resample_with_block_bootstrap(5, 1, 42));
+    CHECK_THROWS(ts.resample_with_block_bootstrap(50, 500, 42));
+    CHECK_THROWS(ts.resample_with_block_bootstrap(0, 5, 42));
+    CHECK_TRUE(a.start_date() == ts.start_date());
+    CHECK_TRUE(a.time_interval() == ts.time_interval());
+}
+
 }  // namespace
 
 int main() {
@@ -638,5 +1135,15 @@ int main() {
     test_clip();
     test_convert_time_interval();
     test_series_mutation();
+    test_stats();
+    test_summary_stats();
+    test_summary_hypothesis_test();
+    test_monthly_stats();
+    test_block_series();
+    test_block_series_nan();
+    test_peaks_over_threshold();
+    test_seasonal_decompose();
+    test_resample_knn();
+    test_resample_block_bootstrap();
     return chtest::summary("time_series_container");
 }

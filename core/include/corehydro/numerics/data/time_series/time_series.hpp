@@ -21,15 +21,19 @@
 // HTTP tooling natively).
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "corehydro/numerics/data/hypothesis_tests.hpp"
 #include "corehydro/numerics/data/interpolation/linear.hpp"
+#include "corehydro/numerics/data/plotting_positions.hpp"
 #include "corehydro/numerics/data/series_ordinate.hpp"
 #include "corehydro/numerics/data/time_series/support/block_function_type.hpp"
 #include "corehydro/numerics/data/time_series/support/date_time.hpp"
@@ -37,7 +41,11 @@
 #include "corehydro/numerics/data/time_series/support/series.hpp"
 #include "corehydro/numerics/data/time_series/support/smoothing_function_type.hpp"
 #include "corehydro/numerics/data/time_series/support/time_interval.hpp"
+#include "corehydro/numerics/machine_learning/supervised/k_nearest_neighbors.hpp"
+#include "corehydro/numerics/math/fourier/fourier.hpp"
+#include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/utilities/dotnet_sort.hpp"
+#include "corehydro/numerics/utilities/extension_methods.hpp"
 
 namespace corehydro::numerics::data {
 
@@ -754,6 +762,17 @@ class TimeSeries : public Series<DateTime, double> {
         return min;
     }
 
+    // Max value, skipping NaN (C# 1354). Like `min_value`, an all-NaN (or empty) series returns
+    // the sentinel it started from -- `double.MinValue` -- rather than NaN.
+    double max_value() const {
+        double max = std::numeric_limits<double>::lowest();
+        for (int i = 0; i < count(); ++i) {
+            double v = (*this)[i].value();
+            if (!std::isnan(v) && v > max) max = v;
+        }
+        return max;
+    }
+
     // Mean of the values, skipping NaN (C# 1370).
     double mean_value() const {
         if (count() == 0) return std::numeric_limits<double>::quiet_NaN();
@@ -813,6 +832,439 @@ class TimeSeries : public Series<DateTime, double> {
         return TimeSeries(time_interval_, start_date(), result);
     }
 
+    // Percentiles at the 5th, 25th, 50th, 75th and 95th (C# `SummaryPercentiles`, 1422).
+    std::vector<double> summary_percentiles() const {
+        return percentiles({0.05, 0.25, 0.5, 0.75, 0.95});
+    }
+
+    // Percentiles at the requested probabilities (C# 1431), over the NaN-filtered sorted values.
+    std::vector<double> percentiles(const std::vector<double>& k_values) const {
+        std::vector<double> data;
+        for (double v : values_to_array())
+            if (!std::isnan(v)) data.push_back(v);
+        std::sort(data.begin(), data.end());
+        return percentile(data, k_values, true);
+    }
+
+    // The duration (percent-of-time exceedance) curve (C# 1442): Weibull plotting positions in
+    // percent against the values sorted DESCENDING. Returned as n rows of {percent, value}.
+    std::vector<std::vector<double>> duration() const {
+        std::vector<double> data;
+        for (double v : values_to_array())
+            if (!std::isnan(v)) data.push_back(v);
+        std::vector<double> pp = plotting_positions::weibull(static_cast<int>(data.size()));
+        std::sort(data.begin(), data.end());
+        std::reverse(data.begin(), data.end());
+        std::vector<std::vector<double>> result;
+        result.reserve(data.size());
+        for (std::size_t i = 0; i < data.size(); ++i) result.push_back({pp[i] * 100, data[i]});
+        return result;
+    }
+
+    // Percentiles by calendar month (C# 1462): 12 rows, one column per requested probability. The
+    // C# runs the twelve months through `Parallel.For`, which each write only their own row, so a
+    // serial loop is bit-identical. UNLIKE `monthly_summary_statistics` below, this one does NOT
+    // filter NaN, so a month holding one missing value gives NaN percentiles.
+    std::vector<std::vector<double>> monthly_percentiles(const std::vector<double>& k_values) const {
+        std::vector<std::vector<double>> result(
+            12, std::vector<double>(k_values.size(), 0.0));
+        if (k_values.empty()) return result;
+        for (int index = 1; index <= 12; ++index) {
+            std::vector<double> monthly_data;
+            for (int j = 0; j < count(); ++j)
+                if ((*this)[j].index().month() == index) monthly_data.push_back((*this)[j].value());
+            std::sort(monthly_data.begin(), monthly_data.end());
+            if (!monthly_data.empty()) {
+                for (std::size_t j = 0; j < k_values.size(); ++j)
+                    result[static_cast<std::size_t>(index - 1)][j] =
+                        percentile(monthly_data, k_values[j], true);
+            }
+        }
+        return result;
+    }
+
+    // Summary statistics by calendar month (C# 1492): 12 rows of {min, 5%, 25%, 50%, 75%, 95%,
+    // max, mean}. A month with no observed value keeps its all-zero row (the C# `return` inside
+    // the parallel body skips it). The mean column is `Statistics.ParallelMean` upstream, whose
+    // PLINQ partitioned sum is not reproducible against itself across machines (see
+    // docs/upstream-csharp-issues.md); the port sums serially, so that column can differ from a
+    // given C# run in its last bits.
+    std::vector<std::vector<double>> monthly_summary_statistics() const {
+        std::vector<std::vector<double>> summary(12, std::vector<double>(8, 0.0));
+        for (int index = 1; index <= 12; ++index) {
+            std::vector<double> monthly_data;
+            for (int j = 0; j < count(); ++j)
+                if ((*this)[j].index().month() == index && !std::isnan((*this)[j].value()))
+                    monthly_data.push_back((*this)[j].value());
+            if (monthly_data.empty()) continue;
+            std::sort(monthly_data.begin(), monthly_data.end());
+            std::size_t row = static_cast<std::size_t>(index - 1);
+            summary[row][0] = monthly_data.front();
+            summary[row][1] = percentile(monthly_data, 0.05, true);
+            summary[row][2] = percentile(monthly_data, 0.25, true);
+            summary[row][3] = percentile(monthly_data, 0.5, true);
+            summary[row][4] = percentile(monthly_data, 0.75, true);
+            summary[row][5] = percentile(monthly_data, 0.95, true);
+            summary[row][6] = monthly_data.back();
+            summary[row][7] = parallel_mean(monthly_data);
+        }
+        return summary;
+    }
+
+    // The fifteen summary statistics (C# 1521), as an ORDERED key/value list because the C#
+    // `Dictionary` insertion order is what a caller reads them back in. The `Count <= 2` guard
+    // reads the ORDINATE count, not the observed count, so a three-ordinate series with a missing
+    // value still takes the compute branch.
+    std::vector<std::pair<std::string, double>> summary_statistics() const {
+        std::vector<double> values;
+        for (const auto& o : series_ordinates_)
+            if (!std::isnan(o.value())) values.push_back(o.value());
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        std::vector<double> moments =
+            count() <= 2 ? std::vector<double>{nan, nan, nan, nan} : product_moments(values);
+        std::vector<double> pct =
+            count() <= 2 ? std::vector<double>{nan, nan, nan, nan, nan, nan, nan}
+                         : percentiles({0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99});
+
+        std::vector<std::pair<std::string, double>> result;
+        result.emplace_back("Record Length", static_cast<double>(count()));
+        result.emplace_back("Missing Values", static_cast<double>(number_of_missing_values()));
+        result.emplace_back("Minimum", minimum(values));
+        result.emplace_back("Maximum", maximum(values));
+        result.emplace_back("Mean", moments[0]);
+        result.emplace_back("Std Dev", moments[1]);
+        result.emplace_back("Skewness", moments[2]);
+        result.emplace_back("Kurtosis", moments[3]);
+        result.emplace_back("1%", pct[0]);
+        result.emplace_back("5%", pct[1]);
+        result.emplace_back("25%", pct[2]);
+        result.emplace_back("50%", pct[3]);
+        result.emplace_back("75%", pct[4]);
+        result.emplace_back("95%", pct[5]);
+        result.emplace_back("99%", pct[6]);
+        return result;
+    }
+
+    // Seven hypothesis tests over the observed values (C# 1551), split into two samples at
+    // `split_location` (default: half the OBSERVED count). This is NOT the RMC.BestFit
+    // `DataFrame.SummaryHypothesisTest` facade, which has ten differently-named keys and splits on
+    // an ordinate index -- the two are separate methods and are not shared.
+    std::vector<std::pair<std::string, double>> summary_hypothesis_test(
+        int split_location = -1) const {
+        std::vector<double> values;
+        for (const auto& o : series_ordinates_)
+            if (!std::isnan(o.value())) values.push_back(o.value());
+        int split = split_location < 0
+                        ? static_cast<int>(static_cast<double>(values.size()) / 2)
+                        : split_location;
+        std::vector<double> v1 = utilities::subset(values, 0, split);
+        std::vector<double> v2 =
+            utilities::subset(values, split + 1, static_cast<int>(values.size()) - 1);
+
+        std::vector<std::pair<std::string, double>> result;
+        result.emplace_back("Jarque-Bera test for normality",
+                            hypothesis_tests::jarque_bera_test(values));
+        result.emplace_back("Ljung-Box test for independence",
+                            hypothesis_tests::ljung_box_test(values));
+        result.emplace_back("Wald-Wolfowitz test for independence and stationarity (trend)",
+                            hypothesis_tests::wald_wolfowitz_test(values));
+        result.emplace_back(
+            "Mann-Whitney test for homogeneity and stationarity (jump)",
+            hypothesis_tests::mann_whitney_test(v1.size() <= v2.size() ? v1 : v2,
+                                                v1.size() > v2.size() ? v1 : v2));
+        result.emplace_back("Mann-Kendall test for homogeneity and stationarity (trend)",
+                            hypothesis_tests::mann_kendall_test(values));
+        result.emplace_back("t-test for differences in the means of two samples",
+                            hypothesis_tests::unequal_variance_t_test(v1, v2));
+        result.emplace_back("F-test for differences in the variances of two samples",
+                            hypothesis_tests::f_test(v1, v2));
+        return result;
+    }
+
+    // --- Frequency analysis (C# 1577-2193). ---
+
+    // The number of ordinates falling in each calendar month (C# `MonthlyFrequency`, 1577).
+    // Counts ORDINATES, missing values included.
+    std::vector<double> monthly_frequency() const {
+        std::vector<double> frequencies(12, 0.0);
+        for (int i = 1; i <= 12; ++i) {
+            int n = 0;
+            for (const auto& o : series_ordinates_)
+                if (o.index().month() == i) ++n;
+            frequencies[static_cast<std::size_t>(i - 1)] = static_cast<double>(n);
+        }
+        return frequencies;
+    }
+
+    // An annual (irregular) block series over calendar years (C# 1591).
+    TimeSeries calendar_year_series(BlockFunctionType block_function = BlockFunctionType::Maximum,
+                                    SmoothingFunctionType smoothing_function =
+                                        SmoothingFunctionType::None,
+                                    int period = 1) {
+        TimeSeries result(TimeInterval::Irregular);
+        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
+            std::vector<Ordinate> block_data;
+            for (const auto& o : smoothed)
+                if (o.index().year() == i) block_data.push_back(o);
+            Ordinate ordinate = apply_block_function(block_data, block_function);
+            if (!std::isnan(ordinate.value())) result.add(ordinate);
+        }
+        return result;
+    }
+
+    // An annual (irregular) block series over a 12-month year starting at `start_month` -- the
+    // water-year form (C# 1682). The series is shifted FORWARD by `12 - start_month + 1` months,
+    // grouped by the shifted year, and the result shifted BACK, which is why the returned dates
+    // are the original event dates.
+    TimeSeries custom_year_series(int start_month = 10,
+                                  BlockFunctionType block_function = BlockFunctionType::Maximum,
+                                  SmoothingFunctionType smoothing_function =
+                                      SmoothingFunctionType::None,
+                                  int period = 1) {
+        if (start_month < 1 || start_month > 12)
+            throw std::out_of_range("The start month be between 1 and 12.");
+
+        TimeSeries result(TimeInterval::Irregular);
+        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+
+        int shift = start_month != 1 ? 12 - start_month + 1 : 0;
+        if (start_month != 1) smoothed = smoothed.shift_dates_by_month(shift);
+
+        for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
+            std::vector<Ordinate> block_data;
+            for (const auto& o : smoothed)
+                if (o.index().year() == i) block_data.push_back(o);
+            Ordinate ordinate = apply_block_function(block_data, block_function);
+            if (!std::isnan(ordinate.value())) result.add(ordinate);
+        }
+
+        if (start_month != 1) result = result.shift_dates_by_month(-shift);
+        return result;
+    }
+
+    // An annual (irregular) block series over an arbitrary month window (C# 1786). When
+    // `start_month > end_month` the window straddles two calendar years and the earlier months are
+    // taken from year i - 1.
+    TimeSeries custom_year_series(int start_month, int end_month,
+                                  BlockFunctionType block_function = BlockFunctionType::Maximum,
+                                  SmoothingFunctionType smoothing_function =
+                                      SmoothingFunctionType::None,
+                                  int period = 1) {
+        if (start_month < 1 || start_month > 12)
+            throw std::out_of_range("The start month be between 1 and 12.");
+        if (end_month < 1 || end_month > 12)
+            throw std::out_of_range("The start month be between 1 and 12.");
+
+        TimeSeries result(TimeInterval::Irregular);
+        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+
+        for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
+            std::vector<Ordinate> block_data;
+            if (start_month <= end_month) {
+                for (int j = start_month; j <= end_month; ++j)
+                    for (const auto& o : smoothed)
+                        if (o.index().year() == i && o.index().month() == j)
+                            block_data.push_back(o);
+            } else {
+                for (int j = start_month; j <= 12; ++j)
+                    for (const auto& o : smoothed)
+                        if (o.index().year() == i - 1 && o.index().month() == j)
+                            block_data.push_back(o);
+                for (int j = 1; j <= end_month; ++j)
+                    for (const auto& o : smoothed)
+                        if (o.index().year() == i && o.index().month() == j)
+                            block_data.push_back(o);
+            }
+            Ordinate ordinate = apply_block_function(block_data, block_function);
+            if (!std::isnan(ordinate.value())) result.add(ordinate);
+        }
+        return result;
+    }
+
+    // A monthly (irregular) block series (C# 1909).
+    TimeSeries monthly_series(BlockFunctionType block_function = BlockFunctionType::Maximum,
+                              SmoothingFunctionType smoothing_function =
+                                  SmoothingFunctionType::None,
+                              int period = 1) {
+        TimeSeries result(TimeInterval::Irregular);
+        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
+            for (int k = 1; k <= 12; ++k) {
+                std::vector<Ordinate> block_data;
+                for (const auto& o : smoothed)
+                    if (o.index().year() == i && o.index().month() == k) block_data.push_back(o);
+                Ordinate ordinate = apply_block_function(block_data, block_function);
+                if (!std::isnan(ordinate.value())) result.add(ordinate);
+            }
+        }
+        return result;
+    }
+
+    // A quarterly (irregular) block series (C# 2004), over the fixed Jan-Mar / Apr-Jun / Jul-Sep /
+    // Oct-Dec quarters.
+    TimeSeries quarterly_series(BlockFunctionType block_function = BlockFunctionType::Maximum,
+                                SmoothingFunctionType smoothing_function =
+                                    SmoothingFunctionType::None,
+                                int period = 1) {
+        const int q_start[4] = {1, 4, 7, 10};
+        const int q_end[4] = {3, 6, 9, 12};
+
+        TimeSeries result(TimeInterval::Irregular);
+        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+
+        for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
+            for (int q = 0; q < 4; ++q) {
+                std::vector<Ordinate> block_data;
+                for (int j = q_start[q]; j <= q_end[q]; ++j)
+                    for (const auto& o : smoothed)
+                        if (o.index().year() == i && o.index().month() == j)
+                            block_data.push_back(o);
+                Ordinate ordinate = apply_block_function(block_data, block_function);
+                if (!std::isnan(ordinate.value())) result.add(ordinate);
+            }
+        }
+        return result;
+    }
+
+    // A peaks-over-threshold (irregular) series (C# 2123), following the `clust` method of the R
+    // POT package: the first exceedance opens a cluster, the first value below the threshold
+    // closes it UNLESS the minimum step count between events has not yet elapsed, and the next
+    // exceedance opens the next cluster.
+    //
+    // Two behaviours preserved as written. The within-cluster maximum uses `>=`, so the LAST tied
+    // peak wins. And the outer loop resumes at `idx + 1` rather than `idx`, skipping one
+    // observation after each cluster -- which looks like an off-by-one but provably cannot drop a
+    // peak: the inner loop only exits when the value at `idx` is at or below the threshold (its
+    // continue condition is "above threshold OR minimum steps not yet elapsed"), so the skipped
+    // observation is never an exceedance.
+    TimeSeries peaks_over_threshold_series(double threshold, int min_steps_between_events = 1,
+                                           SmoothingFunctionType smoothing_function =
+                                               SmoothingFunctionType::None,
+                                           int period = 1) {
+        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+
+        int i = 0, idx = 0, idx_max = 0;
+        std::vector<std::array<int, 2>> clusters;
+
+        while (i < smoothed.count()) {
+            if (!std::isnan(smoothed[i].value()) && smoothed[i].value() > threshold) {
+                clusters.push_back({i, 0});
+                idx = i + 1;
+                idx_max = idx;
+
+                while (idx < smoothed.count() &&
+                       ((!std::isnan(smoothed[idx].value()) &&
+                         smoothed[idx].value() > threshold) ||
+                        smoothed.check_if_min_steps_exceeded(smoothed[idx_max].index(),
+                                                             smoothed[idx].index(),
+                                                             min_steps_between_events) == false)) {
+                    if (!std::isnan(smoothed[idx].value()) &&
+                        smoothed[idx].value() >= smoothed[idx_max].value())
+                        idx_max = idx;
+                    idx++;
+                }
+
+                clusters.back()[1] = idx - 1;
+                i = idx + 1;
+            } else {
+                i++;
+            }
+        }
+
+        TimeSeries result(TimeInterval::Irregular);
+        for (std::size_t c = 0; c < clusters.size(); ++c) {
+            Ordinate max = smoothed[clusters[c][0]].clone();
+            for (int j = clusters[c][0] + 1; j <= clusters[c][1]; ++j)
+                if (smoothed[j].value() >= max.value()) max = smoothed[j].clone();
+            result.add(max);
+        }
+        return result;
+    }
+
+    // --- Decomposition and resampling (C# 1043 / 2217 / 2279). ---
+
+    // Classical additive seasonal decomposition with FFT-based seasonal extraction (C# 1043). The
+    // trend is `moving_average(period)`, the detrended series is zero-padded to a power of two and
+    // transformed, only the harmonic bins of the seasonal frequency are kept, and the inverse
+    // transform is scaled by `2 / fft_length`. The residual is defined only where the trend is.
+    // The result of `seasonal_decompose` (C# returns a named tuple). Declared here and defined
+    // after the class, because it holds TimeSeries members by value.
+    struct SeasonalDecomposition;
+    SeasonalDecomposition seasonal_decompose(int period);
+
+    // The conditional k-nearest-neighbour bootstrap of Lall and Sharma (1996) (C# 2217). At each
+    // step it finds the K historical observations closest to the current (standardized) state,
+    // picks one at random, and advances to the observation that historically came AFTER it -- the
+    // `+1` is what makes it a bootstrap of p(x_{t+1} | x_t) rather than a near-stationary walk.
+    //
+    // The PRNG draw order is oracle-visible: one `next(Count - 1)` for the start index, then one
+    // `next(k_nearest.size())` per step. The kNN candidate set EXCLUDES the last observation so
+    // that `selected + 1` is always in range.
+    TimeSeries resample_with_knn(int time_steps, int k, int seed = 12345) const {
+        if (count() < 11) throw std::invalid_argument("Need at least 11 points for KNN resampling.");
+        if (time_steps < 1)
+            throw std::invalid_argument("The number of time steps must be at least 1.");
+
+        TimeSeries time_series(time_interval_);
+        sampling::MersenneTwister prng(seed);
+        int start_idx = prng.next(count() - 1);
+        double current_value = (*this)[start_idx].value();
+        DateTime current_date = start_date();
+        time_series.add(Ordinate(current_date, current_value));
+
+        double mean = mean_value();
+        double std_dev = standard_deviation();
+        TimeSeries std_data = clone();
+        std_data.standardize();
+        std::vector<double> std_values = std_data.values_to_array();
+
+        std::vector<double> candidate_values(std_values.begin(),
+                                             std_values.begin() + (count() - 1));
+
+        machine_learning::KNearestNeighbors knn(candidate_values, candidate_values, k);
+        for (int i = 1; i < time_steps; ++i) {
+            double val = (current_value - mean) / std_dev;
+            auto k_nearest = knn.get_neighbors(std::vector<double>{val});
+            if (!k_nearest.has_value()) continue;
+            int selected_idx =
+                (*k_nearest)[static_cast<std::size_t>(prng.next(static_cast<int>(k_nearest->size())))];
+            current_value = (*this)[selected_idx + 1].value();
+            current_date = add_time_interval(current_date, time_interval_);
+            time_series.add(Ordinate(current_date, current_value));
+        }
+
+        return time_series;
+    }
+
+    // A fixed-block bootstrap (C# 2279). Despite the doc comment's "non-overlapping" wording it
+    // collects EVERY contiguous block of `block_size`, draws blocks uniformly with replacement
+    // until the requested length is reached, then trims.
+    TimeSeries resample_with_block_bootstrap(int time_steps, int block_size,
+                                             int seed = 12345) const {
+        if (count() < 2) throw std::invalid_argument("Need at least 2 points for resampling.");
+        if (count() < block_size)
+            throw std::invalid_argument("Block size is too large for this time series data.");
+        if (time_steps < 1)
+            throw std::invalid_argument("The number of time steps must be at least 1.");
+
+        std::vector<double> data = values_to_array();
+        std::vector<std::vector<double>> blocks;
+        for (int i = 0; i <= count() - block_size; ++i)
+            blocks.emplace_back(data.begin() + i, data.begin() + i + block_size);
+
+        sampling::MersenneTwister prng(seed);
+        std::vector<double> synthetic;
+        while (static_cast<int>(synthetic.size()) < time_steps) {
+            int index = prng.next(static_cast<int>(blocks.size()));
+            const std::vector<double>& block = blocks[static_cast<std::size_t>(index)];
+            synthetic.insert(synthetic.end(), block.begin(), block.end());
+        }
+
+        synthetic.resize(static_cast<std::size_t>(time_steps));
+        return TimeSeries(time_interval_, start_date(), synthetic);
+    }
+
     // Creates a deep copy (C# 2329 `Clone()`, which round-trips through `ToXElement()`). XML is
     // severed, and the round trip is value-preserving anyway: C# writes the index with the "o"
     // format and the value with "G17", both round-trip formats, and `NaN` survives
@@ -825,6 +1277,67 @@ class TimeSeries : public Series<DateTime, double> {
     }
 
    protected:
+    // The smoothing step every block-series method opens with (C# copies these seven lines into
+    // each of the five). `period == 1` short-circuits the two moving windows to a plain clone,
+    // and the Difference arm passes `period` as the LAG, not as a window length.
+    TimeSeries smooth_for_block(SmoothingFunctionType smoothing_function, int period) {
+        if (smoothing_function == SmoothingFunctionType::MovingAverage)
+            return period == 1 ? clone() : moving_average(period);
+        if (smoothing_function == SmoothingFunctionType::MovingSum)
+            return period == 1 ? clone() : moving_sum(period);
+        if (smoothing_function == SmoothingFunctionType::Difference) return difference(period);
+        return clone();
+    }
+
+    // The block function every block-series method applies (C# copies this body four times per
+    // method, five methods over). Extracted because the five copies are byte-for-byte the same
+    // computation, and the details ARE the contract:
+    //   - Minimum seeds at `double.MaxValue` and Maximum at `double.MinValue`, both with a STRICT
+    //     comparison, so a block whose values are all NaN leaves the ordinate at its NaN default
+    //     and the caller's `if (!IsNaN)` guard drops it -- which is how a year holding one missing
+    //     value disappears from a Sum or Average series.
+    //   - Minimum and Maximum stamp the EXTREMUM's own date; Sum and Average stamp the LAST
+    //     ordinate's date.
+    static Ordinate apply_block_function(const std::vector<Ordinate>& block_data,
+                                         BlockFunctionType block_function) {
+        Ordinate ordinate;
+        ordinate.set_value(std::numeric_limits<double>::quiet_NaN());
+        if (block_function == BlockFunctionType::Minimum) {
+            double min = std::numeric_limits<double>::max();
+            for (std::size_t j = 0; j < block_data.size(); ++j) {
+                if (block_data[j].value() < min) {
+                    min = block_data[j].value();
+                    ordinate.set_index(block_data[j].index());
+                    ordinate.set_value(block_data[j].value());
+                }
+            }
+        } else if (block_function == BlockFunctionType::Maximum) {
+            double max = std::numeric_limits<double>::lowest();
+            for (std::size_t j = 0; j < block_data.size(); ++j) {
+                if (block_data[j].value() > max) {
+                    max = block_data[j].value();
+                    ordinate.set_index(block_data[j].index());
+                    ordinate.set_value(block_data[j].value());
+                }
+            }
+        } else if (block_function == BlockFunctionType::Sum) {
+            double sum = 0;
+            for (std::size_t j = 0; j < block_data.size(); ++j) sum += block_data[j].value();
+            if (!block_data.empty()) {
+                ordinate.set_index(block_data.back().index());
+                ordinate.set_value(sum);
+            }
+        } else if (block_function == BlockFunctionType::Average) {
+            double sum = 0;
+            for (std::size_t j = 0; j < block_data.size(); ++j) sum += block_data[j].value();
+            if (!block_data.empty()) {
+                ordinate.set_index(block_data.back().index());
+                ordinate.set_value(sum / static_cast<double>(block_data.size()));
+            }
+        }
+        return ordinate;
+    }
+
     // C#'s indexed math overloads all guard with `indexes[i] >= 0 && indexes[i] < Count`.
     bool in_range(int index) const { return index >= 0 && index < count(); }
 
@@ -876,5 +1389,76 @@ class TimeSeries : public Series<DateTime, double> {
 
     TimeInterval time_interval_ = TimeInterval::OneDay;
 };
+
+// The result of `TimeSeries::seasonal_decompose` (C# returns a named `(Trend, Seasonal, Residual)`
+// tuple).
+struct TimeSeries::SeasonalDecomposition {
+    TimeSeries trend;
+    std::vector<double> seasonal;
+    TimeSeries residual;
+};
+
+inline TimeSeries::SeasonalDecomposition TimeSeries::seasonal_decompose(int period) {
+        if (period < 2) throw std::invalid_argument("Period must be at least 2.");
+        if (count() < 2 * period)
+            throw std::invalid_argument("Time series must contain at least 2 complete periods.");
+
+        sort_by_time();
+        int n = count();
+
+        TimeSeries trend = moving_average(period);
+
+        std::vector<double> values(static_cast<std::size_t>(n));
+        std::vector<double> trend_full(static_cast<std::size_t>(n), 0.0);
+        std::vector<bool> has_trend(static_cast<std::size_t>(n), false);
+        for (int i = 0; i < n; ++i) values[static_cast<std::size_t>(i)] = (*this)[i].value();
+
+        int trend_start = period - 1;
+        for (int i = 0; i < trend.count(); ++i) {
+            trend_full[static_cast<std::size_t>(trend_start + i)] = trend[i].value();
+            has_trend[static_cast<std::size_t>(trend_start + i)] = true;
+        }
+
+        std::vector<double> detrended(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            std::size_t k = static_cast<std::size_t>(i);
+            detrended[k] = has_trend[k] ? values[k] - trend_full[k] : 0.0;
+        }
+
+        int fft_length = static_cast<int>(
+            std::pow(2, std::ceil(std::log(static_cast<double>(n)) / std::log(2.0))));
+        if (fft_length < n) fft_length *= 2;
+        std::vector<double> fft_data(static_cast<std::size_t>(fft_length), 0.0);
+        for (int i = 0; i < n; ++i)
+            fft_data[static_cast<std::size_t>(i)] = detrended[static_cast<std::size_t>(i)];
+
+        math::fourier::real_fft(fft_data);
+
+        std::vector<double> filtered(static_cast<std::size_t>(fft_length), 0.0);
+        for (int h = 1;; ++h) {
+            int k = static_cast<int>(
+                std::round(static_cast<double>(h) * fft_length / period));
+            if (k <= 0 || k >= fft_length / 2) break;
+            filtered[static_cast<std::size_t>(2 * k)] = fft_data[static_cast<std::size_t>(2 * k)];
+            filtered[static_cast<std::size_t>(2 * k + 1)] =
+                fft_data[static_cast<std::size_t>(2 * k + 1)];
+        }
+
+        math::fourier::real_fft(filtered, true);
+
+        std::vector<double> seasonal(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i)
+            seasonal[static_cast<std::size_t>(i)] =
+                filtered[static_cast<std::size_t>(i)] * 2.0 / fft_length;
+
+        TimeSeries residual(time_interval_);
+        for (int i = 0; i < n; ++i) {
+            std::size_t k = static_cast<std::size_t>(i);
+            if (has_trend[k])
+                residual.add(Ordinate((*this)[i].index(), values[k] - trend_full[k] - seasonal[k]));
+        }
+
+        return SeasonalDecomposition{trend, seasonal, residual};
+}
 
 }  // namespace corehydro::numerics::data
