@@ -5,47 +5,50 @@ toc: false
 
 Disposition of every notebook and script in
 [Numerics-Python-Examples](https://github.com/USACE-RMC/Numerics-Python-Examples)
-with respect to this port. "Ported" examples reproduce the upstream results
-(exactly where seeded and deterministic). "Recast" examples cover the same
-statistical content through this package's public API, where the upstream code
-drove the C# classes directly in ways this API deliberately does not expose
-(notably custom prior lists and Python-callback likelihoods). "Out of scope"
-areas were never part of the C++ port, which targets the probability,
-estimation, and analysis layers of Numerics plus all of RMC-BestFit.
+with respect to this port. Every upstream topic is now covered. "Ported" examples
+reproduce the upstream results (exactly where seeded and deterministic). "Recast"
+examples cover the same statistical content through this package's public API, where
+the upstream code drove the C# classes directly in ways this API deliberately does not
+expose (notably custom prior lists and Python-callback likelihoods), or where the
+material moved onto a page of this site that organizes it differently.
 
 | Upstream | Topic | Status | Notes |
 |----------|-------|--------|-------|
 | `00_getting_started` | Loading the library, first distribution | [Ported](00-getting-started/python.ipynb) | pythonnet/DLL plumbing replaced by a plain package install |
 | `01_distributions` | Distribution tour, sampling, Latin hypercube | [Ported](01-distributions/python.ipynb) | all 10 families and the seeded draws reproduce exactly |
 | `02_distribution_fitting` | MOM / MLE / L-moment fitting | [Ported](02-distribution-fitting/python.ipynb) | fitted parameters reproduce exactly |
-| `03_mcmc_basics` | RWMH fundamentals | [Recast](03-mcmc-basics/python.ipynb) | fixed-parameter model and hand-picked priors not expressible; recast to `mcmc_sample()` |
+| `03_mcmc_basics` | RWMH fundamentals | [Recast](03-mcmc-basics/python.ipynb) | recast onto `mcmc_sample()`, which fits a named family under constraint-based priors; the hand-written likelihood and hand-picked priors this notebook uses are reachable through `mcmc_posterior()` (example 14) |
 | `04_mcmc_bayesian_inference` | Bayesian flood frequency | [Ported](04-bayesian-inference/python.ipynb) | same priors, seed, and serial chains as upstream; acceptance streams bit-exact vs C#, posterior tables reproduce at displayed precision (documented ulp drift in the MAP optimizer) |
 | `05_mcmc_adaptive` | Adaptive sampler comparison | [Recast](05-mcmc-samplers/python.ipynb) | PyMC benchmark sections dropped |
-| `06_mcmc_diagnostics` | R-hat, ESS, autocorrelation | [Recast](06-mcmc-diagnostics/python.ipynb) | diagnostics on arbitrary external chains not exposed |
-| `07_integration_and_root_finding` | Numerical integration, root finding | Out of scope | the Numerics `Mathematics.Integration` / `RootFinding` namespaces are not part of the port |
-| `08_optimization` | Local and global optimizers | [Recast](13-custom-objective/python.ipynb) | all six ported optimizers (DE, BFGS, Powell, MLSL, Nelder-Mead, Brent) are now public via `optim_minimize()`/`optim_maximize()`, not just internal to the estimation layer; example 13 fits a different (rating-curve) likelihood rather than reproducing this notebook's specific test functions |
-| `09_statistics` | Statistical tests, transforms, outliers | [Ported (partial)](09-statistics/python.ipynb) | MGBT, Box-Cox/Yeo-Johnson, plotting positions, bootstrap covered; `hypothesis_test()` now covers t/Mann-Whitney/Mann-Kendall/Jarque-Bera/Wald-Wolfowitz/Ljung-Box (example 28); KS tests and Jenks breaks are not ported |
-| `10_time_series` | TimeSeries container operations | Out of scope | the heavy Numerics `TimeSeries` container (interpolation, file I/O, USGS download) is a documented severance; AR/MA/ARIMA/ARIMAX *models* are ported |
-| `11_machine_learning` | K-Means, random forest, KNN, GMM | Out of scope | the `Numerics.MachineLearning` namespace is not part of the port |
-| `12_linear_models` | GLM regression | Out of scope | the `Numerics.MachineLearning` GLM layer is not part of the port |
+| `06_mcmc_diagnostics` | R-hat, ESS, autocorrelation | [Recast](06-mcmc-diagnostics/python.ipynb) | R-hat and ESS come back with the fit rather than as verbs of their own, so there is no way to score a chain the package did not produce; `autocorrelation()` does take any series |
+| `07_integration_and_root_finding` | Numerical integration, root finding | [Recast](18-numerical-methods/python.ipynb) | both namespaces ported in v0.9.0; `quadrature()` covers ten deterministic rules plus three seeded Monte Carlo families, `root_find()` four methods; example 18 runs them over its own functions rather than this notebook's |
+| `08_optimization` | Local and global optimizers | [Recast](19-global-optimizers/python.ipynb) | all fourteen optimizers are public through `optim_minimize()`/`optim_maximize()` as of v0.10.0, constrained optimization included; example 13 fits a rating-curve likelihood and example 19 covers the global, constrained, and network methods, neither reproducing this notebook's specific test functions |
+| `09_statistics` | Statistical tests, transforms, outliers | [Ported](09-statistics/python.ipynb) | MGBT, Box-Cox/Yeo-Johnson, plotting positions, and bootstrap here; the thirteen `hypothesis_test()` statics and the paired-data curves in example 28; Jenks breaks as `ml_jenks_breaks()` in example 29 |
+| `10_time_series` | TimeSeries container operations | [Ported](30-time-series/python.ipynb) | the container landed in v0.13.0; file I/O and the USGS download stay out, everything else is public through `time_series()` and the `ts_*()` verbs |
+| `11_machine_learning` | K-Means, random forest, KNN, GMM | [Ported](29-machine-learning/python.ipynb) | the whole `Numerics.MachineLearning` namespace landed in v0.12.0 as the eight `ml_*()` verbs |
+| `12_linear_models` | GLM regression | [Ported](29-machine-learning/python.ipynb) | `ml_glm()`, all five families selected by link |
 | `examples/bayesian_regression.py` | DEMCzs linear regression | [Recast](20-bayesian-regression/python.ipynb) | recast onto `arimax_analysis` with a linear trend |
-| `examples/flood_frequency_analysis.py` | Distribution ranking, design flows | [Ported](21-flood-frequency/python.ipynb) | fits and return-period tables reproduce exactly; ranking by log-likelihood/AIC instead of the unported KS test |
+| `examples/flood_frequency_analysis.py` | Distribution ranking, design flows | [Ported](21-flood-frequency/python.ipynb) | fits and return-period tables reproduce exactly; ranking by log-likelihood and AIC rather than the KS test, which does not penalize GEV's extra parameter |
 | `examples/reliability_analysis.py` | Monte Carlo reliability | [Ported](22-reliability/python.ipynb) | uses the `LnNormal` family in place of C# `LogNormal.Base = e`; results reproduce exactly |
 
 : {tbl-colwidths="[22,26,14,38]"}
 
 ## Beyond the upstream examples
 
-The upstream repository exercises the Numerics half of the library. These examples cover
-capabilities of RMC.BestFit that it never reaches, so they have no upstream counterpart
-and no upstream outputs to reproduce against. Each still ends in an executable check, and
-each pair asserts the same literals in R and Python, which is what pins the
-cross-language identity.
+These examples cover ground the upstream notebooks never reach, most of it RMC-BestFit
+and the rest the callback surface, so they have no upstream counterpart and no upstream
+outputs to reproduce against. Each still ends in an executable check, and each pair
+asserts the same literals in R and Python, which is what pins the cross-language
+identity.
 
 | Example | Covers |
 |---------|--------|
 | [12. Model evaluation](12-model-evaluation/python.ipynb) | `goodness_of_fit()`, `gof_test()` (KS/AD), `gof_rmse()`, `aic()`/`aic_weights()`, and `classification_metrics()`, ranking four candidate distributions against the same record example 21 uses |
 | [13. A custom objective](13-custom-objective/python.ipynb) | `optim_minimize()`/`optim_maximize()` over a hand-written likelihood the port does not otherwise know how to fit; global (`"de"`) versus local (`"bfgs"`) optimization, and the sign convention of `optim_maximize()`'s reported value |
+| [14. A custom posterior](14-custom-posterior/python.ipynb) | `mcmc_posterior()` over a log-likelihood and priors you write, reaching all eight samplers -- Gibbs included, which needs a proposal function and so had been unreachable from either package |
+| [15. A custom bootstrap](15-custom-bootstrap/python.ipynb) | `bootstrap_custom()` over the four upstream delegates and all five interval methods, putting an interval on a statistic no verb computes; drawing inside `resample` from the handle the replicate passes in |
+| [16. Ranking fifteen candidate families](16-fifteen-candidate-fitting/python.ipynb) | `fit_distributions()` on its own terms: what the fifteen candidates are, why AIC, BIC and RMSE can each name a different winner, and reading the `converged` column |
+| [17. A pivotal bootstrap](17-pivotal-bootstrap/python.ipynb) | `bootstrap_custom(run_type = "pivotal")`, the covariance-aware run type: the `fit_with_covariance` function it adds, both interval blocks it reports, the six replicate counts in `pivotal_diagnostics`, and standardizing in link space |
 | [23. Censored flood frequency](23-censored-flood-frequency/python.ipynb) | historical and paleoflood interval observations, perception thresholds, Hirsch-Stedinger plotting positions, Multiple Grubbs-Beck low outliers |
 | [24. Nonstationary frequency analysis](24-nonstationary-trends/python.ipynb) | trends on a distribution parameter, stationary versus nonstationary model comparison by AIC, BIC, and DIC |
 | [25. Estimation methods](25-estimation-methods/python.ipynb) | `fit_mle`, `fit_map`, `fit_bayesian`, and `fit_gmm` on the same censored record; AIC/BIC/DIC, profile versus credible intervals, R-hat/ESS, and estimation diagnostics |

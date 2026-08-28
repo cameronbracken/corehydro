@@ -34,10 +34,9 @@ library(corehydror)
 
 ## Descriptive statistics
 
-The upstream section drives the Numerics `Statistics` class. That class exists in
-the port's core but is internal: the packages do not re-export what numpy, pandas,
-and base R already do well. The estimators are the same, so the base R versions
-below reproduce the upstream summary table digit for digit:
+The upstream section drives the Numerics `Statistics` class. `summary_statistics()`
+exposes it, but the estimators are the same ones base R already has, so this page
+stays in base R and the summary table below reproduces the upstream digit for digit:
 
 - `Statistics.Variance` uses Bessel's correction (divide by $n-1$), like `var()`
   and `sd()`.
@@ -120,11 +119,10 @@ cat(
 
 The upstream section uses the Numerics `Correlation` class for three measures:
 Pearson (linear association), Spearman (Pearson on ranks, so monotonic
-association), and Kendall's $\tau_b$ (concordance, tie-adjusted). Like
-`Statistics`, that class is internal to the port; base R's `cor()` computes the
-same coefficients, and the seeded data is identical. Kendall's $\tau_b$ comes from
-`cor(method = "kendall")` in R or `scipy.stats.kendalltau` in Python; on this data
-it also equals 1.
+association), and Kendall's $\tau_b$ (concordance, tie-adjusted). `correlation()`
+exposes all three, and its matrix form as well (example 28); base R's `cor()`
+computes the same coefficients on the same seeded data, so this page stays in base
+R. Kendall's $\tau_b$ equals 1 here too.
 
 Two upstream quirks worth knowing. Reusing seed 321 for both the temperature and
 the noise makes the noise an exactly linear function of temperature, so the
@@ -150,18 +148,20 @@ plot(temperature, sales,
 )
 ```
 
-## Not ported: hypothesis tests, Grubbs-Beck, Jenks
+## Covered elsewhere: hypothesis tests, Grubbs-Beck, Jenks
 
-The upstream notebook's middle sections use classes this port does not expose:
+The upstream notebook's middle sections use three groups of classes that have
+pages of their own here:
 
-- Hypothesis tests (one- and two-sample t, Mann-Whitney U, Kolmogorov-Smirnov):
-  the Numerics `HypothesisTests` and `GoodnessOfFit` classes are internal to the
-  core, and base R's `t.test`, `wilcox.test`, and `ks.test` (or `scipy.stats` in
-  Python) cover the same ground.
-- The single Grubbs-Beck outlier test is not public; only the Multiple
-  Grubbs-Beck generalization below is, because that is the form Bulletin 17C uses.
-- Jenks natural breaks: the `Numerics.MachineLearning` namespace is outside the
-  scope of the port.
+- Hypothesis tests (one- and two-sample t, Mann-Whitney U) and the
+  Kolmogorov-Smirnov statistic: `hypothesis_test()` reaches all thirteen
+  `HypothesisTests` statics and `gof_test()` the `GoodnessOfFit` ones. Example 28
+  works through the first, example 12 the second.
+- Jenks natural breaks: `ml_jenks_breaks()`, one of the eight machine learning
+  verbs in example 29.
+- The single Grubbs-Beck outlier test is the one thing here that stays internal.
+  Only the Multiple Grubbs-Beck generalization below is public, because that is the
+  form Bulletin 17C uses.
 
 ## Bootstrap resampling
 
@@ -324,8 +324,8 @@ par(op)
 
 ## Key takeaways
 
-1. Descriptive statistics and correlation need no special library; the port
-   leaves them to numpy, pandas, and base R.
+1. Descriptive statistics and correlation come both ways: `summary_statistics()`
+   and `correlation()` in the package, or base R and pandas, which agree with them.
 2. Bootstrap for uncertainty when you do not want strong assumptions; the port's
    surface is confidence bands on the quantile curve.
 3. Screen for low outliers with MGBT before fitting a flood frequency curve, and

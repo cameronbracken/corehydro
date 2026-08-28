@@ -14,12 +14,12 @@ Status as of v0.13.0.
 ## Numerics
 
 The [Numerics](https://github.com/USACE-RMC/Numerics) library is the numerical
-foundation. The port targets its probability, sampling, and estimation layers; the
-general-purpose math and data-container layers are out of scope. The machine learning
-layer landed in v0.12.0, which also un-gated `HypothesisTests.UnimodalityTest` and the two
-RMC-BestFit `DataFrame` facades that had been waiting on it. The heavy `TimeSeries` container
-landed in v0.13.0 -- the last unported portable slice -- together with the four members deferred
-alongside it.
+foundation. Every portable part of it is ported. The general-purpose math, optimization, and
+machine learning layers came in over v0.9.0 through v0.12.0, and the heavy `TimeSeries`
+container -- the last unported slice -- landed in v0.13.0 along with the four members that
+had been deferred alongside it. What remains out is what cannot be carried across: file
+I/O, the USGS gauge download, JSON serialization, and the progress reporting that exists
+for the desktop application.
 
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
@@ -29,11 +29,11 @@ alongside it.
 | `Sampling.MCMC` (8 samplers + R-hat / ESS) | Ported | Public | `mcmc_sample()` fits a built-in family; `mcmc_posterior()` takes a log-likelihood you write and reaches all eight samplers, Gibbs included, through the proposal callback it accepts; all drive the Bayesian analyses |
 | `Sampling` (Latin hypercube, Sobol, Stratify) | Ported | Public | `latin_hypercube()`, `sobol_sequence()`, `stratify()` |
 | `Sampling.Bootstrap` | Ported | Public | `bootstrap_analysis()` for a fitted distribution, `bootstrap_custom()` for a statistic you write, reaching all four upstream delegates (resample, fit, statistic, jackknife) and all five interval methods; `bootstrap_custom(run_type = "pivotal")` adds the covariance-aware pivotal workflow since v0.8.0 |
-| `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation (paired and, since v0.11.0, the Pearson/Spearman matrix form), autocorrelation, goodness of fit, histogram binning, and joint probability all public; `hypothesis_test()` exposes all thirteen `HypothesisTests` statics since v0.12.0 (one/two-sample t, F, Jarque-Bera, Wald-Wolfowitz, Ljung-Box, Mann-Whitney, Mann-Kendall, linear trend, and unimodality); Jenks breaks are public as `ml_jenks_breaks()`; single Grubbs-Beck and KS tests not ported |
+| `Data.Statistics` | Ported | Public | all thirteen classes: MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation (paired and, since v0.11.0, the Pearson/Spearman matrix form), autocorrelation, goodness of fit (including the Kolmogorov-Smirnov, Anderson-Darling and chi-squared statistics through `gof_test()`), histogram binning, and joint probability; `hypothesis_test()` exposes all thirteen `HypothesisTests` statics since v0.12.0 (one/two-sample t, F, Jarque-Bera, Wald-Wolfowitz, Ljung-Box, Mann-Whitney, Mann-Kendall, linear trend, and unimodality) |
 | `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z); the Paired Data curve subsystem (`OrderedPairedData`/`Ordinate`/`UncertainOrderedPairedData`/`LineSimplification`) is public as `curve_interpolate()`, `curve_area()`, `curve_simplify()`, `uncertain_curve_sample()`, and `tabular_function()` |
 | `Data.Regression` | Ported | Public | `linear_regression()` -- ordinary least squares, returning a `corehydro_lm` / `LinearRegressionResult` with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict` |
 | `Data` (TimeSeries container) | Ported | Public | `time_series()` / `TimeSeries` plus the `ts_*()` verbs since v0.13.0: moving windows, value transformations, missing-value handling, clipping and shifting, interval conversion, summary and monthly statistics, the duration curve, block series (annual maxima by calendar or water year, quarterly, monthly), peaks over threshold, seasonal decomposition, and two seeded resamplers. Dates are `POSIXct` in R and `datetime64` in Python. File I/O and the USGS download remain out of scope |
-| `Mathematics` (linear algebra, special functions, root finding, numerical derivatives) | Ported (as needed) | Public | `root_find()` (Brent, bisection, secant, Newton), `root_find_system()`, `derivative()`, `gradient()`, `hessian()` and `ode_solve()` run over a function you write; `qr_decomposition()` / `qr_solve()` / `gauss_jordan()` and `debye()` / `polynomial_eval()` are public, and the remaining linear algebra and special functions stay internal, covering what the distribution / estimation layers require; general optimization is a separate row below |
+| `Mathematics` (linear algebra, special functions, root finding, numerical derivatives) | Ported | Public | `root_find()` (Brent, bisection, secant, Newton), `root_find_system()`, `derivative()`, `gradient()`, `hessian()` and `ode_solve()` run over a function you write; `qr_decomposition()` / `qr_solve()` / `gauss_jordan()` and `debye()` / `polynomial_eval()` are public, and the remaining linear algebra and special functions stay internal, covering what the distribution / estimation layers require; general optimization is a separate row below |
 | `Mathematics.Optimization` | Ported | Public | `optim_minimize()` / `optim_maximize()` expose all fourteen optimizers since v0.10.0 -- DE, particle swarm, SCE-UA, simulated annealing, multi-start, MLSL, BFGS, Powell, ADAM, gradient descent, Nelder-Mead, Brent, golden section, and the constrained augmented Lagrange over `optim_constraint()`; ADAM and gradient descent take an analytic gradient you write. The `Dynamic` trio (BinaryHeap, Dijkstra, Network) is public as `shortest_path()` |
 | `Mathematics.Integration` | Ported | Public | `quadrature()` integrates a function you write with any of ten deterministic rules, `quadrature_2d()` over a rectangle, and `quadrature_nd()` over an arbitrary-dimension box with three seeded Monte Carlo families (plain, Miser, Vegas); the Genz MVNDST integrator inside MultivariateNormal is ported too |
 | `MachineLearning` (all 8 methods + 2 support types) | Ported | Public | eight `ml_*()` verbs since v0.12.0: `ml_kmeans()`, `ml_gaussian_mixture()`, `ml_jenks_breaks()`, `ml_decision_tree()`, `ml_random_forest()`, `ml_knn()`, `ml_naive_bayes()`, and `ml_glm()` (five families, selected by link). Each trains and answers in one call; a seeded fit is bit-identical across R and Python |
@@ -59,15 +59,10 @@ fully ported; only its WPF desktop shell is out of scope.
 
 : {tbl-colwidths="[30,14,14,42]"}
 
-## HEC-FDA
+## Related porting efforts
 
-[HEC-FDA](https://github.com/HydrologicEngineeringCenter/HEC-FDA) (flood damage and risk
-assessment) is planned as the next upstream source, extending corehydro beyond RMC
-libraries to the Hydrologic Engineering Center. Porting is underway in a 
-[separate repo](https://github.com/cameronbracken/hecfda/) and will be merged eventually.
-
-| Area | C++ core | Packages | Notes |
-|------|----------|----------|-------|
-| All | Planned | -- | scoping has not started |
-
-: {tbl-colwidths="[30,14,14,42]"}
+[HEC-FDA](https://github.com/HydrologicEngineeringCenter/HEC-FDA), the USACE
+[Hydrologic Engineering Center](https://github.com/HydrologicEngineeringCenter)'s flood damage
+and risk assessment library, is being ported separately in
+[hecfda](https://github.com/cameronbracken/hecfda/). It is not a corehydro porting target and
+nothing on this page covers it.

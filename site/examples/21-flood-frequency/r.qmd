@@ -82,10 +82,12 @@ for (name in names(models)) {
 ## Goodness of fit
 
 The upstream script ranks the fits with the Kolmogorov-Smirnov statistic from
-`Numerics.Data.Statistics.GoodnessOfFit`. That helper is not part of the ported API,
-so this version ranks by log-likelihood and AIC instead. The log-likelihoods are the
-exact values the script also prints, and the conclusion is the same either way:
-Weibull edges out GEV, and LogNormal trails.
+`Numerics.Data.Statistics.GoodnessOfFit`. That class is ported, and `gof_test()` reaches
+its KS, Anderson-Darling and chi-squared statistics (example 12 works through them), but
+this page ranks by log-likelihood and AIC instead, because both penalize the extra
+parameter GEV spends and KS does not. The log-likelihoods are the exact values the script
+also prints, and the conclusion is the same either way: Weibull edges out GEV, and
+LogNormal trails.
 
 ```{r}
 log_liks <- sapply(models, \(d) dist_log_likelihood(d, peak_flows))
@@ -144,7 +146,7 @@ CDFs against the empirical CDF, the frequency curves, and a goodness-of-fit
 comparison. Two substitutions here: the empirical CDF uses Weibull plotting
 positions `i / (n + 1)` from `plotting_positions` instead of the script's naive
 `i / n` (which forces the largest observation to probability 1), and the
-goodness-of-fit panel shows dAIC instead of the unported KS statistic.
+goodness-of-fit panel shows dAIC instead of the KS statistic, for the reason above.
 
 ```{r}
 colors <- c(LogNormal = "#6b7f3f", GEV = "#b06a3b", Weibull = "#5b7a8c")

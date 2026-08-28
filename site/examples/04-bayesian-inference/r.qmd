@@ -178,8 +178,8 @@ print(comparison)
 
 The posterior means match the upstream comparison table (Normal 12678 / 4845,
 Logistic 12633 / 2826, Gumbel 10386 / 4512). The Normal edges out the other two on
-log-likelihood for this record, and `fit$map_fitness` (the optimizer's negative
-log-fitness at the posterior mode) gives the same ordering.
+log-likelihood for this record, and `fit$map_fitness` (the log-likelihood at the
+posterior mode, so higher is better) gives the same ordering.
 
 ## Posterior predictive checks
 
@@ -251,8 +251,10 @@ cat("Misfit flagged:", if (ppc$has_misfit) "yes" else "no", "\n")
 
 The upstream notebook also builds a Bayesian linear regression from a hand-written
 likelihood. `mcmc_sample()` fits named distribution families and does not take a
-custom likelihood, so that section is not expressible here. A dedicated Bayesian
-regression example is planned for this site and will cover the same ground.
+custom likelihood, so that section is not expressible here. Two other pages cover
+the same ground: [example 20](../20-bayesian-regression/r.qmd) does the regression
+itself, and [example 14](../14-custom-posterior/r.qmd) writes a log-likelihood by
+hand and samples it with `mcmc_posterior()`.
 
 ## Non-adaptive vs adaptive samplers
 
@@ -394,7 +396,7 @@ stopifnot(
 stopifnot(
   abs(fit_norm$chains[[1]][1, 1] / 13287.2303500459 - 1) < 1e-15,
   abs(fit_norm$chains[[1]][1, 2] / 4176.928509438068 - 1) < 1e-15,
-  abs(fit_norm$map_fitness / 473.55840961774754 - 1) < 1e-15,
+  abs(fit_norm$map_fitness / -473.55840961774754 - 1) < 1e-15,
   abs(fit_norm$acceptance_rates[1] / 0.4352416666666667 - 1) < 1e-15,
   abs(fit_arwmh$acceptance_rates[1] / 0.35859166666666664 - 1) < 1e-15,
   abs(pred[1] / 14255.412844410343 - 1) < 1e-15,

@@ -16,12 +16,13 @@ so the draws come from the core generator but your own R or Python arithmetic de
 the values. A seeded run there reproduces across the two languages if and only if your
 function returns bit-identical values.
 
-Every example ends with a reproduction check comparing this port's results
-against the outputs embedded in the upstream notebooks, run by the original C#
-library. Where a result is seeded and deterministic the match is exact; where an
-example was recast onto this package's API the check is statistical and says so.
-The [coverage page](coverage.qmd) lists every upstream example and its status
-here.
+Every example ends with an executable reproduction check. Where the example has an
+upstream counterpart the check compares against the outputs embedded in the upstream
+notebooks, run by the original C# library, exactly where the result is seeded and
+deterministic and statistically where the example was recast onto this package's API.
+Where it has no counterpart the check asserts the same literals in both languages, which
+is what pins the cross-language identity. The [coverage page](coverage.qmd) lists every
+upstream example and its status here.
 
 | # | Example | Python | R |
 |---|---------|--------|---|
@@ -53,7 +54,8 @@ here.
 | 29 | Machine learning | [Python](29-machine-learning/python.ipynb) | [R](29-machine-learning/r.qmd) |
 | 30 | Time series | [Python](30-time-series/python.ipynb) | [R](30-time-series/r.qmd) |
 
-Numbers 00-09 mirror the upstream notebooks; 20-22 are the upstream's three
-standalone scripts. Numbers 12 onward have no upstream counterpart: they cover
-capabilities of RMC.BestFit and the Numerics utility toolbox that the upstream examples
-never exercise.
+Numbers 00-09 mirror the upstream notebooks and 20-22 the upstream's three standalone
+scripts. Of the rest, 18, 19, 29 and 30 cover the upstream's remaining four topics
+(integration and root finding, optimization, time series, machine learning) but are
+organized differently, and the others have no upstream counterpart at all: they reach
+parts of RMC-BestFit and the Numerics toolbox the upstream examples never exercise.
