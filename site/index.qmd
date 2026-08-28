@@ -3,23 +3,22 @@ title: "corehydro"
 toc: false
 ---
 
-corehydro is an (unofficial) C++ port of tools developed by the 
-[United States Army Corps of Engineers](https://www.usace.army.mil/) (USACE) 
-[Risk Management Center](https://github.com/USACE-RMC) (RMC) and 
-[Hydrologic Engineering Center](https://github.com/HydrologicEngineeringCenter) (HEC)
-for stochastic and computational hydrology including distribution fitting and sampling, 
-timeseries modeling, uncertainty quantification, optimization, machine learning, flood and precip 
-frequency estimation, and a whole lot more. 
+corehydro is an (unofficial) C++ port of tools developed by the
+[United States Army Corps of Engineers](https://www.usace.army.mil/) (USACE)
+[Risk Management Center](https://github.com/USACE-RMC) (RMC)
+for stochastic and computational hydrology including distribution fitting and sampling,
+timeseries modeling, uncertainty quantification, optimization, machine learning, flood and precip
+frequency estimation, and a whole lot more.
 
-The motivation behind this porting effort is to increase awareness 
-and accessibility of these amazing software packages which have been 
-released under open-source licenses. Currently this project has 
-ported pieces of the following libraries/packages:
-- [RMC-BestFit](https://github.com/USACE-RMC/RMC-BestFit) (statistical engine fully ported)
-- [Numerics](https://github.com/USACE-RMC/Numerics) (probability, sampling, and estimation layers)
-- [HEC-FDA](https://github.com/HydrologicEngineeringCenter/HEC-FDA) (planned, not started)
+The motivation behind this porting effort is to increase awareness
+and accessibility of these amazing software packages which have been
+released under open-source licenses. Two libraries are in scope, and both are ported:
+- [Numerics](https://github.com/USACE-RMC/Numerics) (everything portable; file I/O and gauge
+  download are not)
+- [RMC-BestFit](https://github.com/USACE-RMC/RMC-BestFit) (the statistical engine; the desktop
+  application is not)
 
-See the [porting status page](https://cameronbracken.github.io/corehydro/status.html)
+See the [porting status page](status.qmd)
 for the details of what is currently implemented in the core library and in the packages.
 
 ## What's inside
@@ -33,8 +32,14 @@ for the details of what is currently implemented in the core library and in the 
   distribution ranking, mixtures, competing risks, point processes, time series,
   spatial GEV, copulas, rating curves, and predictive checks.
 - Multivariate distributions, copulas, bootstrap uncertainty, and the supporting
-  statistics toolbox (Grubbs-Beck outlier tests, Box-Cox and Yeo-Johnson
-  transforms, plotting positions, Latin hypercube sampling).
+  statistics toolbox (Grubbs-Beck outlier tests, hypothesis tests, Box-Cox and
+  Yeo-Johnson transforms, plotting positions, Latin hypercube sampling).
+- The Numerics time series container: moving windows, missing-value handling,
+  block series and peaks over threshold, seasonal decomposition, and seeded
+  resampling, with dates as `POSIXct` in R and `datetime64` in Python.
+- Fourteen optimizers over an objective you write, ten quadrature rules, root
+  finding, and the eight machine learning methods (k-means, Gaussian mixtures,
+  Jenks breaks, decision trees, random forests, kNN, naive Bayes, GLM).
 
 ## Install
 

@@ -10,10 +10,11 @@ Ported from
 [`bayesian_regression.py`](https://github.com/USACE-RMC/Numerics-Python-Examples/blob/main/examples/bayesian_regression.py)
 in the USACE-RMC Numerics-Python-Examples repository (0BSD licensed). The upstream
 script drives the C# `Numerics.dll` through pythonnet, handing the `DEMCzs` sampler a
-list of hand-picked `Uniform` priors and a Python log-likelihood callback. That
-callback-likelihood pattern is deliberately not exposed by `corehydror`, so this
-version recasts the same regression through `arimax_analysis` (details below) and the
-reproduction is statistical rather than exact. The synthetic data, however, are
+list of hand-picked `Uniform` priors and a Python log-likelihood callback. `corehydror`
+takes that pattern too, through `mcmc_posterior()`
+([example 14](../14-custom-posterior/r.qmd)), but a linear regression has a model of
+its own here, so this version recasts it through `arimax_analysis` (details below) and
+the reproduction is statistical rather than exact. The synthetic data, however, are
 bit-identical to the upstream script's, and the Python version of this example uses
 the same core and prints the same numbers.
 

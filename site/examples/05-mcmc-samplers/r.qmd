@@ -36,12 +36,13 @@ the chains, acceptance rates, posterior summaries, and diagnostics in one call.
 
 One honest difference to keep in mind throughout: the upstream notebook
 hand-picks its priors (`Uniform(50, 150)` for $\mu$ and `Uniform(5, 30)` for
-$\sigma$ in the Normal example). `corehydror` does not expose custom priors;
-`mcmc_sample()` always uses uniform priors spanning the family's parameter
-constraints, exactly the C# `GetParameterConstraints` bounds. With data this
-informative the posteriors are nearly the same, but bit-comparison against the
-upstream outputs is impossible, so the reproduction check treats every upstream
-posterior value as a statistical comparison.
+$\sigma$ in the Normal example). `mcmc_sample()` always uses uniform priors spanning
+the family's parameter constraints, exactly the C# `GetParameterConstraints` bounds,
+which is what keeps it a one-liner. (`mcmc_posterior()` takes priors you choose, over
+a log-likelihood you write; [example 14](../14-custom-posterior/r.qmd) is that page.)
+With data this informative the posteriors are nearly the same, but bit-comparison
+against the upstream outputs is impossible, so the reproduction check treats every
+upstream posterior value as a statistical comparison.
 
 ```{r}
 library(corehydror)

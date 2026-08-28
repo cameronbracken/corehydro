@@ -7,11 +7,10 @@ Language: **R** (Quarto) - [Python version](python.ipynb)
 :::
 
 [Example 21](../21-flood-frequency/r.qmd) fits LogNormal, GEV, and Weibull to a 48-year peak-flow
-record and ranks them by log-likelihood and AIC, noting that the upstream script's
-Kolmogorov-Smirnov ranking "is not part of the ported API." It now is: this example revisits the
-same record with the goodness-of-fit toolbox this phase adds -- `goodness_of_fit()`,
-`gof_test()`, `gof_rmse()`, `aic()`/`aic_weights()` -- and confirms the KS statistic agrees with
-the AIC ranking. It has no upstream counterpart: the USACE-RMC Numerics-Python-Examples
+record and ranks them by log-likelihood and AIC, setting the upstream script's
+Kolmogorov-Smirnov ranking aside. This example picks it back up, revisiting the same record with
+the whole goodness-of-fit toolbox -- `goodness_of_fit()`, `gof_test()`, `gof_rmse()`,
+`aic()`/`aic_weights()` -- and confirms the KS statistic agrees with the AIC ranking. It has no upstream counterpart: the USACE-RMC Numerics-Python-Examples
 repository has no dedicated model-comparison notebook.
 
 ## What you'll learn
@@ -171,7 +170,7 @@ barplot(weights[order(AICs)],
 ## Key takeaways
 
 1. `gof_test()` and `gof_rmse()` give a fitted distribution the same KS/AD/RMSE ranking the C#
-   `GoodnessOfFit` class always offered, closing the gap example 21 noted.
+   `GoodnessOfFit` class always offered, which is what example 21 sets aside.
 2. `aic_weights()` turns a table of AIC values into normalized weights -- useful directly, and
    the same weights `fit_distributions()`'s composite-model machinery consumes internally.
 3. `goodness_of_fit()` is not distribution-specific: it scores any two equal-length numeric

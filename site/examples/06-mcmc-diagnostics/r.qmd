@@ -184,9 +184,10 @@ not strict rules; for life-safety applications err on the side of more.
 | > 0.6 | Poor mixing | ESS well below 0.1 N |
 
 The R-hat and ESS values come from the ported core (they are returned by
-`mcmc_sample`). The C# `MCMCDiagnostics` autocorrelation helper for arbitrary
-arrays is not exposed in the package API, so the chunk below computes the
-autocorrelation function with `stats::acf`.
+`mcmc_sample`). The chunk below computes the autocorrelation function with
+`stats::acf`, which plots as well as it computes; `autocorrelation()` is the ported
+Numerics equivalent and takes any numeric series, partial autocorrelations and
+confidence bands included.
 
 ```{r}
 combined <- do.call(rbind, res$chains) # 20000 x 2 pooled draws
@@ -263,8 +264,9 @@ DEMCzs are better at exploring them.
 
 The upstream notebook hand-rolls a five-parameter two-component Normal mixture
 log-likelihood in Python and passes it to the C# DEMCz sampler as a delegate.
-Custom log-likelihood delegates are not exposed in the package API, so this section
-recasts the same problem onto `mixture_analysis`, which fits the same
+`mcmc_posterior()` takes exactly that ([example 14](../14-custom-posterior/r.qmd)),
+but a mixture has a verb of its own, so this section recasts the problem onto
+`mixture_analysis`, which fits the same
 two-component Normal mixture with the same DEMCz sampler through the ported
 MixtureModel. The bimodal data are built exactly as upstream: 40 seeded draws from
 Normal(80, 10) and 40 from Normal(120, 10), both with seed 789 (reusing the seed
