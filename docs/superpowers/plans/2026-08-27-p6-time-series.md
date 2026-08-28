@@ -77,11 +77,12 @@ dotnet 10 oracle emitter.
 - Commits are GPG-signed, identity `Cam Bracken <cameron.bracken@pm.me>`, no Co-Authored-By
   trailers. Push only when Cam asks (the ship task pushes; that is the standing exception).
 - **Branch base:** `port-time-series`, created off `45bec0e` (`origin/main`, the merge of PR #31).
-- **Baseline numbers, measured on this branch at creation (2026-08-27):** ctest run recorded in
-  Task 1 Step 0. The P5 release records the rest: oracle gate 6383 reproduced / 0 failed / 11
-  skipped; testthat 7529/0; pytest 1829. Re-measure R/Python/oracle on the first task that runs
-  them; if any number differs, the fresh measurement governs -- never reconcile against a stale
-  census.
+- **Baseline numbers, measured on this branch at creation (2026-08-27):** ctest **117/117** (260 s
+  wall). The P5 release records the rest and all three were re-measured unchanged on the first task
+  that ran them: oracle gate 6383 reproduced / 0 failed / 11 skipped; testthat 7529/0; pytest 1829.
+  **Final numbers for the phase: ctest 119/119; oracle gate 6705 reproduced / 0 failed / 11
+  skipped; testthat 7959/0; pytest 1886; `R CMD check --as-cran` at the same three known NOTEs with
+  no WARNING.**
 
 ## Scope decisions taken during recon (do not re-litigate)
 
@@ -92,9 +93,13 @@ dotnet 10 oracle emitter.
    port reproduces .NET's documented algorithms, not a convenient rewrite:
    - Ticks are 100 ns since 0001-01-01 00:00:00, stored in an `int64_t`; `default(DateTime)` is
      tick 0, which the seasonal PointProcess path tests for with `dt == default`.
-   - `AddDays`/`AddHours`/`AddMinutes(double)` round to whole MILLISECONDS the way .NET's private
-     `Add(double value, int scale)` does (`(long)(value * scale + (value >= 0 ? 0.5 : -0.5))`,
-     then `* TicksPerMillisecond`), and throw when the result leaves `[MinValue, MaxValue]`.
+   - `AddDays`/`AddHours`/`AddMinutes(double)` -- MEASURED during Task 1 and NOT what this plan
+     first assumed. The legacy Framework rounded to whole milliseconds; modern .NET does not, and
+     it does not compute `(long)(value * TicksPerUnit)` either (that model disagreed 192 times in
+     300,000 random values, always by exactly one tick). What reproduces the BCL EXACTLY -- 0
+     mismatches over 300,000 draws for all five fractional Add* methods -- is a whole/fraction
+     split: `(long)trunc(v) * unit + (long)((v - trunc(v)) * unit)`. Both range guards are real
+     and carry different messages.
    - `AddMonths(int)` clamps the day to the target month's length and preserves the time-of-day
      ticks; `AddYears` is `AddMonths(value * 12)` under .NET's range check.
    - `ToOADate()` (used by both `InterpolateMissingData` overloads) reproduces the .NET conversion
