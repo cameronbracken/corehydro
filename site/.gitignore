@@ -1,2 +1,10 @@
 /.quarto/
 **/*.quarto_ipynb
+
+# Rendered output. The real site is built into site/_site by `make docs` and by
+# .github/workflows/docs.yml; rendering a single page also drops a copy next to its
+# source. Neither is read by anything, so neither is tracked. (site/_freeze IS
+# tracked -- see the note in the repo root .gitignore.)
+*.html
+**/*_files/
+/site_libs/
