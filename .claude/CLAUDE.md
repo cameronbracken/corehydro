@@ -1035,3 +1035,70 @@ two reasons why. The version bump to **0.12.0** records it. Final numbers: **cte
 gate 6383 reproduced, 0 failed, 11 skipped; testthat 7529/0; pytest 1829**; `R CMD check --as-cran`
 holds at the same three NOTEs with no WARNING. No `oracle_skip` and no loosened tolerance was added
 anywhere in the phase.
+
+The time-series phase (P6, branch `port-time-series`, August 2026) ported the heavy Numerics
+`TimeSeries` container -- the last unported portable slice of Numerics, and the sixth and final
+port step of the release arc in
+`docs/superpowers/specs/2026-08-20-remaining-port-and-v1-release-design.md`.
+`Numerics/Data/Time Series/TimeSeries.cs` (2,334 lines) and its `Series` base land under
+`core/include/corehydro/numerics/data/time_series/`, replacing the P2 thin adapter in place, and
+with them a **`DateTime` value type** (`support/date_time.hpp`) that is a corehydro ADDITION with
+no upstream source file: the container is calendar-driven and the core takes no external
+dependency, so the `System.DateTime` subset it uses is reproduced. That type's oracle is the real
+BCL rather than a C# test literal, and one measurement in it is load-bearing: modern .NET does NOT
+compute `AddDays` as `(long)(value * TicksPerDay)` (that model disagreed 192 times in 300,000
+random values, always by one tick); what reproduces it exactly is a whole/fraction split,
+`(long)trunc(v) * unit + (long)((v - trunc(v)) * unit)`, verified 0 mismatches over 300,000 draws
+for all five fractional Add* methods. `PointProcessModel::generate_pot_time_series` adds a
+fractional day offset and reads `day_of_year()` off the result, so a one-tick difference across
+midnight would move an event into the other season.
+
+The container reaches users as an object plus verbs -- R `time_series()` + 28 `ts_*()` functions
+over a `corehydro_ts`, Python a `TimeSeries` class with the same operations as methods -- over the
+**`timeseries` toolbox group, the nineteenth**. Dates are native in both languages (POSIXct in UTC,
+`datetime64`) and travel as EPOCH SECONDS on the wire, never .NET ticks: a tick count near 6.3e17
+is not exactly representable in a double, while epoch seconds is exact for every interval the
+container supports. Four fixture files carry the surface, one of which
+(`fixtures/timeseries/date_time.json`) is what puts the ported `DateTime` permanently behind the
+oracle gate.
+
+Four members deferred with the container were un-gated: the **seasonal `PointProcessModel` data
+path** and `GeneratePOTTimeSeries` (with `ExactData.DateTime`), **`DataFrame.CreateBlockSeries` /
+`CreatePeaksOverThresholdSeries`**, and the **ARIMAX covariate forecast-tail extension**
+(BlockBootstrap/KNN, live in both Predict and GenerateRandomValues). The seasonal point process is
+reachable from both packages: `analysis_data()` takes dated exact observations and
+`model_point_process()` takes `seasonal` / `time_block` / `start_month`. Eleven ctest methods
+skipped in earlier phases -- five seasonal PointProcess, four DataFrame block-series/POT, and five
+of the seven ARIMAX CovariateExtension methods -- are transcribed and reproduce their C# literals.
+
+Four upstream findings came out of the phase, each measured against the real compiled library,
+mirrored rather than corrected, and written up in `docs/upstream-csharp-issues.md`:
+`CumulativeSum` silently drops the series' time interval (the only method in the class that does);
+three indexed math overloads (`LogTransform`, `Inverse`, and the indexed `InterpolateMissingData`)
+reach through an index their own guard rejected while their seven siblings skip it;
+`MovingAverage` / `MovingSum` swap their `ArgumentException` arguments; and the consequential one,
+**`PointProcessModel`'s seasonal day-of-year list comes out DATE-sorted** (`ShiftDatesByMonth`
+sorts) while the seasonal likelihood pairs it POSITIONALLY with the caller's unsorted exact series,
+so a record not already in date order has each magnitude scored against another event's day. A
+fifth suspicion did NOT survive measurement and was deleted rather than softened: the
+peaks-over-threshold loop's `idx + 1` resume looks like an off-by-one but provably cannot drop a
+peak, since the inner loop can only exit on a value at or below the threshold.
+
+The `Autocorrelation` TimeSeries overloads are still not ported, and that severance became a
+MEASUREMENT: they are the same four bodies with a missing-value-skipping mean, and the difference
+is not observable because the lag-0 autocovariance sums over every observation, so one missing
+value NaNs the result either way. Driven against the real library, both overload families return
+identical values on a clean series and all-NaN on a gappy one. Porting them would duplicate four
+bodies to no numerical end AND would need `autocorrelation.hpp` to include `time_series.hpp`, which
+includes `hypothesis_tests.hpp`, which includes `autocorrelation.hpp`; instead both packages'
+`autocorrelation()` accept a time series and read its values.
+
+`fixtures/timeseries/timeseries_cross_language.json` is this layer's cross-language proof, and
+unlike the callback layer's honest limit it is a real guarantee: every operation, the Mersenne
+Twister included, happens in the shared core, so a seeded resampling run is bit-identical R to
+Python, asserted at ZERO tolerance. Its peaks-over-threshold block asserts each event's DATE as
+well as its value, because a value-only assertion would pass even if a date conversion drifted
+while the clustering itself depends on the calendar. Worked example **30** walks one thirty-year
+daily record from raw gauge output to two fitted flood-frequency models and then generates
+synthetic records from it; both language pages assert the same literals. The version bump to
+**0.13.0** records it.

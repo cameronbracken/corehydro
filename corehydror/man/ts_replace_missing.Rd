@@ -10,12 +10,13 @@ ts_replace_missing(ts, value, indexes = NULL)
 
 ts_interpolate_missing(ts, max_missing = 1, indexes = NULL)
 
-ts_fill_missing_dates(ts, start, end, value = 0)
+ts_fill_missing_dates(ts, start, end, value = NA)
 }
 \arguments{
 \item{ts}{a \code{corehydro_ts}.}
 
-\item{value}{the replacement (or fill) value.}
+\item{value}{the replacement (or fill) value. \code{ts_fill_missing_dates()} defaults to \code{NA},
+inserting the absent ordinates as missing rather than as zeros.}
 
 \item{indexes}{optional 1-based ordinate positions to restrict the operation to.}
 

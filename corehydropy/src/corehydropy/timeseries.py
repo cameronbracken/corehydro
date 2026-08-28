@@ -304,8 +304,23 @@ class TimeSeries:
             extra=None if indexes is None else np.asarray(indexes, dtype=float),
         )
 
-    def fill_missing_dates(self, start, end, value: float = 0.0) -> "TimeSeries":
-        """Insert the ordinates a regular series is missing entirely, over ``[start, end]``."""
+    def fill_missing_dates(self, start, end, value: float = float("nan")) -> "TimeSeries":
+        """Insert the ordinates a regular series is missing entirely, over ``[start, end]``.
+
+        ``value`` defaults to ``nan``, inserting the absent ordinates as MISSING -- which is what a
+        repair workflow wants: fill the dates first, then decide separately which gaps are short
+        enough to interpolate. The core takes a finite fill value, so the nan case fills with a
+        placeholder and then marks exactly the inserted dates missing (an inserted date is one the
+        input did not have, so this is exact rather than a guess).
+        """
+        if np.isnan(value):
+            out = self._run_series(
+                "fill_missing_dates", {"value": 0.0},
+                extra=[_epoch_scalar(start, "start"), _epoch_scalar(end, "end")],
+            )
+            inserted = ~np.isin(out._epoch, self._epoch)
+            out._values[inserted] = np.nan
+            return out
         return self._run_series(
             "fill_missing_dates", {"value": float(value)},
             extra=[_epoch_scalar(start, "start"), _epoch_scalar(end, "end")],

@@ -101,6 +101,9 @@ test_that("missing values are replaced, interpolated and filled", {
   filled <- ts_fill_missing_dates(sparse, as.Date("2024-01-01"), as.Date("2024-01-05"), -9)
   expect_equal(length(filled), 5L)
   expect_equal(filled$values, c(1, -9, -9, 4, -9))
+  # The default inserts the absent ordinates as MISSING rather than as a value.
+  default_filled <- ts_fill_missing_dates(sparse, as.Date("2024-01-01"), as.Date("2024-01-05"))
+  expect_equal(default_filled$values, c(1, NA, NA, 4, NA))
 })
 
 test_that("transformations apply to the whole series or to chosen ordinates", {

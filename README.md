@@ -156,6 +156,14 @@ carries the multivariate distributions and seven bivariate copulas.
 | `posterior_predictive_check`, `prior_predictive_check` | model-adequacy checks |
 | `estimation_diagnostics` | leverage, PSIS-LOO influence, prior influence |
 
+**Time series.** `time_series()` (R) / `TimeSeries` (Python) carries dated observations on a
+stated interval, and the verbs over it cover the container the USACE library builds its
+flood-frequency inputs from: moving windows and smoothing, missing-value interpolation and date
+filling, interval conversion, summary and per-month statistics, the duration curve, annual maxima
+by calendar or water year, peaks over a threshold with an independence criterion, seasonal
+decomposition, and two seeded resamplers (a conditional k-nearest-neighbour bootstrap and a
+fixed-block bootstrap). Dates are `POSIXct` in R and `datetime64` in Python.
+
 Every function is documented in the package help (eg. `?univariate_analysis` in R, `help(...)` in
 Python), with additional information about MCMC sampler choice, credible level, and seeding.
 

@@ -1,0 +1,361 @@
+---
+title: "30. Time series"
+---
+
+::: {.callout-note appearance="minimal" icon=false}
+Language: **R** (Quarto) - [Python version](python.ipynb)
+:::
+
+The Numerics `TimeSeries` container, which had no R or Python binding until this release. It is
+the thing a flood-frequency analysis actually starts from: a gauge record with gaps in it, out of
+which you have to get an annual maximum series, or a set of independent peaks, before any of the
+fitting machinery is any use.
+
+This page walks one thirty-year daily record from raw gauge output to two fitted flood-frequency
+models, and then generates synthetic records from it.
+
+## What you'll learn
+
+- How to build a `time_series()`, and why the interval it carries is not just a label.
+- How to repair a record: filling dates that are missing entirely, and interpolating short runs of
+  missing values -- and what the library does when a run is too long.
+- How to reduce a record to annual maxima over a water year, and what happens to a year that
+  contains a missing value (it depends on the block function, and the reason is worth knowing).
+- How to extract independent peaks over a threshold, and what the independence criterion is
+  measured in.
+- How to decompose a series into trend, seasonal and residual components.
+- How to generate synthetic records with two resamplers, and why a seeded run gives identical
+  numbers in R and Python.
+
+## Setup
+
+```{r}
+library(corehydror)
+```
+
+## A thirty-year daily record
+
+The record below is illustrative rather than observed, but it is built to be exactly reproducible:
+a twelve-value monthly base flow, modulated by a small integer linear congruential generator
+written out in full, so R and Python compute byte-identical inputs without either of them calling
+a random number generator or a transcendental function.
+
+```{r}
+# A deterministic uniform sequence in [0, 1). The arithmetic stays well inside a double's exact
+# integer range, so this is the same sequence in every language.
+lcg <- function(n, seed = 7) {
+  s <- seed
+  out <- numeric(n)
+  for (i in seq_len(n)) {
+    s <- (75 * s + 74) %% 65537
+    out[i] <- s / 65537
+  }
+  out
+}
+
+dates <- seq(as.Date("1990-01-01"), as.Date("2019-12-31"), by = "day")
+n <- length(dates)
+u <- lcg(n)
+
+# Monthly base flow (m^3^/s), a snowmelt-dominated regime peaking in spring.
+base <- c(18, 22, 35, 48, 40, 26, 16, 12, 11, 14, 20, 19)
+month <- as.integer(format(dates, "%m"))
+flow <- round(base[month] * (0.6 + 0.8 * u), 3)
+
+# Storms: the top 1.5% of the modulating sequence become peaks, each scaled by a second
+# deterministic sequence so the peaks have a spread rather than all landing on one multiple.
+storm <- u > 0.985
+flow[storm] <- round(flow[storm] * (2.5 + 7 * lcg(n, seed = 913)[storm]), 3)
+
+length(flow)
+range(flow)
+```
+
+Two kinds of damage, both of which a real record has:
+
+```{r}
+# A short instrument outage: five consecutive missing days in 2002.
+outage <- which(dates >= as.Date("2002-06-10") & dates <= as.Date("2002-06-14"))
+flow[outage] <- NA
+
+# Three days that never made it into the file at all.
+dropped <- which(dates %in% as.Date(c("2004-03-02", "2004-03-03", "2005-11-19")))
+gauge <- time_series(dates[-dropped], flow[-dropped], interval = "one_day")
+gauge
+```
+
+The `interval` is not decoration. It is what `ts_shift(by = "start")` walks, what
+`ts_convert_interval()` converts from, and -- the one that matters below -- what
+`ts_peaks_over_threshold()` measures its independence criterion in. A "minimum of 5 steps between
+events" means five days here and would mean five months on a monthly series.
+
+## Repairing the record
+
+Missing DATES and missing VALUES are different problems and take different verbs.
+`ts_fill_missing_dates()` inserts the ordinates that are absent entirely;
+`ts_interpolate_missing()` fills short runs of values that are present but unobserved.
+
+```{r}
+filled <- ts_fill_missing_dates(gauge, min(gauge$dates), max(gauge$dates))
+c(before = length(gauge), after = length(filled))
+```
+
+Now every day is present and the three dropped ones are missing values, alongside the five-day
+outage. Interpolating with a limit of 3 fills the dropped days and leaves the outage alone -- the
+limit is the point, not an inconvenience: a five-day gap in a flashy record is not something linear
+interpolation should be inventing values for.
+
+```{r}
+repaired <- ts_interpolate_missing(filled, max_missing = 3)
+data.frame(
+  gap = c("dropped days (2)", "dropped day (1)", "outage (5)"),
+  filled = c(
+    sum(!is.na(repaired$values[repaired$dates >= as.POSIXct("2004-03-02", tz = "UTC") &
+                                 repaired$dates <= as.POSIXct("2004-03-03", tz = "UTC")])),
+    sum(!is.na(repaired$values[repaired$dates == as.POSIXct("2005-11-19", tz = "UTC")])),
+    sum(!is.na(repaired$values[repaired$dates >= as.POSIXct("2002-06-10", tz = "UTC") &
+                                 repaired$dates <= as.POSIXct("2002-06-14", tz = "UTC")]))
+  )
+)
+```
+
+## What is in the record
+
+```{r}
+stats <- ts_statistics(repaired)
+round(stats[c("Record Length", "Missing Values", "Minimum", "Maximum", "Mean", "Std Dev",
+              "Skewness", "50%", "95%")], 3)
+```
+
+Per-month statistics show the regime directly. Note that this verb filters missing values out,
+while `ts_monthly_percentiles()` does not -- a difference inherited from the library, and the
+reason June's percentiles below are missing while its summary row is not.
+
+```{r}
+round(ts_monthly_statistics(repaired)[, c("minimum", "p50", "mean", "maximum")], 2)
+```
+
+```{r}
+round(ts_monthly_percentiles(repaired, c(0.5, 0.95))[5:7, ], 2)
+```
+
+The duration curve is the same information as a flow-exceedance plot:
+
+```{r}
+dur <- ts_duration(repaired)
+round(dur[c(1, 30, nrow(dur) %/% 2, nrow(dur)), ], 3)
+```
+
+## Annual maxima
+
+A flood-frequency analysis wants one value per year, and in most of the world it wants the year to
+start in autumn so a winter flood season is not split across two of them. That is
+`ts_water_year()`:
+
+```{r}
+ams <- ts_water_year(repaired, block = "maximum", start_month = 10)
+head(data.frame(date = format(ams$dates, "%Y-%m-%d"), peak = ams$values), 8)
+```
+
+Two things to notice. The result is an IRREGULAR series carrying each maximum's own date, not the
+end of its year -- so you can see when the annual flood happened, which is a seasonality signal in
+itself. And the record spans thirty-one water years, not thirty: it starts in January 1990,
+part-way through water year 1990, and ends in December 2019, part-way through water year 2020.
+Both partial years contribute their own maximum.
+
+Compare it with a calendar-year reduction:
+
+```{r}
+list(
+  water_year = round(ts_water_year(repaired)$values, 1),
+  calendar_year = round(ts_calendar_year(repaired)$values, 1)
+)
+```
+
+They differ in both length and content: a flood in October or later belongs to the NEXT water year
+but the same calendar year.
+
+One behaviour is worth stating outright, because it decides whether a gappy record silently loses a
+year. A block containing a missing value is DROPPED by the sum and average block functions -- the
+missing value propagates through the arithmetic -- but KEPT by minimum and maximum, because the
+comparison is simply false against a missing value and it is never selected. This is the library's
+behaviour, and it is why the maximum series above spans every year despite the outage:
+
+```{r}
+c(
+  maximum_years = length(ts_water_year(filled, block = "maximum")),
+  sum_years = length(ts_water_year(filled, block = "sum"))
+)
+```
+
+Fitting is one call away:
+
+```{r}
+fit <- fit_mle(model_univariate("GeneralizedExtremeValue", ams$values))
+round(coef(fit), 4)
+round(dist_quantile(distribution("GeneralizedExtremeValue", coef(fit)), c(0.5, 0.9, 0.99)), 2)
+```
+
+## Peaks over a threshold
+
+Annual maxima throw away most of a record: eight numbers out of nearly three thousand. A
+partial-duration series keeps every independent peak above a threshold instead, which is why the
+independence criterion matters -- without it, one flood's rising and falling limbs count as many
+events.
+
+```{r}
+pot_1 <- ts_peaks_over_threshold(repaired, threshold = 120, min_steps_between_events = 1)
+pot_10 <- ts_peaks_over_threshold(repaired, threshold = 120, min_steps_between_events = 10)
+c(one_day_apart = length(pot_1), ten_days_apart = length(pot_10))
+```
+
+```{r}
+head(data.frame(date = format(pot_10$dates, "%Y-%m-%d"), peak = round(pot_10$values, 2)), 8)
+```
+
+`min_steps_between_events` is counted in the series' own interval, so on this daily record ten
+steps is ten days. The extracted series feeds a point-process model directly:
+
+```{r}
+pp <- model_point_process(pot_10$values, threshold = 120, total_years = 30)
+round(coef(fit_mle(pp)), 4)
+```
+
+Smoothing happens BEFORE the extraction, which is how an n-day event series is built: the peaks of
+a 3-day moving average are the largest 3-day volumes, not the largest instantaneous flows.
+
+```{r}
+pot_3day <- ts_peaks_over_threshold(repaired, threshold = 120,
+                                    min_steps_between_events = 10,
+                                    smoothing = "moving_average", period = 3)
+c(instantaneous = length(pot_10), three_day_mean = length(pot_3day))
+```
+
+Far fewer events clear the same threshold, which is the expected result rather than a surprise: a
+three-day mean of a flashy record is a smaller number than its instantaneous peak. Choose the
+threshold for the series you are actually extracting from.
+
+## Decomposition
+
+`ts_seasonal_decompose()` splits the record into trend, seasonal and residual parts, keeping only
+the harmonics of the seasonal frequency for the seasonal component. On a monthly aggregation of
+this record the annual cycle is the whole story:
+
+```{r}
+monthly <- ts_block_series(repaired, window = "month", block = "average")
+monthly <- time_series(monthly$dates, monthly$values, interval = "one_month")
+d <- ts_seasonal_decompose(monthly, period = 12)
+defined_rows <- head(which(!is.na(d$trend)), 4)
+data.frame(
+  date = format(d$date[defined_rows], "%Y-%m"),
+  round(d[defined_rows, c("trend", "seasonal", "residual")], 3)
+)
+```
+
+The trend is a moving average over `period` ordinates, so it -- and the residual with it -- is
+undefined for the first eleven months. Where all three components exist they add back to the
+original value exactly, which the reproduction check at the bottom asserts.
+
+## Synthetic records
+
+Two resamplers generate records of arbitrary length from the observed one.
+`ts_resample_knn()` is the conditional k-nearest-neighbour bootstrap of Lall and Sharma (1996): at
+each step it finds the `k` historical days closest to the current flow, picks one, and advances to
+whatever historically came NEXT. That last step is what preserves the recession behaviour -- taking
+the neighbour's own value instead would leave the trajectory hovering near where it started.
+
+```{r}
+observed <- ts_replace_missing(repaired, value = 0)
+knn <- ts_resample_knn(observed, time_steps = 365, k = 20, seed = 2024)
+block <- ts_resample_block_bootstrap(observed, time_steps = 365, block_size = 30, seed = 2024)
+
+data.frame(
+  series = c("observed", "knn", "block bootstrap"),
+  mean = round(c(mean(observed$values), mean(knn$values), mean(block$values)), 3),
+  sd = round(c(sd(observed$values), sd(knn$values), sd(block$values)), 3),
+  lag1 = round(c(
+    autocorrelation(observed, max_lag = 1)$value[2],
+    autocorrelation(knn, max_lag = 1)$value[2],
+    autocorrelation(block, max_lag = 1)$value[2]
+  ), 3)
+)
+```
+
+Both preserve the marginal distribution to within sampling error on a 365-day draw, and both
+recover most of the lag-1 dependence. Neither recovers all of it, and it is worth being clear about
+why rather than reading the table as a ranking: this record's day-to-day persistence comes almost
+entirely from its seasonal cycle rather than from a recession, since the modulating sequence is
+independent from day to day. A resampler that reorders time cannot keep a seasonal signal it was
+never conditioned on. On a real record with genuine recession behaviour the kNN resample is the one
+that holds lag-1 dependence, because it conditions each step on the current state; the block
+bootstrap keeps dependence only WITHIN a block and breaks it at every boundary.
+
+Seeded runs are reproducible, and the reproduction is not only within one language: the whole
+computation, the Mersenne Twister included, happens in the shared C++ core, so these 365 numbers
+are bit-identical to the ones the Python page prints.
+
+```{r}
+round(knn$values[1:8], 3)
+```
+
+## Reproduction check
+
+Every literal below was produced by this page. The Python page asserts the same values.
+
+```{r}
+near <- function(a, b, tol = 1e-15) isTRUE(all.equal(a, b, tolerance = tol))
+defined <- !is.na(d$trend)
+
+stopifnot(
+  # The record and its repair: three dates absent entirely, five values missing, and
+  # interpolation fills the short gaps only.
+  length(gauge) == 10954L,
+  length(filled) == 10957L,
+  sum(is.na(filled$values)) == 8L,
+  sum(is.na(repaired$values)) == 5L,
+
+  # Summary statistics.
+  near(unname(stats["Record Length"]), 10957),
+  near(unname(stats["Missing Values"]), 5),
+  near(unname(stats["Mean"]), 26.130572315558798),
+  near(unname(stats["Maximum"]), 588.07600000000002),
+
+  # Annual maxima: thirty-one water years against thirty calendar years.
+  length(ams) == 31L,
+  length(ts_calendar_year(repaired)) == 30L,
+  near(ams$values[1], 288.59899999999999),
+  near(max(ams$values), 588.07600000000002),
+
+  # A missing value costs the sum series three years but the maximum series none.
+  length(ts_water_year(filled, block = "maximum")) == 31L,
+  length(ts_water_year(filled, block = "sum")) == 28L,
+
+  # The fitted GEV.
+  near(unname(coef(fit)[1]), 295.35281082558026),
+  near(unname(coef(fit)[2]), 116.76657650129897),
+  near(unname(coef(fit)[3]), 0.25436343374399251),
+
+  # Peaks over threshold: the independence criterion declusters, and smoothing before the
+  # extraction changes what clears the threshold at all.
+  length(pot_1) == 124L,
+  length(pot_10) == 106L,
+  length(pot_3day) == 30L,
+  near(pot_10$values[1], 288.59899999999999),
+  near(unname(coef(fit_mle(pp))[1]), 295.7606336759473),
+
+  # The decomposition is additive wherever the trend is defined.
+  length(monthly) == 359L,
+  sum(defined) == 348L,
+  all(abs(d$trend[defined] + d$seasonal[defined] + d$residual[defined] -
+            monthly$values[defined]) < 1e-9),
+
+  # The seeded resamplers. These are the numbers the Python page prints too: the generator and
+  # every operation around it live in the shared C++ core.
+  length(knn) == 365L,
+  length(block) == 365L,
+  near(knn$values[1], 34.271999999999998),
+  near(knn$values[8], 9.2219999999999995),
+  near(block$values[1], 23.332999999999998)
+)
+cat("All reproduction checks passed.\n")
+```

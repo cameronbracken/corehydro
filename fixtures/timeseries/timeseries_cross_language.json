@@ -1,0 +1,297 @@
+{
+  "kind": "toolbox",
+  "group": "timeseries",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a. Every value is curated with verify_oracles.py --dump against the real library; this file's job is the GUARANTEE rather than the accuracy, so it is asserted at ZERO tolerance throughout.",
+  "reference": "The time-series layer's counterpart of fixtures/estimation/fit_cross_language.json, fixtures/toolbox/toolbox_cross_language.json, fixtures/callback/callback_cross_language.json and fixtures/ml/ml_cross_language.json: one case, three verbs, every assertion exact. Unlike the CALLBACK layer, whose limit is that a user's own R or Python arithmetic drives the run, everything here happens inside the shared C++ core -- the Mersenne Twister the two resamplers draw from, the kNN neighbour search under resample_knn (whose distance sort is the ported .NET introsort, so a tie resolves identically), and the calendar arithmetic under the clustering. So R-to-Python bit-identity is a real guarantee for this surface, not a best effort, and these assertions are what would catch it lapsing. The peaks-over-threshold block is deliberate: it asserts each event's DATE as well as its value, because a value-only assertion would pass even if a date conversion drifted, while the clustering itself depends on the calendar through the minimum-steps criterion.",
+  "cases": [
+    {
+      "name": "seeded_resampling_and_block_extraction",
+      "data": [
+        [
+          946684800.0,
+          946771200.0,
+          946857600.0,
+          946944000.0,
+          947030400.0,
+          947116800.0,
+          947203200.0,
+          947289600.0,
+          947376000.0,
+          947462400.0,
+          947548800.0,
+          947635200.0,
+          947721600.0,
+          947808000.0,
+          947894400.0,
+          947980800.0,
+          948067200.0,
+          948153600.0,
+          948240000.0,
+          948326400.0,
+          948412800.0,
+          948499200.0,
+          948585600.0,
+          948672000.0,
+          948758400.0,
+          948844800.0,
+          948931200.0,
+          949017600.0,
+          949104000.0,
+          949190400.0,
+          949276800.0,
+          949363200.0,
+          949449600.0,
+          949536000.0,
+          949622400.0,
+          949708800.0,
+          949795200.0,
+          949881600.0,
+          949968000.0,
+          950054400.0
+        ],
+        [
+          100.0,
+          113.361,
+          125.511,
+          135.361,
+          142.042,
+          145.0,
+          144.042,
+          132.361,
+          124.511,
+          114.361,
+          103.0,
+          91.639,
+          81.489,
+          73.639,
+          61.958,
+          61.0,
+          63.958,
+          70.639,
+          80.489,
+          92.639,
+          106.0,
+          112.361,
+          124.511,
+          134.361,
+          141.042,
+          144.0,
+          143.042,
+          138.361,
+          123.511,
+          113.361,
+          102.0,
+          90.639,
+          80.489,
+          72.639,
+          67.958,
+          60.0,
+          62.958,
+          69.639,
+          79.489,
+          91.639
+        ]
+      ],
+      "options": {
+        "time_interval": "one_day",
+        "time_steps": 10,
+        "k": 4,
+        "seed": 2024,
+        "block_size": 5,
+        "threshold": 130.0,
+        "min_steps_between_events": 3
+      },
+      "assertions": [
+        {
+          "method": "resample_knn",
+          "select": "rows",
+          "expected": 10,
+          "mode": "equal",
+          "source": "the requested length"
+        },
+        {
+          "method": "resample_knn",
+          "index": 1,
+          "expected": 125.511,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 3,
+          "expected": 114.361,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 5,
+          "expected": 103,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 7,
+          "expected": 91.639,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 9,
+          "expected": 113.361,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 11,
+          "expected": 125.511,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 13,
+          "expected": 114.361,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 15,
+          "expected": 124.511,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 17,
+          "expected": 114.361,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_knn",
+          "index": 19,
+          "expected": 124.511,
+          "mode": "equal",
+          "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "select": "rows",
+          "expected": 10,
+          "mode": "equal",
+          "source": "the requested length"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 1,
+          "expected": 124.511,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 3,
+          "expected": 114.361,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 5,
+          "expected": 103,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 7,
+          "expected": 91.639,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 9,
+          "expected": 81.489,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 11,
+          "expected": 125.511,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 13,
+          "expected": 135.361,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 15,
+          "expected": 142.042,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 17,
+          "expected": 145,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "resample_block_bootstrap",
+          "index": 19,
+          "expected": 144.042,
+          "mode": "equal",
+          "source": "the seeded fixed-block draw sequence, curated with verify_oracles.py --dump"
+        },
+        {
+          "method": "peaks_over_threshold",
+          "select": "rows",
+          "expected": 2,
+          "mode": "equal",
+          "source": "two independent events clear the threshold at this spacing"
+        },
+        {
+          "method": "peaks_over_threshold",
+          "index": 1,
+          "expected": 145,
+          "mode": "equal",
+          "source": "deterministic, and the counterpart of the two seeded blocks above -- if a date conversion drifted between languages the CLUSTERING would move, not just a value"
+        },
+        {
+          "method": "peaks_over_threshold",
+          "index": 3,
+          "expected": 144,
+          "mode": "equal",
+          "source": "deterministic, and the counterpart of the two seeded blocks above -- if a date conversion drifted between languages the CLUSTERING would move, not just a value"
+        },
+        {
+          "method": "peaks_over_threshold",
+          "index": 0,
+          "expected": 947116800,
+          "mode": "equal",
+          "source": "the event DATE, in epoch seconds -- the one assertion here that a wrong calendar would break while every value still matched"
+        },
+        {
+          "method": "peaks_over_threshold",
+          "index": 2,
+          "expected": 948844800,
+          "mode": "equal",
+          "source": "the event DATE, in epoch seconds -- the one assertion here that a wrong calendar would break while every value still matched"
+        }
+      ]
+    }
+  ]
+}

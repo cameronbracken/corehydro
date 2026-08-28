@@ -324,7 +324,8 @@ ts_transform <- function(ts, fun, constant = 0, power = 1, base = 10, indexes = 
 #' regular series is missing entirely, over the requested date range.
 #'
 #' @param ts a `corehydro_ts`.
-#' @param value the replacement (or fill) value.
+#' @param value the replacement (or fill) value. `ts_fill_missing_dates()` defaults to `NA`,
+#'   inserting the absent ordinates as missing rather than as zeros.
 #' @param max_missing the longest run of missing values to interpolate across.
 #' @param indexes optional 1-based ordinate positions to restrict the operation to.
 #' @param start,end the date range to fill over.
@@ -350,8 +351,19 @@ ts_interpolate_missing <- function(ts, max_missing = 1, indexes = NULL) {
 
 #' @rdname ts_replace_missing
 #' @export
-ts_fill_missing_dates <- function(ts, start, end, value = 0) {
+ts_fill_missing_dates <- function(ts, start, end, value = NA) {
   ts_check(ts)
+  # `NA` -- the default -- inserts the absent ordinates as MISSING, which is what a repair
+  # workflow wants: fill the dates first, then decide separately which gaps are short enough to
+  # interpolate. The core takes a finite fill value, so the NA case fills with a placeholder and
+  # then marks exactly the inserted dates missing (an inserted date is one the input did not
+  # have, so this is exact rather than a guess).
+  if (is.na(value)) {
+    out <- ts_run_series(ts, "fill_missing_dates", list(value = 0),
+                         extra = c(ts_epoch(start, "start"), ts_epoch(end, "end")))
+    out$values[!(as.double(out$dates) %in% as.double(ts$dates))] <- NA_real_
+    return(out)
+  }
   ts_run_series(ts, "fill_missing_dates", list(value = as.double(value)),
                 extra = c(ts_epoch(start, "start"), ts_epoch(end, "end")))
 }

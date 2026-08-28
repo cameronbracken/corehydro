@@ -126,6 +126,10 @@ def test_missing_values_are_replaced_interpolated_and_filled():
     filled = sparse.fill_missing_dates("2024-01-01", "2024-01-05", -9)
     assert len(filled) == 5
     assert filled.values.tolist() == [1.0, -9.0, -9.0, 4.0, -9.0]
+    # The default inserts the absent ordinates as MISSING rather than as a value.
+    default_filled = sparse.fill_missing_dates("2024-01-01", "2024-01-05")
+    assert np.isnan(default_filled.values[[1, 2, 4]]).all()
+    assert default_filled.values[[0, 3]].tolist() == [1.0, 4.0]
 
 
 def test_transformations_whole_series_or_chosen_ordinates():

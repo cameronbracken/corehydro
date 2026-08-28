@@ -51,6 +51,7 @@ here.
 | 27 | Composite distributions | [Python](27-composite-distributions/python.ipynb) | [R](27-composite-distributions/r.qmd) |
 | 28 | Hypothesis tests and paired data | [Python](28-hypothesis-tests-and-paired-data/python.ipynb) | [R](28-hypothesis-tests-and-paired-data/r.qmd) |
 | 29 | Machine learning | [Python](29-machine-learning/python.ipynb) | [R](29-machine-learning/r.qmd) |
+| 30 | Time series | [Python](30-time-series/python.ipynb) | [R](30-time-series/r.qmd) |
 
 Numbers 00-09 mirror the upstream notebooks; 20-22 are the upstream's three
 standalone scripts. Numbers 12 onward have no upstream counterpart: they cover

@@ -7,6 +7,66 @@ the `corehydropy` Python package) are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-27
+
+The heavy `TimeSeries` container -- the last unported portable slice of `Numerics`, and the one
+four other members were waiting on. `Numerics/Data/Time Series/TimeSeries.cs` (2,334 lines) and
+its `Series` base are ported, along with a `DateTime` value type that stands in for
+`System.DateTime` (a corehydro addition: the calendar is what the container is built on, and the
+core takes no external dependency). This closes branch `port-time-series`.
+
+### Added
+
+- **A time-series object in both packages.** R gets `time_series()` and 28 `ts_*()` verbs over a
+  `corehydro_ts` classed list; Python gets a `TimeSeries` class with the same operations as
+  methods -- the shape `distribution()` / `Distribution` already established. Between them they
+  reach the whole container: moving windows, cumulative sums and differences, the value
+  transformations, missing-value replacement and interpolation, date filling, clipping, shifting,
+  interval conversion, the summary and monthly statistics, the duration curve, the five block
+  series (with `ts_water_year()` and `ts_calendar_year()` by name), peaks over threshold, seasonal
+  decomposition, and two resamplers.
+- **Dates are native in both languages.** R takes and returns `POSIXct` in UTC and also accepts
+  `Date`, ISO 8601 strings and epoch seconds; Python takes and returns `numpy.datetime64` and also
+  accepts `datetime`, a pandas `DatetimeIndex`, ISO strings and floats. Epoch seconds travel on
+  the wire, never .NET ticks -- a tick count near 6.3e17 is not exactly representable in a double,
+  while epoch seconds is exact for every interval the container supports.
+- **A `timeseries` toolbox group**, the nineteenth, plus four fixture files. One of them,
+  `fixtures/timeseries/date_time.json`, is what puts the ported `DateTime` -- which has no
+  upstream source file to be checked against -- permanently behind the dotnet oracle gate:
+  `AddMonths` day-clamping, leap years, the fractional-`AddDays` split, `DayOfYear`, `DayOfWeek`
+  and `ToOADate`.
+- **Four members un-gated**, each deferred with the container it needed: the seasonal
+  `PointProcessModel` data path and `GeneratePOTTimeSeries`, `DataFrame.CreateBlockSeries` and
+  `CreatePeaksOverThresholdSeries` (with `ExactData.DateTime`), and the ARIMAX covariate
+  forecast-tail extension (`CovariateExtension = "block_bootstrap"` / `"knn"`). The seasonal point
+  process is reachable from both packages: `analysis_data()` takes dated observations and
+  `model_point_process()` takes `seasonal` / `time_block` / `start_month`.
+- **`autocorrelation()` accepts a time series** in both packages.
+
+### Fixed
+
+- Nothing was broken; the phase found four upstream behaviours instead. See below.
+
+### Notes
+
+- **Four upstream findings**, each measured against the real compiled library, mirrored rather
+  than corrected, and written up in `docs/upstream-csharp-issues.md`: `CumulativeSum` silently
+  drops the series' time interval; three indexed math overloads reach through an index their own
+  guard rejected while their seven siblings skip it; `MovingAverage` / `MovingSum` swap their
+  `ArgumentException` arguments; and -- the consequential one -- `PointProcessModel`'s seasonal
+  day-of-year list comes out date-sorted while the likelihood pairs it positionally with the
+  caller's unsorted exact series, so a record not already in date order has each magnitude scored
+  against another event's day.
+- **The `Autocorrelation` TimeSeries overloads are still not ported, and that is now a
+  measurement rather than a severance.** They are the same four bodies with a
+  missing-value-skipping mean, and the difference is not observable, because the lag-0
+  autocovariance sums over every observation. Driven against the real library, both overload
+  families return identical values on a clean series and all-NaN on a gappy one.
+- **A seeded resampling run is bit-identical between R and Python**, and
+  `fixtures/timeseries/timeseries_cross_language.json` asserts it at zero tolerance. Unlike the
+  callback layer's honest limit, every operation here happens inside the shared core, so this is a
+  guarantee rather than a best effort.
+
 ## [0.12.0] - 2026-08-27
 
 The Machine Learning layer -- the last major slice of `Numerics` with no R or Python binding.
