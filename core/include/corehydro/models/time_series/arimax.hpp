@@ -56,17 +56,18 @@
 //     warnings when sum|.| >= 1 for the AR/MA blocks, indexing the flat parameter list through the
 //     GetARParameterStartIndex()/GetMAParameterStartIndex() helpers (ARIMAX.cs:2073/2097).
 //
-// DEFERRED (documented; NOT ported) -- the covariate forecast-tail extension. The nested
-// CovariateExtensionMethod enum (None/BlockBootstrap/KNN, ARIMAX.cs:175) drives covariate
-// resampling in Predict / the forecast branch of GenerateRandomValues via
-// TimeSeries.ResampleWithBlockBootstrap / ResampleWithKNN, which live on the DEFERRED heavy
-// TimeSeries container (see time_series.hpp DEFERRED list and PHASE7_PLAN.md). The enum + property
-// are ported (structural parity, XML-free), but any code path that would RESAMPLE a forecast tail
-// short-circuits with a clearly-marked no-throw/throw guard: predict_components and
-// generate_random_values throw std::runtime_error("... deferred ...") only when covariates are
-// present AND the horizon exceeds the observed covariate length AND no explicit forecast
-// covariates were supplied. The fit/likelihood path never triggers this. CovariateExtensionMethod
-// defaults to BlockBootstrap (C# field initializer, ARIMAX.cs:198).
+// THE COVARIATE FORECAST-TAIL EXTENSION landed in P6, un-gated by the ported TimeSeries
+// container. The nested CovariateExtensionMethod enum (None/BlockBootstrap/KNN, ARIMAX.cs:175)
+// now drives real covariate resampling in both places C# does: Predict (C# 1558-1650) and the
+// forecast branch of GenerateRandomValues (C# 2333-2378). Through P5 both sites threw a
+// "deferred" error when the horizon ran past the observed covariates; they no longer do.
+// Three details the two sites do NOT share, transcribed as written: Predict keeps the observed
+// span EXACTLY as observed and extends only the tail (resampling the observed period would
+// inflate the training-period credible interval, since beta * X[t] would move every
+// realization); Predict has a DETERMINISTIC branch that appends each covariate's mean when no
+// seed was given, and GenerateRandomValues has none; and their resample-seed offsets differ
+// (+1000 vs +2000). CovariateExtensionMethod defaults to BlockBootstrap (C# field initializer,
+// ARIMAX.cs:198).
 //
 // Deliberately NOT ported (documented; C# governs -- deviations noted in task-T3-report.md):
 //   - XML (ToXElement / the XElement ctor, ARIMAX.cs:72-128,1852): project-wide non-port.
@@ -75,11 +76,12 @@
 //     (parameters_ is a plain std::vector; no change notification is threaded through it).
 //   - IModel Clone() (ARIMAX.cs:1819): the C++ core has no virtual IModel::Clone (see
 //     model_base.hpp) and no T3 fit path needs a clone, so it is omitted (T1/T2/S4 precedent).
-//   - GenerateRandomSeries (ARIMAX.cs:1792): returns the heavy Numerics TimeSeries container;
-//     deferred (the required simulation entry point is generate_random_values below, the
-//     ISimulatable member). It can be added trivially over the P2 adapter if a caller needs it.
-//   - AppendTail / AppendConstantTail (ARIMAX.cs:691/711): covariate-extension helpers, used only
-//     by the deferred forecast-tail resampling; not ported.
+//   - GenerateRandomSeries (ARIMAX.cs:1792): returns a date-stamped TimeSeries rather than the
+//     bare vector generate_random_values (the ISimulatable member) returns. Not ported: no caller
+//     in scope needs the dates, and the container it would wrap them in is now ported, so this is
+//     a one-method addition whenever one does.
+//   - AppendTail / AppendConstantTail (ARIMAX.cs:799/819) were unported through P5 because nothing
+//     called them; P6's forecast-tail extension does, so both are ported below.
 //
 // RNG deviation (documented): C# Predict() draws its stochastic-forecast noise from System.Random
 // (a .NET LCG with no ported equivalent); this port substitutes the ported MersenneTwister.
@@ -698,9 +700,42 @@ class ARIMAX : public ModelBase, public ISimulatable<std::vector<double>> {
         return result;
     }
 
+    // C# `AppendTail` (line 799): clone the observed covariate and append the resampled tail,
+    // walking the dates forward at the series' own interval.
+    static TimeSeries append_tail(const TimeSeries& observed, const TimeSeries& tail) {
+        TimeSeries extended = observed.clone();
+        numerics::data::DateTime next =
+            extended.count() > 0
+                ? TimeSeries::add_time_interval(extended[extended.count() - 1].index(),
+                                                extended.time_interval())
+                : observed.start_date();
+        for (int j = 0; j < tail.count(); ++j) {
+            extended.add(TimeSeries::Ordinate(next, tail[j].value()));
+            next = TimeSeries::add_time_interval(next, extended.time_interval());
+        }
+        return extended;
+    }
+
+    // C# `AppendConstantTail` (line 819): the deterministic counterpart, used when no seed was
+    // given so a "deterministic forecast" does not depend on one arbitrary resampled path.
+    static TimeSeries append_constant_tail(const TimeSeries& observed, double constant,
+                                           int tail_length) {
+        TimeSeries extended = observed.clone();
+        numerics::data::DateTime next =
+            extended.count() > 0
+                ? TimeSeries::add_time_interval(extended[extended.count() - 1].index(),
+                                                extended.time_interval())
+                : observed.start_date();
+        for (int j = 0; j < tail_length; ++j) {
+            extended.add(TimeSeries::Ordinate(next, constant));
+            next = TimeSeries::add_time_interval(next, extended.time_interval());
+        }
+        return extended;
+    }
+
     // --- Predict (C#:1425): the ARMA recursion on the differenced scale with the full inline mean
     //     function, then reverse-differencing integration and inverse transform. Returns Y + parts.
-    //     The covariate forecast-tail extension is DEFERRED (see file header). ---
+    //     The covariate forecast tail is extended per CovariateExtension (P6). ---
     PredictResult predict_components(const std::vector<double>& parameters, int forecast_steps = 0,
                                      int seed = -1) const {
         int total_steps = training_time_steps_ + forecast_steps;
@@ -726,16 +761,66 @@ class ARIMAX : public ModelBase, public ISimulatable<std::vector<double>> {
             err_dist.emplace(0.0, parameters.back());
         }
 
-        // Covariate forecast-tail extension is DEFERRED (see file header). If a forecast horizon
-        // needs covariates beyond the observed length, short-circuit with a clear error.
+        // Covariate forecast-tail extension (C# 1558-1650), un-gated in P6 by the ported
+        // TimeSeries container. The observed span is always kept EXACTLY as observed -- only the
+        // tail of length forecast_steps is extended -- because resampling the observed period
+        // would inflate the training-period credible interval, every realization moving
+        // beta * X[t]. Without a seed the tail is each covariate's MEAN rather than one arbitrary
+        // resampled path, so a deterministic forecast does not depend on the extension method.
         const std::vector<TimeSeries>* use_covariates = covariates_ ? &*covariates_ : nullptr;
+        std::vector<TimeSeries> extended_covariates;
         if (forecast_steps > 0 && covariates_ && !covariates_->empty()) {
-            int required = training_time_steps_ + forecast_steps;
-            if ((*covariates_)[0].count() < required)
-                throw std::runtime_error(
-                    "ARIMAX covariate forecast-tail extension (BlockBootstrap/KNN) is deferred "
-                    "with the heavy TimeSeries container; provide covariates covering the full "
-                    "horizon.");
+            bool deterministic = seed < 0;
+            int resample_seed = seed >= 0 ? seed + 1000 : 12345;
+            switch (covariate_extension_) {
+                case CovariateExtensionMethod::None: {
+                    int required_length = training_time_steps_ + forecast_steps;
+                    for (std::size_t i = 0; i < covariates_->size(); ++i) {
+                        if ((*covariates_)[i].count() < required_length)
+                            throw std::runtime_error(
+                                "Covariate " + std::to_string(i) + " has " +
+                                std::to_string((*covariates_)[i].count()) + " observations but " +
+                                std::to_string(required_length) + " are required for " +
+                                std::to_string(forecast_steps) +
+                                " forecast steps. Either provide forecast covariates or set "
+                                "CovariateExtension to BlockBootstrap or KNN.");
+                    }
+                    break;
+                }
+                case CovariateExtensionMethod::BlockBootstrap: {
+                    for (std::size_t i = 0; i < covariates_->size(); ++i) {
+                        const TimeSeries& cov = (*covariates_)[i];
+                        if (deterministic) {
+                            extended_covariates.push_back(
+                                append_constant_tail(cov, cov.mean_value(), forecast_steps));
+                        } else {
+                            int block_size = std::max(1, std::min(10, cov.count() / 4));
+                            extended_covariates.push_back(append_tail(
+                                cov, cov.resample_with_block_bootstrap(
+                                         forecast_steps, block_size,
+                                         resample_seed + static_cast<int>(i))));
+                        }
+                    }
+                    use_covariates = &extended_covariates;
+                    break;
+                }
+                case CovariateExtensionMethod::KNN: {
+                    for (std::size_t i = 0; i < covariates_->size(); ++i) {
+                        const TimeSeries& cov = (*covariates_)[i];
+                        if (deterministic) {
+                            extended_covariates.push_back(
+                                append_constant_tail(cov, cov.mean_value(), forecast_steps));
+                        } else {
+                            int knn = std::max(3, cov.count() / 10);
+                            extended_covariates.push_back(append_tail(
+                                cov, cov.resample_with_knn(forecast_steps, knn,
+                                                           resample_seed + static_cast<int>(i))));
+                        }
+                    }
+                    use_covariates = &extended_covariates;
+                    break;
+                }
+            }
         }
 
         int k = 0;
@@ -935,6 +1020,7 @@ class ARIMAX : public ModelBase, public ISimulatable<std::vector<double>> {
                    parameters_[static_cast<std::size_t>(k++)].value()};
 
         const std::vector<TimeSeries>* use_covariates = nullptr;
+        std::vector<TimeSeries> extended_covariates;
         if (covariates_ && !covariates_->empty()) {
             beta.assign(covariates_->size(),
                         std::vector<double>(static_cast<std::size_t>(x_order_b_ + 1), 0.0));
@@ -942,12 +1028,44 @@ class ARIMAX : public ModelBase, public ISimulatable<std::vector<double>> {
                 for (int j = 0; j <= x_order_b_; ++j)
                     beta[i][static_cast<std::size_t>(j)] = parameters_[static_cast<std::size_t>(k++)].value();
 
-            if (sample_size > (*covariates_)[0].count())
-                throw std::runtime_error(
-                    "ARIMAX covariate forecast-tail extension (BlockBootstrap/KNN) is deferred "
-                    "with the heavy TimeSeries container; request a sample_size within the "
-                    "observed covariate length.");
-            use_covariates = &*covariates_;
+            // C# 2333-2378: extend the covariates when the requested sample runs past them.
+            // Unlike Predict, this path has no deterministic branch -- a generated realization is
+            // stochastic by definition -- and its resample seed offset is 2000, not 1000.
+            if (sample_size > (*covariates_)[0].count()) {
+                int resample_seed = seed > 0 ? seed + 2000 : 54321;
+                switch (covariate_extension_) {
+                    case CovariateExtensionMethod::None:
+                        throw std::runtime_error(
+                            "Covariates have " + std::to_string((*covariates_)[0].count()) +
+                            " observations but " + std::to_string(sample_size) +
+                            " are required. Either provide generate covariates or set "
+                            "CovariateExtension to BlockBootstrap or KNN.");
+                    case CovariateExtensionMethod::BlockBootstrap:
+                        for (std::size_t i = 0; i < covariates_->size(); ++i) {
+                            const TimeSeries& cov = (*covariates_)[i];
+                            int block_size = std::max(1, std::min(10, cov.count() / 4));
+                            int tail_size = sample_size - cov.count();
+                            extended_covariates.push_back(append_tail(
+                                cov, cov.resample_with_block_bootstrap(
+                                         tail_size, block_size,
+                                         resample_seed + static_cast<int>(i))));
+                        }
+                        break;
+                    case CovariateExtensionMethod::KNN:
+                        for (std::size_t i = 0; i < covariates_->size(); ++i) {
+                            const TimeSeries& cov = (*covariates_)[i];
+                            int knn = std::max(3, cov.count() / 10);
+                            int tail_size = sample_size - cov.count();
+                            extended_covariates.push_back(append_tail(
+                                cov, cov.resample_with_knn(tail_size, knn,
+                                                           resample_seed + static_cast<int>(i))));
+                        }
+                        break;
+                }
+                use_covariates = &extended_covariates;
+            } else {
+                use_covariates = &*covariates_;
+            }
         }
 
         std::vector<double> phi(static_cast<std::size_t>(ar_order_p_));

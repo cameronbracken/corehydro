@@ -5,12 +5,21 @@
 // (the port that reached FULL PARITY on every distribution/estimator/model/analysis surface never
 // needed it); this task ports it as the first entry in the Numerics utility-toolbox surface.
 //
-// Only the IList<double> overloads of Function/Covariance/Correlation/Partial are ported; the
-// TimeSeries overloads are a documented severance. This port's `numerics/data/time_series/
-// time_series.hpp` (Phase 7a) is a thin adapter with no mutation surface tailored to this class,
-// and no caller identified so far -- including Fourier's own `autocorrelation()`
-// (math/fourier/fourier.hpp), which already works from a plain `vector<double>` -- needs the
-// TimeSeries entry point. Add it if a later target does.
+// Only the IList<double> overloads of Function/Covariance/Correlation/Partial are ported. The
+// TimeSeries overloads are NOT a gap: they are the same four bodies with `timeSeries[t].Value`
+// substituted for `data[t]` and `timeSeries.MeanValue()` (which skips missing values) for
+// `Statistics.Mean(data)` (which does not) -- and that one difference is not observable, because
+// the lag-0 autocovariance sums over EVERY observation, so a single missing value makes it NaN
+// under either mean, and correlation and partial both divide by it.
+//
+// MEASURED against the real library rather than argued: on a 20-value series, and again with one
+// value replaced by NaN, `Autocorrelation.Function(data, 5, t)` and
+// `Autocorrelation.Function(timeSeries, 5, t)` return identical values for all three types --
+// the clean series to the last digit, the gappy one all-NaN from both. P6 ported the TimeSeries
+// container, so the overloads COULD be added now; they are not, because they would duplicate four
+// bodies to no numerical end and would need this header to include `time_series.hpp`, which
+// includes `hypothesis_tests.hpp`, which includes THIS header. A caller holding a time series
+// passes its values, which is what the R and Python `autocorrelation()` verbs do.
 //
 // C# defaults `lagMax` to `floor(min(10*log10(n), n-1))` when the caller passes -1. n == 0 makes
 // log10(n) == -inf; casting that to int is unspecified in C# but undefined behavior in C++

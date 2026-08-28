@@ -240,6 +240,17 @@ test_that("seeded resampling reproduces the pinned values and is deterministic",
                "Need at least 11 points")
 })
 
+test_that("autocorrelation accepts a time series and gets the C# values", {
+  ts <- time_series(as.Date("2000-01-01") + 0:19,
+                    c(3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4))
+  a <- autocorrelation(ts, max_lag = 5)
+  # Driven against the real Numerics library: Autocorrelation.Function's TimeSeries and
+  # IList<double> overloads return identical values, which is why only the latter is ported (see
+  # autocorrelation.hpp's header).
+  expect_equal(a$value[1:3], c(1, 0.17306026705160593, 0.007975460122699398), tolerance = 1e-12)
+  expect_identical(a$value, autocorrelation(ts$values, max_lag = 5)$value)
+})
+
 test_that("interval names are the library's, in its own order", {
   expect_equal(ts_interval_names()[1], "one_minute")
   expect_equal(ts_interval_names()[8], "one_day")

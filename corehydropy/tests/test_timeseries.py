@@ -266,6 +266,21 @@ def test_seeded_resampling_reproduces_the_pinned_values():
                    [1, 2, 3, 4, 5]).resample_knn(5, 2)
 
 
+def test_autocorrelation_accepts_a_time_series_and_gets_the_csharp_values():
+    from corehydropy import autocorrelation
+
+    ts = TimeSeries(np.arange("2000-01-01", "2000-01-21", dtype="datetime64[D]"),
+                    [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4])
+    a = autocorrelation(ts, max_lag=5)
+    # Driven against the real Numerics library: Autocorrelation.Function's TimeSeries and
+    # IList<double> overloads return identical values, which is why only the latter is ported (see
+    # autocorrelation.hpp's header).
+    assert a["value"][:3] == pytest.approx(
+        [1, 0.17306026705160593, 0.007975460122699398], abs=1e-12
+    )
+    assert np.array_equal(a["value"], autocorrelation(ts.values, max_lag=5)["value"])
+
+
 def test_interval_names_are_the_librarys_in_its_own_order():
     assert ts_interval_names()[0] == "one_minute"
     assert ts_interval_names()[7] == "one_day"

@@ -450,6 +450,12 @@ def autocorrelation(x, max_lag=None, type: str = "correlation", confidence_level
     """
     if type not in ("correlation", "covariance", "partial"):
         raise ValueError(f"`type` must be one of 'correlation', 'covariance', 'partial'; got {type!r}")
+    # A TimeSeries is accepted for convenience and reduced to its values. That is exactly what the
+    # library's own TimeSeries overloads compute: they differ only in using a missing-value-skipping
+    # mean, which is not observable because the lag-0 autocovariance sums over every observation
+    # (see autocorrelation.hpp's header for the measurement).
+    if hasattr(x, "values") and hasattr(x, "interval"):
+        x = x.values
     xa = np.asarray(x, dtype=float).ravel()
     if xa.size < 2:
         raise ValueError("`x` must have at least two elements")
