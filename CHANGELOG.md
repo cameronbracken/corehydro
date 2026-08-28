@@ -45,7 +45,27 @@ core takes no external dependency). This closes branch `port-time-series`.
 
 ### Fixed
 
-- Nothing was broken; the phase found four upstream behaviours instead. See below.
+- The phase itself broke nothing and found four upstream behaviours instead (see below). The
+  documentation sweep that closed it did find one thing: worked example 04 pinned `map_fitness`
+  at `473.558409617748`, the value from before the v0.2.0 upstream sync moved MAP fitness onto
+  the log-likelihood scale as `-473.558409617748`. Both language pages were wrong and both
+  pipelines were green, because Quarto's freeze keys on the source file rather than on the
+  package the source calls, and notebooks are never re-executed. Every other page was audited by
+  forced re-execution and reproduces.
+- The documentation had accumulated scope claims that stopped being true as v0.9.0 through
+  v0.13.0 landed: five upstream example notebooks were still listed out of scope after being
+  ported, `Data.Statistics` was marked partial when all thirteen of its classes are ported, and
+  seven example pairs said capabilities were unreachable that `mcmc_posterior()`,
+  `autocorrelation()`, `ml_jenks_breaks()`, `summary_statistics()` and `correlation()` have
+  since made public.
+
+### Changed
+
+- HEC-FDA is no longer listed as a porting target. It is being ported separately in
+  [hecfda](https://github.com/cameronbracken/hecfda/); the status page carries it as a related
+  effort instead of a planned upstream source.
+- The rendered site output (219 files: the `.html` pages sitting beside their sources, their
+  `*_files/` figures, and `site_libs/`) is no longer tracked. `site/_freeze` still is.
 
 ### Notes
 
@@ -1139,7 +1159,10 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/cameronbracken/corehydro/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/cameronbracken/corehydro/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/cameronbracken/corehydro/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cameronbracken/corehydro/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cameronbracken/corehydro/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/cameronbracken/corehydro/compare/v0.7.0...v0.8.0
