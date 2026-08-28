@@ -1,18 +1,26 @@
 # corehydro
 
+[![CI](https://github.com/cameronbracken/corehydro/actions/workflows/ci.yml/badge.svg)](https://github.com/cameronbracken/corehydro/actions/workflows/ci.yml)
+[![Docs](https://github.com/cameronbracken/corehydro/actions/workflows/docs.yml/badge.svg)](https://cameronbracken.github.io/corehydro/)
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-b06a3b.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+[![Version](https://img.shields.io/github/v/tag/cameronbracken/corehydro?sort=semver&label=version&color=6b7f3f)](https://github.com/cameronbracken/corehydro/releases)
+[![License: 0BSD](https://img.shields.io/badge/license-0BSD-5b7a8c.svg)](LICENSE)
+[![Upstream: Numerics 2.1.4 | RMC--BestFit 2.0.0](https://img.shields.io/badge/upstream-Numerics%202.1.4%20%7C%20RMC--BestFit%202.0.0-8c8c7a.svg)](https://github.com/USACE-RMC)
+
 corehydro is an (unofficial) C++ port of tools developed by the 
 [United States Army Corps of Engineers](https://www.usace.army.mil/) (USACE) 
-[Risk Management Center](https://github.com/USACE-RMC) (RMC) and 
-[Hydrologic Engineering Center](https://github.com/HydrologicEngineeringCenter) (HEC)
+[Risk Management Center](https://github.com/USACE-RMC) (RMC) 
 for stochastic and computational hydrology including distribution fitting and sampling, 
 timeseries modeling, uncertainty quantification, optimization, machine learning, flood and precip 
 frequency estimation, and a whole lot more. 
 
 The motivation behind this porting effort is to increase awareness 
 and accessibility of these amazing software packages (see the [Why?](#why) section 
-for more info). Currently this project has ported pieces of the following libraries/packages:
-- [RMC-BestFit](https://github.com/USACE-RMC/RMC-BestFit) (statistical engine fully ported)
-- [Numerics](https://github.com/USACE-RMC/Numerics) (probability, sampling, and estimation layers)
+for more info). Two libraries are in scope, and both are ported:
+- [Numerics](https://github.com/USACE-RMC/Numerics) (everything portable; file I/O and gauge
+  download are not)
+- [RMC-BestFit](https://github.com/USACE-RMC/RMC-BestFit) (the statistical engine; the desktop
+  application is not)
 
 See the [porting status page](https://cameronbracken.github.io/corehydro/status.html)
 for the details of what is currently implemented in the core library and in the packages. 
@@ -39,8 +47,10 @@ library is not guaranteed to.
 - [R API reference](https://cameronbracken.github.io/corehydro/r/)
 
 ## Development status
-Early development. All [RMC.BestFit](https://github.com/USACE-RMC/RMC-BestFit) features have 
-been ported but more testing and documentation are needed. 
+Early development. Both libraries are ported: the whole
+[RMC-BestFit](https://github.com/USACE-RMC/RMC-BestFit) statistical engine, and every portable
+part of [Numerics](https://github.com/USACE-RMC/Numerics) through the machine learning and
+time series layers. More testing and documentation are needed. 
 
 Neither package is on CRAN or PyPI yet.
 
@@ -218,7 +228,10 @@ All credit for the implementation of these tools goes to [Haden Smith](https://g
 
 ## Other related porting projects
 
-- [hecfda](https://github.com/cameronbracken/hecfda)
+- [hecfda](https://github.com/cameronbracken/hecfda), a separate port of the USACE
+  [Hydrologic Engineering Center](https://github.com/HydrologicEngineeringCenter)'s
+  [HEC-FDA](https://github.com/HydrologicEngineeringCenter/HEC-FDA) flood damage and risk
+  assessment library. It is its own project, not a corehydro porting target.
 
 ## License
 The C++ core and both packages are released under the [Zero-Clause BSD (0BSD) license](https://github.com/cameronbracken/corehydro/blob/main/LICENSE), matching the USACE-RMC libraries.
