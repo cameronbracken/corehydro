@@ -3418,12 +3418,11 @@ static (BestFitModels.UnivariateDistributionModelBase model, object? estimator, 
 // model_estimation section. The three runners already build these families through their shared
 // model_spec.hpp path; this emitter path is the fourth (oracle) leg.
 //
-// TimeSeries note: the C# TimeSeries index is a DateTime, but every model consumer touches the
-// index only as a sequence position / inner-join key (never calendar arithmetic -- see the C++
-// adapter header time_series.hpp). All series in a case are built from ONE fixed base date with
-// the same interval, so their relative alignment (rating_curve stage<->discharge, ARIMAX
-// covariate lags) is preserved exactly as the C++ integer-index adapter preserves it; the
-// absolute `start_index` is therefore not modeled here (documented deviation, fit-invariant).
+// TimeSeries note: since P6 the C++ container indexes by a real DateTime too, so this builder and
+// models/model_spec.hpp's build_time_series agree ordinate-for-ordinate. The shared epoch below is
+// the date a spec's integer `start_index` counts from (in INTERVALS); a spec that cares about the
+// calendar carries an ISO `start_date` instead. Keep this equal to `spec_epoch()` in
+// core/include/corehydro/models/model_spec.hpp.
 static DateTime EmitterSeriesEpoch() => new DateTime(2000, 1, 1);
 
 static BestFitModels.Transform ParseTransform(string s) => s switch
@@ -3454,25 +3453,41 @@ static TimeInterval ParseTimeInterval(string s) => s switch
 };
 
 // Wraps a flat value vector into a real Numerics.Data.TimeSeries (interval + start date + values).
-// `time_interval` defaults OneDay (the C# field default); the start date is the fixed epoch (see
-// the region note -- absolute start_index is fit-invariant given all series share it).
+// `time_interval` defaults OneDay (the C# field default); the start date comes from `start_date`
+// (ISO 8601) when present, otherwise from `start_index` counted in INTERVALS off the shared epoch
+// -- byte-for-byte the rule models/model_spec.hpp's build_time_series applies.
 static TimeSeries BuildEmitterTimeSeries(JsonElement modelSpec, double[] values)
 {
     TimeInterval interval = modelSpec.TryGetProperty("time_interval", out var ti)
         ? ParseTimeInterval(ti.GetString()!) : TimeInterval.OneDay;
+    int startIndex = modelSpec.TryGetProperty("start_index", out var si) ? si.GetInt32() : 0;
+    DateTime startDate = EmitterSeriesEpoch();
+    if (modelSpec.TryGetProperty("start_date", out var sd))
+    {
+        startDate = DateTime.Parse(sd.GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+    }
+    else if (interval == TimeInterval.Irregular)
+    {
+        startDate = startDate.AddDays(startIndex);
+    }
+    else
+    {
+        for (int i = 0; i < startIndex; i++)
+            startDate = TimeSeries.AddTimeInterval(startDate, interval);
+    }
     // Irregular is rejected by the (interval, startDate, data) ctor (it walks a REGULAR step), in
     // C# exactly as in the C++ port. Build it the way the C# regression tests do -- empty series
-    // on the interval, then one Add per value -- matching models/model_spec.hpp's build_time_series
+    // on the interval, then one Add per value, a day apart -- matching build_time_series
     // ordinate-for-ordinate. Index spacing is inert (the ARMA families index by position).
     if (interval == TimeInterval.Irregular)
     {
         var irregular = new TimeSeries(interval);
         for (int i = 0; i < values.Length; i++)
             irregular.Add(new SeriesOrdinate<DateTime, double>(
-                EmitterSeriesEpoch().AddDays(i), values[i]));
+                startDate.AddDays(i), values[i]));
         return irregular;
     }
-    return new TimeSeries(interval, EmitterSeriesEpoch(), values);
+    return new TimeSeries(interval, startDate, values);
 }
 
 // Resolves a time-series data source: inline `data` array, else the file-level dataset.

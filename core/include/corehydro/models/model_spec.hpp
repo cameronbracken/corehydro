@@ -439,27 +439,47 @@ inline numerics::data::TimeInterval parse_time_interval(const std::string& name)
     throw std::runtime_error("unknown time_series time_interval: " + name);
 }
 
-// Wraps a flat value vector into the P2 TimeSeries adapter (data ctor: interval + start index +
-// values). `time_interval` defaults OneDay, `start_index` defaults 0 -- the index is only a
-// join key (rating_curve) / a sequence position (the ARMA family), never calendar arithmetic.
+// The date a spec's integer `start_index` counts from, shared with the dotnet oracle emitter
+// (`EmitterSeriesEpoch()` in tools/oracle_emitter/Program.cs -- keep the two equal). The fixture
+// grammar predates the P6 index swap, when a series index was a bare integer offset;
+// `start_index: i` now means "i intervals after this date", which keeps every pre-P6 fixture
+// reproducing exactly (the mapping is monotone, so ordering and the rating-curve date join are
+// preserved) while a spec that cares about the calendar says so with `start_date` instead.
+inline numerics::data::DateTime spec_epoch() { return numerics::data::DateTime(2000, 1, 1); }
+
+// Wraps a flat value vector into a TimeSeries (data ctor: interval + start date + values).
+// `time_interval` defaults OneDay. The start date comes from `start_date` (an ISO 8601 string)
+// when present, otherwise from `start_index` counted in intervals off `spec_epoch()`.
 inline numerics::data::TimeSeries build_time_series(const JsonValue& spec,
                                                     const std::vector<double>& values) {
     numerics::data::TimeInterval interval =
         spec.contains("time_interval") ? parse_time_interval(spec.at("time_interval").as_string())
                                        : numerics::data::TimeInterval::OneDay;
     long start = static_cast<long>(spec.value_or("start_index", 0));
+    numerics::data::DateTime start_date = spec_epoch();
+    if (spec.contains("start_date")) {
+        start_date = numerics::data::DateTime::parse_iso(spec.at("start_date").as_string());
+    } else if (interval == numerics::data::TimeInterval::Irregular) {
+        // An irregular series has no interval to step, so `start_index` counts days here.
+        start_date = start_date.add_days(static_cast<double>(start));
+    } else {
+        for (long i = 0; i < start; ++i)
+            start_date = numerics::data::TimeSeries::add_time_interval(start_date, interval);
+    }
     // Irregular is rejected by the (interval, start, values) ctor in BOTH C# and this port (that
-    // ctor walks a REGULAR +1 step). Build it the way the C# regression tests do -- an empty
-    // series on the interval, then one Add per value. Index spacing is inert for every model
-    // here (the ARMA families index by POSITION), so a +1 walk keeps the C++/C# builders
-    // value-identical. Task 21: needed by the TimeInterval.Irregular Validate guard fixtures.
+    // ctor walks a REGULAR interval step). Build it the way the C# regression tests do -- an
+    // empty series on the interval, then one Add per value, spacing the dates a day apart. Index
+    // spacing is inert for every model here (the ARMA families index by POSITION), so the
+    // spacing choice keeps the C++/C# builders value-identical. Task 21: needed by the
+    // TimeInterval.Irregular Validate guard fixtures.
     if (interval == numerics::data::TimeInterval::Irregular) {
         numerics::data::TimeSeries ts(interval);
         for (std::size_t i = 0; i < values.size(); ++i)
-            ts.add(numerics::data::TimeSeries::Ordinate(start + static_cast<long>(i), values[i]));
+            ts.add(numerics::data::TimeSeries::Ordinate(
+                start_date.add_days(static_cast<double>(i)), values[i]));
         return ts;
     }
-    return numerics::data::TimeSeries(interval, start, values);
+    return numerics::data::TimeSeries(interval, start_date, values);
 }
 
 // Resolves a time-series data source: an inline `data` array when present, otherwise the

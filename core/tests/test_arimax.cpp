@@ -53,6 +53,22 @@
 #include "check.hpp"
 
 namespace {
+// P6 index swap: the TimeSeries container indexes by DateTime rather than by an integer offset.
+// Nothing in this suite reads the index for meaning (the ARMA families index by POSITION, the
+// rating curve by date EQUALITY), so every series here is anchored at one arbitrary date; the
+// mapping is monotone, so every oracle below is unchanged by the swap.
+const corehydro::numerics::data::DateTime kT0(1900, 1, 1);
+// The (interval, start, end) constructor takes an END DATE since the P6 index swap; these suites
+// expressed the span as a step count, so this walks the interval that many times.
+inline corehydro::numerics::data::DateTime t0_plus(int steps,
+                                                   corehydro::numerics::data::TimeInterval ti) {
+    corehydro::numerics::data::DateTime d = kT0;
+    for (int i = 0; i < steps; ++i)
+        d = corehydro::numerics::data::TimeSeries::add_time_interval(d, ti);
+    return d;
+}
+
+
 
 using corehydro::models::ARIMAX;
 using corehydro::models::Transform;
@@ -70,7 +86,7 @@ static_assert(std::is_base_of<corehydro::models::ISimulatable<std::vector<double
 
 // 60 annual observations, AR(1)-with-trend, positive mean ~1000 (mirrors CreateSampleTimeSeries).
 TimeSeries make_sample_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 59);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(59, TimeInterval::OneYear));
     MersenneTwister rng(12345);
     const double mean = 1000.0, phi = 0.6, sigma = 100.0, trend_slope = 5.0;
     double prev = mean;
@@ -86,7 +102,7 @@ TimeSeries make_sample_series() {
 
 // 240 monthly observations, seasonal + trend + noise (mirrors CreateMonthlyTimeSeries).
 TimeSeries make_monthly_series() {
-    TimeSeries ts(TimeInterval::OneMonth, 0, 239);
+    TimeSeries ts(TimeInterval::OneMonth, kT0, t0_plus(239, TimeInterval::OneMonth));
     MersenneTwister rng(54321);
     for (int i = 0; i < ts.count(); ++i) {
         double seasonal = 50.0 * std::sin(2.0 * corehydro::numerics::kPi * i / 12.0);
@@ -99,14 +115,15 @@ TimeSeries make_monthly_series() {
 
 // 15 annual observations, deterministic 100 + 10i (mirrors CreateShortTimeSeries).
 TimeSeries make_short_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 14);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(14, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(100.0 + i * 10.0);
     return ts;
 }
 
 // Covariate aligned to the target series (mirrors CreateCovariateTimeSeries).
 TimeSeries make_covariate_series(const TimeSeries& target) {
-    TimeSeries ts(target.time_interval(), 0, target.count() - 1);
+    TimeSeries ts(target.time_interval(), kT0,
+                  t0_plus(target.count() - 1, target.time_interval()));
     MersenneTwister rng(67890);
     for (int i = 0; i < ts.count(); ++i)
         ts[i].set_value(0.5 * target[i].value() + rng.next_double() * 50.0);
@@ -115,7 +132,7 @@ TimeSeries make_covariate_series(const TimeSeries& target) {
 
 // 5 annual observations -> too short for the 10-observation validation guard.
 TimeSeries make_tiny_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 4);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(4, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(i);
     return ts;
 }
@@ -130,7 +147,7 @@ bool messages_contain(const corehydro::models::ValidationResult& r, const std::s
 // fails can_fit_lambda's positivity requirement (mirrors C#'s
 // CreateBoxCoxLambdaFailureTimeSeries).
 TimeSeries make_box_cox_lambda_failure_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 59);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(59, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(i == 0 ? 0.0 : 10.0);
     return ts;
 }
@@ -139,7 +156,7 @@ TimeSeries make_box_cox_lambda_failure_series() {
 // non-degeneracy requirement for Yeo-Johnson (mirrors C#'s
 // CreateYeoJohnsonLambdaFailureTimeSeries).
 TimeSeries make_yeo_johnson_lambda_failure_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 59);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(59, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(-std::numeric_limits<double>::max());
     return ts;
 }
@@ -576,7 +593,7 @@ void test_arimax_covariates() {
 void test_arimax_p4_fixed_param_oracles() {
     // ARIMAX(1,0,0)+intercept+linear trend, params [intercept, trend, phi1, sigma] =
     // [10.9, 0.05, 0.3, 1.0]; construction mirrors model_spec.hpp's build_time_series_model.
-    TimeSeries series(TimeInterval::OneDay, 0L,
+    TimeSeries series(TimeInterval::OneDay, kT0,
                       std::vector<double>{10.2, 11.5, 9.8, 12.1, 13.4, 11.9, 10.6, 12.8, 14.0,
                                           13.1, 11.7, 12.5, 13.9, 15.2, 14.1, 12.9, 13.6, 15.0,
                                           16.2, 14.8});
@@ -701,7 +718,7 @@ void test_arimax_irregular_interval_validate() {
     // C# test's own i*i+1 index spacing.
     TimeSeries irregular(TimeInterval::Irregular);
     for (int i = 0; i < 50; ++i)
-        irregular.add(TimeSeries::Ordinate(static_cast<long>(i) * i + 1, i + 1.0));
+        irregular.add(TimeSeries::Ordinate(kT0.add_days(static_cast<double>(i) * i + 1), i + 1.0));
 
     auto r = ARIMAX(irregular).validate();
     CHECK_TRUE(!r.is_valid);

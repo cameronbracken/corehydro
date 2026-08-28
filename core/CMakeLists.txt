@@ -70,6 +70,7 @@ set(BF_TESTS
   test_box_cox
   test_date_time
   test_time_series
+  test_time_series_container
   test_spatial_correlation
   test_cached_mvn_gaussian_copula
   test_spatial_regression_errors
