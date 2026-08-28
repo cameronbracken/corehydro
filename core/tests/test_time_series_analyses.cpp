@@ -51,13 +51,29 @@ using corehydro::numerics::data::TimeSeries;
 using corehydro::numerics::sampling::MersenneTwister;
 
 namespace {
+// P6 index swap: the TimeSeries container indexes by DateTime rather than by an integer offset.
+// Nothing in this suite reads the index for meaning (the ARMA families index by POSITION, the
+// rating curve by date EQUALITY), so every series here is anchored at one arbitrary date; the
+// mapping is monotone, so every oracle below is unchanged by the swap.
+const corehydro::numerics::data::DateTime kT0(1900, 1, 1);
+// The (interval, start, end) constructor takes an END DATE since the P6 index swap; these suites
+// expressed the span as a step count, so this walks the interval that many times.
+inline corehydro::numerics::data::DateTime t0_plus(int steps,
+                                                   corehydro::numerics::data::TimeInterval ti) {
+    corehydro::numerics::data::DateTime d = kT0;
+    for (int i = 0; i < steps; ++i)
+        d = corehydro::numerics::data::TimeSeries::add_time_interval(d, ti);
+    return d;
+}
+
+
 
 // ---- Deterministic fixtures (ported Mersenne Twister is bit-exact) ----------------------
 
 // 60-observation annual streamflow, AR(1)-ish (mean ~5000, phi ~0.6, sigma ~600). Mirrors the
 // C# CreateAnnualStreamflowTimeSeries shape; data regenerated with the ported RNG.
 TimeSeries annual_streamflow() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 59);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(59, TimeInterval::OneYear));
     MersenneTwister rng(12345);
     const double mean = 5000.0, phi = 0.6, sigma = 600.0;
     double prev = mean;

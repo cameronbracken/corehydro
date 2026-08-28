@@ -309,6 +309,42 @@ reference:
       - ml_knn
       - ml_naive_bayes
       - ml_glm
+  - title: Time-series container
+    desc: >
+      The ported Numerics TimeSeries container. A time_series() carries dated observations on a
+      stated interval; the verbs over it smooth, fill, clip, re-interval, summarize, reduce to
+      annual maxima or peaks over a threshold, decompose, and resample. Seeded resampling agrees
+      bit for bit with the identical call in Python.
+    contents:
+      - time_series
+      - ts_interval_names
+      - ts_moving_average
+      - ts_moving_sum
+      - ts_cumulative_sum
+      - ts_difference
+      - ts_standardize
+      - ts_sort
+      - ts_transform
+      - ts_replace_missing
+      - ts_interpolate_missing
+      - ts_fill_missing_dates
+      - ts_clip
+      - ts_shift
+      - ts_convert_interval
+      - ts_statistics
+      - ts_hypothesis_test
+      - ts_percentiles
+      - ts_duration
+      - ts_monthly_statistics
+      - ts_monthly_percentiles
+      - ts_monthly_frequency
+      - ts_block_series
+      - ts_water_year
+      - ts_calendar_year
+      - ts_peaks_over_threshold
+      - ts_seasonal_decompose
+      - ts_resample_knn
+      - ts_resample_block_bootstrap
   - title: The generator a callback is handed
     desc: >
       Drawing from the core's seeded random number generator inside a function you write, so

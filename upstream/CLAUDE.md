@@ -96,8 +96,12 @@ The Sobol generator embeds `Properties/new-joe-kuo-6.21201` as a resource.
   It was ported in the `surface-numerics-toolbox` branch's Task 3 (August 2026) as
   `core/include/corehydro/numerics/data/autocorrelation.hpp`, reachable from R and Python via the
   `spectra` toolbox group's `autocorrelation`/`autocorrelation_ci` verbs. Only the
-  `IList<double>` overloads are ported; the `TimeSeries` overloads remain a documented severance
-  (see that header's own file comment). Its sibling `Correlation.cs`'s matrix overloads
+  `IList<double>` overloads are ported. P6 measured why that is not a gap rather than leaving it
+  as a severance: the `TimeSeries` overloads are the same bodies with a missing-value-skipping
+  mean, and that difference is not observable (the lag-0 autocovariance sums over every
+  observation, so one missing value NaNs the result either way) -- driven against the real
+  library, both overload families return identical values on a clean series and all-NaN on a
+  gappy one. See that header's own file comment. Its sibling `Correlation.cs`'s matrix overloads
   (`Correlation.Pearson(double[,])` / `Correlation.Spearman(double[,])`, column-pairwise
   correlation matrices over an `[n, p]` table) were ported in the P4 "data and tests" phase's
   Task 4 (August 2026) as `pearson_matrix`/`spearman_matrix` in
@@ -122,6 +126,19 @@ The Sobol generator embeds `Properties/new-joe-kuo-6.21201` as a resource.
   caller in this port's scope needs a Hunt search over a bare array; see `search.hpp`'s own header
   for the fidelity notes on both un-severed families). All three retirements are reachable from R
   and Python via the P4 Task 10 `curve_*`/`uncertain_curve_*`/`tabular_function` toolbox surface.
+- **`Numerics/Data/Time Series/TimeSeries.cs` (2,334 lines) and `Support/Series.cs`** were a
+  documented severance from Phase 7a, when only a thin adapter over `std::vector<double>` was
+  needed, through P5. The **P6 "time series" phase** (August 2026) ported both into
+  `core/include/corehydro/numerics/data/time_series/`, including the v2.1.4 `Remove` / `RemoveAt`
+  / `Clear` semantics upstream added tests for, and the `DateTime` value type under them -- a
+  corehydro addition with no upstream source file, standing in for `System.DateTime` and pinned
+  against the real BCL by `fixtures/timeseries/date_time.json`. They reach R and Python through
+  the `timeseries` toolbox group. Their landing also un-gated four members deferred with them:
+  the seasonal `PointProcessModel` data path and `GeneratePOTTimeSeries`,
+  `DataFrame.CreateBlockSeries` / `CreatePeaksOverThresholdSeries` (with `ExactData.DateTime`),
+  and the ARIMAX covariate forecast-tail extension. Still severed INSIDE the ported files: the
+  XML round trip (so `Clone()` deep-copies -- an exact equivalence, since "o" and "G17" are
+  round-trip formats), `INotifyPropertyChanged` / `CollectionChanged`, and file I/O.
 - **The whole `Numerics/Machine Learning/` subsystem** (`Supervised/`: DecisionTree,
   RandomForest, KNearestNeighbors, NaiveBayes, GeneralizedLinearModel; `Unsupervised/`: KMeans,
   GaussianMixtureModel, JenksNaturalBreaks; `Support/`: DecisionNode, JenksCluster) was unported
@@ -214,12 +231,6 @@ changed-upstream file whose pin was deliberately not moved.
 - **`Numerics/Data/Time Series/Support/TimeSeriesDownload.cs`** — network retrieval of gauge
   records (USGS and similar). v2.1.4 rewrote it substantially (+754/-237 lines). corehydro takes
   data from the caller; R and Python users have far better HTTP tooling natively.
-- **`Numerics/Data/Time Series/Support/Series.cs`** — the observable-collection container behind
-  the heavy Numerics `TimeSeries`. v2.1.4 changed its `Remove` / `RemoveAt` / `Clear` semantics.
-  corehydro's `numerics/data/time_series/time_series.hpp` is a thin adapter over
-  `std::vector<double>` with no mutation surface of that shape, so the change has nothing to land
-  on. The 2,334-line Numerics container itself (interpolation, file I/O, hypothesis tests) remains
-  a documented severance.
 - **`src/RMC.BestFit/Analyses/Support/AnalysisProgress.cs`** — new in v2.0.0. GUI progress
   plumbing: phase percentages, a safe progress reporter, and an `AsyncLocal` parallelism budget.
   Its adoption is what makes the fifteen analysis orchestrators' diffs look large; those hunks are

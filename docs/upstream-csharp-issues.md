@@ -3019,6 +3019,106 @@ a numbered transcription note at the call site citing the C# line numbers below.
 
 ---
 
+## CONSISTENCY — `TimeSeries.CumulativeSum` silently drops the series' time interval
+
+- **Where:** `Numerics/Data/Time Series/TimeSeries.cs` @ 2a0357a, `CumulativeSum()` (line 476).
+- **What:** Every other method that returns a new series builds it with `new TimeSeries(TimeInterval)`.
+  This one builds `new TimeSeries()`, whose field initializer is `TimeInterval.OneDay`, so the
+  result claims a daily interval no matter what the source had. The ordinate DATES are copied
+  intact, so the returned object is internally inconsistent: monthly dates labelled as daily.
+- **Evidence (measured against the real library):** a `OneMonth` series of `{1, 2, 3}` returns a
+  cumulative sum whose `TimeInterval` is `OneDay`. The values and dates are otherwise correct.
+- **Consequence:** anything downstream that branches on the interval sees the wrong one. Within
+  Numerics itself the only such consumer is `ConvertTimeInterval`, so a caller who cumulates and
+  then converts gets a conversion computed from a 24-hour step.
+- **Port handling:** mirrored, with the oddity named in the method's own comment and pinned by
+  `test_time_series_container.cpp` (`test_cumulative` asserts the result reports `OneDay` while the
+  source still reports `OneMonth`).
+- **Suggested C# fix:** `new TimeSeries(TimeInterval)`, matching every sibling.
+
+---
+
+## ROBUSTNESS — three `TimeSeries` indexed math overloads reach through an index their own guard rejected
+
+- **Where:** `Numerics/Data/Time Series/TimeSeries.cs` @ 2a0357a: `LogTransform(IList<int>, double)`
+  (line 410), `Inverse(IList<int>)` (line 461), and `InterpolateMissingData(int, IList<int>)`
+  (line 617).
+- **What:** The indexed math overloads share one shape -- `if (indexes[i] >= 0 && indexes[i] <
+  Count && <condition>) { ... }` -- and the seven that stop there SKIP an out-of-range index
+  silently. These three do not. `LogTransform` and `Inverse` add an `else` (or `else if`) that
+  writes or reads `this[indexes[i]]` with NO bounds check, so an out-of-range entry raises
+  `ArgumentOutOfRangeException` from the indexer. `InterpolateMissingData`'s extrapolation branch
+  reads `this[idx - 2]` with no `idx >= 2` guard, which its own non-indexed twin (line 596) DOES
+  have, so passing index 1 reads position -1.
+- **Evidence (measured against the real library), on a 3-ordinate series:**
+  `Add(5, new[]{7})` returns normally having done nothing; `LogTransform(new[]{7})` and
+  `Inverse(new[]{7})` both throw `ArgumentOutOfRangeException`; and
+  `InterpolateMissingData(1, new[]{1})` on `{1, NaN, NaN}` throws the same.
+- **Consequence:** whether an out-of-range index is ignored or fatal depends on which of the ten
+  sibling methods you call, which is not a contract a caller can guess.
+- **Port handling:** mirrored. Reading position -1 is undefined behaviour in C++, not an exception,
+  so the three sites carry an explicit bounds check that throws `std::out_of_range` at exactly the
+  point the C# indexer would; the other seven keep skipping. `test_time_series_container.cpp` pins
+  both behaviours side by side.
+- **Suggested C# fix:** give the three methods the same guard their siblings have (and give the
+  indexed `InterpolateMissingData` the `idx >= 2` check its twin already has).
+
+---
+
+## COSMETIC — `TimeSeries.MovingAverage` / `MovingSum` swap their `ArgumentException` arguments
+
+- **Where:** `Numerics/Data/Time Series/TimeSeries.cs` @ 2a0357a, `MovingAverage` (line 955) and
+  `MovingSum` (line 998).
+- **What:** Both write `throw new ArgumentException(nameof(period), "The period must be less than
+  the length of the time-series.")`. `ArgumentException(string message, string paramName)` takes
+  the MESSAGE first, so the parameter name becomes the message and the message becomes the
+  parameter name.
+- **Evidence (measured against the real library):** calling `MovingAverage(3)` on a 3-ordinate
+  series raises `ArgumentException: period (Parameter 'The period must be less than the length of
+  the time-series.')`.
+- **Note:** the guard itself is `period >= Count`, not `period > Count`, so a window exactly as
+  long as the series is rejected rather than producing the single full-series value. That is
+  deliberate enough (a one-point output is rarely wanted) that it is recorded here rather than
+  filed as a bug, but it IS the boundary a caller has to know.
+- **Port handling:** the port throws `std::invalid_argument` carrying the descriptive message and
+  keeps the `>=` boundary; `test_time_series_container.cpp` pins the boundary.
+- **Suggested C# fix:** swap the two arguments.
+
+---
+
+## BUG — `PointProcessModel`'s seasonal day-of-year list is date-sorted while the likelihood pairs it positionally with an unsorted series
+
+- **Where:** `RMC-BestFit/src/RMC.BestFit/Models/UnivariateDistribution/PointProcessModel.cs` @
+  `c2e6192`, `SetAMSData()` (lines 526-556) against `DataLogLikelihood` (~line 1858) and
+  `PointwisePriorLogLikelihood`.
+- **What:** The seasonal branch builds an irregular `TimeSeries` from the exact series IN THE
+  ORDER THE CALLER SUPPLIED IT, then -- for the water-year convention -- reassigns
+  `ts = ts.ShiftDatesByMonth(shift)`. `ShiftDatesByMonth` opens with `SortByTime()`, so the
+  returned series is in DATE order. `_potDays` is then filled from that sorted series. But the
+  seasonal likelihood consumes it positionally:
+  `for (int i = 0; i < POTDays.Count && i < DataFrame.ExactSeries.Count; i++) { double x =
+  ExactSeries[i].Value; int day = POTDays[i]; ... }` -- and `ExactSeries` was never sorted. Each
+  magnitude is therefore scored against a DIFFERENT event's day of year whenever the input record
+  is not already in date order, which decides which of the two seasonal GEV marginals it is
+  attributed to.
+- **Evidence (measured on the ported path, which transcribes the C# statement for statement):**
+  upstream's own `CreateSeasonalPOTDataFrame` helper supplies ten February events followed by ten
+  July events. `POTDays` comes back interleaved -- 135, 288, 135, 288, ... (May 15 and October 15
+  after the three-month water-year shift) -- while `ExactSeries` is still all-Februaries then
+  all-Julys. So the first ten magnitudes, every one a February event, are scored against
+  alternating May and October days.
+- **Scope:** the calendar-year path (`StartMonth == 1`) is unaffected, because no shift happens
+  and `ts` keeps the caller's order. A record supplied in date order is also unaffected, which is
+  the common case and probably why this has gone unnoticed.
+- **Port handling:** mirrored, with the defect named at the assignment in
+  `point_process_model.hpp` and pinned by `test_point_process_model.cpp`'s
+  `test_set_ams_data_seasonal_creates_pot_days`, which asserts the interleaved order rather than
+  the intuitive one.
+- **Suggested C# fix:** sort the exact series into the same order before pairing (or, better,
+  carry the day of year ON the ordinate rather than in a parallel list, so the two cannot drift).
+
+---
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a

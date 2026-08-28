@@ -15,20 +15,20 @@
 //     override).
 //   - C# `DataFrame = null` maps to the base's never-set optional (see the base header).
 //
-// DEFERRED (single documented block, per plan + ledger): the SEASONAL DATA PATH --
+// THE SEASONAL DATA PATH landed in P6, un-gated by the ported Numerics `TimeSeries` container
+// and the `DateTime` value type under it (and by `ExactData.DateTime`, deferred with them). Both
+// members it covered are live:
 //   - the irregular-TimeSeries branch of SetAMSData (C# lines 526-556: CreateBlockSeries,
-//     ShiftDatesByMonth, water-year shifting, the POT day-of-year `_potDays` population),
-//     which requires the unported 2,334-line Numerics `TimeSeries` container and C#
-//     `DateTime` (ExactData.DateTime is itself a project-wide deferral, see
-//     data_types/exact_data.hpp). In this port the seasonal branch of set_ams_data() is a
-//     silent no-op (mirroring the C# swallow-all catch): the AMS frame stays empty and
-//     pot_days() stays empty when IsSeasonal is true. Consequences, mirrored rather than
-//     hidden: seasonal default GEV parameters are NaN-valued (empty constraint sample),
-//     the seasonal exact-data likelihood terms vanish (the C# loop is bounded by
-//     POTDays.Count), and Validate() reports the missing seasonal AMS data.
-//   - `GeneratePOTTimeSeries(DateTime, double, int)` (C# line 2017) -- returns a
-//     date-stamped TimeSeries. Its private `SamplePoisson` helper IS ported (below) so the
-//     seeded stream work (M14) has the complete RNG surface.
+//     ShiftDatesByMonth, water-year shifting, the POT day-of-year `_potDays` population).
+//     Through P5 this branch was a silent no-op, so the AMS frame and pot_days() stayed empty
+//     when IsSeasonal was true, and every downstream consequence (NaN seasonal defaults,
+//     vanishing seasonal likelihood terms, a Validate() complaint) followed from that. They no
+//     longer do. The C# swallow-all catch around the body is still mirrored, and is now
+//     LOAD-BEARING: this method runs from the StartMonth setter, so an out-of-range month
+//     reaches CustomYearSeries's guard and must be swallowed for Validate() to report it.
+//   - `GeneratePOTTimeSeries(DateTime, double, int)` (C# line 2017), the synthetic
+//     peaks-over-threshold record. Its private `SamplePoisson` helper was already ported (the
+//     M14 seeded-stream work needed the complete RNG surface); P6 added the caller.
 // Everything else seasonal -- the IsSeasonal/TimeBlock/StartMonth properties and setter
 // cascades, the two-GEV SetDistribution branch, the change-point parameters, the seasonal
 // branches of every likelihood method, SetParameterValues/GetDistribution's seasonal
@@ -98,6 +98,8 @@
 #include "corehydro/models/univariate_distribution/base/univariate_distribution_model_base.hpp"
 #include "corehydro/numerics/data/probability.hpp"
 #include "corehydro/numerics/data/time_series/support/time_block_window.hpp"
+#include "corehydro/numerics/data/time_series/time_series.hpp"
+#include "corehydro/numerics/utilities/dotnet_sort.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
@@ -203,7 +205,7 @@ class PointProcessModel : public UnivariateDistributionModelBase,
     const DataFrame& ams_data_frame() const { return ams_data_frame_; }
 
     // C# `POTDays` (line 243): the day-of-year for each POT event. Always empty in this
-    // port (populated only by the deferred seasonal data path; see the file header).
+    // port (populated by the seasonal data path in set_ams_data()).
     const std::vector<int>& pot_days() const { return pot_days_; }
 
     // C# `Lambda` (line 248): the average number of POT events per year.
@@ -253,7 +255,7 @@ class PointProcessModel : public UnivariateDistributionModelBase,
     }
 
     // C# `TimeBlock` (line 346): the time block window used to build the block series
-    // (default water year). Consumed only by the deferred seasonal data path; the property
+    // (default water year). Consumed by the seasonal data path; the property
     // and its setter cascade port in full.
     TimeBlockWindow time_block() const { return time_block_; }
     void set_time_block(TimeBlockWindow value) {
@@ -350,10 +352,13 @@ class PointProcessModel : public UnivariateDistributionModelBase,
     // C# `SetAMSData` (line 504): preprocesses the annual maximum (block) data. The
     // non-seasonal branch groups the exact series by index and keeps the per-index maximum,
     // in first-appearance order of the index (the GroupBy/ToDictionary reading in the file
-    // header). The seasonal branch is DEFERRED (file header). The C# wraps the body in a
-    // swallow-all catch (Debug.WriteLine only) so imperfect time-series data never crashes
-    // the model; the ported branches cannot throw, and the deferral keeps that no-throw
-    // contract.
+    // header). The seasonal branch (P6) builds an irregular series from the ordinates' dates,
+    // reduces it to block maxima, and records each event's day of year. The C# wraps the whole
+    // body in a swallow-all catch (Debug.WriteLine only) so imperfect time-series data never
+    // crashes the model, and that catch is LOAD-BEARING now that the seasonal branch is live:
+    // this method runs from the StartMonth setter, so assigning an out-of-range month reaches
+    // CustomYearSeries's own guard and the throw has to be swallowed for Validate() to be the
+    // thing that reports it. Mirrored below.
     void set_ams_data() {
         ams_data_frame_ = DataFrame();
         pot_days_.clear();
@@ -362,6 +367,7 @@ class PointProcessModel : public UnivariateDistributionModelBase,
             return;
         }
 
+        try {
         if (!is_seasonal_) {
             // Get block-maximum values over each unique index (first-appearance order).
             std::vector<std::pair<int, double>> max_by_index;
@@ -380,11 +386,43 @@ class PointProcessModel : public UnivariateDistributionModelBase,
                 ams_data_frame_.exact_series().add(ExactData(item.first, item.second));
             }
         } else {
-            // DEFERRED: the seasonal branch builds an irregular TimeSeries from the exact
-            // data's DateTimes, computes block maxima via CreateBlockSeries, and populates
-            // the POT day-of-year list (C# lines 526-556). It needs the unported
-            // TimeSeries/DateTime machinery (file header); AMSDataFrame and POTDays simply
-            // remain empty, exactly the C# catch-branch outcome for unusable dates.
+            // The seasonal branch (C# lines 526-556), un-gated by the P6 TimeSeries container:
+            // build an irregular series from the exact data's dates, reduce it to block maxima,
+            // and record each event's day of the year.
+            numerics::data::TimeSeries ts(numerics::data::TimeInterval::Irregular);
+            for (std::size_t i = 0; i < data_frame().exact_series().count(); ++i) {
+                const ExactData& exact = data_frame().exact_series()[i];
+                numerics::data::DateTime dt = exact.date_time();
+                // An ordinate built from a bare index carries no date (tick 0), so the C#
+                // substitutes January 1 of its index year.
+                if (dt == numerics::data::DateTime()) dt = numerics::data::DateTime(exact.index(), 1, 1);
+                ts.add(numerics::data::TimeSeries::Ordinate(dt, exact.value()));
+            }
+
+            ams_data_frame_.create_block_series(ts, time_block_,
+                                                numerics::data::BlockFunctionType::Maximum,
+                                                numerics::data::SmoothingFunctionType::None,
+                                                start_month_);
+
+            // The day of year is read AFTER the water-year shift, so a POT day is expressed in
+            // the same year convention the block maxima were taken in.
+            if (time_block_ == numerics::data::TimeBlockWindow::WaterYear) {
+                int shift = start_month_ != 1 ? 12 - start_month_ + 1 : 0;
+                if (start_month_ != 1) ts = ts.shift_dates_by_month(shift);
+            }
+
+            // UPSTREAM DEFECT, mirrored (see docs/upstream-csharp-issues.md): on the water-year
+            // path `ts` has just been through ShiftDatesByMonth, which SORTS BY TIME, so
+            // `pot_days_` comes out in DATE order -- while the seasonal likelihood pairs it
+            // POSITIONALLY with the exact series, which is in whatever order the caller supplied.
+            // A record that is not already date-sorted therefore has each magnitude scored
+            // against another event's day of year. Do not "fix" it here; the fix belongs upstream
+            // and would move every seasonal oracle.
+            for (int i = 0; i < ts.count(); ++i) pot_days_.push_back(ts[i].index().day_of_year());
+        }
+        } catch (const std::exception&) {
+            // C# swallows every exception here (Debug.WriteLine only): the AMS frame and the POT
+            // day list are simply left as they are, which is what Validate() then reports.
         }
     }
 
@@ -666,8 +704,7 @@ class PointProcessModel : public UnivariateDistributionModelBase,
 
             if (scl1 <= 0.0 || scl2 <= 0.0) return neg_inf;
 
-            // Loop over POT days and assign to season 1 or 2. (POTDays is empty in this
-            // port -- the deferred seasonal data path; see the file header.)
+            // Loop over POT days and assign to season 1 or 2.
             for (std::size_t i = 0;
                  i < pot_days_.size() && i < df.exact_series().count(); ++i) {
                 double x = df.exact_series()[i].value();
@@ -1519,9 +1556,97 @@ class PointProcessModel : public UnivariateDistributionModelBase,
         return result;
     }
 
-    // DEFERRED: `GeneratePOTTimeSeries(DateTime startDate, double durationYears, int seed)`
-    // (C# line 2017) -- returns a date-stamped Numerics TimeSeries and needs C# DateTime;
-    // see the deferral block in the file header. Its SamplePoisson helper is ported below.
+    // C# `GeneratePOTTimeSeries(DateTime startDate, double durationYears, int seed)` (line 2017),
+    // un-gated by the P6 TimeSeries container: a synthetic peaks-over-threshold record. The event
+    // COUNT is Poisson with mean lambda * durationYears; each event's DATE is uniform over the
+    // span (365.25 days per year, averaging over leap years) and its MAGNITUDE is drawn from the
+    // marginal conditional on exceeding the threshold, by inverting
+    // F_cond(y) = (F(y) - F(u)) / (1 - F(u)).
+    //
+    // The PRNG draw order is oracle-visible and is transcribed as written: the Poisson count
+    // first, then per event one `next_double()` for the date offset and one for the magnitude.
+    // For a SEASONAL model the first two parameters are the season-change days k1 and k2, and the
+    // event's day of year selects which of the two GEV marginals it is drawn from -- the same
+    // classification DataLogLikelihood applies.
+    numerics::data::TimeSeries generate_pot_time_series(
+        const numerics::data::DateTime& start_date, double duration_years, int seed = -1) const {
+        if (duration_years <= 0)
+            throw std::out_of_range("Duration must be positive.");
+        if (distribution_ == nullptr)
+            throw std::runtime_error("Distribution cannot be null when generating POT samples.");
+        if (!has_data_frame())
+            throw std::runtime_error("DataFrame cannot be null when generating POT samples.");
+
+        double u = threshold_;
+        double ny = total_years_;
+        if (std::isnan(u) || std::isnan(ny) || ny <= 0)
+            throw std::runtime_error("Threshold and TotalYears must be set on the model.");
+
+        double lambda = static_cast<double>(data_frame().exact_series().count()) / ny;
+        double expected_events = lambda * duration_years;
+
+        numerics::sampling::MersenneTwister rng =
+            seed > 0 ? numerics::sampling::MersenneTwister(seed)
+                     : numerics::sampling::MersenneTwister();
+
+        int total_events = sample_poisson(expected_events, rng);
+
+        numerics::data::TimeSeries result(numerics::data::TimeInterval::OneDay);
+        if (total_events <= 0) return result;
+
+        std::vector<double> parameters;
+        parameters.reserve(parameters_.size());
+        for (const auto& p : parameters_) parameters.push_back(p.value());
+
+        std::unique_ptr<CompetingRisks> local_model(
+            static_cast<CompetingRisks*>(distribution_->clone().release()));
+        double k1 = 0.0, k2 = 0.0;
+        if (is_seasonal_ && parameters.size() >= 2) {
+            k1 = parameters[0];
+            k2 = parameters[1];
+            local_model->set_parameters(
+                std::vector<double>(parameters.begin() + 2, parameters.end()));
+        } else {
+            local_model->set_parameters(parameters);
+        }
+
+        // 365.25 days per year averages over leap years, as the C# comment says.
+        double total_days = duration_years * 365.25;
+
+        std::vector<std::pair<numerics::data::DateTime, double>> events;
+        events.reserve(static_cast<std::size_t>(total_events));
+        for (int i = 0; i < total_events; ++i) {
+            double offset_days = rng.next_double() * total_days;
+            numerics::data::DateTime event_date = start_date.add_days(offset_days);
+
+            const DistributionBase* mark = nullptr;
+            if (is_seasonal_ && local_model->component_count() >= 2) {
+                int day = event_date.day_of_year();
+                mark = (day < k1 || day >= k2) ? &local_model->component(0)
+                                               : &local_model->component(1);
+            } else {
+                mark = &local_model->component(0);
+            }
+
+            double fu = mark->cdf(u);
+            if (fu >= 1.0 - 1e-12) fu = 1.0 - 1e-12;
+            double p_unif = fu + (1.0 - fu) * rng.next_double();
+            if (p_unif >= 1.0) p_unif = 1.0 - 1e-12;
+            events.emplace_back(event_date, mark->inverse_cdf(p_unif));
+        }
+
+        // C# `events.Sort((a, b) => a.date.CompareTo(b.date))` -- List<T>.Sort is the unstable
+        // .NET introsort, so tied dates keep ITS permutation, not a stable one.
+        numerics::utilities::dotnet_list_sort(
+            events, [](const std::pair<numerics::data::DateTime, double>& a,
+                       const std::pair<numerics::data::DateTime, double>& b) {
+                return a.first.compare_to(b.first);
+            });
+        for (const auto& e : events)
+            result.add(numerics::data::TimeSeries::Ordinate(e.first, e.second));
+
+        return result;
+    }
 
    protected:
     // C# `DataFrame_PropertyChanged` override (line 390): the explicit-invalidation
@@ -1543,8 +1668,8 @@ class PointProcessModel : public UnivariateDistributionModelBase,
    private:
     // C# `SamplePoisson(double mean, MersenneTwister rng)` (line 2112): an integer event
     // count from Poisson(mean) -- normal approximation for mean > 30, Knuth's algorithm
-    // otherwise. Its only C# caller (GeneratePOTTimeSeries) is deferred; the helper is
-    // ported so the model's RNG surface is complete for the M14 seeded-stream work.
+    // otherwise. Called by generate_pot_time_series above (P6 un-gated it; the helper itself
+    // was ported early so the model's RNG surface was complete for the M14 seeded-stream work).
     // C# (int)Math.Round(...) is banker's rounding -> std::nearbyint (round-half-even under
     // the default FE mode; the codebase's Math.Round precedent).
     static int sample_poisson(double mean, numerics::sampling::MersenneTwister& rng) {

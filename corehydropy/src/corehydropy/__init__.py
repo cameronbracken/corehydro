@@ -153,6 +153,7 @@ from .fit import (
     quantile_variance,
 )
 from .mcmc import mcmc_sample
+from .timeseries import TimeSeries, ts_interval_names
 from .stats import (
     box_cox,
     box_cox_inverse,
@@ -327,6 +328,8 @@ __all__ = [
     "ml_decision_tree",
     "ml_gaussian_mixture",
     "ml_glm",
+    "TimeSeries",
+    "ts_interval_names",
     "ml_jenks_breaks",
     "ml_kmeans",
     "ml_knn",

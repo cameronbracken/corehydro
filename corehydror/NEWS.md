@@ -1,3 +1,35 @@
+# corehydror 0.13.0
+
+The heavy `TimeSeries` container -- the last unported portable slice of Numerics, and the one four
+other members were waiting on. See `CHANGELOG.md` at the repository root for the full account.
+
+## New features
+
+* `time_series()` builds a `corehydro_ts` from dates and values on a stated interval, and 28
+  `ts_*()` verbs work over it: `ts_moving_average()` / `ts_moving_sum()`, `ts_cumulative_sum()`,
+  `ts_difference()`, `ts_standardize()`, `ts_sort()`, `ts_transform()`, `ts_replace_missing()` /
+  `ts_interpolate_missing()` / `ts_fill_missing_dates()`, `ts_clip()`, `ts_shift()`,
+  `ts_convert_interval()`, `ts_statistics()`, `ts_hypothesis_test()`, `ts_percentiles()`,
+  `ts_duration()`, `ts_monthly_statistics()` / `ts_monthly_percentiles()` /
+  `ts_monthly_frequency()`, `ts_block_series()` with `ts_water_year()` and `ts_calendar_year()`,
+  `ts_peaks_over_threshold()`, `ts_seasonal_decompose()`, `ts_resample_knn()` and
+  `ts_resample_block_bootstrap()`.
+* Dates are `POSIXct` in UTC on the way in and out; `Date`, ISO 8601 strings and epoch seconds are
+  accepted too.
+* `analysis_data()` accepts a `date` column for exact observations, and
+  `model_point_process()` gains `seasonal`, `time_block` and `start_month` -- the seasonal point
+  process fits two magnitude distributions with fitted change points, assigning each observation
+  to a season by its day of the year.
+* `autocorrelation()` accepts a time series.
+
+## Notes
+
+* A seeded `ts_resample_knn()` or `ts_resample_block_bootstrap()` gives bit-identical results in R
+  and Python: the whole computation, generator included, runs in the shared C++ core.
+* `ts_cumulative_sum()` returns a series on the default `"one_day"` interval rather than the
+  source's. That is the library's behaviour, mirrored rather than corrected, and it is one of four
+  upstream findings this release documents.
+
 # corehydror 0.12.0
 
 The Machine Learning layer, the last major slice of Numerics with no R or Python binding: three

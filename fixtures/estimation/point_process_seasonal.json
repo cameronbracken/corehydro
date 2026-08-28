@@ -1,0 +1,197 @@
+{
+  "target": "Simulation",
+  "kind": "model_estimation",
+  "source": "RMC-BestFit/src/RMC.BestFit/Models/UnivariateDistribution/PointProcessModel.cs @ c2e6192, the seasonal data path (SetAMSData's irregular-TimeSeries branch, lines 526-556), un-gated in P6 by the ported Numerics TimeSeries container. The dated exact series is upstream's own CreateSeasonalPOTDataFrame shape from src/RMC.BestFit.Tests/Univariate/PointProcessModelTests.cs, extended from ten years to fifteen; the seeded draw values are curated with verify_oracles.py --dump against the real library.",
+  "reference": "This file exists to pin the CONSEQUENCE of the un-gate rather than an intermediate. Through P5 the seasonal branch was a silent no-op, so the AMS frame stayed empty, the two seasonal GEV marginals were left NaN-parameterized, and Validate() reported missing seasonal data. Every assertion here would have failed then: the model validates, and a seeded draw off its two-season competing-risks distribution is a finite number the C# reproduces. The Simulation target is used rather than MaximumLikelihood because an eight-parameter seasonal fit on thirty synthetic observations is not a convergence test (the same reason plotting_position.json uses it), and the seasonal path is reachable under any target.",
+  "datasets": {},
+  "cases": [
+    {
+      "name": "seasonal_water_year_two_gev_marginals",
+      "construct": {
+        "model": {
+          "type": "point_process",
+          "data_frame": {
+            "exact": [
+              {
+                "date": "1990-02-15T00:00:00",
+                "value": 1500.0
+              },
+              {
+                "date": "1990-07-15T00:00:00",
+                "value": 2000.0
+              },
+              {
+                "date": "1991-02-15T00:00:00",
+                "value": 1600.0
+              },
+              {
+                "date": "1991-07-15T00:00:00",
+                "value": 2150.0
+              },
+              {
+                "date": "1992-02-15T00:00:00",
+                "value": 1700.0
+              },
+              {
+                "date": "1992-07-15T00:00:00",
+                "value": 2300.0
+              },
+              {
+                "date": "1993-02-15T00:00:00",
+                "value": 1800.0
+              },
+              {
+                "date": "1993-07-15T00:00:00",
+                "value": 2450.0
+              },
+              {
+                "date": "1994-02-15T00:00:00",
+                "value": 1900.0
+              },
+              {
+                "date": "1994-07-15T00:00:00",
+                "value": 2600.0
+              },
+              {
+                "date": "1995-02-15T00:00:00",
+                "value": 2000.0
+              },
+              {
+                "date": "1995-07-15T00:00:00",
+                "value": 2750.0
+              },
+              {
+                "date": "1996-02-15T00:00:00",
+                "value": 2100.0
+              },
+              {
+                "date": "1996-07-15T00:00:00",
+                "value": 2900.0
+              },
+              {
+                "date": "1997-02-15T00:00:00",
+                "value": 2200.0
+              },
+              {
+                "date": "1997-07-15T00:00:00",
+                "value": 3050.0
+              },
+              {
+                "date": "1998-02-15T00:00:00",
+                "value": 2300.0
+              },
+              {
+                "date": "1998-07-15T00:00:00",
+                "value": 3200.0
+              },
+              {
+                "date": "1999-02-15T00:00:00",
+                "value": 2400.0
+              },
+              {
+                "date": "1999-07-15T00:00:00",
+                "value": 3350.0
+              },
+              {
+                "date": "2000-02-15T00:00:00",
+                "value": 2500.0
+              },
+              {
+                "date": "2000-07-15T00:00:00",
+                "value": 3500.0
+              },
+              {
+                "date": "2001-02-15T00:00:00",
+                "value": 2600.0
+              },
+              {
+                "date": "2001-07-15T00:00:00",
+                "value": 3650.0
+              },
+              {
+                "date": "2002-02-15T00:00:00",
+                "value": 2700.0
+              },
+              {
+                "date": "2002-07-15T00:00:00",
+                "value": 3800.0
+              },
+              {
+                "date": "2003-02-15T00:00:00",
+                "value": 2800.0
+              },
+              {
+                "date": "2003-07-15T00:00:00",
+                "value": 3950.0
+              },
+              {
+                "date": "2004-02-15T00:00:00",
+                "value": 2900.0
+              },
+              {
+                "date": "2004-07-15T00:00:00",
+                "value": 4100.0
+              }
+            ]
+          },
+          "is_seasonal": true,
+          "time_block": "water_year",
+          "start_month": 10,
+          "threshold": 1400.0,
+          "total_years": 15.0,
+          "use_defaults": false
+        },
+        "sample_size": 4,
+        "seed": 12345
+      },
+      "assertions": [
+        {
+          "method": "is_valid",
+          "expected": 1.0,
+          "mode": "equal",
+          "source": "C# Test_PointProcess_SeasonalFloodAnalysis: Validate() requires seasonal AMS exact data, which only this path produces"
+        },
+        {
+          "method": "simulated_value",
+          "args": [
+            0
+          ],
+          "expected": 126.17520683418697,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "curated with verify_oracles.py --dump against the real library: a seeded draw off the two-season competing-risks distribution, whose parameters are derived from the block maxima the seasonal path computes"
+        },
+        {
+          "method": "simulated_value",
+          "args": [
+            1
+          ],
+          "expected": 98.59520672460104,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "curated with verify_oracles.py --dump against the real library"
+        },
+        {
+          "method": "simulated_value",
+          "args": [
+            2
+          ],
+          "expected": 94.73343829461757,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "curated with verify_oracles.py --dump against the real library"
+        },
+        {
+          "method": "simulated_value",
+          "args": [
+            3
+          ],
+          "expected": 116.57407052190487,
+          "mode": "rel",
+          "tol": 1e-08,
+          "source": "curated with verify_oracles.py --dump against the real library"
+        }
+      ]
+    }
+  ]
+}

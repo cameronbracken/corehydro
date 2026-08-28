@@ -9,6 +9,9 @@ model_point_process(
   threshold = NULL,
   total_years = NULL,
   use_defaults = TRUE,
+  seasonal = FALSE,
+  time_block = c("water_year", "calendar_year", "custom_year", "quarter", "month"),
+  start_month = 10,
   parameters = NULL,
   parameter_values = NULL,
   use_default_flat_priors = NULL
@@ -25,6 +28,13 @@ model_point_process(
 \item{use_defaults}{logical; let the model derive its threshold and record length from the
 data. Applied before an explicit \code{threshold} or \code{total_years}, so an explicit value wins.}
 
+\item{seasonal}{logical; fit two seasonal magnitude distributions with fitted change points.}
+
+\item{time_block}{the block a seasonal model reduces the record over: \code{"water_year"} (the
+default), \code{"calendar_year"}, \code{"custom_year"}, \code{"quarter"} or \code{"month"}.}
+
+\item{start_month}{the month a water year or custom year begins. Default 10 (October).}
+
 \item{parameters}{optional \code{\link[=model_parameter]{model_parameter()}} object or list of them, setting bounds, fixed
 flags, priors, or starting values.}
 
@@ -36,8 +46,20 @@ flags, priors, or starting values.}
 An object of class \code{corehydro_model}.
 }
 \description{
-A non-seasonal point process over exceedances of a threshold, combining an arrival rate with a
-magnitude distribution.
+A point process over exceedances of a threshold, combining an arrival rate with a magnitude
+distribution.
+}
+\details{
+With \code{seasonal = TRUE} the magnitude distribution becomes TWO generalized extreme value
+marginals with two fitted change points, and each observation is assigned to a season by its
+day of the year -- so the data must carry DATES rather than bare indices:
+
+\if{html}{\out{<div class="sourceCode r">}}\preformatted{data <- analysis_data(exact = list(date = dates, value = peaks))
+model <- model_point_process(data, seasonal = TRUE)
+}\if{html}{\out{</div>}}
+
+Observations supplied with integer indices are treated as January 1 of that year, which puts
+every one of them in the same season.
 }
 \examples{
 x <- c(1200, 1500, 890, 2210, 1870, 1420, 980, 2850, 1740, 1160, 1920, 1380, 2560, 1050)

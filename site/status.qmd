@@ -9,7 +9,7 @@ What is currently implemented, by source library for both the shared C++ core li
 no row is marked "Internal" any more; where only part of an area is exposed, the Notes
 column says which part. Every "Ported" row is validated by test suites which have also been ported and compared to the original C# libraries.
 
-Status as of v0.12.0.
+Status as of v0.13.0.
 
 ## Numerics
 
@@ -17,7 +17,9 @@ The [Numerics](https://github.com/USACE-RMC/Numerics) library is the numerical
 foundation. The port targets its probability, sampling, and estimation layers; the
 general-purpose math and data-container layers are out of scope. The machine learning
 layer landed in v0.12.0, which also un-gated `HypothesisTests.UnimodalityTest` and the two
-RMC-BestFit `DataFrame` facades that had been waiting on it.
+RMC-BestFit `DataFrame` facades that had been waiting on it. The heavy `TimeSeries` container
+landed in v0.13.0 -- the last unported portable slice -- together with the four members deferred
+alongside it.
 
 | Area | C++ core | Packages | Notes |
 |------|----------|----------|-------|
@@ -30,7 +32,7 @@ RMC-BestFit `DataFrame` facades that had been waiting on it.
 | `Data.Statistics` | Partial | Public | MGBT, Box-Cox, Yeo-Johnson, plotting positions, descriptive and running statistics, correlation (paired and, since v0.11.0, the Pearson/Spearman matrix form), autocorrelation, goodness of fit, histogram binning, and joint probability all public; `hypothesis_test()` exposes all thirteen `HypothesisTests` statics since v0.12.0 (one/two-sample t, F, Jarque-Bera, Wald-Wolfowitz, Ljung-Box, Mann-Whitney, Mann-Kendall, linear trend, and unimodality); Jenks breaks are public as `ml_jenks_breaks()`; single Grubbs-Beck and KS tests not ported |
 | `Data.Interpolation` | Ported | Public | `interpolate()`, `interpolate_2d()` -- one- and two-dimensional interpolation with optional axis transforms (log, normal-Z); the Paired Data curve subsystem (`OrderedPairedData`/`Ordinate`/`UncertainOrderedPairedData`/`LineSimplification`) is public as `curve_interpolate()`, `curve_area()`, `curve_simplify()`, `uncertain_curve_sample()`, and `tabular_function()` |
 | `Data.Regression` | Ported | Public | `linear_regression()` -- ordinary least squares, returning a `corehydro_lm` / `LinearRegressionResult` with `print`/`summary`/`coef`/`vcov`/`residuals`/`predict` |
-| `Data` (TimeSeries container) | Not ported | -- | a thin adapter exists for the time-series models; The additional functionality (file I/O, USGS download) may be implemented later |
+| `Data` (TimeSeries container) | Ported | Public | `time_series()` / `TimeSeries` plus the `ts_*()` verbs since v0.13.0: moving windows, value transformations, missing-value handling, clipping and shifting, interval conversion, summary and monthly statistics, the duration curve, block series (annual maxima by calendar or water year, quarterly, monthly), peaks over threshold, seasonal decomposition, and two seeded resamplers. Dates are `POSIXct` in R and `datetime64` in Python. File I/O and the USGS download remain out of scope |
 | `Mathematics` (linear algebra, special functions, root finding, numerical derivatives) | Ported (as needed) | Public | `root_find()` (Brent, bisection, secant, Newton), `root_find_system()`, `derivative()`, `gradient()`, `hessian()` and `ode_solve()` run over a function you write; `qr_decomposition()` / `qr_solve()` / `gauss_jordan()` and `debye()` / `polynomial_eval()` are public, and the remaining linear algebra and special functions stay internal, covering what the distribution / estimation layers require; general optimization is a separate row below |
 | `Mathematics.Optimization` | Ported | Public | `optim_minimize()` / `optim_maximize()` expose all fourteen optimizers since v0.10.0 -- DE, particle swarm, SCE-UA, simulated annealing, multi-start, MLSL, BFGS, Powell, ADAM, gradient descent, Nelder-Mead, Brent, golden section, and the constrained augmented Lagrange over `optim_constraint()`; ADAM and gradient descent take an analytic gradient you write. The `Dynamic` trio (BinaryHeap, Dijkstra, Network) is public as `shortest_path()` |
 | `Mathematics.Integration` | Ported | Public | `quadrature()` integrates a function you write with any of ten deterministic rules, `quadrature_2d()` over a rectangle, and `quadrature_nd()` over an arbitrary-dimension box with three seeded Monte Carlo families (plain, Miser, Vegas); the Genz MVNDST integrator inside MultivariateNormal is ported too |

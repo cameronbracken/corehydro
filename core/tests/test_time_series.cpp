@@ -17,11 +17,17 @@ using corehydro::numerics::data::TimeInterval;
 using corehydro::numerics::data::TimeSeries;
 
 namespace {
+// P6 index swap: the TimeSeries container indexes by DateTime rather than by an integer offset.
+// Nothing in this suite reads the index for meaning (the ARMA families index by POSITION, the
+// rating curve by date EQUALITY), so every series here is anchored at one arbitrary date; the
+// mapping is monotone, so every oracle below is unchanged by the swap.
+const corehydro::numerics::data::DateTime kT0(1900, 1, 1);
+
 
 // Round-trip: build from a known vector, read values back in order.
 void test_round_trip() {
     std::vector<double> data = {3.0, 1.0, 4.0, 1.0, 5.0, 9.0};
-    TimeSeries ts(TimeInterval::OneDay, 0, data);
+    TimeSeries ts(TimeInterval::OneDay, kT0, data);
     CHECK_EQ(ts.count(), static_cast<int>(data.size()));
 
     std::vector<double> arr = ts.values_to_array();
@@ -32,15 +38,15 @@ void test_round_trip() {
         CHECK_NEAR(lst[i], data[i], 1e-12);
         CHECK_NEAR(ts[static_cast<int>(i)].value(), data[i], 1e-12);
     }
-    // Integer index increments by 1 from the start index (no calendar math).
-    CHECK_EQ(ts[0].index(), 0L);
-    CHECK_EQ(ts[5].index(), 5L);
+    // The index advances by one TIME INTERVAL per ordinate (real calendar math since P6).
+    CHECK_TRUE(ts[0].index() == kT0);
+    CHECK_TRUE(ts[5].index() == kT0.add_days(5.0));
 }
 
 // Difference(1,1): successive first differences; Difference(1,2): second differences.
 void test_difference() {
     std::vector<double> data = {1.0, 4.0, 9.0, 16.0, 25.0};
-    TimeSeries ts(TimeInterval::OneDay, 0, data);
+    TimeSeries ts(TimeInterval::OneDay, kT0, data);
 
     TimeSeries d1 = ts.difference(1, 1);
     std::vector<double> e1 = {3.0, 5.0, 7.0, 9.0};  // successive diffs
@@ -65,7 +71,7 @@ void test_difference() {
 // Difference throws when length <= lag (TimeSeries.cs:501).
 void test_difference_throws() {
     std::vector<double> data = {1.0, 2.0, 3.0};
-    TimeSeries ts(TimeInterval::OneDay, 0, data);
+    TimeSeries ts(TimeInterval::OneDay, kT0, data);
     CHECK_THROWS(ts.difference(3, 1));  // length (3) <= lag (3)
     CHECK_THROWS(ts.difference(1, 3));  // second pass shrinks below lag
 }
@@ -73,7 +79,7 @@ void test_difference_throws() {
 // Summary stats on a known vector (population-consistent MeanValue; sample-denominator SD).
 void test_summary_stats() {
     std::vector<double> data = {2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0};
-    TimeSeries ts(TimeInterval::OneDay, 0, data);
+    TimeSeries ts(TimeInterval::OneDay, kT0, data);
 
     // Mean = 40/8 = 5.
     CHECK_NEAR(ts.mean_value(), 5.0, 1e-12);
@@ -88,7 +94,7 @@ void test_summary_stats() {
 void test_summary_stats_nan() {
     double nan = std::numeric_limits<double>::quiet_NaN();
     std::vector<double> data = {2.0, nan, 6.0};
-    TimeSeries ts(TimeInterval::OneDay, 0, data);
+    TimeSeries ts(TimeInterval::OneDay, kT0, data);
     CHECK_NEAR(ts.mean_value(), 4.0, 1e-12);  // (2+6)/2
     CHECK_NEAR(ts.min_value(), 2.0, 1e-12);
 }
@@ -96,7 +102,7 @@ void test_summary_stats_nan() {
 // Clone() is a deep copy: mutating a clone's ordinate does not touch the original.
 void test_clone_deep_copy() {
     std::vector<double> data = {1.0, 2.0, 3.0};
-    TimeSeries ts(TimeInterval::OneDay, 0, data);
+    TimeSeries ts(TimeInterval::OneDay, kT0, data);
     TimeSeries cl = ts.clone();
     cl[1].set_value(99.0);
     CHECK_NEAR(cl[1].value(), 99.0, 1e-12);

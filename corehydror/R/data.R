@@ -33,6 +33,18 @@ normalize_exact <- function(exact) {
     exact <- list(value = exact)
   }
   value <- as.double(data_column(exact, "value", "exact"))
+  # An observation may carry a DATE instead of an integer index (P6). The index then becomes the
+  # date's year, and the date itself is what a seasonal point-process model reads to place each
+  # event in its season. Date, POSIXct and ISO 8601 character are all accepted.
+  date <- exact[["date"]]
+  if (!is.null(date)) {
+    if (length(date) != length(value)) {
+      stop(sprintf("`exact` date and value must have the same length; got %d and %d",
+                   length(date), length(value)), call. = FALSE)
+    }
+    iso <- format(ts_posix(ts_epoch(date, "exact date")), "%Y-%m-%dT%H:%M:%S")
+    return(lapply(seq_along(value), function(i) list(date = iso[i], value = value[i])))
+  }
   index <- data_indexes(exact[["index"]], length(value), "exact")
   flag <- exact[["is_low_outlier"]]
   flag <- if (is.null(flag)) rep(FALSE, length(value)) else rep_len(as.logical(flag), length(value))

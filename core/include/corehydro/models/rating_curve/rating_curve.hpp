@@ -69,6 +69,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -99,7 +100,7 @@ class RatingCurve : public ModelBase, public ISimulatable<std::vector<double>> {
 
     // One date-aligned observation (C# tuple (DateTime Date, double Stage, double Discharge)).
     struct AlignedObservation {
-        long date;
+        numerics::data::DateTime date;
         double stage;
         double discharge;
     };
@@ -273,13 +274,14 @@ class RatingCurve : public ModelBase, public ISimulatable<std::vector<double>> {
             return *aligned_observations_cache_;
         }
 
-        std::unordered_map<long, double> discharge_by_date;
-        discharge_by_date.reserve(static_cast<std::size_t>(discharge_data_->count()));
+        // C# keys a `Dictionary<DateTime, double>`; an ordered map keyed on the same dates gives
+        // the same inner join (lookup only -- no iteration, so no ordering dependence).
+        std::map<numerics::data::DateTime, double> discharge_by_date;
         for (int j = 0; j < discharge_data_->count(); ++j)
             discharge_by_date[(*discharge_data_)[j].index()] = (*discharge_data_)[j].value();
 
         for (int i = 0; i < stage_data_->count(); ++i) {
-            long idx = (*stage_data_)[i].index();
+            numerics::data::DateTime idx = (*stage_data_)[i].index();
             auto it = discharge_by_date.find(idx);
             if (it != discharge_by_date.end())
                 result.push_back({idx, (*stage_data_)[i].value(), it->second});
@@ -682,10 +684,10 @@ class RatingCurve : public ModelBase, public ISimulatable<std::vector<double>> {
                 pairs[static_cast<std::size_t>(i)].second;
         }
 
-        // C# starts the index at DateTime(2000,1,1); the integer-index adapter uses 0 (the date is
-        // only a join key, never used in arithmetic -- see time_series.hpp).
-        return {TimeSeries(numerics::data::TimeInterval::OneDay, 0, sorted_stages),
-                TimeSeries(numerics::data::TimeInterval::OneDay, 0, sorted_discharges)};
+        // C# starts the index at DateTime(2000,1,1), and since P6 so does this port.
+        const numerics::data::DateTime start(2000, 1, 1);
+        return {TimeSeries(numerics::data::TimeInterval::OneDay, start, sorted_stages),
+                TimeSeries(numerics::data::TimeInterval::OneDay, start, sorted_discharges)};
     }
 
    private:

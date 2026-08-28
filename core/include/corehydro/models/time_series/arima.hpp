@@ -55,9 +55,10 @@
 //     (parameters_ is a plain std::vector; no change notification is threaded through it).
 //   - IModel Clone() (ARIMA.cs:1055): the C++ core has no virtual IModel::Clone (see
 //     model_base.hpp) and no T2 fit path needs a clone, so it is omitted (T1 / S4 precedent).
-//   - GenerateRandomSeries (ARIMA.cs:1030): returns the heavy Numerics TimeSeries container;
-//     deferred (the required simulation entry point is generate_random_values below, the
-//     ISimulatable member). It can be added trivially over the P2 adapter if a caller needs it.
+//   - GenerateRandomSeries (ARIMA.cs:1030): returns a date-stamped TimeSeries rather than the
+//     bare vector generate_random_values (the ISimulatable member) returns. Not ported: no caller
+//     in scope needs the dates. Since P6 ported the container, this is a one-method addition
+//     whenever one does.
 //
 // RNG deviation (documented): C# Predict() draws its stochastic-forecast noise from System.Random
 // (a .NET LCG with no ported equivalent); this port substitutes the ported MersenneTwister.

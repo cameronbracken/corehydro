@@ -31,7 +31,8 @@
 //   { "type": "mixture", "families": [ ... ], "zero_inflated"?: b, <data>, ... }
 //   { "type": "competing_risks", "families": [ ... ], <data>, ... }
 //   { "type": "point_process", <data>, "use_defaults"?: b, "threshold"?: x,
-//     "total_years"?: y, ... }
+//     "total_years"?: y, "is_seasonal"?: b, "time_block"?: "<TimeBlockWindow name>",
+//     "start_month"?: m, ... }
 //   { "type": "time_series", "subtype": "ar"|"ma"|"arima"|"arimax", <data>,
 //     "orders": { "p"?, "d"?, "q"?, "b"? }, "include_intercept"?: b, "transform"?: "<name>",
 //     "trend"?, "include_seasonality"?, "covariates"?, "training_time_steps"?: n,
@@ -48,6 +49,8 @@
 // ExactSeries with sequential 0-based indexes -- exactly the Phase 4 vector-ctor path.
 // `data_frame` arrays carry their values inline:
 //   exact:     { "index": i, "value": x, "is_low_outlier"?: b }
+//              or { "date": "<ISO 8601>", "value": x } -- the dated form the seasonal
+//              point-process path reads (the index becomes the date's year)
 //   interval:  { "index": i, "lower": lo, "value": x, "upper": hi }
 //   threshold: { "start_index": i, "end_index": j, "value": x, "number_above": n }
 //   uncertain: { "index": i, "distribution": { "family": "<name>", "parameters": [ ... ] } }
@@ -176,9 +179,20 @@ inline DataFrame build_data_frame(const JsonValue& spec) {
 
     if (spec.contains("exact")) {
         std::vector<ExactData> items;
-        for (const JsonValue& e : spec.at("exact").items())
-            items.emplace_back(e.at("index").as_int(), e.at("value").as_double(), 0.0,
-                               e.value_or("is_low_outlier", false));
+        for (const JsonValue& e : spec.at("exact").items()) {
+            // An ordinate may carry an ISO 8601 `date` instead of an `index` (P6): the C#
+            // ExactData(DateTime, double) ctor sets the index to the date's YEAR and keeps the
+            // date, which is what the seasonal point-process path reads. When both keys are
+            // present the date wins, since it determines the index.
+            if (e.contains("date")) {
+                items.emplace_back(
+                    numerics::data::DateTime::parse_iso(e.at("date").as_string()),
+                    e.at("value").as_double());
+            } else {
+                items.emplace_back(e.at("index").as_int(), e.at("value").as_double(), 0.0,
+                                   e.value_or("is_low_outlier", false));
+            }
+        }
         df.set_exact_series(ExactSeries(items));
     }
 
@@ -387,14 +401,34 @@ inline std::unique_ptr<ModelBase> build_competing_risks_model(
     return m;
 }
 
+// A `TimeBlockWindow` name (time_block_window.hpp) -> the enum. Default WaterYear (the C# field
+// default), matching the name the R/Python `model_point_process(time_block =)` argument takes.
+inline numerics::data::TimeBlockWindow parse_time_block_window(const std::string& name) {
+    using TB = numerics::data::TimeBlockWindow;
+    if (name == "CalendarYear" || name == "calendar_year") return TB::CalendarYear;
+    if (name == "WaterYear" || name == "water_year") return TB::WaterYear;
+    if (name == "CustomYear" || name == "custom_year") return TB::CustomYear;
+    if (name == "Quarter" || name == "quarter") return TB::Quarter;
+    if (name == "Month" || name == "month") return TB::Month;
+    throw std::runtime_error("unknown point_process time_block: " + name);
+}
+
 inline std::unique_ptr<ModelBase> build_point_process_model(
     const JsonValue& model, const std::vector<double>& dataset) {
-    // Ctor surface: default-construct (non-seasonal GEV competing-risks distribution),
-    // assign the frame (set_data_frame runs the AMS/defaults cascade), then the optional
-    // knobs in C#-property order: UseDefaults before the explicit Threshold/TotalYears so
-    // an explicit value is never clobbered by the defaults cascade. The deferred seasonal
-    // path is deliberately NOT exposed.
+    // Ctor surface: default-construct (non-seasonal GEV competing-risks distribution), set the
+    // seasonal knobs, assign the frame (set_data_frame runs the AMS/defaults cascade), then the
+    // optional knobs in C#-property order: UseDefaults before the explicit Threshold/TotalYears
+    // so an explicit value is never clobbered by the defaults cascade.
+    //
+    // The seasonal knobs are set BEFORE the frame on purpose. Each of their setters re-runs the
+    // AMS cascade itself, so setting them first means the frame is processed once, under the
+    // final configuration -- and it is the configuration in force when set_data_frame runs that
+    // decides whether the seasonal (dated, block-maxima) path or the non-seasonal one applies.
     auto m = std::make_unique<PointProcessModel>();
+    if (model.contains("is_seasonal")) m->set_is_seasonal(model.at("is_seasonal").as_bool());
+    if (model.contains("time_block"))
+        m->set_time_block(parse_time_block_window(model.at("time_block").as_string()));
+    if (model.contains("start_month")) m->set_start_month(model.at("start_month").as_int());
     m->set_data_frame(build_model_data_frame(model, dataset));
     if (model.contains("use_defaults")) m->set_use_defaults(model.at("use_defaults").as_bool());
     if (model.contains("threshold")) m->set_threshold(model.at("threshold").as_double());
@@ -439,27 +473,47 @@ inline numerics::data::TimeInterval parse_time_interval(const std::string& name)
     throw std::runtime_error("unknown time_series time_interval: " + name);
 }
 
-// Wraps a flat value vector into the P2 TimeSeries adapter (data ctor: interval + start index +
-// values). `time_interval` defaults OneDay, `start_index` defaults 0 -- the index is only a
-// join key (rating_curve) / a sequence position (the ARMA family), never calendar arithmetic.
+// The date a spec's integer `start_index` counts from, shared with the dotnet oracle emitter
+// (`EmitterSeriesEpoch()` in tools/oracle_emitter/Program.cs -- keep the two equal). The fixture
+// grammar predates the P6 index swap, when a series index was a bare integer offset;
+// `start_index: i` now means "i intervals after this date", which keeps every pre-P6 fixture
+// reproducing exactly (the mapping is monotone, so ordering and the rating-curve date join are
+// preserved) while a spec that cares about the calendar says so with `start_date` instead.
+inline numerics::data::DateTime spec_epoch() { return numerics::data::DateTime(2000, 1, 1); }
+
+// Wraps a flat value vector into a TimeSeries (data ctor: interval + start date + values).
+// `time_interval` defaults OneDay. The start date comes from `start_date` (an ISO 8601 string)
+// when present, otherwise from `start_index` counted in intervals off `spec_epoch()`.
 inline numerics::data::TimeSeries build_time_series(const JsonValue& spec,
                                                     const std::vector<double>& values) {
     numerics::data::TimeInterval interval =
         spec.contains("time_interval") ? parse_time_interval(spec.at("time_interval").as_string())
                                        : numerics::data::TimeInterval::OneDay;
     long start = static_cast<long>(spec.value_or("start_index", 0));
+    numerics::data::DateTime start_date = spec_epoch();
+    if (spec.contains("start_date")) {
+        start_date = numerics::data::DateTime::parse_iso(spec.at("start_date").as_string());
+    } else if (interval == numerics::data::TimeInterval::Irregular) {
+        // An irregular series has no interval to step, so `start_index` counts days here.
+        start_date = start_date.add_days(static_cast<double>(start));
+    } else {
+        for (long i = 0; i < start; ++i)
+            start_date = numerics::data::TimeSeries::add_time_interval(start_date, interval);
+    }
     // Irregular is rejected by the (interval, start, values) ctor in BOTH C# and this port (that
-    // ctor walks a REGULAR +1 step). Build it the way the C# regression tests do -- an empty
-    // series on the interval, then one Add per value. Index spacing is inert for every model
-    // here (the ARMA families index by POSITION), so a +1 walk keeps the C++/C# builders
-    // value-identical. Task 21: needed by the TimeInterval.Irregular Validate guard fixtures.
+    // ctor walks a REGULAR interval step). Build it the way the C# regression tests do -- an
+    // empty series on the interval, then one Add per value, spacing the dates a day apart. Index
+    // spacing is inert for every model here (the ARMA families index by POSITION), so the
+    // spacing choice keeps the C++/C# builders value-identical. Task 21: needed by the
+    // TimeInterval.Irregular Validate guard fixtures.
     if (interval == numerics::data::TimeInterval::Irregular) {
         numerics::data::TimeSeries ts(interval);
         for (std::size_t i = 0; i < values.size(); ++i)
-            ts.add(numerics::data::TimeSeries::Ordinate(start + static_cast<long>(i), values[i]));
+            ts.add(numerics::data::TimeSeries::Ordinate(
+                start_date.add_days(static_cast<double>(i)), values[i]));
         return ts;
     }
-    return numerics::data::TimeSeries(interval, start, values);
+    return numerics::data::TimeSeries(interval, start_date, values);
 }
 
 // Resolves a time-series data source: an inline `data` array when present, otherwise the
@@ -475,7 +529,7 @@ inline std::vector<double> time_series_values(const JsonValue& spec,
 // `orders` carries p/d/q/b as the subtype needs; `transform` names a TransformType; `include_
 // intercept` defaults true. ARIMAX adds `trend` (Trend enum), `include_seasonality`, and inline
 // `covariates` (a list of value arrays). The series data comes from the file-level datasets map
-// (or an inline `data` array), wrapped into the P2 TimeSeries adapter.
+// (or an inline `data` array), wrapped into a TimeSeries.
 inline std::unique_ptr<ModelBase> build_time_series_model(const JsonValue& model,
                                                           const std::vector<double>& dataset) {
     std::string subtype = model.at("subtype").as_string();

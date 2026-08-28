@@ -1125,7 +1125,7 @@ like every other fixture kind) and passed alongside the spec as a flat vector.
   //   dedicated build_bulletin17c_from_json entry point returning the concrete type.
   // -- Phase 7a families (P3): --------------------------------------------------------------
   // time_series (AR/MA/ARIMA/ARIMAX): the series data comes from `dataset` (or an inline `data`
-  //   array), wrapped into the P2 TimeSeries adapter (`time_interval` default OneDay,
+  //   array), wrapped into a TimeSeries (`time_interval` default OneDay,
   //   `start_index` default 0 -- the index is a sequence position / join key, never calendar
   //   arithmetic).
   "type": "time_series", "subtype": "arima",  // "ar" | "ma" | "arima" | "arimax"
@@ -2064,6 +2064,39 @@ and the measurements behind them: the prediction-interval MEAN column (upstream'
 `Statistics.ParallelMean` is not reproducible against itself across machines) and one kNN lower
 bound (a measured 2 ULP FMA-contraction difference inside the shared core, which the shipped
 packages have too because they compile the core the same way).
+
+P6 "time series" added the `timeseries` group, the nineteenth, over the ported Numerics
+`TimeSeries` container (`numerics/data/time_series/time_series.hpp`) and the `DateTime` value type
+under it. Unlike `regression`/`ml`'s matrix layout, a time series is two aligned series, so this
+group takes them that way: `data[0]` is the ordinate DATES, `data[1]` the values, and `data[2]`
+whatever else the method needs (a `{start, end}` date pair for `clip`/`fill_missing_dates`, an
+ordinate-index list for the indexed `math` verbs, a probability list for `percentiles`).
+
+DATES TRAVEL AS SECONDS SINCE 1970-01-01, never .NET ticks: a tick count near 6.3e17 is not
+exactly representable in a double, while epoch seconds for any date in range is ~1.7e9 and every
+supported `TimeInterval` lands on a whole second. A method that returns a SERIES returns a
+row-major `{date, value}` matrix with `dims = {n, 2}`, so an even `index` selects a date and the
+odd index beside it the value.
+
+Two conventions worth knowing before writing a case here. First, `missing_indexes` (an option, not
+data) marks ordinates as missing by POSITION, because JSON has no NaN literal and these data
+vectors are plain doubles; both the C++ group and the dotnet emitter apply it right after building
+the series, and the R/Python verbs never set it (they pass their own NaNs through `data[1]`).
+Second, a `label` selects a COLUMN and every runner reads it against the FIRST ROW only, so a
+multi-row table like `date_components` is indexed FLAT (`row * columns + column`) rather than by
+label -- see that case's own `notes`.
+
+Four files: `fixtures/timeseries/date_time.json` is what puts the ported `DateTime` -- a corehydro
+addition with no upstream source file, standing in for `System.DateTime` -- permanently behind the
+gate (AddMonths day-clamping, leap years, the fractional-AddDays whole/fraction split, DayOfYear,
+DayOfWeek with Sunday == 0, ToOADate); `time_series.json` and `block_series.json` carry
+Test_TimeSeries.cs literals for the container's own methods; and `resampling.json` pins the two
+seeded resamplers at ZERO tolerance. That last file is curated rather than scraped for a reason
+worth repeating: upstream's own resampling tests build their input from `System.Random`, which has
+no ported equivalent, so they assert statistical properties instead of values and there is nothing
+to lift. The `summary_hypothesis_test` case in `time_series.json` is curated for the opposite
+reason -- upstream's literals there are R's outputs compared at `1E-1`, so the gate pins the C#
+values and `core/tests/test_time_series_container.cpp` keeps the R comparison at the C# tolerance.
 
 ### `optimizer`
 

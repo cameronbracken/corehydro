@@ -280,6 +280,11 @@ autocorrelation <- function(x, max_lag = NULL,
                             type = c("correlation", "covariance", "partial"),
                             confidence_level = 0.95) {
   type <- match.arg(type)
+  # A time series is accepted for convenience and reduced to its values. That is exactly what the
+  # library's own TimeSeries overloads compute: they differ only in using a missing-value-skipping
+  # mean, which is not observable because the lag-0 autocovariance sums over every observation
+  # (see autocorrelation.hpp's header for the measurement).
+  if (inherits(x, "corehydro_ts")) x <- x$values
   if (!is.numeric(x) || length(x) < 2L) {
     stop("`x` must be a numeric vector with at least two elements", call. = FALSE)
   }

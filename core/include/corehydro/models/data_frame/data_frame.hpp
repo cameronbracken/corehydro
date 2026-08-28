@@ -61,9 +61,12 @@
 // NaN'd nine otherwise-working results rather than surfacing the real gap. Both C# regions
 // are now ported in full.
 //
+// P6 landed the last two this file had deferred: create_block_series and
+// create_peaks_over_threshold_series, both un-gated by the ported
+// numerics/data/time_series/time_series.hpp container.
+//
 // Deliberately NOT ported (unrelated to the above):
-//   - CreateBlockSeries / CreatePeaksOverThresholdSeries (need the unported TimeSeries
-//     container), CreateFromUSGS + USGSRawText (network import)
+//   - CreateFromUSGS + USGSRawText (network import)
 //   - XML (ToXElement / XElement constructor), INotifyPropertyChanged, and the
 //     concurrency machinery (_syncRoot, Volatile, SnapshotNonNull)
 //
@@ -119,6 +122,8 @@
 #include "corehydro/models/data_frame/data_types/uncertain_data.hpp"
 #include "corehydro/models/support/validation_result.hpp"
 #include "corehydro/numerics/data/hypothesis_tests.hpp"
+#include "corehydro/numerics/data/time_series/support/time_block_window.hpp"
+#include "corehydro/numerics/data/time_series/time_series.hpp"
 #include "corehydro/numerics/data/multiple_grubbs_beck_test.hpp"
 #include "corehydro/numerics/data/regression/linear_regression.hpp"
 #include "corehydro/numerics/data/statistics.hpp"
@@ -1228,6 +1233,72 @@ class DataFrame {
         copy.low_outlier_threshold_ = low_outlier_threshold_;
         copy.plotting_parameter_ = plotting_parameter_;
         return copy;
+    }
+
+    // ===================== Time-series import (P6) =====================
+    // Ported from the C# `#region Create Series Methods` (DataFrame.cs 2339-2400), un-gated by
+    // the P6 TimeSeries container. Both replace the exact series wholesale from a time series,
+    // and both build their ExactData ordinates from a DATE -- so each ordinate's index is the
+    // observation's YEAR and the date rides along for the seasonal PointProcess path.
+
+    // Replaces the exact series with one value per time block (C# CreateBlockSeries, line 2339).
+    // Sets lambda to 1 UNCONDITIONALLY: a block series has exactly one event per block by
+    // construction, whatever the underlying record's rate was.
+    void create_block_series(numerics::data::TimeSeries& time_series,
+                             numerics::data::TimeBlockWindow time_block =
+                                 numerics::data::TimeBlockWindow::WaterYear,
+                             numerics::data::BlockFunctionType block_function =
+                                 numerics::data::BlockFunctionType::Maximum,
+                             numerics::data::SmoothingFunctionType smoothing_function =
+                                 numerics::data::SmoothingFunctionType::None,
+                             int start_month = 10, int end_month = 9, int period = 1) {
+        numerics::data::TimeSeries blocked(numerics::data::TimeInterval::Irregular);
+        switch (time_block) {
+            case numerics::data::TimeBlockWindow::CalendarYear:
+                blocked = time_series.calendar_year_series(block_function, smoothing_function,
+                                                           period);
+                break;
+            case numerics::data::TimeBlockWindow::WaterYear:
+                blocked = time_series.custom_year_series(start_month, block_function,
+                                                          smoothing_function, period);
+                break;
+            case numerics::data::TimeBlockWindow::CustomYear:
+                blocked = time_series.custom_year_series(start_month, end_month, block_function,
+                                                          smoothing_function, period);
+                break;
+            case numerics::data::TimeBlockWindow::Quarter:
+                blocked = time_series.quarterly_series(block_function, smoothing_function, period);
+                break;
+            case numerics::data::TimeBlockWindow::Month:
+                blocked = time_series.monthly_series(block_function, smoothing_function, period);
+                break;
+        }
+
+        exact_series_.clear();
+        for (int i = 0; i < blocked.count(); ++i)
+            exact_series_.add(ExactData(blocked[i].index(), blocked[i].value()));
+        lambda_ = 1;
+    }
+
+    // Replaces the exact series with the peaks over a threshold (C#
+    // CreatePeaksOverThresholdSeries, line 2383). Unlike the block series, lambda is the observed
+    // RATE: the event count over the record's span in years (inclusive of both end years).
+    void create_peaks_over_threshold_series(numerics::data::TimeSeries& time_series,
+                                            double threshold, int min_steps_between_peaks = 1,
+                                            numerics::data::SmoothingFunctionType
+                                                smoothing_function =
+                                                    numerics::data::SmoothingFunctionType::None,
+                                            int period = 1) {
+        numerics::data::TimeSeries pot = time_series.peaks_over_threshold_series(
+            threshold, min_steps_between_peaks, smoothing_function, period);
+
+        exact_series_.clear();
+        for (int i = 0; i < pot.count(); ++i)
+            exact_series_.add(ExactData(pot[i].index(), pot[i].value()));
+        double events = static_cast<double>(exact_series_.count());
+        double span = static_cast<double>(time_series.end_date().year() -
+                                          time_series.start_date().year() + 1);
+        lambda_ = events / span;
     }
 
     // ===================== Bootstrap Methods (A3) =====================

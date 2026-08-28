@@ -17,9 +17,11 @@
 // bit-exact: a later task (SNIS) depends on reproducing it against the real C# output.
 //
 // Omitted (no ported caller needs them; the C# source has many more extension-method
-// regions -- Enum, 1-D/2-D Array, Vector, Matrix -- covering `Apply`/`Map`/`Subset`/
+// regions -- Enum, 1-D/2-D Array, Vector, Matrix -- covering `Apply`/`Map`/
 // `RandomSubset`/`Fill`/`GetColumn`/`SetRow`/`SetColumn`/etc.): every `ExtensionMethods.cs`
-// member outside the four ported below. `almost_equals` (the `Double` region's sole
+// member outside the ones ported below. `Subset` left that list in P6 -- its two 1-D array
+// overloads are ported (see their own comments); the 2-D array, Vector and Matrix overloads
+// of the same name are not. `almost_equals` (the `Double` region's sole
 // member) was added additively for the BestFit v2.0.0 DataFrame plotting-position rewrite,
 // which uses it to detect/separate tied Hirsch-Stedinger positions.
 #pragma once
@@ -36,6 +38,31 @@ namespace corehydro::numerics::utilities {
 // (this double a, double b, double epsilon = 1E-15)`).
 inline bool almost_equals(double a, double b, double epsilon = 1e-15) {
     return std::fabs(a - b) <= epsilon;
+}
+
+// Returns the elements from `start_index` to the end (C# `Subset<T>(this T[] array,
+// int startIndex)`, source line 266). P6 un-severed the two 1-D array `Subset` overloads for
+// `TimeSeries::summary_hypothesis_test`, which splits its value array with both of them; the
+// 2-D array, Vector and Matrix overloads stay omitted (no ported caller).
+inline std::vector<double> subset(const std::vector<double>& array, int start_index) {
+    std::vector<double> result;
+    result.reserve(array.size() - static_cast<std::size_t>(start_index));
+    for (std::size_t i = static_cast<std::size_t>(start_index); i < array.size(); ++i)
+        result.push_back(array[i]);
+    return result;
+}
+
+// Returns the elements from `start_index` to `end_index` INCLUSIVE (C# `Subset<T>(this T[]
+// array, int startIndex, int endIndex)`, source line 285 -- its loop is `i <= endIndex` and its
+// result length is `endIndex - startIndex + 1`).
+inline std::vector<double> subset(const std::vector<double>& array, int start_index,
+                                  int end_index) {
+    std::vector<double> result;
+    if (end_index >= start_index)
+        result.reserve(static_cast<std::size_t>(end_index - start_index + 1));
+    for (int i = start_index; i <= end_index; ++i)
+        result.push_back(array[static_cast<std::size_t>(i)]);
+    return result;
 }
 
 // Returns an array of `length` random doubles (matches C# `NextDoubles(this Random,

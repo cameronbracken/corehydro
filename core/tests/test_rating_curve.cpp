@@ -42,6 +42,12 @@
 #include "check.hpp"
 
 namespace {
+// P6 index swap: the TimeSeries container indexes by DateTime rather than by an integer offset.
+// Nothing in this suite reads the index for meaning (the ARMA families index by POSITION, the
+// rating curve by date EQUALITY), so every series here is anchored at one arbitrary date; the
+// mapping is monotone, so every oracle below is unchanged by the swap.
+const corehydro::numerics::data::DateTime kT0(1900, 1, 1);
+
 
 using corehydro::models::RatingCurve;
 using corehydro::numerics::data::TimeInterval;
@@ -61,14 +67,13 @@ const std::vector<double> kStage = {5.0, 6.5, 7.5, 9.0, 10.5, 12.0, 14.0};
 // Synthetic discharge values (100-5000 cfs) -- C# s_discharge.
 const std::vector<double> kDischarge = {110.0, 300.0, 600.0, 1200.0, 2000.0, 3500.0, 5100.0};
 
-TimeSeries make_stage() { return TimeSeries(TimeInterval::OneDay, 0, kStage); }
-TimeSeries make_discharge() { return TimeSeries(TimeInterval::OneDay, 0, kDischarge); }
+TimeSeries make_stage() { return TimeSeries(TimeInterval::OneDay, kT0, kStage); }
+TimeSeries make_discharge() { return TimeSeries(TimeInterval::OneDay, kT0, kDischarge); }
 
-// Builds a TimeSeries with consecutive integer indices start..start+n-1 (mirrors the C# MakeSeries
-// helper, which advances DateTime by +1 day per ordinate; the ported adapter uses an integer
-// day-count index, see time_series.hpp).
+// Builds a TimeSeries of consecutive daily ordinates starting `start` days after kT0 (mirrors the
+// C# MakeSeries helper, which advances DateTime by +1 day per ordinate).
 TimeSeries make_series(long start, const std::vector<double>& values) {
-    return TimeSeries(TimeInterval::OneDay, start, values);
+    return TimeSeries(TimeInterval::OneDay, kT0.add_days(static_cast<double>(start)), values);
 }
 
 bool messages_contain(const corehydro::models::ValidationResult& r, const std::string& needle) {
@@ -382,9 +387,11 @@ void test_alignment() {
         // Extended stage: original 30 (indices 0..29) + 15 unmatched (large indices).
         TimeSeries stage_extended(TimeInterval::OneDay);
         for (int i = 0; i < 30; ++i)
-            stage_extended.add(TimeSeries::Ordinate(i, stage_vals[static_cast<std::size_t>(i)]));
+            stage_extended.add(TimeSeries::Ordinate(kT0.add_days(i),
+                                                    stage_vals[static_cast<std::size_t>(i)]));
         for (int i = 30; i < 45; ++i)
-            stage_extended.add(TimeSeries::Ordinate(5L * 365 + (i - 30), 5.0 + 0.1 * (i - 30)));
+            stage_extended.add(
+                TimeSeries::Ordinate(kT0.add_days(5.0 * 365 + (i - 30)), 5.0 + 0.1 * (i - 30)));
 
         RatingCurve model_extended(stage_extended, discharge_aligned, 1);
         model_extended.set_use_default_flat_priors(false);

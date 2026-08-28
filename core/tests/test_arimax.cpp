@@ -24,10 +24,12 @@
 //   - Clone tests (Test_Clone_*): the C++ core has no virtual IModel::Clone (see model_base.hpp);
 //     no fit path in T3 needs a clone, so clone() is omitted (T1 / T2 / S4 precedent).
 //   - Test_SetParameterValues_NullParameters_ThrowsException: VACUOUS (const-ref vector; no null).
-//   - The CovariateExtension Predict/Generate tests (Test_Predict_CovariateExtension*,
-//     Test_GenerateRandomValues_CovariateExtension*): the covariate forecast-tail extension
-//     (BlockBootstrap/KNN) needs the DEFERRED heavy TimeSeries container (ResampleWithBlockBootstrap
-//     / ResampleWithKNN); deferred with that container per PHASE7_PLAN.md.
+//   - Test_Predict_ExplicitForecastCovariates_OverridesExtensionSetting /
+//     Test_GenerateRandomValues_ExplicitCovariates_OverridesExtensionSetting: the ported
+//     predict/generate entry points take no explicit forecast-covariate argument (no caller in
+//     scope supplies one), so there is no override to test. The other five CovariateExtension
+//     tests, skipped through P5 with the container they needed, ARE transcribed -- see
+//     "P6: the covariate forecast-tail extension" at the end of this file.
 //
 // P4 landed (see test_arimax_p4_fixed_param_oracles below + fixtures/estimation/*):
 //   - exact ARIMAX DataLogLikelihood + Residuals at fixed parameters (intercept + linear trend +
@@ -53,6 +55,22 @@
 #include "check.hpp"
 
 namespace {
+// P6 index swap: the TimeSeries container indexes by DateTime rather than by an integer offset.
+// Nothing in this suite reads the index for meaning (the ARMA families index by POSITION, the
+// rating curve by date EQUALITY), so every series here is anchored at one arbitrary date; the
+// mapping is monotone, so every oracle below is unchanged by the swap.
+const corehydro::numerics::data::DateTime kT0(1900, 1, 1);
+// The (interval, start, end) constructor takes an END DATE since the P6 index swap; these suites
+// expressed the span as a step count, so this walks the interval that many times.
+inline corehydro::numerics::data::DateTime t0_plus(int steps,
+                                                   corehydro::numerics::data::TimeInterval ti) {
+    corehydro::numerics::data::DateTime d = kT0;
+    for (int i = 0; i < steps; ++i)
+        d = corehydro::numerics::data::TimeSeries::add_time_interval(d, ti);
+    return d;
+}
+
+
 
 using corehydro::models::ARIMAX;
 using corehydro::models::Transform;
@@ -70,7 +88,7 @@ static_assert(std::is_base_of<corehydro::models::ISimulatable<std::vector<double
 
 // 60 annual observations, AR(1)-with-trend, positive mean ~1000 (mirrors CreateSampleTimeSeries).
 TimeSeries make_sample_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 59);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(59, TimeInterval::OneYear));
     MersenneTwister rng(12345);
     const double mean = 1000.0, phi = 0.6, sigma = 100.0, trend_slope = 5.0;
     double prev = mean;
@@ -86,7 +104,7 @@ TimeSeries make_sample_series() {
 
 // 240 monthly observations, seasonal + trend + noise (mirrors CreateMonthlyTimeSeries).
 TimeSeries make_monthly_series() {
-    TimeSeries ts(TimeInterval::OneMonth, 0, 239);
+    TimeSeries ts(TimeInterval::OneMonth, kT0, t0_plus(239, TimeInterval::OneMonth));
     MersenneTwister rng(54321);
     for (int i = 0; i < ts.count(); ++i) {
         double seasonal = 50.0 * std::sin(2.0 * corehydro::numerics::kPi * i / 12.0);
@@ -99,14 +117,15 @@ TimeSeries make_monthly_series() {
 
 // 15 annual observations, deterministic 100 + 10i (mirrors CreateShortTimeSeries).
 TimeSeries make_short_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 14);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(14, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(100.0 + i * 10.0);
     return ts;
 }
 
 // Covariate aligned to the target series (mirrors CreateCovariateTimeSeries).
 TimeSeries make_covariate_series(const TimeSeries& target) {
-    TimeSeries ts(target.time_interval(), 0, target.count() - 1);
+    TimeSeries ts(target.time_interval(), kT0,
+                  t0_plus(target.count() - 1, target.time_interval()));
     MersenneTwister rng(67890);
     for (int i = 0; i < ts.count(); ++i)
         ts[i].set_value(0.5 * target[i].value() + rng.next_double() * 50.0);
@@ -115,7 +134,7 @@ TimeSeries make_covariate_series(const TimeSeries& target) {
 
 // 5 annual observations -> too short for the 10-observation validation guard.
 TimeSeries make_tiny_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 4);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(4, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(i);
     return ts;
 }
@@ -130,7 +149,7 @@ bool messages_contain(const corehydro::models::ValidationResult& r, const std::s
 // fails can_fit_lambda's positivity requirement (mirrors C#'s
 // CreateBoxCoxLambdaFailureTimeSeries).
 TimeSeries make_box_cox_lambda_failure_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 59);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(59, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(i == 0 ? 0.0 : 10.0);
     return ts;
 }
@@ -139,7 +158,7 @@ TimeSeries make_box_cox_lambda_failure_series() {
 // non-degeneracy requirement for Yeo-Johnson (mirrors C#'s
 // CreateYeoJohnsonLambdaFailureTimeSeries).
 TimeSeries make_yeo_johnson_lambda_failure_series() {
-    TimeSeries ts(TimeInterval::OneYear, 0, 59);
+    TimeSeries ts(TimeInterval::OneYear, kT0, t0_plus(59, TimeInterval::OneYear));
     for (int i = 0; i < ts.count(); ++i) ts[i].set_value(-std::numeric_limits<double>::max());
     return ts;
 }
@@ -576,7 +595,7 @@ void test_arimax_covariates() {
 void test_arimax_p4_fixed_param_oracles() {
     // ARIMAX(1,0,0)+intercept+linear trend, params [intercept, trend, phi1, sigma] =
     // [10.9, 0.05, 0.3, 1.0]; construction mirrors model_spec.hpp's build_time_series_model.
-    TimeSeries series(TimeInterval::OneDay, 0L,
+    TimeSeries series(TimeInterval::OneDay, kT0,
                       std::vector<double>{10.2, 11.5, 9.8, 12.1, 13.4, 11.9, 10.6, 12.8, 14.0,
                                           13.1, 11.7, 12.5, 13.9, 15.2, 14.1, 12.9, 13.6, 15.0,
                                           16.2, 14.8});
@@ -701,7 +720,7 @@ void test_arimax_irregular_interval_validate() {
     // C# test's own i*i+1 index spacing.
     TimeSeries irregular(TimeInterval::Irregular);
     for (int i = 0; i < 50; ++i)
-        irregular.add(TimeSeries::Ordinate(static_cast<long>(i) * i + 1, i + 1.0));
+        irregular.add(TimeSeries::Ordinate(kT0.add_days(static_cast<double>(i) * i + 1), i + 1.0));
 
     auto r = ARIMAX(irregular).validate();
     CHECK_TRUE(!r.is_valid);
@@ -709,6 +728,109 @@ void test_arimax_irregular_interval_validate() {
 
     CHECK_TRUE(ARIMAX(make_sample_series()).validate().is_valid);
 }
+
+// ===================== P6: the covariate forecast-tail extension =====================
+// The five CovariateExtension tests that could not run through P5, transcribed from
+// src/RMC.BestFit.Tests/TimeSeriesModels/ARIMAXTests.cs @ c2e6192.
+//
+// DEVIATION, documented: the C# fixtures build their response series with
+// `new Random(i).NextDouble()`, a .NET LCG with no ported equivalent, so this uses the ported
+// MersenneTwister for that noise instead. Every assertion in these five tests is structural (a
+// length, a non-zero covariate effect, a throw), so the substitution costs nothing; the covariate
+// series itself is deterministic in the C# and is transcribed exactly.
+namespace p6_covariate_extension {
+
+using corehydro::numerics::data::DateTime;
+using corehydro::numerics::data::TimeInterval;
+
+ARIMAX build(ARIMAX::CovariateExtensionMethod extension) {
+    corehydro::numerics::sampling::MersenneTwister rng(7);
+    std::vector<double> values(100);
+    for (int i = 0; i < 100; ++i) values[static_cast<std::size_t>(i)] = 50.0 + i * 0.1 + rng.next_double() * 5;
+    std::vector<double> cov_values(100);
+    for (int i = 0; i < 100; ++i) cov_values[static_cast<std::size_t>(i)] = 10.0 + i * 0.5;
+
+    TimeSeries ts(TimeInterval::OneMonth, DateTime(2000, 1, 1), values);
+    TimeSeries covariate(TimeInterval::OneMonth, DateTime(2000, 1, 1), cov_values);
+
+    ARIMAX model(ts);
+    model.set_include_intercept(true);
+    model.set_ar_order_p(1);
+    model.set_ma_order_q(0);
+    model.set_use_default_training_steps(false);
+    model.set_covariate_extension(extension);
+    model.set_training_time_steps(100);
+    model.set_covariates({covariate});
+    model.set_default_parameters();
+    model.set_parameter_values({50.0, 0.1, 0.5, 1.0});   // mu, beta, phi, sigma
+    return model;
+}
+
+std::vector<double> parameter_values(const ARIMAX& model) {
+    std::vector<double> p;
+    for (const auto& param : model.parameters()) p.push_back(param.value());
+    return p;
+}
+
+// C# Test_Predict_CovariateExtensionNone_ThrowsWhenInsufficient.
+void test_predict_extension_none_throws_when_insufficient() {
+    ARIMAX model = build(ARIMAX::CovariateExtensionMethod::None);
+    CHECK_THROWS(model.predict_components(parameter_values(model), 10));
+    CHECK_THROWS_MSG(model.predict_components(parameter_values(model), 10), "are required");
+}
+
+// C# Test_Predict_CovariateExtensionBlockBootstrap_ExtendsCovariates and
+// Test_Predict_CovariateExtensionKNN_ExtendsCovariates.
+void test_predict_extension_extends_covariates() {
+    for (auto extension : {ARIMAX::CovariateExtensionMethod::BlockBootstrap,
+                           ARIMAX::CovariateExtensionMethod::KNN}) {
+        ARIMAX model = build(extension);
+        auto result = model.predict_components(parameter_values(model), 20, 12345);
+        CHECK_EQ(static_cast<int>(result.y.size()), 120);
+        bool any_nonzero = false;
+        for (std::size_t i = 100; i < result.covariate_part.size(); ++i)
+            if (result.covariate_part[i] != 0) any_nonzero = true;
+        CHECK_TRUE(any_nonzero);
+
+        // corehydro supplement: the OBSERVED span is untouched by the extension -- that is the
+        // whole point of extending only the tail -- and a seeded run repeats.
+        ARIMAX shorter = build(extension);
+        auto observed_only = shorter.predict_components(parameter_values(shorter), 0, 12345);
+        for (std::size_t i = 0; i < observed_only.covariate_part.size(); ++i)
+            CHECK_NEAR(result.covariate_part[i], observed_only.covariate_part[i], 1e-12);
+        auto again = model.predict_components(parameter_values(model), 20, 12345);
+        for (std::size_t i = 0; i < result.y.size(); ++i)
+            CHECK_NEAR(again.y[i], result.y[i], 0.0);
+
+        // ... and WITHOUT a seed the tail is the covariate's mean, not a resampled path, so the
+        // two extension methods agree with each other (the deterministic branch).
+        ARIMAX knn = build(ARIMAX::CovariateExtensionMethod::KNN);
+        ARIMAX boot = build(ARIMAX::CovariateExtensionMethod::BlockBootstrap);
+        auto d1 = knn.predict_components(parameter_values(knn), 20, -1);
+        auto d2 = boot.predict_components(parameter_values(boot), 20, -1);
+        for (std::size_t i = 0; i < d1.y.size(); ++i) CHECK_NEAR(d1.y[i], d2.y[i], 1e-12);
+    }
+}
+
+// C# Test_GenerateRandomValues_CovariateExtensionNone_ThrowsWhenInsufficient,
+// _BlockBootstrap_ExtendsCovariates and _KNN_ExtendsCovariates.
+void test_generate_random_values_extension() {
+    ARIMAX none = build(ARIMAX::CovariateExtensionMethod::None);
+    CHECK_THROWS(none.generate_random_values(120, 12345));
+    CHECK_THROWS_MSG(none.generate_random_values(120, 12345), "are required");
+
+    for (auto extension : {ARIMAX::CovariateExtensionMethod::BlockBootstrap,
+                           ARIMAX::CovariateExtensionMethod::KNN}) {
+        ARIMAX model = build(extension);
+        std::vector<double> values = model.generate_random_values(120, 12345);
+        CHECK_EQ(static_cast<int>(values.size()), 120);
+        for (double v : values) CHECK_TRUE(std::isfinite(v));
+        std::vector<double> again = model.generate_random_values(120, 12345);
+        CHECK_TRUE(values == again);
+    }
+}
+
+}  // namespace p6_covariate_extension
 
 }  // namespace
 
@@ -732,6 +854,11 @@ int main() {
     test_arimax_irregular_interval_validate();
 
     test_arimax_p4_fixed_param_oracles();
+
+    // P6: the covariate forecast-tail extension.
+    p6_covariate_extension::test_predict_extension_none_throws_when_insufficient();
+    p6_covariate_extension::test_predict_extension_extends_covariates();
+    p6_covariate_extension::test_generate_random_values_extension();
 
     return chtest::summary("arimax");
 }

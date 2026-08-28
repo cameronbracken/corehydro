@@ -1,0 +1,343 @@
+{
+  "kind": "toolbox",
+  "group": "timeseries",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a (AddTimeInterval / SubtractTimeInterval / TimeIntervalInHours) over the System.DateTime calendar arithmetic underneath it. The interval-in-hours values are Test_TimeSeries.cs's Test_TimeIntervalInHours literals; every calendar value is the real BCL's, and the two marked CURATE were harvested with verify_oracles.py --dump.",
+  "reference": "Dates cross this surface as SECONDS since 1970-01-01, never .NET ticks (a tick count near 6.3e17 is not exactly representable in a double). This file is what puts the ported DateTime value type -- a corehydro addition with no upstream source file, standing in for System.DateTime -- permanently behind the oracle gate: AddMonths day-clamping, the leap-year cases, the fractional-AddDays whole/fraction split, DayOfYear across a leap boundary, DayOfWeek with Sunday == 0, and ToOADate. core/tests/test_date_time.cpp carries the same measurements as ctest assertions.",
+  "cases": [
+    {
+      "name": "add_time_interval_from_month_end",
+      "data": [
+        [
+          1675207800.0
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month",
+        "steps": 1
+      },
+      "assertions": [
+        {
+          "method": "date_add",
+          "index": 0,
+          "expected": 1677627000.0,
+          "mode": "equal",
+          "source": "AddMonths clamps January 31 to February 28 and keeps the time of day"
+        }
+      ]
+    },
+    {
+      "name": "add_time_interval_quarter_from_month_end",
+      "data": [
+        [
+          1675207800.0
+        ]
+      ],
+      "options": {
+        "time_interval": "one_quarter",
+        "steps": 1
+      },
+      "assertions": [
+        {
+          "method": "date_add",
+          "index": 0,
+          "expected": 1682897400.0,
+          "mode": "equal",
+          "source": "AddMonths(3) clamps January 31 to April 30"
+        }
+      ]
+    },
+    {
+      "name": "add_time_interval_year_from_month_end",
+      "data": [
+        [
+          1675207800.0
+        ]
+      ],
+      "options": {
+        "time_interval": "one_year",
+        "steps": 1
+      },
+      "assertions": [
+        {
+          "method": "date_add",
+          "index": 0,
+          "expected": 1706743800.0,
+          "mode": "equal",
+          "source": "AddYears keeps the day when the target month is long enough"
+        }
+      ]
+    },
+    {
+      "name": "add_time_interval_thirty_minute_crosses_month",
+      "data": [
+        [
+          1675207800.0
+        ]
+      ],
+      "options": {
+        "time_interval": "thirty_minute",
+        "steps": 1
+      },
+      "assertions": [
+        {
+          "method": "date_add",
+          "index": 0,
+          "expected": 1675209600.0,
+          "mode": "equal",
+          "source": "AddMinutes(30) rolls into the next month"
+        }
+      ]
+    },
+    {
+      "name": "subtract_time_interval_month_clamps",
+      "data": [
+        [
+          1680220800.0
+        ]
+      ],
+      "options": {
+        "time_interval": "one_month",
+        "steps": 1
+      },
+      "assertions": [
+        {
+          "method": "date_subtract",
+          "index": 0,
+          "expected": 1677542400.0,
+          "mode": "equal",
+          "source": "AddMonths(-1) clamps March 31 to February 28"
+        }
+      ]
+    },
+    {
+      "name": "add_months_leap_clamping",
+      "data": [
+        [
+          1706659200.0,
+          1675123200.0,
+          1709164800.0
+        ]
+      ],
+      "options": {
+        "amount": 1
+      },
+      "assertions": [
+        {
+          "method": "date_add_months",
+          "index": 0,
+          "expected": 1709164800.0,
+          "mode": "equal",
+          "source": "leap February"
+        },
+        {
+          "method": "date_add_months",
+          "index": 1,
+          "expected": 1677542400.0,
+          "mode": "equal",
+          "source": "non-leap February"
+        },
+        {
+          "method": "date_add_months",
+          "index": 2,
+          "expected": 1711670400.0,
+          "mode": "equal",
+          "source": "February 29 into March"
+        }
+      ]
+    },
+    {
+      "name": "add_years_leap_day",
+      "data": [
+        [
+          1709164800.0
+        ]
+      ],
+      "options": {
+        "amount": 1
+      },
+      "assertions": [
+        {
+          "method": "date_add_years",
+          "index": 0,
+          "expected": 1740700800.0,
+          "mode": "equal",
+          "source": "AddYears clamps February 29 to February 28"
+        }
+      ]
+    },
+    {
+      "name": "add_days_fractional",
+      "data": [
+        [
+          946684800.0
+        ]
+      ],
+      "options": {
+        "amount": 12.3456789
+      },
+      "assertions": [
+        {
+          "method": "date_add_days",
+          "index": 0,
+          "expected": 947751466.65696,
+          "mode": "abs",
+          "source": "curated with verify_oracles.py --dump against the real library: the whole/fraction split .NET applies to a fractional AddDays; asserted to a microsecond because the exact tick lands beyond a double's decimal precision once expressed in epoch seconds",
+          "tol": 1e-06
+        }
+      ]
+    },
+    {
+      "name": "date_components_calendar",
+      "data": [
+        [
+          1709214330.0,
+          1703980800.0,
+          -2208988800.0
+        ]
+      ],
+      "options": {},
+      "assertions": [
+        {
+          "method": "date_components",
+          "index": 0,
+          "expected": 2024,
+          "mode": "equal",
+          "source": "row 0, column year: row 0"
+        },
+        {
+          "method": "date_components",
+          "index": 1,
+          "expected": 2,
+          "mode": "equal",
+          "source": "row 0, column month: row 0"
+        },
+        {
+          "method": "date_components",
+          "index": 2,
+          "expected": 29,
+          "mode": "equal",
+          "source": "row 0, column day: row 0"
+        },
+        {
+          "method": "date_components",
+          "index": 3,
+          "expected": 13,
+          "mode": "equal",
+          "source": "row 0, column hour: row 0"
+        },
+        {
+          "method": "date_components",
+          "index": 4,
+          "expected": 45,
+          "mode": "equal",
+          "source": "row 0, column minute: row 0"
+        },
+        {
+          "method": "date_components",
+          "index": 5,
+          "expected": 30,
+          "mode": "equal",
+          "source": "row 0, column second: row 0"
+        },
+        {
+          "method": "date_components",
+          "index": 6,
+          "expected": 60,
+          "mode": "equal",
+          "source": "row 0, column day_of_year: leap year"
+        },
+        {
+          "method": "date_components",
+          "index": 7,
+          "expected": 4,
+          "mode": "equal",
+          "source": "row 0, column day_of_week: Thursday, with Sunday == 0"
+        },
+        {
+          "method": "date_components",
+          "index": 15,
+          "expected": 365,
+          "mode": "equal",
+          "source": "row 1, column day_of_year: non-leap year"
+        },
+        {
+          "method": "date_components",
+          "index": 18,
+          "expected": 1900,
+          "mode": "equal",
+          "source": "row 2, column year: row 2"
+        },
+        {
+          "method": "date_components",
+          "index": 26,
+          "expected": 2.0,
+          "mode": "equal",
+          "source": "row 2, column oa_date: ToOADate of 1900-01-01"
+        },
+        {
+          "method": "date_components",
+          "index": 8,
+          "expected": 45351.57326388889,
+          "mode": "abs",
+          "tol": 1e-09,
+          "source": "row 0, column oa_date: curated with verify_oracles.py --dump against the real library: ToOADate with a time of day"
+        }
+      ],
+      "notes": "date_components returns a row-major table with dims {n, 9} and the column names {year, month, day, hour, minute, second, day_of_year, day_of_week, oa_date}. The assertions index it flat (row * 9 + column) rather than by label, because a label selects a COLUMN and every runner reads it against the first row only."
+    },
+    {
+      "name": "interval_in_hours_one_minute",
+      "data": [
+        []
+      ],
+      "options": {
+        "time_interval": "one_minute"
+      },
+      "assertions": [
+        {
+          "method": "interval_in_hours",
+          "index": 0,
+          "expected": 0.016666666666666666,
+          "mode": "equal",
+          "source": "Test_TimeIntervalInHours"
+        }
+      ]
+    },
+    {
+      "name": "interval_in_hours_one_day",
+      "data": [
+        []
+      ],
+      "options": {
+        "time_interval": "one_day"
+      },
+      "assertions": [
+        {
+          "method": "interval_in_hours",
+          "index": 0,
+          "expected": 24.0,
+          "mode": "equal",
+          "source": "Test_TimeIntervalInHours"
+        }
+      ]
+    },
+    {
+      "name": "interval_in_hours_seven_day",
+      "data": [
+        []
+      ],
+      "options": {
+        "time_interval": "seven_day"
+      },
+      "assertions": [
+        {
+          "method": "interval_in_hours",
+          "index": 0,
+          "expected": 168.0,
+          "mode": "equal",
+          "source": "Test_TimeIntervalInHours"
+        }
+      ]
+    }
+  ]
+}
