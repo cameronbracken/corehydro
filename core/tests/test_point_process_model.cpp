@@ -14,25 +14,19 @@
 //         (ToXElement / the XElement ctor are a project-wide non-port);
 //       Test_SetParameterValues_NullParameters_ThrowsException (a std::vector<double>
 //         argument cannot be null -- type-system guarantee);
-//       seasonal DATA path (deferred; see the model header's deferral block):
-//         Test_SetAMSData_Seasonal_CreatesPOTDays (POT day-of-year population needs the
-//         unported TimeSeries/DateTime machinery),
-//         Test_Seasonal_DataLogLikelihood_ReturnsFinite,
-//         Test_JeffreysPrior_Seasonal_AppliedToBothGEVs,
-//         Test_PointwisePriorLogLikelihood_Sum_Equals_PriorLogLikelihood_Seasonal
-//         (their setup evaluates default seasonal GEV parameters/priors, which the C#
-//         derives from the deferred seasonal block-maxima path; without it the priors are
-//         NaN-bounded and the assertions cannot reproduce),
-//         Test_PointProcess_SeasonalFloodAnalysis (Validate() requires seasonal AMS exact
-//         data, which only the deferred path produces).
+// The five seasonal DATA-path tests skipped through P5 -- Test_SetAMSData_Seasonal_CreatesPOTDays,
+// Test_Seasonal_DataLogLikelihood_ReturnsFinite, Test_JeffreysPrior_Seasonal_AppliedToBothGEVs,
+// Test_PointwisePriorLogLikelihood_Sum_Equals_PriorLogLikelihood_Seasonal and
+// Test_PointProcess_SeasonalFloodAnalysis -- are TRANSCRIBED as of P6, which ported the TimeSeries
+// container that path needs. They are at the end of this file, under "P6: the seasonal data path".
 // Hardcoded oracles are allowed here (internal support layer); public-API oracle values stay
 // in fixtures/ only (the fixture wiring for the Models layer arrives in M13/M14).
 //
 // Test-surface adaptations forced by the port (each noted at the test):
-//   - The C# helpers construct ExactData from DateTime; the ported ExactData has no
-//     DateTime (project-wide deferral). The C# `ExactData(DateTime, value)` ctor is
-//     `base(dateTime.Year, value, 0)`, so the transcription uses the year as the index --
-//     the identical observable state for the non-seasonal surface.
+//   - The non-seasonal C# helpers construct ExactData from a bare index and this file does the
+//     same. The SEASONAL helper builds from a DateTime, as C# does, now that ExactData carries
+//     one (P6); the C# `ExactData(DateTime, value)` ctor is `base(dateTime.Year, value, 0)`, so
+//     the index is still the year either way.
 //   - C# `Assert.AreSame(df, model.DataFrame)` maps to has_data_frame() + content checks
 //     (the move-only C++ frame cannot alias).
 //   - C# `Assert.AreNotSame(a, b)` maps to a pointer-identity check.
@@ -110,18 +104,22 @@ DataFrame create_pot_data_frame() {
     return df;
 }
 
-// Creates a seasonal POT data frame with events from different seasons.
+// Creates a seasonal POT data frame with events from different seasons. Since P6 this builds its
+// ordinates from DATES, exactly as the C# helper does -- which is what the seasonal data path
+// reads to compute each event's day of the year.
 DataFrame create_seasonal_pot_data_frame() {
     DataFrame df;
     std::vector<ExactData> data;
 
-    // Winter/Spring events (season 1; C# DateTime(year, 2, 15)).
+    // Winter/Spring events (season 1).
     for (int year = 1990; year < 2000; ++year)
-        data.emplace_back(year, 1500 + (year - 1990) * 100);
+        data.emplace_back(corehydro::numerics::data::DateTime(year, 2, 15),
+                          1500 + (year - 1990) * 100);
 
-    // Summer events (season 2; C# DateTime(year, 7, 15)).
+    // Summer events (season 2).
     for (int year = 1990; year < 2000; ++year)
-        data.emplace_back(year, 2000 + (year - 1990) * 150);
+        data.emplace_back(corehydro::numerics::data::DateTime(year, 7, 15),
+                          2000 + (year - 1990) * 150);
 
     df.set_exact_series(ExactSeries(data));
     return df;
@@ -1153,6 +1151,128 @@ void test_generate_random_values_guards_and_deterministic_seed() {
     CHECK_TRUE(a != c);
 }
 
+// ===================== P6: the seasonal data path =====================
+// The five tests P5 and earlier skipped because the seasonal branch of set_ams_data() was a
+// no-op. P6 ported the TimeSeries container it needs, so each is transcribed from
+// src/RMC.BestFit.Tests/Univariate/PointProcessModelTests.cs @ c2e6192.
+
+// C# Test_SetAMSData_Seasonal_CreatesPOTDays.
+void test_set_ams_data_seasonal_creates_pot_days() {
+    DataFrame df = create_seasonal_pot_data_frame();
+    PointProcessModel model;
+    model.set_is_seasonal(true);
+    model.set_data_frame(std::move(df));
+
+    CHECK_TRUE(model.pot_days().size() > 0);
+
+    // corehydro supplement: the day of year is read AFTER the water-year shift, so a February
+    // event reports its water-year day rather than day 46. February 15 shifted forward by three
+    // months is May 15 -- day 135 or 136 depending on the leap year -- and July 15 becomes
+    // October 15, day 288 or 289.
+    //
+    // The ORDER is the upstream defect documented in docs/upstream-csharp-issues.md and in the
+    // model header: ShiftDatesByMonth sorts by time, so POTDays comes out in DATE order (Feb
+    // 1990, Jul 1990, Feb 1991, ...) while the likelihood pairs it positionally with the
+    // UNSORTED exact series (all Februaries, then all Julys). This pins the ported order, which
+    // is C#'s.
+    CHECK_EQ(static_cast<int>(model.pot_days().size()), 20);
+    CHECK_TRUE(model.pot_days()[0] == 135 || model.pot_days()[0] == 136);
+    CHECK_TRUE(model.pot_days()[1] == 288 || model.pot_days()[1] == 289);
+    CHECK_TRUE(model.pot_days()[2] == 135 || model.pot_days()[2] == 136);
+    // The block series is populated too, one maximum per water year.
+    CHECK_TRUE(model.ams_data_frame().exact_series().count() > 0);
+}
+
+// C# Test_Seasonal_DataLogLikelihood_ReturnsFinite.
+void test_seasonal_data_log_likelihood_returns_finite() {
+    DataFrame df = create_seasonal_pot_data_frame();
+    PointProcessModel model;
+    model.set_is_seasonal(true);
+    model.set_data_frame(std::move(df));
+
+    std::vector<double> parameters;
+    for (const auto& p : model.parameters()) parameters.push_back(p.value());
+    double data_log_lh = model.data_log_likelihood(parameters);
+    CHECK_TRUE(!std::isnan(data_log_lh));
+}
+
+// C# Test_JeffreysPrior_Seasonal_AppliedToBothGEVs.
+void test_jeffreys_prior_seasonal_applied_to_both_gevs() {
+    DataFrame df = create_seasonal_pot_data_frame();
+    PointProcessModel model;
+    model.set_is_seasonal(true);
+    model.set_use_jeffreys_rule_for_scale(true);
+    model.set_data_frame(std::move(df));
+
+    std::vector<double> parameters;
+    for (const auto& p : model.parameters()) parameters.push_back(p.value());
+    auto priors = model.pointwise_prior_log_likelihood(parameters);
+
+    int jeffreys_count = 0;
+    for (const auto& p : priors)
+        if (p.type() == PriorComponentType::JeffreysScalePrior) ++jeffreys_count;
+    CHECK_EQ(jeffreys_count, 2);
+}
+
+// C# Test_PointwisePriorLogLikelihood_Sum_Equals_PriorLogLikelihood_Seasonal.
+void test_pointwise_prior_sum_equals_prior_seasonal() {
+    DataFrame df = create_seasonal_pot_data_frame();
+    PointProcessModel model;
+    model.set_data_frame(std::move(df));
+    model.set_use_jeffreys_rule_for_scale(false);
+    model.set_is_seasonal(true);
+    model.set_default_parameters();
+
+    std::vector<double> p;
+    for (const auto& param : model.parameters()) p.push_back(param.value());
+    double scalar = model.prior_log_likelihood(p);
+    double pointwise_sum = 0;
+    for (const auto& c : model.pointwise_prior_log_likelihood(p)) pointwise_sum += c.log_likelihood();
+    CHECK_NEAR(pointwise_sum, scalar, 1e-9);
+}
+
+// C# Test_PointProcess_SeasonalFloodAnalysis.
+void test_point_process_seasonal_flood_analysis() {
+    DataFrame df = create_seasonal_pot_data_frame();
+    PointProcessModel model;
+    model.set_is_seasonal(true);
+    model.set_data_frame(std::move(df));
+
+    CHECK_TRUE(model.validate().is_valid);
+    CHECK_EQ(model.distribution()->component_count(), 2);
+}
+
+// corehydro supplement: generate_pot_time_series, whose only C# test coverage is indirect. It is
+// the seeded synthetic-record path, so what is asserted is the contract -- determinism under a
+// seed, dates inside the requested span, magnitudes above the threshold, sorted output -- and the
+// guards.
+void test_generate_pot_time_series() {
+    using corehydro::numerics::data::DateTime;
+    DataFrame df = create_pot_data_frame();
+    PointProcessModel model;
+    model.set_data_frame(std::move(df));
+
+    DateTime start(2000, 1, 1);
+    auto a = model.generate_pot_time_series(start, 10.0, 12345);
+    auto b = model.generate_pot_time_series(start, 10.0, 12345);
+    CHECK_EQ(a.count(), b.count());
+    for (int i = 0; i < a.count(); ++i) {
+        CHECK_TRUE(a[i].index() == b[i].index());
+        CHECK_NEAR(a[i].value(), b[i].value(), 0.0);
+    }
+    CHECK_TRUE(a.count() > 0);
+    CHECK_TRUE(a.time_interval() == corehydro::numerics::data::TimeInterval::OneDay);
+    DateTime end = start.add_days(10.0 * 365.25);
+    for (int i = 0; i < a.count(); ++i) {
+        CHECK_TRUE(a[i].index() >= start && a[i].index() <= end);
+        CHECK_TRUE(a[i].value() > model.threshold());
+        if (i > 0) CHECK_TRUE(a[i - 1].index() <= a[i].index());
+    }
+
+    CHECK_THROWS(model.generate_pot_time_series(start, 0.0, 12345));
+    CHECK_THROWS(model.generate_pot_time_series(start, -1.0, 12345));
+}
+
 }  // namespace
 
 int main() {
@@ -1262,6 +1382,14 @@ int main() {
 
     // ISimulatable guards + seeded determinism.
     test_generate_random_values_guards_and_deterministic_seed();
+
+    // P6: the seasonal data path.
+    test_set_ams_data_seasonal_creates_pot_days();
+    test_seasonal_data_log_likelihood_returns_finite();
+    test_jeffreys_prior_seasonal_applied_to_both_gevs();
+    test_pointwise_prior_sum_equals_prior_seasonal();
+    test_point_process_seasonal_flood_analysis();
+    test_generate_pot_time_series();
 
     return chtest::summary("point_process_model");
 }

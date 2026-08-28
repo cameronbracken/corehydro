@@ -384,8 +384,21 @@ model_competing_risks <- function(families, data, parameters = NULL, parameter_v
 
 #' Peaks-over-threshold point process model
 #'
-#' A non-seasonal point process over exceedances of a threshold, combining an arrival rate with a
-#' magnitude distribution.
+#' A point process over exceedances of a threshold, combining an arrival rate with a magnitude
+#' distribution.
+#'
+#' @details
+#' With `seasonal = TRUE` the magnitude distribution becomes TWO generalized extreme value
+#' marginals with two fitted change points, and each observation is assigned to a season by its
+#' day of the year -- so the data must carry DATES rather than bare indices:
+#'
+#' ```r
+#' data <- analysis_data(exact = list(date = dates, value = peaks))
+#' model <- model_point_process(data, seasonal = TRUE)
+#' ```
+#'
+#' Observations supplied with integer indices are treated as January 1 of that year, which puts
+#' every one of them in the same season.
 #'
 #' @param data a numeric vector of observations, or an [analysis_data()] frame.
 #' @param threshold optional exceedance threshold; derived from the data when omitted. See
@@ -393,6 +406,10 @@ model_competing_risks <- function(families, data, parameters = NULL, parameter_v
 #' @param total_years optional record length in years, used for the arrival rate.
 #' @param use_defaults logical; let the model derive its threshold and record length from the
 #'   data. Applied before an explicit `threshold` or `total_years`, so an explicit value wins.
+#' @param seasonal logical; fit two seasonal magnitude distributions with fitted change points.
+#' @param time_block the block a seasonal model reduces the record over: `"water_year"` (the
+#'   default), `"calendar_year"`, `"custom_year"`, `"quarter"` or `"month"`.
+#' @param start_month the month a water year or custom year begins. Default 10 (October).
 #' @inheritParams model_univariate
 #' @return An object of class `corehydro_model`.
 #' @seealso [point_process_analysis()], [threshold_diagnostics()].
@@ -401,13 +418,21 @@ model_competing_risks <- function(families, data, parameters = NULL, parameter_v
 #' x <- c(1200, 1500, 890, 2210, 1870, 1420, 980, 2850, 1740, 1160, 1920, 1380, 2560, 1050)
 #' model_point_process(x, threshold = 1000, total_years = 14)
 model_point_process <- function(data, threshold = NULL, total_years = NULL, use_defaults = TRUE,
+                                seasonal = FALSE,
+                                time_block = c("water_year", "calendar_year", "custom_year",
+                                               "quarter", "month"),
+                                start_month = 10,
                                 parameters = NULL, parameter_values = NULL,
                                 use_default_flat_priors = NULL) {
+  time_block <- match.arg(time_block)
   block <- model_data_block(data)
   spec <- list(
     type = "point_process",
     dataset = block$dataset, data_frame = block$data_frame,
     use_defaults = isTRUE(use_defaults),
+    is_seasonal = if (isTRUE(seasonal)) TRUE else NULL,
+    time_block = time_block,
+    start_month = as.integer(start_month),
     threshold = if (is.null(threshold)) NULL else as.double(threshold),
     total_years = if (is.null(total_years)) NULL else as.double(total_years)
   )

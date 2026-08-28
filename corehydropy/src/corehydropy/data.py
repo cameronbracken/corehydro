@@ -56,6 +56,21 @@ def _normalize_exact(exact):
     if not isinstance(exact, dict):
         exact = {"value": exact}
     value = _values(_column(exact, "value", "exact"), "exact")
+    # An observation may carry a DATE instead of an integer index (P6). The index then becomes the
+    # date's year, and the date itself is what a seasonal point-process model reads to place each
+    # event in its season. Anything numpy can read as a date works: datetime, datetime64, ISO
+    # strings, or a pandas column.
+    date = exact.get("date")
+    if date is not None:
+        dates = np.asarray(date, dtype="datetime64[s]")
+        if dates.size != len(value):
+            raise ValueError(
+                f"`exact` date and value must have the same length; "
+                f"got {dates.size} and {len(value)}"
+            )
+        return [
+            {"date": str(dates[i]), "value": value[i]} for i in range(len(value))
+        ]
     index = _indexes(exact.get("index"), len(value), "exact")
     flag = exact.get("is_low_outlier")
     if flag is None:

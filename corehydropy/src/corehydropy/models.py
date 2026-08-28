@@ -460,13 +460,26 @@ def model_point_process(
     threshold=None,
     total_years=None,
     use_defaults: bool = True,
+    seasonal: bool = False,
+    time_block: str = "water_year",
+    start_month: int = 10,
     parameters=None,
     parameter_values=None,
     use_default_flat_priors=None,
 ) -> Model:
-    """A non-seasonal point process over exceedances of a threshold.
+    """A point process over exceedances of a threshold.
 
     Combines an arrival rate with a magnitude distribution.
+
+    With ``seasonal=True`` the magnitude distribution becomes TWO generalized extreme value
+    marginals with two fitted change points, and each observation is assigned to a season by its
+    day of the year -- so the data must carry DATES, not bare indices::
+
+        data = analysis_data(exact={"date": dates, "value": peaks})
+        model = model_point_process(data, seasonal=True)
+
+    Observations supplied with integer indices are treated as January 1 of that year, which puts
+    every one of them in the same season.
 
     Parameters
     ----------
@@ -480,6 +493,13 @@ def model_point_process(
     use_defaults : bool, default True
         Let the model derive its threshold and record length from the data. Applied before an
         explicit ``threshold`` or ``total_years``, so an explicit value wins.
+    seasonal : bool, default False
+        Fit two seasonal magnitude distributions with fitted change points.
+    time_block : str, default "water_year"
+        The block a seasonal model reduces the record over: ``"water_year"``,
+        ``"calendar_year"``, ``"custom_year"``, ``"quarter"`` or ``"month"``.
+    start_month : int, default 10
+        The month a water year or custom year begins.
     parameters, parameter_values, use_default_flat_priors
         As in :func:`model_univariate`.
 
@@ -489,7 +509,16 @@ def model_point_process(
         The assembled model spec.
     """
     block, dataset = _data_block(data)
+    if time_block not in ("water_year", "calendar_year", "custom_year", "quarter", "month"):
+        raise ValueError(
+            '`time_block` must be one of "water_year", "calendar_year", "custom_year", '
+            f'"quarter", "month"; got "{time_block}"'
+        )
     spec = {"type": "point_process", "use_defaults": bool(use_defaults), **block}
+    if seasonal:
+        spec["is_seasonal"] = True
+    spec["time_block"] = time_block
+    spec["start_month"] = int(start_month)
     if threshold is not None:
         spec["threshold"] = float(threshold)
     if total_years is not None:

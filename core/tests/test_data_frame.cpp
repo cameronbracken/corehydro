@@ -1460,6 +1460,84 @@ void test_data_frame_scenario_paleoflood() {
     CHECK_EQ(df.threshold_series().count(), std::size_t{1});
 }
 
+// ===================== P6: time-series import =====================
+// The four ExactDataProcessTests methods that could not run through P5 because
+// CreateBlockSeries / CreatePeaksOverThresholdSeries needed the unported TimeSeries container.
+// Transcribed from src/RMC.BestFit.Tests/DataFrame/ExactDataProcessTests.cs @ c2e6192
+// (Test_CalendarYearSeries, Test_WaterYearSeries, Test_CustomYearSeries, Test_PeaksOverThreshold);
+// its fifth method, Test_USGS*, is the network-import severance.
+namespace p6_import {
+
+using corehydro::numerics::data::BlockFunctionType;
+using corehydro::numerics::data::DateTime;
+using corehydro::numerics::data::SmoothingFunctionType;
+using corehydro::numerics::data::TimeBlockWindow;
+using corehydro::numerics::data::TimeInterval;
+using corehydro::numerics::data::TimeSeries;
+
+const std::vector<double> kValues = {
+    122,  244, 214, 173, 229, 156, 212, 263, 146, 183, 161, 205, 135, 331, 225, 174, 98.8, 149,
+    238,  262, 132, 235, 216, 240, 230, 192, 195, 172, 173, 172, 153, 142, 317, 161, 201,  204,
+    194,  164, 183, 161, 167, 179, 185, 117, 192, 337, 125, 166, 99.1, 202, 230, 158, 262, 154,
+    164,  182, 164, 183, 171, 250, 184, 205, 237, 177, 239, 187, 180, 173, 174};
+
+TimeSeries monthly() { return TimeSeries(TimeInterval::OneMonth, DateTime(2023, 1, 1), kValues); }
+
+void check_exact_values(const DataFrame& df, const std::vector<double>& expected) {
+    CHECK_EQ(static_cast<int>(df.exact_series().count()), static_cast<int>(expected.size()));
+    for (std::size_t i = 0; i < expected.size(); ++i)
+        CHECK_NEAR(df.exact_series()[i].value(), expected[i], 0.0);
+}
+
+void test_create_block_series() {
+    TimeSeries ts = monthly();
+
+    DataFrame calendar;
+    calendar.create_block_series(ts, TimeBlockWindow::CalendarYear, BlockFunctionType::Maximum,
+                                 SmoothingFunctionType::None, 1, 12, 1);
+    check_exact_values(calendar, {263, 331, 317, 337, 262, 239});
+
+    DataFrame water;
+    water.create_block_series(ts, TimeBlockWindow::WaterYear, BlockFunctionType::Maximum,
+                              SmoothingFunctionType::None, 10, 9, 1);
+    check_exact_values(water, {263, 331, 317, 204, 337, 250});
+
+    DataFrame custom;
+    custom.create_block_series(ts, TimeBlockWindow::CustomYear, BlockFunctionType::Maximum,
+                               SmoothingFunctionType::None, 1, 12, 1);
+    check_exact_values(custom, {263, 331, 317, 337, 262, 239});
+    custom.create_block_series(ts, TimeBlockWindow::CustomYear, BlockFunctionType::Maximum,
+                               SmoothingFunctionType::None, 10, 3, 1);
+    check_exact_values(custom, {244, 331, 240, 204, 337, 250});
+
+    // corehydro supplement: each ordinate's index is its observation's YEAR, its date rides
+    // along, and lambda is pinned to 1 (one event per block, by construction).
+    CHECK_EQ(calendar.exact_series()[0].index(), 2023);
+    CHECK_EQ(calendar.exact_series()[0].date_time().year(), 2023);
+    CHECK_TRUE(calendar.exact_series()[0].date_time() != DateTime());
+    CHECK_NEAR(calendar.lambda(), 1.0, 0.0);
+}
+
+void test_create_peaks_over_threshold_series() {
+    TimeSeries ts = monthly();
+    DataFrame df;
+
+    df.create_peaks_over_threshold_series(ts, 100, 2);
+    check_exact_values(df, {331, 337, 262});
+    df.create_peaks_over_threshold_series(ts, 90, 1);
+    check_exact_values(df, {337});
+    df.create_peaks_over_threshold_series(ts, 150, 5);
+    check_exact_values(df, {331, 240, 317, 337});
+    df.create_peaks_over_threshold_series(ts, 200, 2);
+    check_exact_values(df, {263, 331, 262, 317, 337, 250});
+
+    // corehydro supplement: unlike the block series, lambda here is the observed RATE -- six
+    // events over the record's six-year span.
+    CHECK_NEAR(df.lambda(), 6.0 / 6.0, 1e-12);
+}
+
+}  // namespace p6_import
+
 }  // namespace
 
 int main() {
@@ -1598,6 +1676,10 @@ int main() {
     test_data_frame_scenario_systematic_record();
     test_data_frame_scenario_systematic_with_historical();
     test_data_frame_scenario_paleoflood();
+
+    // P6: time-series import.
+    p6_import::test_create_block_series();
+    p6_import::test_create_peaks_over_threshold_series();
 
     return chtest::summary("data_frame");
 }

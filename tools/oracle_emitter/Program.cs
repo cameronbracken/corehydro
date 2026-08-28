@@ -3198,9 +3198,17 @@ static BestFitModels.DataFrame BuildSpecDataFrame(JsonElement dfSpec)
 {
     var df = new BestFitModels.DataFrame();
     if (dfSpec.TryGetProperty("exact", out var exactEl))
-        df.ExactSeries = new ExactSeries(exactEl.EnumerateArray().Select(e => new ExactData(
-            e.GetProperty("index").GetInt32(), e.GetProperty("value").GetDouble(), 0d,
-            e.TryGetProperty("is_low_outlier", out var lo) && lo.GetBoolean())).ToList());
+        // An ordinate may carry an ISO 8601 `date` instead of an `index` (P6): the
+        // ExactData(DateTime, double) ctor sets the index to the date's YEAR and keeps the date,
+        // which is what the seasonal point-process path reads. Mirrors model_spec.hpp.
+        df.ExactSeries = new ExactSeries(exactEl.EnumerateArray().Select(e =>
+            e.TryGetProperty("date", out var dateEl)
+                ? new ExactData(DateTime.Parse(dateEl.GetString()!,
+                                               System.Globalization.CultureInfo.InvariantCulture),
+                                e.GetProperty("value").GetDouble())
+                : new ExactData(
+                    e.GetProperty("index").GetInt32(), e.GetProperty("value").GetDouble(), 0d,
+                    e.TryGetProperty("is_low_outlier", out var lo) && lo.GetBoolean())).ToList());
     if (dfSpec.TryGetProperty("interval", out var intervalEl))
         df.IntervalSeries = new IntervalSeries(intervalEl.EnumerateArray().Select(e =>
             new IntervalData(e.GetProperty("index").GetInt32(), e.GetProperty("lower").GetDouble(),
@@ -3310,10 +3318,24 @@ static BestFitModels.UnivariateDistributionModelBase BuildSpecModel(
     }
     else if (type == "point_process")
     {
-        // Default-construct (non-seasonal GEV competing-risks distribution), assign the frame,
-        // then the optional knobs in C#-property order: UseDefaults before the explicit
-        // Threshold/TotalYears so an explicit value is never clobbered by the defaults cascade.
+        // Default-construct (non-seasonal GEV competing-risks distribution), set the seasonal
+        // knobs, assign the frame, then the optional knobs in C#-property order: UseDefaults
+        // before the explicit Threshold/TotalYears so an explicit value is never clobbered by
+        // the defaults cascade. The seasonal knobs go first so the frame is processed once,
+        // under the final configuration -- mirrors model_spec.hpp.
         var pp = new BestFitModels.PointProcessModel();
+        if (modelSpec.TryGetProperty("is_seasonal", out var seas)) pp.IsSeasonal = seas.GetBoolean();
+        if (modelSpec.TryGetProperty("time_block", out var tb))
+            pp.TimeBlock = tb.GetString() switch
+            {
+                "CalendarYear" or "calendar_year" => TimeBlockWindow.CalendarYear,
+                "WaterYear" or "water_year" => TimeBlockWindow.WaterYear,
+                "CustomYear" or "custom_year" => TimeBlockWindow.CustomYear,
+                "Quarter" or "quarter" => TimeBlockWindow.Quarter,
+                "Month" or "month" => TimeBlockWindow.Month,
+                _ => throw new Exception($"unknown point_process time_block: {tb.GetString()}")
+            };
+        if (modelSpec.TryGetProperty("start_month", out var sm)) pp.StartMonth = sm.GetInt32();
         pp.DataFrame = BuildModelDataFrame(modelSpec, datasets);
         if (modelSpec.TryGetProperty("use_defaults", out var udFlag)) pp.UseDefaults = udFlag.GetBoolean();
         if (modelSpec.TryGetProperty("threshold", out var th)) pp.Threshold = th.GetDouble();

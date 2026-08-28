@@ -3086,6 +3086,39 @@ a numbered transcription note at the call site citing the C# line numbers below.
 
 ---
 
+## BUG — `PointProcessModel`'s seasonal day-of-year list is date-sorted while the likelihood pairs it positionally with an unsorted series
+
+- **Where:** `RMC-BestFit/src/RMC.BestFit/Models/UnivariateDistribution/PointProcessModel.cs` @
+  `c2e6192`, `SetAMSData()` (lines 526-556) against `DataLogLikelihood` (~line 1858) and
+  `PointwisePriorLogLikelihood`.
+- **What:** The seasonal branch builds an irregular `TimeSeries` from the exact series IN THE
+  ORDER THE CALLER SUPPLIED IT, then -- for the water-year convention -- reassigns
+  `ts = ts.ShiftDatesByMonth(shift)`. `ShiftDatesByMonth` opens with `SortByTime()`, so the
+  returned series is in DATE order. `_potDays` is then filled from that sorted series. But the
+  seasonal likelihood consumes it positionally:
+  `for (int i = 0; i < POTDays.Count && i < DataFrame.ExactSeries.Count; i++) { double x =
+  ExactSeries[i].Value; int day = POTDays[i]; ... }` -- and `ExactSeries` was never sorted. Each
+  magnitude is therefore scored against a DIFFERENT event's day of year whenever the input record
+  is not already in date order, which decides which of the two seasonal GEV marginals it is
+  attributed to.
+- **Evidence (measured on the ported path, which transcribes the C# statement for statement):**
+  upstream's own `CreateSeasonalPOTDataFrame` helper supplies ten February events followed by ten
+  July events. `POTDays` comes back interleaved -- 135, 288, 135, 288, ... (May 15 and October 15
+  after the three-month water-year shift) -- while `ExactSeries` is still all-Februaries then
+  all-Julys. So the first ten magnitudes, every one a February event, are scored against
+  alternating May and October days.
+- **Scope:** the calendar-year path (`StartMonth == 1`) is unaffected, because no shift happens
+  and `ts` keeps the caller's order. A record supplied in date order is also unaffected, which is
+  the common case and probably why this has gone unnoticed.
+- **Port handling:** mirrored, with the defect named at the assignment in
+  `point_process_model.hpp` and pinned by `test_point_process_model.cpp`'s
+  `test_set_ams_data_seasonal_creates_pot_days`, which asserts the interleaved order rather than
+  the intuitive one.
+- **Suggested C# fix:** sort the exact series into the same order before pairing (or, better,
+  carry the day of year ON the ordinate rather than in a parallel list, so the two cannot drift).
+
+---
+
 ## How to work this list later
 
 1. Reproduce each finding directly against the pinned upstream (`dotnet test` a targeted case, or a
