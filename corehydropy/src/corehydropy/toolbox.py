@@ -1807,6 +1807,7 @@ def shortest_path(
     destinations,
     edge_index=None,
     node_count: int | None = None,
+    nearest: bool = False,
 ) -> np.ndarray:
     """Solve the shortest paths through a network.
 
@@ -1843,6 +1844,9 @@ def shortest_path(
         Defaults to ``max(frm, to) + 1``; supply a larger value to include isolated nodes
         carrying no edge, which then report ``cost = inf``. A value below ``max(frm, to) + 1``
         is an error: the graph would not fit the routing table it asks for.
+    nearest : bool, default False
+        Use the v2.2 single-pass multi-source solver. Costs match the regular multi-destination
+        solve, but exact-cost ties use deterministic heap order instead of destination order.
 
     Returns
     -------
@@ -1878,6 +1882,7 @@ def shortest_path(
                 "`edge_index` must be an array the same length as `frm`; "
                 f"got {idx.size} for {n}"
             )
+    _check_node_indices(idx, "edge_index")
     dest = np.atleast_1d(np.asarray(destinations, dtype=float)).ravel()
     if dest.size == 0:
         raise ValueError("`destinations` must name at least one destination node")
@@ -1907,7 +1912,10 @@ def shortest_path(
         raise ValueError(
             f"`destinations` is out of range for a network of {int(n_nodes)} nodes"
         )
-    r = _toolbox_run("network", "dijkstra", [f, t, w, idx], options)
+    if not isinstance(nearest, (bool, np.bool_)):
+        raise ValueError("`nearest` must be True or False")
+    method = "dijkstra_nearest" if nearest else "dijkstra"
+    r = _toolbox_run("network", method, [f, t, w, idx], options)
     values = np.asarray(r["values"], dtype=float)
     return values.reshape(int(r["dims"][0]), int(r["dims"][1]))
 

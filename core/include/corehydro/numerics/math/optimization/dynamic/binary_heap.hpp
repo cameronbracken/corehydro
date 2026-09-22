@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Dynamic/BinaryHeap.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Dynamic/BinaryHeap.cs @ 7e8e8d1
 //
 // An implicit binary min-heap over a fixed-capacity array, with an index-to-position map so a
 // node's key can be decreased in place. It exists for the shortest-path solver next door
@@ -29,9 +29,8 @@
 // 5. `Add` calls `BubbleUp(_n)` BEFORE incrementing `_n`. BubbleUp never reads `_n`, so the order
 //    is immaterial -- transcribed as written anyway.
 //
-// 6. `Replace` scans linearly for the matching index and only ever bubbles UP, so replacing with a
-//    heavier node leaves the heap out of order. That is upstream behavior, exercised by
-//    BinaryHeapTesting's HeapTest3/HeapTest4, and is not "fixed" here.
+// 6. v2.2.0 addresses replacement through the position map and restores order in either
+//    direction. Replacing an unknown index remains a no-op.
 #pragma once
 #include <cstddef>
 #include <stdexcept>
@@ -115,13 +114,15 @@ class BinaryHeap {
 
     // Replace a node that has the same index value as the new node.
     void replace(const Node& new_node) {
-        for (int i = 0; i < n_; i++) {
-            if (heap_[static_cast<std::size_t>(i)].index == new_node.index) {
-                heap_[static_cast<std::size_t>(i)] = new_node;
-                bubble_up(i);
-                break;
-            }
-        }
+        auto it = position_map_.find(new_node.index);
+        if (it == position_map_.end()) return;
+        int position = it->second;
+        float previous_weight = heap_[static_cast<std::size_t>(position)].weight;
+        heap_[static_cast<std::size_t>(position)] = new_node;
+        if (new_node.weight < previous_weight)
+            bubble_up(position);
+        else
+            bubble_down(position);
     }
 
    private:

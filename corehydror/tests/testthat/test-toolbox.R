@@ -840,6 +840,20 @@ test_that("shortest_path() takes several destinations", {
   expect_identical(sp$cost[[3]], 5)
 })
 
+test_that("shortest_path() exposes the single-pass nearest solve", {
+  args <- list(
+    from = c(0, 1, 1, 2, 1),
+    to = c(1, 0, 2, 1, 3),
+    weight = c(1, 3, 1, 2, 3),
+    destinations = c(0, 3, 3),
+    edge_index = c(0, 1, 2, 3, 4),
+    node_count = 4
+  )
+  merged <- do.call(shortest_path, args)
+  nearest <- do.call(shortest_path, c(args, list(nearest = TRUE)))
+  expect_identical(nearest$cost, merged$cost)
+})
+
 test_that("shortest_path() marks an unreachable node", {
   sp <- shortest_path(
     from = c(0, 1, 2),
@@ -875,6 +889,10 @@ test_that("shortest_path() validates its arguments", {
                "whole, non-negative")
   expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
                              edge_index = c(0, 1, 2)), "same length")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
+                             edge_index = c(0, -1)), "whole, non-negative")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
+                             nearest = 1), "TRUE or FALSE")
   expect_error(shortest_path(numeric(0), numeric(0), numeric(0), destinations = 0), "at least one")
   expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 7), "out of range")
 })

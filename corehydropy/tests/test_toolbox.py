@@ -932,6 +932,18 @@ def test_shortest_path_takes_several_destinations():
     assert table[2, 2] == 5
 
 
+def test_shortest_path_exposes_the_single_pass_nearest_solve():
+    args = ([0, 1, 1, 2, 1], [1, 0, 2, 1, 3], [1, 3, 1, 2, 3])
+    kwargs = {
+        "destinations": [0, 3, 3],
+        "edge_index": [0, 1, 2, 3, 4],
+        "node_count": 4,
+    }
+    merged = shortest_path(*args, **kwargs)
+    nearest = shortest_path(*args, **kwargs, nearest=True)
+    np.testing.assert_array_equal(nearest[:, 2], merged[:, 2])
+
+
 def test_shortest_path_marks_an_unreachable_node():
     table = shortest_path(
         [0, 1, 2], [1, 0, 3], [1, 3, 1], destinations=0, edge_index=[0, 1, 2], node_count=4
@@ -958,6 +970,10 @@ def test_shortest_path_validates_its_arguments():
         shortest_path([0, 1], [1, 2], [1, 1], destinations=0.5)
     with pytest.raises(ValueError, match="same length"):
         shortest_path([0, 1], [1, 2], [1, 1], destinations=0, edge_index=[0, 1, 2])
+    with pytest.raises(ValueError, match="whole, non-negative"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0, edge_index=[0, -1])
+    with pytest.raises(ValueError, match="True or False"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0, nearest=1)
     with pytest.raises(ValueError, match="at least one"):
         shortest_path([], [], [], destinations=0)
     with pytest.raises(ValueError, match="out of range"):

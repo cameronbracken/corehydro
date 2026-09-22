@@ -1,7 +1,7 @@
 // corehydro ADDITION -- toolbox group header, no upstream C# counterpart.
 //
-// Holds the `network` group's dispatch arms over the dynamic-programming trio
-// (numerics/math/optimization/dynamic/{binary_heap,dijkstra,network}.hpp). Unlike every other
+// Holds the `network` group's dispatch arms over the dynamic shortest-path layer
+// (`numerics/math/optimization/dynamic/`). Unlike every other
 // toolbox group, this one's subject is a GRAPH rather than a series, so the toolbox convention
 // (flat double vectors as `data`, scalars and flags in `options`) carries the edge list as FOUR
 // parallel data vectors -- `[from, to, weight, index]`, all of the same length, one element per
@@ -15,7 +15,7 @@
 // realistically build (a double holds every integer below 2^53) but is checked anyway, since
 // silently truncating a node index would corrupt a graph rather than fail.
 //
-// The three methods:
+// The network methods:
 //
 //   dijkstra              the free solver. Uses the SINGLE-destination C# overload when exactly
 //                         one destination is given and the multi-destination one otherwise,
@@ -25,17 +25,12 @@
 //                         result is cheaper, and one partial result is cheaper than infinity
 //                         exactly where it is finite), so this is a fidelity choice, not a
 //                         behavioral one.
-//   network_solve         the same solve routed through `Network`, which caches the incoming-edge
-//                         lists in its constructor and hands them to the free solver.
-//   network_solve_weights `Network::Solve(float[] edgeWeights)`. Preserved as an oracle of an
-//                         UPSTREAM DEFECT, not offered as a feature: the custom weights have no
-//                         effect, because the re-weighted edge array is passed alongside the
-//                         stale cached incoming-edge lists, which is where the solver reads its
-//                         weights from. It therefore returns the ORIGINAL-weight table. See
-//                         network.hpp note 5 and docs/upstream-csharp-issues.md. The user-facing
-//                         `shortest_path()` verb in both packages does NOT call this method for
-//                         exactly that reason -- a caller who wants different weights passes
-//                         them as `weight`.
+//   dijkstra_nearest      the v2.2.0 single-pass multi-source solve.
+//   dijkstra_path         reconstructs edge indices from a merged result table.
+//   network_solve         the compiled Network solve.
+//   network_solve_weights the compiled solve with a positional weight overlay.
+//   network_nearest       the compiled single-pass nearest-destination solve.
+//   network_path          a forward detour solve excluding edge indices.
 //
 // `node_count` is an option only on `dijkstra` (C#'s own optional `nNodes` parameter, default
 // -1 meaning "derive it from the edge list"). `Network` derives its own node count in its
@@ -126,6 +121,22 @@ inline ToolboxResult result_table_result(const nwopt::dijkstra::ResultTable& tab
     return r;
 }
 
+inline ToolboxResult path_result(const std::vector<int>& path) {
+    ToolboxResult r;
+    r.dims = {static_cast<int>(path.size())};
+    r.values.reserve(path.size());
+    for (int edge : path) r.values.push_back(static_cast<double>(edge));
+    return r;
+}
+
+inline std::vector<int> network_indices_from_data(const std::string& method, const char* what,
+                                                  const std::vector<double>& values) {
+    std::vector<int> result;
+    result.reserve(values.size());
+    for (double value : values) result.push_back(network_index(method, what, value));
+    return result;
+}
+
 // C# indexes the result table with the destination index and lets the CLR raise
 // IndexOutOfRangeException when it is past the end; `std::vector::operator[]` would be undefined
 // behavior instead, so the boundary checks it. `n_nodes` is whatever the chosen method will
@@ -145,18 +156,29 @@ inline ToolboxResult run_network(const std::string& method,
     std::vector<nwopt::Edge> edges = to_edges(method, data);
     std::vector<int> destinations = to_destinations(method, options);
 
-    if (method == "dijkstra") {
+    if (method == "dijkstra" || method == "dijkstra_nearest" || method == "dijkstra_path") {
         int node_count = options.value_or("node_count", -1);
         check_destinations(method, destinations,
                            node_count == -1 ? nwopt::dijkstra::detail::node_count_from_edges(edges)
                                             : node_count);
+        if (method == "dijkstra_nearest")
+            return result_table_result(nwopt::dijkstra::solve_nearest(edges, destinations,
+                                                                      node_count));
+        nwopt::dijkstra::ResultTable table;
         if (destinations.size() == 1)
-            return result_table_result(
-                nwopt::dijkstra::solve(edges, destinations[0], node_count));
-        return result_table_result(nwopt::dijkstra::solve(edges, destinations, node_count));
+            table = nwopt::dijkstra::solve(edges, destinations[0], node_count);
+        else
+            table = nwopt::dijkstra::solve(edges, destinations, node_count);
+        if (method == "dijkstra_path") {
+            int start = network_index(method, "start_node", options.at("start_node").as_double());
+            auto path = nwopt::dijkstra::get_path(table, start);
+            return path_result(path.value_or(std::vector<int>{}));
+        }
+        return result_table_result(table);
     }
 
-    if (method == "network_solve" || method == "network_solve_weights") {
+    if (method == "network_solve" || method == "network_solve_weights" ||
+        method == "network_nearest" || method == "network_path") {
         if (options.contains("node_count"))
             throw std::runtime_error(
                 "toolbox method 'network." + method +
@@ -170,7 +192,18 @@ inline ToolboxResult run_network(const std::string& method,
             return result_table_result(network.solve(destinations));
         }
 
-        // network_solve_weights: the quirk-preserving arm (see this header's method list).
+        if (method == "network_nearest") return result_table_result(network.solve_nearest());
+
+        if (method == "network_path") {
+            int start = network_index(method, "start_node", options.at("start_node").as_double());
+            const std::vector<double>& removed_data = data_at(data, 4, "network", method);
+            std::vector<int> removed =
+                network_indices_from_data(method, "removed edge index", removed_data);
+            auto path = network.get_path(removed, start);
+            return path_result(path.value_or(std::vector<int>{}));
+        }
+
+        // network_solve_weights: positional v2.2.0 weight overlay.
         const std::vector<double>& weights = data_at(data, 4, "network", method);
         if (weights.size() != edges.size())
             throw std::runtime_error("toolbox method 'network.network_solve_weights' needs one "

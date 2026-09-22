@@ -5307,17 +5307,9 @@ static double LinalgDispatch(string method, List<double[]> data, JsonElement opt
 // `options.destinations` and an optional `node_count`; the float[nNodes, 3] result table is
 // flattened row-major to match the C++ ToolboxResult (dims = {nNodes, 3}).
 //
-// ALL THREE methods are driven through the free Dijkstra.Solve, INCLUDING the two network_* ones,
-// and that is deliberate rather than a shortcut: the shipped C# Network cannot be constructed at
-// all (its constructor sizes both edge caches at the maximum node index rather than max + 1 and
-// then indexes one past the end, so every construction throws IndexOutOfRangeException -- measured,
-// and written up in docs/upstream-csharp-issues.md). A patched Network -- the same file with only
-// that sizing corrected, which is the port's one intentional divergence -- was measured returning
-// the free solver's table element for element, because Network.Solve does nothing but forward its
-// cached edge lists to this very function. `network_solve_weights` is likewise driven on the
-// ORIGINAL weights, because Network.Solve(float[] edgeWeights) passes the stale cache alongside
-// its re-weighted array and the solver reads its weights out of that cache: the custom weights
-// have no effect, which is exactly what the fixture case pins.
+// v2.2.0 repairs Network construction and positional custom weights and adds the single-pass
+// nearest solve plus path reconstruction. The network_* arms therefore drive the real compiled
+// Network rather than standing in with the free solver.
 static double NetworkDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
     double[] from = data[0], to = data[1], weight = data[2], index = data[3];
@@ -5331,26 +5323,47 @@ static double NetworkDispatch(string method, List<double[]> data, JsonElement op
         foreach (var e in d.EnumerateArray()) destinations.Add((int)ParseNum(e));
     else destinations.Add((int)ParseNum(d));
 
-    // "dijkstra" honors the fixture's node_count (C#'s own optional nNodes parameter, -1 meaning
-    // "derive it"); the two network_* methods take none, because Network derives its own.
+    // Free Dijkstra methods honor node_count; Network derives its own.
     int nodeCount = -1;
-    if (method == "dijkstra")
+    if (method == "dijkstra" || method == "dijkstra_nearest" || method == "dijkstra_path")
     {
         if (options.TryGetProperty("node_count", out var nc)) nodeCount = (int)ParseNum(nc);
     }
-    else if (method == "network_solve" || method == "network_solve_weights")
+    float[,] table;
+    if (method == "dijkstra" || method == "dijkstra_path")
+        table = destinations.Count == 1
+            ? Dijkstra.Solve(edges, destinations[0], nodeCount)
+            : Dijkstra.Solve(edges, destinations.ToArray(), nodeCount);
+    else if (method == "dijkstra_nearest")
+        table = Dijkstra.SolveNearest(edges, destinations.ToArray(), nodeCount);
+    else
     {
-        int max = 0;
-        foreach (var edge in edges) max = Math.Max(max, Math.Max(edge.FromIndex, edge.ToIndex));
-        nodeCount = max + 1;
+        var network = new Network(edges.ToArray(), destinations.ToArray());
+        if (method == "network_solve")
+            table = destinations.Count == 1
+                ? network.Solve(destinations[0]) : network.Solve(destinations.ToArray());
+        else if (method == "network_solve_weights")
+            table = network.Solve(data[4].Select(v => (float)v).ToArray());
+        else if (method == "network_nearest")
+            table = network.SolveNearest();
+        else if (method == "network_path")
+        {
+            int start = options.GetProperty("start_node").GetInt32();
+            int[] removed = data[4].Select(v => (int)v).ToArray();
+            double[] path = (network.GetPath(removed, start) ?? new List<int>())
+                .Select(v => (double)v).ToArray();
+            return ToolboxSelectFlatNoDims(asrt, path);
+        }
+        else throw new Exception($"unknown network method: {method}");
     }
-    else throw new Exception($"unknown network method: {method}");
 
-    // Which overload: the single-destination one for one destination, the int[] one otherwise --
-    // the same rule the C++ arm follows, and the one each transcribed C# test calls.
-    float[,] table = destinations.Count == 1
-        ? Dijkstra.Solve(edges, destinations[0], nodeCount)
-        : Dijkstra.Solve(edges, destinations.ToArray(), nodeCount);
+    if (method == "dijkstra_path")
+    {
+        int start = options.GetProperty("start_node").GetInt32();
+        double[] path = (Dijkstra.GetPath(table, start) ?? new List<int>())
+            .Select(v => (double)v).ToArray();
+        return ToolboxSelectFlatNoDims(asrt, path);
+    }
 
     int rows = table.GetLength(0);
     var flat = new double[rows * 3];

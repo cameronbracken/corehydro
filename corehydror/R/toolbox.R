@@ -1142,6 +1142,7 @@ check_edges <- function(from, to, weight, edge_index) {
     stop(sprintf("`edge_index` must be a numeric vector the same length as `from`; got %d for %d",
                  length(edge_index), n), call. = FALSE)
   }
+  check_node_indices(edge_index, "edge_index")
   as.double(edge_index)
 }
 
@@ -1183,6 +1184,9 @@ check_node_indices <- function(x, what) {
 #' @param node_count an optional node count. Defaults to `max(from, to) + 1`; supply a larger
 #'   value to include isolated nodes carrying no edge, which then report `cost = Inf`. A value
 #'   below `max(from, to) + 1` is an error: the graph would not fit the routing table it asks for.
+#' @param nearest if `TRUE`, use the v2.2 single-pass multi-source solver. Costs match the regular
+#'   multi-destination solve, but exact-cost ties use deterministic heap order instead of
+#'   destination order.
 #' @return a data frame with one row per node, in node-index order, and columns `next_node`,
 #'   `edge_index` (both integer) and `cost` (numeric).
 #' @examples
@@ -1195,7 +1199,8 @@ check_node_indices <- function(x, what) {
 #'   node_count = 4
 #' )
 #' @export
-shortest_path <- function(from, to, weight, destinations, edge_index = NULL, node_count = NULL) {
+shortest_path <- function(from, to, weight, destinations, edge_index = NULL, node_count = NULL,
+                          nearest = FALSE) {
   edge_index <- check_edges(from, to, weight, edge_index)
   if (!is.numeric(destinations)) {
     stop("`destinations` must be a numeric vector of node indices", call. = FALSE)
@@ -1230,8 +1235,12 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
     stop(sprintf("`destinations` is out of range for a network of %d nodes", as.integer(n_nodes)),
          call. = FALSE)
   }
+  if (!is.logical(nearest) || length(nearest) != 1L || is.na(nearest)) {
+    stop("`nearest` must be TRUE or FALSE", call. = FALSE)
+  }
+  method <- if (nearest) "dijkstra_nearest" else "dijkstra"
   r <- toolbox_run(
-    "network", "dijkstra",
+    "network", method,
     list(from, to, weight, edge_index),
     opts
   )
