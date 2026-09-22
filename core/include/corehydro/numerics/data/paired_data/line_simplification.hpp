@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Paired Data/LineSimplification.cs @ 2a0357a
+// ported from: Numerics/Data/Paired Data/LineSimplification.cs @ 7e8e8d1
 //
 // The Ramer-Douglas-Peucker curve-decimation algorithm: given a curve made of ordinates,
 // finds a similar curve with fewer points, where "similar" is bounded by a user-supplied
@@ -62,6 +62,8 @@ inline void ramer_douglas_peucker(const std::vector<Ordinate>& ordinates, double
         throw std::invalid_argument("Not enough points to simplify");
     }
 
+    output.clear();
+
     // Find the point with the maximum distance from the line between the start and end.
     double dmax = 0.0;
     std::size_t index = 0;
@@ -95,7 +97,6 @@ inline void ramer_douglas_peucker(const std::vector<Ordinate>& ordinates, double
         if (output.size() < 2) throw std::runtime_error("Problem assembling output");
     } else {
         // Just return start and end points.
-        output.clear();
         output.push_back(ordinates.front());
         output.push_back(ordinates.back());
     }

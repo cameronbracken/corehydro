@@ -137,6 +137,8 @@ static UnivariateDistributionBase BuildComposite(string target, JsonElement cons
                 var s     => throw new Exception($"unknown p_transform: {s}")
             };
         }
+        if (construct.TryGetProperty("extrapolation", out var ex))
+            emp.Extrapolation = ParseExtrapolationSides(ex.GetString()!);
         return emp;
     }
     if (target == "KernelDensity")
@@ -5949,6 +5951,7 @@ static double FunctionsDispatch(string method, List<double[]> data, JsonElement 
         var tabFunc = new TabularFunction(tabUpd);
         tabFunc.XTransform = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
         tabFunc.YTransform = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        tabFunc.Extrapolation = ParseExtrapolationSides(OptString(options, "extrapolation", "none"));
         if (OptBool(options, "is_deterministic", false)) tabFunc.IsDeterministic = true;
         if (options.TryGetProperty("confidence_level", out var clOpt)) tabFunc.ConfidenceLevel = clOpt.GetDouble();
         tabFunc.AllowNegativeYValues = OptBool(options, "allow_negative_y_values", true);
@@ -6161,6 +6164,9 @@ static double TimeSeriesToolboxDispatch(string method, List<double[]> data, Json
             return SeriesResult(ts.CumulativeSum());
         case "difference":
             return SeriesResult(ts.Difference(Opt("lag", 1), Opt("differences", 1)));
+        case "smoothed_series":
+            return SeriesResult(ts.SmoothedSeries(
+                ParseSmoothing(OptS("smoothing", "none")), Opt("period", 1)));
         case "standardize":
             ts.Standardize();
             return SeriesResult(ts);
@@ -6425,6 +6431,15 @@ static Numerics.Data.Transform ParsePairedDataTransform(string s) => s switch
     _ => throw new Exception($"unknown transform '{s}'; expected none, logarithmic, or normal_z")
 };
 
+static Numerics.Data.ExtrapolationSides ParseExtrapolationSides(string s) => s.ToLowerInvariant() switch
+{
+    "none" => Numerics.Data.ExtrapolationSides.None,
+    "below" => Numerics.Data.ExtrapolationSides.Below,
+    "above" => Numerics.Data.ExtrapolationSides.Above,
+    "both" => Numerics.Data.ExtrapolationSides.Both,
+    _ => throw new Exception($"unknown extrapolation policy '{s}'")
+};
+
 // Mirrors numerics/support/toolbox/paired_data.hpp's run_paired_data: the real
 // Numerics.Data.OrderedPairedData / UncertainOrderedPairedData / LineSimplification driving the
 // same nine methods. `curve_sample`'s `distribution_type` is optional here too, defaulting to
@@ -6471,7 +6486,8 @@ static double PairedDataDispatch(string method, List<double[]> data, JsonElement
         double[] xout = data[2];
         var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
         var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
-        var values = xout.Select(v => opd.GetYFromX(v, xt, yt)).ToArray();
+        var extrapolation = ParseExtrapolationSides(OptString(options, "extrapolation", "none"));
+        var values = xout.Select(v => opd.GetYFromX(v, xt, yt, extrapolation)).ToArray();
         return ToolboxSelectFlat(asrt, values, values.Length, 1);
     }
 
@@ -6481,7 +6497,8 @@ static double PairedDataDispatch(string method, List<double[]> data, JsonElement
         double[] yout = data[2];
         var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
         var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
-        var values = yout.Select(v => opd.GetXFromY(v, xt, yt)).ToArray();
+        var extrapolation = ParseExtrapolationSides(OptString(options, "extrapolation", "none"));
+        var values = yout.Select(v => opd.GetXFromY(v, xt, yt, extrapolation)).ToArray();
         return ToolboxSelectFlat(asrt, values, values.Length, 1);
     }
 

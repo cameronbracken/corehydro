@@ -102,10 +102,15 @@ def test_differences_cumulative_sums_and_standardization():
     assert d.values == pytest.approx(np.diff(MONTHLY_VALUES))
     assert d.dates[0] == np.datetime64("2023-01-01T00:00:00")
 
-    # Test_Cumulative, and the upstream oddity that the result drops the source's interval.
+    # Test_Cumulative; v2.2 preserves the source interval.
     cs = monthly_ts().cumulative_sum()
     assert cs.values == pytest.approx(np.cumsum(MONTHLY_VALUES))
-    assert cs.interval == "one_day"
+    assert cs.interval == "one_month"
+
+    base = TimeSeries(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"], [1, 2, 4, 8])
+    assert base.smoothed_series("moving_average", 1).values.tolist() == base.values.tolist()
+    assert base.smoothed_series("moving_sum", 1).values.tolist() == base.values.tolist()
+    assert base.smoothed_series("difference", 1).values.tolist() == [1.0, 2.0, 4.0]
 
     s = monthly_ts().standardize()
     assert s.values.mean() == pytest.approx(0, abs=1e-12)
@@ -138,6 +143,10 @@ def test_transformations_whole_series_or_chosen_ordinates():
     assert ts.transform("logarithm", base=2).values == pytest.approx([0, 1, 2])
     # 0-based positions here, 1-based in R -- each language follows its own convention.
     assert ts.transform("add", constant=5, indexes=[0, 2]).values.tolist() == [6.0, 2.0, 9.0]
+    with pytest.raises(Exception, match="Cannot divide by zero"):
+        ts.transform("divide", constant=0, indexes=[0])
+    assert ts.transform("logarithm", indexes=[99]).values.tolist() == ts.values.tolist()
+    assert ts.transform("inverse", indexes=[99]).values.tolist() == ts.values.tolist()
     gappy = TimeSeries(["2023-01-01", "2023-01-02", "2023-01-03"], [1, np.nan, 4])
     assert np.isnan(gappy.transform("add", constant=5).values[1])
     with pytest.raises(ValueError, match="`fun` must be one of"):

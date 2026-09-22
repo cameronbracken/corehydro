@@ -1128,9 +1128,9 @@ def test_curve_simplify_reproduces_the_three_algorithms_on_the_sin_curve():
     # claims.
     lang = curve_simplify(x, y, method="lang", tolerance=0.01, look_ahead=2, strict_y=False,
                           order_y="none")
-    assert lang.shape == (3, 2)
-    assert lang[:, 0] == pytest.approx([0, 1.57, 4.71], abs=1e-6)
-    assert lang[:, 1] == pytest.approx([0, 1, -1], abs=1e-6)
+    assert lang.shape == (4, 2)
+    assert lang[:, 0] == pytest.approx([0, 1.57, 4.71, 6.28], abs=1e-6)
+    assert lang[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
 
 
 def test_uncertain_curve_sample_reproduces_test_curve_sample_probability():
@@ -1220,3 +1220,18 @@ def test_log_and_logarithmic_are_equivalent_everywhere_a_transform_argument_appe
     ia = interpolate(x, y, [2.5], x_transform="log")
     ib = interpolate(x, y, [2.5], x_transform="logarithmic")
     assert ia == pytest.approx(ib)
+
+
+def test_paired_data_v220_extrapolation_reaches_both_public_wrappers():
+    assert curve_interpolate([1, 2], [10, 20], xout=[0, 3], extrapolation="both") == pytest.approx(
+        [0, 30]
+    )
+    assert curve_interpolate(
+        [100, 10], [2, 1], xout=[1000, 1], x_transform="logarithmic",
+        order_x="descending", order_y="descending", extrapolation="both",
+    ) == pytest.approx([3, 0])
+    d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
+    assert tabular_function(
+        [50, 100, 150, 200, 250], d, at=600, inverse=True,
+        x_transform="logarithmic", extrapolation="both",
+    )[0] == pytest.approx(312.5, abs=1e-12)

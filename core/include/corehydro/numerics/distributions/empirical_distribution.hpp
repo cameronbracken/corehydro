@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/EmpiricalDistribution.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/EmpiricalDistribution.cs @ 7e8e8d1
 //
 // Univariate Empirical distribution: a piecewise-linear CDF defined by (x, p) pairs.
 // CDF and InverseCDF use linear interpolation in transformed space (default: NormalZ
@@ -64,6 +64,7 @@
 #include <vector>
 
 #include "corehydro/numerics/data/interpolation/transform.hpp"
+#include "corehydro/numerics/data/paired_data/extrapolation_sides.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
@@ -154,6 +155,12 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
         moments_computed_ = false;
     }
 
+    data::paired_data::ExtrapolationSides extrapolation() const { return extrapolation_; }
+    void set_extrapolation(data::paired_data::ExtrapolationSides value) {
+        extrapolation_ = value;
+        moments_computed_ = false;
+    }
+
     const std::vector<double>& x_values() const { return x_; }
     const std::vector<double>& p_values() const { return p_; }
 
@@ -230,7 +237,7 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
         if (!parameters_valid_)
             throw std::invalid_argument("EmpiricalDistribution: invalid parameters (nondecreasing "
                                         "x, matching-length finite p in [0,1], strictly monotonic p)");
-        double raw = get_y_from_x(x);
+        double raw = get_y_from_x(x, extrapolation_);
         double p = p_descending_ ? 1.0 - raw : raw;
         return p < 0.0 ? 0.0 : p > 1.0 ? 1.0 : p;
     }
@@ -244,11 +251,32 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
                                         "x, matching-length finite p in [0,1], strictly monotonic p)");
         if (probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
-        if (probability <= 1e-16) return minimum();
-        if (probability >= 1.0 - 1e-16) return maximum();
-        double x = p_descending_ ? get_x_from_y(1.0 - probability) : get_x_from_y(probability);
+        using data::paired_data::ExtrapolationSides;
+        using data::paired_data::includes;
+        if (probability <= 1e-16) {
+            if (!includes(extrapolation_, ExtrapolationSides::Below)) return minimum();
+            probability = 1e-16;
+        }
+        if (probability >= 1.0 - 1e-16) {
+            if (!includes(extrapolation_, ExtrapolationSides::Above)) return maximum();
+            probability = 1.0 - 1e-16;
+        }
+        ExtrapolationSides mapped = extrapolation_;
+        if (p_descending_) {
+            mapped = ExtrapolationSides::None;
+            if (includes(extrapolation_, ExtrapolationSides::Below))
+                mapped = static_cast<ExtrapolationSides>(static_cast<int>(mapped) |
+                                                         static_cast<int>(ExtrapolationSides::Above));
+            if (includes(extrapolation_, ExtrapolationSides::Above))
+                mapped = static_cast<ExtrapolationSides>(static_cast<int>(mapped) |
+                                                         static_cast<int>(ExtrapolationSides::Below));
+        }
+        double x = p_descending_ ? get_x_from_y(1.0 - probability, mapped)
+                                 : get_x_from_y(probability, mapped);
         double lo = minimum(), hi = maximum();
-        return x < lo ? lo : x > hi ? hi : x;
+        if (x < lo && !includes(extrapolation_, ExtrapolationSides::Below)) return lo;
+        if (x > hi && !includes(extrapolation_, ExtrapolationSides::Above)) return hi;
+        return x;
     }
 
     /// Mirrors C# PDF(X): numerical derivative of CDF with adaptive step size.
@@ -285,6 +313,7 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
     std::unique_ptr<UnivariateDistributionBase> clone() const override {
         auto c = std::make_unique<EmpiricalDistribution>(x_, p_, p_transform_, p_descending_);
         c->x_transform_ = x_transform_;
+        c->extrapolation_ = extrapolation_;
         return c;
     }
 
@@ -293,6 +322,8 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
     std::vector<double> p_;  // strictly monotonic probability values (ascending or descending)
     EmpiricalTransform p_transform_ = EmpiricalTransform::NormalZ;
     data::Transform x_transform_ = data::Transform::None;  // mirrors C# XTransform (default None)
+    data::paired_data::ExtrapolationSides extrapolation_ =
+        data::paired_data::ExtrapolationSides::None;
 
     // The DECLARED direction of p_ (mirrors the C# caller-configured `probabilityOrder`; an
     // explicit constructor parameter -- see the (x, p, transform, p_descending) constructor
@@ -438,13 +469,25 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
 
     /// Mirrors OrderedPairedData.GetYFromX(x, XTransform=None, ProbabilityTransform).
     /// Boundary: x <= x[0] → p[0]; x >= x[n-1] → p[n-1]; otherwise linear interpolate.
-    double get_y_from_x(double x) const {
+    double get_y_from_x(double x, data::paired_data::ExtrapolationSides extrapolation) const {
         int n = static_cast<int>(x_.size());
         if (n == 0) return kNaN;
         if (n == 1) return p_[0];
-        if (x <= x_[0]) return p_[0];
-        if (x >= x_[n - 1]) return p_[n - 1];
-        int i = bisect_x(x);
+        int i = 0;
+        if (x <= x_[0]) {
+            if (!data::paired_data::includes(extrapolation,
+                                             data::paired_data::ExtrapolationSides::Below) ||
+                x == x_[0])
+                return p_[0];
+        } else if (x >= x_[n - 1]) {
+            if (!data::paired_data::includes(extrapolation,
+                                             data::paired_data::ExtrapolationSides::Above) ||
+                x == x_[n - 1])
+                return p_[n - 1];
+            i = n - 2;
+        } else {
+            i = bisect_x(x);
+        }
         // Apply the x-transform (transforms are monotonic increasing, so bisect_x on raw x
         // still selects the correct bracketing interval).
         double tx = transform_x(x);
@@ -458,20 +501,44 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
     /// Mirrors OrderedPairedData.GetXFromY(p, XTransform=None, ProbabilityTransform).
     /// Boundary depends on p_'s direction (p_descending_): ascending -> p<=p[0] gives x[0],
     /// p>=p[n-1] gives x[n-1]; descending -> the comparisons flip. Otherwise linear interpolate.
-    double get_x_from_y(double prob) const {
+    double get_x_from_y(double prob,
+                        data::paired_data::ExtrapolationSides extrapolation) const {
         int n = static_cast<int>(p_.size());
         if (n == 0) return kNaN;
         if (n == 1) return x_[0];
         if (!p_descending_) {
-            if (prob <= p_[0]) return x_[0];
-            if (prob >= p_[n - 1]) return x_[n - 1];
+            if (prob <= p_[0] &&
+                (!data::paired_data::includes(extrapolation,
+                                              data::paired_data::ExtrapolationSides::Below) ||
+                 prob == p_[0]))
+                return x_[0];
+            if (prob >= p_[n - 1] &&
+                (!data::paired_data::includes(extrapolation,
+                                              data::paired_data::ExtrapolationSides::Above) ||
+                 prob == p_[n - 1]))
+                return x_[n - 1];
         } else {
-            if (prob >= p_[0]) return x_[0];
-            if (prob <= p_[n - 1]) return x_[n - 1];
+            if (prob >= p_[0] &&
+                (!data::paired_data::includes(extrapolation,
+                                              data::paired_data::ExtrapolationSides::Above) ||
+                 prob == p_[0]))
+                return x_[0];
+            if (prob <= p_[n - 1] &&
+                (!data::paired_data::includes(extrapolation,
+                                              data::paired_data::ExtrapolationSides::Below) ||
+                 prob == p_[n - 1]))
+                return x_[n - 1];
         }
         // Transform the query into the interpolation space.
         double y = transform_p(prob);
-        int i = bisect_p(prob);
+        int i;
+        if ((!p_descending_ && prob <= p_[0]) || (p_descending_ && prob >= p_[0]))
+            i = 0;
+        else if ((!p_descending_ && prob >= p_[n - 1]) ||
+                 (p_descending_ && prob <= p_[n - 1]))
+            i = n - 2;
+        else
+            i = bisect_p(prob);
         double y1 = transform_p(p_[i]), y2 = transform_p(p_[i + 1]);
         double x1 = transform_x(x_[i]), x2 = transform_x(x_[i + 1]);
         if (y2 == y1) return untransform_x(x1);

@@ -26,9 +26,8 @@ a \code{corehydro_ts}.
 Three whole-series transformations, each returning a new series.
 }
 \details{
-\code{ts_cumulative_sum()} treats a missing value as zero while accumulating but keeps its ordinate,
-and -- following the library -- the result carries the DEFAULT \code{"one_day"} interval rather than
-the source's. \code{ts_difference()} keeps the source's start date rather than shifting forward by
+\code{ts_cumulative_sum()} treats a missing value as zero while accumulating, keeps its ordinate,
+and preserves the source interval. \code{ts_difference()} keeps the source's start date rather than shifting forward by
 the lag. \code{ts_standardize()} subtracts the mean and divides by the standard deviation, both
 computed over the observed values, and errors when the spread is zero.
 }

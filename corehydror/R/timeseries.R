@@ -225,9 +225,8 @@ ts_moving_sum <- function(ts, period, min_valid_count = NULL) {
 #' Three whole-series transformations, each returning a new series.
 #'
 #' @details
-#' `ts_cumulative_sum()` treats a missing value as zero while accumulating but keeps its ordinate,
-#' and -- following the library -- the result carries the DEFAULT `"one_day"` interval rather than
-#' the source's. `ts_difference()` keeps the source's start date rather than shifting forward by
+#' `ts_cumulative_sum()` treats a missing value as zero while accumulating, keeps its ordinate,
+#' and preserves the source interval. `ts_difference()` keeps the source's start date rather than shifting forward by
 #' the lag. `ts_standardize()` subtracts the mean and divides by the standard deviation, both
 #' computed over the observed values, and errors when the spread is zero.
 #'
@@ -241,7 +240,7 @@ ts_moving_sum <- function(ts, period, min_valid_count = NULL) {
 #' @export
 ts_cumulative_sum <- function(ts) {
   ts_check(ts)
-  ts_run_series(ts, "cumulative_sum", interval = "one_day")
+  ts_run_series(ts, "cumulative_sum")
 }
 
 #' @rdname ts_cumulative_sum
@@ -250,6 +249,26 @@ ts_difference <- function(ts, lag = 1, differences = 1) {
   ts_check(ts)
   ts_run_series(ts, "difference",
                 list(lag = as.integer(lag), differences = as.integer(differences)))
+}
+
+#' Smooth a time series for threshold diagnostics
+#'
+#' Returns the exact preprocessing used by [ts_peaks_over_threshold()]. Moving average and moving
+#' sum with period 1 return an identity copy; differencing applies at every period.
+#'
+#' @param ts a `corehydro_ts`.
+#' @param smoothing `"none"`, `"moving_average"`, `"moving_sum"`, or `"difference"`.
+#' @param period the moving window or difference lag.
+#' @return a `corehydro_ts`.
+#' @export
+ts_smoothed_series <- function(ts,
+                               smoothing = c("none", "moving_average", "moving_sum", "difference"),
+                               period = 1) {
+  ts_check(ts)
+  smoothing <- ts_match_token(match.arg(smoothing),
+                              c("none", "moving_average", "moving_sum", "difference"), "smoothing")
+  ts_run_series(ts, "smoothed_series",
+                list(smoothing = smoothing, period = as.integer(period)))
 }
 
 #' @rdname ts_cumulative_sum
@@ -286,9 +305,8 @@ ts_sort <- function(ts, by = c("time", "value"), order = c("ascending", "descend
 #' `"logarithm"` writes a missing value for any non-positive input, and `ts_standardize()`
 #' propagates missing values through the subtraction.
 #'
-#' `indexes` restricts the transformation to the given 1-based ordinate positions. Two
-#' transformations behave differently from their siblings when an index is out of range, because
-#' the library does: `"logarithm"` and `"inverse"` raise, while the others skip it.
+#' `indexes` restricts the transformation to the given 1-based ordinate positions. Out-of-range
+#' indexes are skipped for every transformation.
 #'
 #' @param ts a `corehydro_ts`.
 #' @param fun one of `"add"`, `"subtract"`, `"multiply"`, `"divide"`, `"absolute_value"`,

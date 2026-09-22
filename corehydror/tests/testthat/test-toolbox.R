@@ -1043,14 +1043,12 @@ test_that("curve_simplify() reproduces the three simplification algorithms on th
   expect_equal(rdp$y, c(0, 1, -1, 0), tolerance = 1e-6)
   expect_equal(vis$y, c(0, 1, -1, 0), tolerance = 1e-6)
 
-  # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
-  # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here is
-  # THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test claims.
+  # Numerics v2.2.0 fixes LangSimplify so it retains the trailing point.
   lang <- curve_simplify(x, y, method = "lang", tolerance = 0.01, look_ahead = 2,
                          strict_y = FALSE, order_y = "none")
-  expect_equal(nrow(lang), 3L)
-  expect_equal(lang$x, c(0, 1.57, 4.71), tolerance = 1e-6)
-  expect_equal(lang$y, c(0, 1, -1), tolerance = 1e-6)
+  expect_equal(nrow(lang), 4L)
+  expect_equal(lang$x, c(0, 1.57, 4.71, 6.28), tolerance = 1e-6)
+  expect_equal(lang$y, c(0, 1, -1, 0), tolerance = 1e-6)
 })
 
 test_that("uncertain_curve_sample() reproduces Test_Curve_Sample_Probability", {
@@ -1133,4 +1131,16 @@ test_that("\"log\" and \"logarithmic\" are equivalent everywhere a transform arg
   ia <- interpolate(x, y, 2.5, x_transform = "log")
   ib <- interpolate(x, y, 2.5, x_transform = "logarithmic")
   expect_equal(ia, ib)
+})
+
+test_that("paired-data v2.2 extrapolation reaches both public wrappers", {
+  expect_equal(curve_interpolate(c(1, 2), c(10, 20), xout = c(0, 3),
+                                 extrapolation = "both"), c(0, 30))
+  expect_equal(curve_interpolate(c(100, 10), c(2, 1), xout = c(1000, 1),
+                                 x_transform = "logarithmic", order_x = "descending",
+                                 order_y = "descending", extrapolation = "both"), c(3, 0))
+  d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
+  expect_equal(tabular_function(c(50, 100, 150, 200, 250), d, at = 600, inverse = TRUE,
+                                x_transform = "logarithmic", extrapolation = "both"),
+               312.5, tolerance = 1e-12)
 })

@@ -2007,6 +2007,21 @@
           "tol": 1e-09
         }
       ]
+    },
+    {
+      "name": "v220_smoothed_series_difference",
+      "data": [[0, 86400, 172800, 259200], [1, 2, 4, 8]],
+      "options": {"time_interval": "one_day", "smoothing": "difference", "period": 1},
+      "assertions": [
+        {"method": "smoothed_series", "select": "rows", "expected": 3, "mode": "equal",
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"},
+        {"method": "smoothed_series", "index": 1, "expected": 1, "mode": "abs", "tol": 1e-12,
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"},
+        {"method": "smoothed_series", "index": 3, "expected": 2, "mode": "abs", "tol": 1e-12,
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"},
+        {"method": "smoothed_series", "index": 5, "expected": 4, "mode": "abs", "tol": 1e-12,
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"}
+      ]
     }
   ]
 }

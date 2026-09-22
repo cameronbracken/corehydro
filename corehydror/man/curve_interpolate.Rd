@@ -11,6 +11,7 @@ curve_interpolate(
   yout = NULL,
   x_transform = "none",
   y_transform = "none",
+  extrapolation = "none",
   order_x = "ascending",
   order_y = "ascending",
   strict_x = TRUE,
@@ -26,6 +27,9 @@ curve_interpolate(
 
 \item{x_transform, y_transform}{one of \code{"none"} (default), \code{"logarithmic"} (also accepted as
 \code{"log"}), or \code{"normal_z"}.}
+
+\item{extrapolation}{sides on which to extend the boundary segment: \code{"none"} (default),
+\code{"below"}, \code{"above"}, or \code{"both"}.}
 
 \item{order_x, order_y}{one of \code{"ascending"} (default), \code{"descending"}, or \code{"none"}.}
 

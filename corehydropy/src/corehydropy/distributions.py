@@ -556,7 +556,8 @@ def dist_competing_risks(
     return Distribution._from_spec("CompetingRisks", spec)
 
 
-def dist_empirical(x, p, p_transform: str = "NormalZ", p_descending: bool = False) -> Distribution:
+def dist_empirical(x, p, p_transform: str = "NormalZ", p_descending: bool = False,
+                   extrapolation: str = "none") -> Distribution:
     """Empirical distribution.
 
     A distribution defined by paired value/probability points, interpolated between. Mirrors
@@ -574,6 +575,8 @@ def dist_empirical(x, p, p_transform: str = "NormalZ", p_descending: bool = Fals
     p_descending : bool, default False
         Whether `p` decreases as `x` increases (a survival-function encoding); ``False`` is the
         ordinary ascending-CDF case.
+    extrapolation : {"none", "below", "above", "both"}, default "none"
+        Sides on which to extend the boundary segments.
 
     Returns
     -------
@@ -593,9 +596,12 @@ def dist_empirical(x, p, p_transform: str = "NormalZ", p_descending: bool = Fals
     p_v = [float(v) for v in np.asarray(p, dtype=float).ravel()]
     if len(x_v) != len(p_v):
         raise ValueError("`x` and `p` must have the same length")
+    if extrapolation not in ("none", "below", "above", "both"):
+        raise ValueError("`extrapolation` must be one of none, below, above, both")
     spec = {
         "family": "Empirical", "x": x_v, "p": p_v,
         "p_transform": p_transform, "p_descending": bool(p_descending),
+        "extrapolation": extrapolation,
     }
     return Distribution._from_spec("Empirical", spec)
 

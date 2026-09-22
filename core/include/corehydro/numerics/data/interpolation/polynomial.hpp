@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Interpolation/Polynomial.cs @ 2a0357a
+// ported from: Numerics/Data/Interpolation/Polynomial.cs @ 7e8e8d1
 //
 // Polynomial interpolation of a given order via Neville's algorithm.
 //

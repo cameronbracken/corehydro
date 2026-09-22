@@ -244,15 +244,26 @@ class TimeSeries:
     def cumulative_sum(self) -> "TimeSeries":
         """Running total, treating a missing value as zero while accumulating.
 
-        Following the library, the result carries the DEFAULT ``"one_day"`` interval rather than
-        this series'.
+        The result preserves this series' interval.
         """
-        return self._run_series("cumulative_sum", interval="one_day")
+        return self._run_series("cumulative_sum")
 
     def difference(self, lag: int = 1, differences: int = 1) -> "TimeSeries":
         """Successive differences. The result keeps this series' start date, not a shifted one."""
         return self._run_series("difference",
                                 {"lag": int(lag), "differences": int(differences)})
+
+    def smoothed_series(self, smoothing: str = "none", period: int = 1) -> "TimeSeries":
+        """Return the exact preprocessing used by :meth:`peaks_over_threshold`.
+
+        Moving average and moving sum with period 1 return an identity copy. Differencing applies
+        at every period.
+        """
+        smoothing = _match_token(smoothing,
+                                 ("none", "moving_average", "moving_sum", "difference"),
+                                 "smoothing")
+        return self._run_series("smoothed_series",
+                                {"smoothing": smoothing, "period": int(period)})
 
     def standardize(self) -> "TimeSeries":
         """Subtract the mean and divide by the standard deviation of the observed values."""
@@ -275,8 +286,7 @@ class TimeSeries:
 
         Every transformation LEAVES A MISSING VALUE MISSING except ``"logarithm"``, which writes a
         missing value for any non-positive input. ``indexes`` restricts the transformation to the
-        given 0-based ordinate positions; ``"logarithm"`` and ``"inverse"`` raise on an
-        out-of-range index while the others skip it, because the library does.
+        given 0-based ordinate positions. Out-of-range indexes are skipped.
         """
         fun = _match_token(fun, ("add", "subtract", "multiply", "divide", "absolute_value",
                                  "exponentiate", "logarithm", "inverse"), "fun")

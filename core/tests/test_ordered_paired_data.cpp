@@ -25,6 +25,7 @@ using corehydro::numerics::data::SortOrder;
 using corehydro::numerics::data::Transform;
 using corehydro::numerics::data::paired_data::Ordinate;
 using corehydro::numerics::data::paired_data::OrderedPairedData;
+using corehydro::numerics::data::paired_data::ExtrapolationSides;
 namespace search = corehydro::numerics::data::search;
 
 namespace {
@@ -490,6 +491,47 @@ void test_lin_list() {
     for (std::size_t i = 1; i < y_arr.size(); ++i) CHECK_NEAR(x_from_y[i], x_arr[i], 1e-6);
 }
 
+void test_extrapolation() {
+    OrderedPairedData ascending({1.0, 2.0}, {10.0, 20.0}, true, SortOrder::Ascending, true,
+                                SortOrder::Ascending);
+    CHECK_EQ(ascending.get_y_from_x(0.0), 10.0);
+    CHECK_EQ(ascending.get_y_from_x(3.0), 20.0);
+    CHECK_NEAR(ascending.get_y_from_x(0.0, Transform::None, Transform::None,
+                                      ExtrapolationSides::Below),
+               0.0, 1e-12);
+    CHECK_NEAR(ascending.get_y_from_x(3.0, Transform::None, Transform::None,
+                                      ExtrapolationSides::Above),
+               30.0, 1e-12);
+    CHECK_NEAR(ascending.get_x_from_y(0.0, Transform::None, Transform::None,
+                                      ExtrapolationSides::Below),
+               0.0, 1e-12);
+    CHECK_NEAR(ascending.get_x_from_y(30.0, Transform::None, Transform::None,
+                                      ExtrapolationSides::Above),
+               3.0, 1e-12);
+
+    OrderedPairedData descending({2.0, 1.0}, {20.0, 10.0}, true, SortOrder::Descending, true,
+                                 SortOrder::Descending);
+    CHECK_NEAR(descending.get_y_from_x(0.0, Transform::None, Transform::None,
+                                       ExtrapolationSides::Below),
+               0.0, 1e-12);
+    CHECK_NEAR(descending.get_y_from_x(3.0, Transform::None, Transform::None,
+                                       ExtrapolationSides::Above),
+               30.0, 1e-12);
+
+    OrderedPairedData logarithmic({10.0, 100.0}, {1.0, 2.0}, true, SortOrder::Ascending, true,
+                                  SortOrder::Ascending);
+    CHECK_NEAR(logarithmic.get_y_from_x(1.0, Transform::Logarithmic, Transform::None,
+                                        ExtrapolationSides::Below),
+               0.0, 1e-12);
+    CHECK_NEAR(logarithmic.get_y_from_x(1000.0, Transform::Logarithmic, Transform::None,
+                                        ExtrapolationSides::Above),
+               3.0, 1e-12);
+
+    OrderedPairedData empty(true, SortOrder::Ascending, true, SortOrder::Ascending);
+    CHECK_TRUE(empty.is_valid());
+    CHECK_TRUE(std::isnan(empty.get_y_from_x(1.0)));
+}
+
 // -------------------------------------------------------------------------------------------
 // Line simplification: shared five-point sin curve, same expected four points for all three
 // algorithms.
@@ -562,15 +604,13 @@ void test_visvaligam_whyatt_simplify_out_of_range() {
 // douglas_peucker/visvaligam_whyatt -- but LangSimplify does not force-keep the trailing point
 // (see ordered_paired_data.hpp's sixth transcription finding), and this is verified DIRECTLY
 // against the real C# library (`dotnet run` against upstream/Numerics @ 2a0357a): the real
-// `LangSimplify(0.01, 2)` on this exact curve returns 3 points, dropping (6.28, 0). Upstream's
-// own test never notices because its assertion loop is bounded by the (short) result length,
-// not `valid.Count`. This port's expected value below is the VERIFIED real-library result, not
-// the brief's/upstream test's claimed four points.
+// v2.2 fixes the exact-tail boundary and retains the final point.
 void test_lang_simplify() {
     auto data = sin_curve_data();
     OrderedPairedData ordered_pair(data, true, SortOrder::Ascending, false, SortOrder::None);
     auto test = ordered_pair.lang_simplify(0.01, 2);
-    std::vector<Ordinate> valid = {Ordinate(0, 0), Ordinate(1.57, 1), Ordinate(4.71, -1)};
+    std::vector<Ordinate> valid = {Ordinate(0, 0), Ordinate(1.57, 1), Ordinate(4.71, -1),
+                                    Ordinate(6.28, 0)};
     check_simplified(test, valid);
 }
 
@@ -628,6 +668,7 @@ int main() {
     test_rev_z_lin();
     test_rev_zz();
     test_lin_list();
+    test_extrapolation();
     test_douglas_peucker_simplify();
     test_visvaligam_whyatt_simplify();
     test_visvaligam_whyatt_simplify_out_of_range();

@@ -1,4 +1,4 @@
-// ported from: Numerics/Functions/TabularFunction.cs @ 2a0357a
+// ported from: Numerics/Functions/TabularFunction.cs @ 7e8e8d1
 //
 // P4 Task 9: the third and last IUnivariateFunction implementation (see
 // i_univariate_function.hpp), built entirely on the Paired Data subsystem -- an
@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "corehydro/numerics/data/interpolation/transform.hpp"
+#include "corehydro/numerics/data/paired_data/extrapolation_sides.hpp"
 #include "corehydro/numerics/data/paired_data/ordered_paired_data.hpp"
 #include "corehydro/numerics/data/paired_data/uncertain_ordered_paired_data.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
@@ -51,6 +52,8 @@ class TabularFunction : public IUnivariateFunction {
     void set_x_transform(data::Transform value) { x_transform_ = value; }
     data::Transform y_transform() const { return y_transform_; }
     void set_y_transform(data::Transform value) { y_transform_ = value; }
+    data::paired_data::ExtrapolationSides extrapolation() const { return extrapolation_; }
+    void set_extrapolation(data::paired_data::ExtrapolationSides value) { extrapolation_ = value; }
 
     int number_of_parameters() const override { return 1; }
     bool parameters_valid() const override { return paired_data_.is_valid(); }
@@ -120,7 +123,7 @@ class TabularFunction : public IUnivariateFunction {
     // C# Function(double) (lines ~136-143).
     double function(double x) const override {
         if (!parameters_valid()) validate_parameters({0.0}, true);
-        double y = opd_.get_y_from_x(x, x_transform_, y_transform_);
+        double y = opd_.get_y_from_x(x, x_transform_, y_transform_, extrapolation_);
         if (!allow_negative_y_values_ && (std::isnan(y) || y < 0.0)) y = 0.0;
         return y;
     }
@@ -129,7 +132,7 @@ class TabularFunction : public IUnivariateFunction {
     double inverse_function(double y) const override {
         if (!parameters_valid()) validate_parameters({0.0}, true);
         if (!allow_negative_y_values_ && (std::isnan(y) || y < 0.0)) y = 0.0;
-        return opd_.get_x_from_y(y, x_transform_, y_transform_);
+        return opd_.get_x_from_y(y, x_transform_, y_transform_, extrapolation_);
     }
 
    private:
@@ -137,6 +140,8 @@ class TabularFunction : public IUnivariateFunction {
     data::paired_data::OrderedPairedData opd_;
     data::Transform x_transform_ = data::Transform::None;
     data::Transform y_transform_ = data::Transform::None;
+    data::paired_data::ExtrapolationSides extrapolation_ =
+        data::paired_data::ExtrapolationSides::None;
     double minimum_ = std::numeric_limits<double>::lowest();
     double maximum_ = std::numeric_limits<double>::max();
     double confidence_level_ = -1.0;

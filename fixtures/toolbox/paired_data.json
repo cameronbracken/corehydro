@@ -3540,7 +3540,7 @@
     {
      "method": "simplify",
      "select": "rows",
-     "expected": 3,
+     "expected": 4,
      "mode": "equal",
      "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
     },
@@ -3585,6 +3585,20 @@
      "expected": -1,
      "mode": "equal",
      "source": "Test_LangSimplify -- VERIFIED against the real C# library (dotnet run against upstream/Numerics @ 2a0357a): LangSimplify(0.01, 2) on this curve returns 3 points, dropping (6.28, 0); upstream's own test claims 4 points but its assertion loop is bounded by the (short) result length, not the claimed count, so it never notices. See core/tests/test_ordered_paired_data.cpp's test_lang_simplify."
+    },
+    {
+     "method": "simplify",
+     "index": 6,
+     "expected": 6.28,
+     "mode": "equal",
+     "source": "Numerics v2.2.0 Test_LangSimplify tail-retention fix"
+    },
+    {
+     "method": "simplify",
+     "index": 7,
+     "expected": 0,
+     "mode": "equal",
+     "source": "Numerics v2.2.0 Test_LangSimplify tail-retention fix"
     }
    ]
   },
@@ -3681,6 +3695,41 @@
      "source": "Test_RamerDouglasPeucker",
      "tol": 1e-06
     }
+   ]
+  },
+  {
+   "name": "v220_extrapolate_ascending_both",
+   "data": [[1, 2], [10, 20], [0, 3]],
+   "options": {
+    "strict_x": true,
+    "order_x": "ascending",
+    "strict_y": true,
+    "order_y": "ascending",
+    "extrapolation": "both"
+   },
+   "assertions": [
+    {"method": "interpolate_y", "index": 0, "expected": 0, "mode": "abs", "tol": 1e-12,
+     "source": "Numerics v2.2.0 OrderedPairedData sided extrapolation"},
+    {"method": "interpolate_y", "index": 1, "expected": 30, "mode": "abs", "tol": 1e-12,
+     "source": "Numerics v2.2.0 OrderedPairedData sided extrapolation"}
+   ]
+  },
+  {
+   "name": "v220_extrapolate_descending_log",
+   "data": [[100, 10], [2, 1], [1000, 1]],
+   "options": {
+    "strict_x": true,
+    "order_x": "descending",
+    "strict_y": true,
+    "order_y": "descending",
+    "x_transform": "logarithmic",
+    "extrapolation": "both"
+   },
+   "assertions": [
+    {"method": "interpolate_y", "index": 0, "expected": 3, "mode": "abs", "tol": 1e-12,
+     "source": "Numerics v2.2.0 transform-aware extrapolation"},
+    {"method": "interpolate_y", "index": 1, "expected": 0, "mode": "abs", "tol": 1e-12,
+     "source": "Numerics v2.2.0 transform-aware extrapolation"}
    ]
   }
  ]

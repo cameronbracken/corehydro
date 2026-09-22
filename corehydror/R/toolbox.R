@@ -1385,6 +1385,7 @@ hypothesis_test <- function(x = NULL, y = NULL, method = "jarque_bera", populati
 # here -- see the P4 whole-branch-review finding M2.
 .paired_data_orders <- c("ascending", "descending", "none")
 .paired_data_transforms <- c("none", "logarithmic", "log", "normal_z")
+.paired_data_extrapolation <- c("none", "below", "above", "both")
 
 # Internal: build a `distributions` list of corehydro_dist objects, recycling a single one across
 # every `x`. Shared by uncertain_curve_sample() and tabular_function(), which use identical
@@ -1418,6 +1419,8 @@ paired_data_distributions <- function(distributions, x) {
 #' @param yout numeric vector of y positions to interpolate x at.
 #' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
 #'   `"log"`), or `"normal_z"`.
+#' @param extrapolation sides on which to extend the boundary segment: `"none"` (default),
+#'   `"below"`, `"above"`, or `"both"`.
 #' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
 #' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
 #'   between consecutive ordinates. Default `TRUE`.
@@ -1427,6 +1430,7 @@ paired_data_distributions <- function(distributions, x) {
 #' @export
 curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
                               x_transform = "none", y_transform = "none",
+                              extrapolation = "none",
                               order_x = "ascending", order_y = "ascending",
                               strict_x = TRUE, strict_y = TRUE) {
   check_pair(x, y)
@@ -1439,11 +1443,13 @@ curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
   # unambiguous prefix Python does not.
   x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
   y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
+  extrapolation <- check_choice(extrapolation, .paired_data_extrapolation, "extrapolation")
   order_x <- check_choice(order_x, .paired_data_orders, "order_x")
   order_y <- check_choice(order_y, .paired_data_orders, "order_y")
   opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
                order_x = order_x, order_y = order_y,
-               x_transform = x_transform, y_transform = y_transform)
+               x_transform = x_transform, y_transform = y_transform,
+               extrapolation = extrapolation)
   if (!is.null(xout)) {
     if (!is.numeric(xout)) {
       stop("`xout` must be numeric", call. = FALSE)
@@ -1615,6 +1621,8 @@ uncertain_curve_sample <- function(x, distributions, probability = NULL,
 #' @param inverse if `TRUE`, evaluates `InverseFunction()` instead of `Function()`.
 #' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
 #'   `"log"`), or `"normal_z"`.
+#' @param extrapolation sides on which to extend the boundary segment: `"none"` (default),
+#'   `"below"`, `"above"`, or `"both"`.
 #' @param confidence_level quantile in `[0, 1]` to sample the curve at; `NULL` (default) samples
 #'   the mean.
 #' @param allow_negative_y_values allow a negative or `NaN` result to pass through unmodified,
@@ -1628,6 +1636,7 @@ uncertain_curve_sample <- function(x, distributions, probability = NULL,
 #' @export
 tabular_function <- function(x, distributions, at, inverse = FALSE,
                              x_transform = "none", y_transform = "none",
+                             extrapolation = "none",
                              confidence_level = NULL, allow_negative_y_values = FALSE) {
   if (!is.numeric(x) || length(x) == 0L) {
     stop("`x` must be a non-empty numeric vector", call. = FALSE)
@@ -1638,8 +1647,10 @@ tabular_function <- function(x, distributions, at, inverse = FALSE,
   }
   x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
   y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
+  extrapolation <- check_choice(extrapolation, .paired_data_extrapolation, "extrapolation")
   opts <- list(x = spec_array(as.double(x)), distributions = distributions,
                x_transform = x_transform, y_transform = y_transform,
+               extrapolation = extrapolation,
                allow_negative_y_values = isTRUE(allow_negative_y_values))
   if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
   method <- if (isTRUE(inverse)) "tabular_inverse" else "tabular"

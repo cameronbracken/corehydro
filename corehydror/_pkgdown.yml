@@ -328,6 +328,7 @@ reference:
       - ts_moving_sum
       - ts_cumulative_sum
       - ts_difference
+      - ts_smoothed_series
       - ts_standardize
       - ts_sort
       - ts_transform

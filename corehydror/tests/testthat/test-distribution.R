@@ -178,3 +178,10 @@ test_that("distribution_names reports both kinds", {
   )
   expect_true(all(distribution_names() %in% distribution_names("all")))
 })
+
+test_that("dist_empirical carries the v2.2 extrapolation policy", {
+  d <- dist_empirical(c(1, 2), c(0.25, 0.75), p_transform = "None",
+                      extrapolation = "both")
+  expect_equal(dist_cdf(d, c(0, 3)), c(0, 1))
+  expect_equal(dist_quantile(d, c(1e-16, 1 - 1e-16)), c(0.5, 2.5), tolerance = 1e-12)
+})

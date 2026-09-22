@@ -242,10 +242,9 @@ void test_math() {
     CHECK_NEAR(indexed[0].value(), 11.0, 0.0);
     CHECK_NEAR(indexed[1].value(), 2.0, 0.0);
     CHECK_NEAR(indexed[2].value(), 13.0, 0.0);
-    // ... except log_transform and inverse, whose `else` branch reaches through an unchecked
-    // index (see the header note on both methods).
-    CHECK_THROWS(indexed.log_transform(std::vector<int>{7}));
-    CHECK_THROWS(indexed.inverse(std::vector<int>{7}));
+    indexed.log_transform(std::vector<int>{7});
+    indexed.inverse(std::vector<int>{7});
+    CHECK_THROWS_MSG(indexed.divide(0.0, std::vector<int>{0}), "Cannot divide by zero.");
 }
 
 // C# Test_Cumulative.
@@ -257,9 +256,8 @@ void test_cumulative() {
     equal(new_ts, values);
 
     // corehydro supplement: missing values accumulate as zero but are NOT skipped in the output,
-    // and the result carries the DEFAULT OneDay interval rather than the source's (upstream
-    // oddity, see the method's own note).
-    CHECK_TRUE(new_ts.time_interval() == TimeInterval::OneDay);
+    // and the result preserves the source interval.
+    CHECK_TRUE(new_ts.time_interval() == TimeInterval::OneMonth);
     CHECK_TRUE(ts.time_interval() == TimeInterval::OneMonth);
     TimeSeries with_nan(TimeInterval::OneDay, DateTime(2024, 1, 1),
                         std::vector<double>{1.0, kNaN, 3.0});
@@ -267,6 +265,24 @@ void test_cumulative() {
     CHECK_NEAR(cum[0].value(), 1.0, 0.0);
     CHECK_NEAR(cum[1].value(), 1.0, 0.0);
     CHECK_NEAR(cum[2].value(), 4.0, 0.0);
+}
+
+void test_v220_time_series_fixes() {
+    TimeSeries missing(TimeInterval::OneDay, DateTime(2024, 1, 1),
+                       std::vector<double>{1.0, kNaN, 3.0, 5.0});
+    CHECK_NEAR(missing.standard_deviation(), 2.0, 1e-12);
+
+    TimeSeries base(TimeInterval::OneDay, DateTime(2024, 1, 1),
+                    std::vector<double>{1.0, 2.0, 4.0, 8.0});
+    TimeSeries ma = base.smoothed_series(SmoothingFunctionType::MovingAverage, 1);
+    TimeSeries ms = base.smoothed_series(SmoothingFunctionType::MovingSum, 1);
+    TimeSeries diff = base.smoothed_series(SmoothingFunctionType::Difference, 1);
+    CHECK_EQ(ma.count(), base.count());
+    CHECK_EQ(ms.count(), base.count());
+    CHECK_EQ(diff.count(), base.count() - 1);
+    CHECK_NEAR(diff[0].value(), 1.0, 0.0);
+    CHECK_NEAR(diff[1].value(), 2.0, 0.0);
+    CHECK_NEAR(diff[2].value(), 4.0, 0.0);
 }
 
 // C# Test_Difference and Test_Difference_NaN.
@@ -1128,6 +1144,7 @@ int main() {
     test_math();
     test_cumulative();
     test_difference();
+    test_v220_time_series_fixes();
     test_missing();
     test_intervals();
     test_moving_windows();

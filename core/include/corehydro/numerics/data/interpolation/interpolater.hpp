@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Interpolation/Support/Interpolater.cs @ 2a0357a
+// ported from: Numerics/Data/Interpolation/Support/Interpolater.cs @ 7e8e8d1
 //
 // Abstract base for 1D interpolation. Owns the shared search machinery -- sequential,
 // bisection, and hunt search over the sorted x-value list -- that Linear (and, through
@@ -45,7 +45,7 @@ class Interpolater {
             if (sort_order == SortOrder::Descending && x_values_[ui] > x_values_[ui - 1])
                 throw std::invalid_argument("The x values are not in descending order.");
         }
-        delta_start_ = std::min(1, static_cast<int>(std::pow(static_cast<double>(count_), 0.25)));
+        delta_start_ = std::max(1, static_cast<int>(std::pow(static_cast<double>(count_), 0.25)));
     }
 
     virtual ~Interpolater() = default;

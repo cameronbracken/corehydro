@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Paired Data/OrderedPairedData.cs @ 2a0357a
+// ported from: Numerics/Data/Paired Data/OrderedPairedData.cs @ 7e8e8d1
 //
 // P4 Task 8: the centrepiece of the Paired Data subsystem -- an x-y curve container that keeps
 // itself sorted/validated against a caller-chosen monotonicity contract (StrictX/OrderX,
@@ -155,6 +155,7 @@
 
 #include "corehydro/numerics/data/interpolation/sort_order.hpp"
 #include "corehydro/numerics/data/interpolation/transform.hpp"
+#include "corehydro/numerics/data/paired_data/extrapolation_sides.hpp"
 #include "corehydro/numerics/data/paired_data/ordinate.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/tools.hpp"
@@ -172,6 +173,7 @@ class OrderedPairedData {
         set_strict_y(strict_on_y);
         set_order_x(x_order);
         set_order_y(y_order);
+        validate();
     }
 
     // C# constructor 2 (lines ~212-221): parallel x/y arrays.
@@ -312,19 +314,17 @@ class OrderedPairedData {
         validate();
     }
 
-    // C# RemoveRange (lines ~453-462). See transcription note 1 above: the guard uses `>=`
-    // where `>` is correct, so a removal reaching the trailing element is a silent no-op.
+    // C# RemoveRange.
     void remove_range(int index, int cnt) {
-        if (index < 0 || (index + cnt) >= count()) return;
+        if (index < 0 || (index + cnt) > count()) return;
         ordinates_.erase(ordinates_.begin() + index, ordinates_.begin() + index + cnt);
         validate();
     }
 
-    // C# Add (lines ~468-474). See transcription note 4 above: the unconditional assignment can
-    // widen IsValid from false back to true.
+    // C# Add: appending can narrow validity but cannot repair an already-invalid collection.
     void add(const Ordinate& item) {
         ordinates_.push_back(item);
-        is_valid_ = ordinate_valid(count() - 1);
+        if (is_valid_) is_valid_ = ordinate_valid(count() - 1);
     }
 
     // C# Insert (lines ~481-488): only narrows IsValid (true -> possibly false).
@@ -403,34 +403,68 @@ class OrderedPairedData {
     // C# GetYFromX(double, Transform, Transform) (lines ~848-861).
     double get_y_from_x(double x, Transform x_transform = Transform::None,
                          Transform y_transform = Transform::None) const {
+        return get_y_from_x(x, x_transform, y_transform, ExtrapolationSides::None);
+    }
+
+    double get_y_from_x(double x, Transform x_transform, Transform y_transform,
+                        ExtrapolationSides extrapolation) const {
         if (count() == 0) return std::numeric_limits<double>::quiet_NaN();
         if (order_x_ == SortOrder::None)
             throw std::runtime_error("Interpolation requires the x-values to be ascending or descending.");
         if (count() == 1) return ordinates_[0].y;
         if ((order_x_ == SortOrder::Ascending && x <= ordinates_[0].x) ||
-            (order_x_ == SortOrder::Descending && x >= ordinates_[0].x))
+            (order_x_ == SortOrder::Descending && x >= ordinates_[0].x)) {
+            ExtrapolationSides side = order_x_ == SortOrder::Ascending
+                                          ? ExtrapolationSides::Below
+                                          : ExtrapolationSides::Above;
+            if (includes(extrapolation, side) && x != ordinates_[0].x)
+                return base_interpolate(x, 0, true, x_transform, y_transform);
             return ordinates_[0].y;
+        }
         std::size_t last = static_cast<std::size_t>(count() - 1);
         if ((order_x_ == SortOrder::Ascending && x >= ordinates_[last].x) ||
-            (order_x_ == SortOrder::Descending && x <= ordinates_[last].x))
+            (order_x_ == SortOrder::Descending && x <= ordinates_[last].x)) {
+            ExtrapolationSides side = order_x_ == SortOrder::Ascending
+                                          ? ExtrapolationSides::Above
+                                          : ExtrapolationSides::Below;
+            if (includes(extrapolation, side) && x != ordinates_[last].x)
+                return base_interpolate(x, count() - 2, true, x_transform, y_transform);
             return ordinates_[last].y;
+        }
         return base_interpolate(x, search_x(x), true, x_transform, y_transform);
     }
 
     // C# GetXFromY(double, Transform, Transform) (lines ~870-882).
     double get_x_from_y(double y, Transform x_transform = Transform::None,
                          Transform y_transform = Transform::None) const {
+        return get_x_from_y(y, x_transform, y_transform, ExtrapolationSides::None);
+    }
+
+    double get_x_from_y(double y, Transform x_transform, Transform y_transform,
+                        ExtrapolationSides extrapolation) const {
         if (count() == 0) return std::numeric_limits<double>::quiet_NaN();
         if (order_y_ == SortOrder::None)
             throw std::runtime_error("Interpolation requires the y-values to be ascending or descending.");
         if (count() == 1) return ordinates_[0].x;
         if ((order_y_ == SortOrder::Ascending && y <= ordinates_[0].y) ||
-            (order_y_ == SortOrder::Descending && y >= ordinates_[0].y))
+            (order_y_ == SortOrder::Descending && y >= ordinates_[0].y)) {
+            ExtrapolationSides side = order_y_ == SortOrder::Ascending
+                                          ? ExtrapolationSides::Below
+                                          : ExtrapolationSides::Above;
+            if (includes(extrapolation, side) && y != ordinates_[0].y)
+                return base_interpolate(y, 0, false, x_transform, y_transform);
             return ordinates_[0].x;
+        }
         std::size_t last = static_cast<std::size_t>(count() - 1);
         if ((order_y_ == SortOrder::Ascending && y >= ordinates_[last].y) ||
-            (order_y_ == SortOrder::Descending && y <= ordinates_[last].y))
+            (order_y_ == SortOrder::Descending && y <= ordinates_[last].y)) {
+            ExtrapolationSides side = order_y_ == SortOrder::Ascending
+                                          ? ExtrapolationSides::Above
+                                          : ExtrapolationSides::Below;
+            if (includes(extrapolation, side) && y != ordinates_[last].y)
+                return base_interpolate(y, count() - 2, false, x_transform, y_transform);
             return ordinates_[last].x;
+        }
         return base_interpolate(y, search_y(y), false, x_transform, y_transform);
     }
 
@@ -438,9 +472,15 @@ class OrderedPairedData {
     std::vector<double> get_y_from_x(const std::vector<double>& x_values,
                                       Transform x_transform = Transform::None,
                                       Transform y_transform = Transform::None) const {
+        return get_y_from_x(x_values, x_transform, y_transform, ExtrapolationSides::None);
+    }
+
+    std::vector<double> get_y_from_x(const std::vector<double>& x_values,
+                                     Transform x_transform, Transform y_transform,
+                                     ExtrapolationSides extrapolation) const {
         std::vector<double> result(x_values.size());
         for (std::size_t i = 0; i < x_values.size(); ++i)
-            result[i] = get_y_from_x(x_values[i], x_transform, y_transform);
+            result[i] = get_y_from_x(x_values[i], x_transform, y_transform, extrapolation);
         return result;
     }
 
@@ -448,9 +488,15 @@ class OrderedPairedData {
     std::vector<double> get_x_from_y(const std::vector<double>& y_values,
                                       Transform x_transform = Transform::None,
                                       Transform y_transform = Transform::None) const {
+        return get_x_from_y(y_values, x_transform, y_transform, ExtrapolationSides::None);
+    }
+
+    std::vector<double> get_x_from_y(const std::vector<double>& y_values,
+                                     Transform x_transform, Transform y_transform,
+                                     ExtrapolationSides extrapolation) const {
         std::vector<double> result(y_values.size());
         for (std::size_t i = 0; i < y_values.size(); ++i)
-            result[i] = get_x_from_y(y_values[i], x_transform, y_transform);
+            result[i] = get_x_from_y(y_values[i], x_transform, y_transform, extrapolation);
         return result;
     }
 
@@ -459,7 +505,7 @@ class OrderedPairedData {
     int search_x(double x) const {
         int start = use_smart_search_ ? (x_correlated_ ? hunt_search_x(x) : bisection_search_x(x))
                                        : sequential_search_x(x);
-        x_correlated_ = std::abs(start - x_search_start_) > x_delta_start_ ? false : true;
+        x_correlated_ = std::abs(start - x_search_start_) > delta_start() ? false : true;
         x_search_start_ = (start < 0 || start >= count()) ? 0 : start;
         return start;
     }
@@ -468,7 +514,7 @@ class OrderedPairedData {
     int search_y(double y) const {
         int start = use_smart_search_ ? (y_correlated_ ? hunt_search_y(y) : bisection_search_y(y))
                                        : sequential_search_y(y);
-        y_correlated_ = std::abs(start - y_search_start_) > y_delta_start_ ? false : true;
+        y_correlated_ = std::abs(start - y_search_start_) > delta_start() ? false : true;
         y_search_start_ = (start < 0 || start >= count()) ? 0 : start;
         return start;
     }
@@ -547,10 +593,9 @@ class OrderedPairedData {
                    (order_y_ == SortOrder::Descending && y < ordinates_[last].y)) {
             return count() - 2;
         } else if ((order_y_ == SortOrder::Ascending &&
-                    y < ordinates_[static_cast<std::size_t>(x_search_start_)].y) ||
+                    y < ordinates_[static_cast<std::size_t>(y_search_start_)].y) ||
                    (order_y_ == SortOrder::Descending &&
-                    y > ordinates_[static_cast<std::size_t>(x_search_start_)].y)) {
-            // Bug transcribed verbatim (note 2): x_search_start_, not y_search_start_.
+                    y > ordinates_[static_cast<std::size_t>(y_search_start_)].y)) {
             jl = 0;
         }
         for (int i = jl; i < count(); ++i) {
@@ -737,7 +782,7 @@ class OrderedPairedData {
         ords.push_back(ordinates_[0]);
 
         for (int i = 0; i < n; ++i) {
-            if (i + la > n) la = n - i - 1;
+            if (i + la >= n) la = n - i - 1;
             int offset = recursive_tolerance(i, la, tolerance);
             if (offset > 0 && (i + offset) < count()) {
                 const Ordinate& o = ordinates_[static_cast<std::size_t>(i + offset)];
@@ -888,6 +933,8 @@ class OrderedPairedData {
         double area = std::fabs((a_x * b_y + b_x * c_y + c_x * a_y - b_x * a_y - c_x * b_y - a_x * c_y) *
                                  0.5);
         double base_len = std::sqrt(std::pow(a_x - b_x, 2) + std::pow(a_y - b_y, 2));
+        if (base_len == 0.0)
+            return std::sqrt(std::pow(c_x - a_x, 2) + std::pow(c_y - a_y, 2));
         return area * 2 / base_len;
     }
 
@@ -933,9 +980,9 @@ class OrderedPairedData {
     mutable int x_search_start_ = 0;
     mutable int y_search_start_ = 0;
     bool use_smart_search_ = true;
-    // Transcription note 3 (see file header): never assigned past 0, matching C#.
-    int x_delta_start_ = 0;
-    int y_delta_start_ = 0;
+    int delta_start() const {
+        return std::max(1, static_cast<int>(std::pow(static_cast<double>(count()), 0.25)));
+    }
     mutable bool x_correlated_ = false;
     mutable bool y_correlated_ = false;
 };

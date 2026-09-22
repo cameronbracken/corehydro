@@ -2087,6 +2087,7 @@ _SORT_ORDERS = ("ascending", "descending", "none")
 # core-side) so a value valid for interpolate()/interpolate_2d() is also valid here -- see the P4
 # whole-branch-review finding M2.
 _PAIRED_TRANSFORMS = ("none", "logarithmic", "log", "normal_z")
+_EXTRAPOLATION_SIDES = ("none", "below", "above", "both")
 
 
 def _check_sort_order(value: str, what: str) -> None:
@@ -2102,6 +2103,15 @@ def _check_paired_transform(value: str, what: str) -> None:
         raise ValueError(
             f"unknown {what} '{value}'; expected one of {', '.join(_PAIRED_TRANSFORMS)}"
         )
+
+
+def _check_extrapolation(value: str) -> str:
+    if value not in _EXTRAPOLATION_SIDES:
+        raise ValueError(
+            "unknown extrapolation "
+            f"'{value}'; expected one of {', '.join(_EXTRAPOLATION_SIDES)}"
+        )
+    return value
 
 
 def _paired_data_shape_opts(strict_x: bool, strict_y: bool, order_x: str, order_y: str) -> dict:
@@ -2146,6 +2156,7 @@ def curve_interpolate(
     yout=None,
     x_transform: str = "none",
     y_transform: str = "none",
+    extrapolation: str = "none",
     order_x: str = "ascending",
     order_y: str = "ascending",
     strict_x: bool = True,
@@ -2169,6 +2180,8 @@ def curve_interpolate(
     x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
         "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
         is the spelling used in this package's own examples.
+    extrapolation : {"none", "below", "above", "both"}
+        Sides on which to extend the boundary segment in transformed space.
     order_x, order_y : {"ascending", "descending", "none"}
     strict_x, strict_y : bool
         Require x/y to strictly increase/decrease (per ``order_x``/``order_y``) between
@@ -2190,9 +2203,11 @@ def curve_interpolate(
         raise ValueError("exactly one of `xout` or `yout` must be supplied")
     _check_paired_transform(x_transform, "x_transform")
     _check_paired_transform(y_transform, "y_transform")
+    extrapolation = _check_extrapolation(extrapolation)
     options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
     options["x_transform"] = x_transform
     options["y_transform"] = y_transform
+    options["extrapolation"] = extrapolation
     if xout is not None:
         xouta = np.atleast_1d(np.asarray(xout, dtype=float))
         r = _toolbox_run("paired_data", "interpolate_y", [xa, ya, xouta], options)
@@ -2405,6 +2420,7 @@ def tabular_function(
     inverse: bool = False,
     x_transform: str = "none",
     y_transform: str = "none",
+    extrapolation: str = "none",
     confidence_level: float | None = None,
     allow_negative_y_values: bool = False,
 ) -> np.ndarray:
@@ -2432,6 +2448,8 @@ def tabular_function(
     x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
         "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
         is the spelling used in this package's own examples.
+    extrapolation : {"none", "below", "above", "both"}
+        Sides on which to extend the boundary segment in transformed space.
     confidence_level : float, optional
         Quantile in ``[0, 1]`` to sample the curve at; ``None`` (default) samples the mean.
     allow_negative_y_values : bool, default False
@@ -2461,11 +2479,13 @@ def tabular_function(
         raise ValueError("`at` must be a non-empty array")
     _check_paired_transform(x_transform, "x_transform")
     _check_paired_transform(y_transform, "y_transform")
+    extrapolation = _check_extrapolation(extrapolation)
     options: dict = {
         "x": xa.tolist(),
         "distributions": [_as_spec(d) for d in dists],
         "x_transform": x_transform,
         "y_transform": y_transform,
+        "extrapolation": extrapolation,
         "allow_negative_y_values": bool(allow_negative_y_values),
     }
     if confidence_level is not None:

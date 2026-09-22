@@ -103,6 +103,7 @@ inline ToolboxResult run_functions(const std::string& method,
         numerics::functions::TabularFunction f(std::move(upd));
         f.set_x_transform(parse_transform_token(options.value_or("x_transform", "none")));
         f.set_y_transform(parse_transform_token(options.value_or("y_transform", "none")));
+        f.set_extrapolation(parse_extrapolation_token(options.value_or("extrapolation", "none")));
         if (options.value_or("is_deterministic", false)) f.set_is_deterministic(true);
         if (options.contains("confidence_level"))
             f.set_confidence_level(options.at("confidence_level").as_double());

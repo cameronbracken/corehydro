@@ -163,8 +163,23 @@ inline std::unique_ptr<UnivariateDistributionBase> build_univariate(const JsonVa
         EmpiricalTransform pt = EmpiricalTransform::NormalZ;
         if (spec.contains("p_transform"))
             pt = detail::parse_empirical_transform(spec.at("p_transform").as_string());
-        out = std::make_unique<EmpiricalDistribution>(std::move(x), std::move(p), pt,
-                                                      spec.value_or("p_descending", false));
+        auto empirical = std::make_unique<EmpiricalDistribution>(
+            std::move(x), std::move(p), pt, spec.value_or("p_descending", false));
+        if (spec.contains("extrapolation")) {
+            const std::string& policy = spec.at("extrapolation").as_string();
+            using data::paired_data::ExtrapolationSides;
+            if (policy == "none" || policy == "None")
+                empirical->set_extrapolation(ExtrapolationSides::None);
+            else if (policy == "below" || policy == "Below")
+                empirical->set_extrapolation(ExtrapolationSides::Below);
+            else if (policy == "above" || policy == "Above")
+                empirical->set_extrapolation(ExtrapolationSides::Above);
+            else if (policy == "both" || policy == "Both")
+                empirical->set_extrapolation(ExtrapolationSides::Both);
+            else
+                throw std::runtime_error("unknown empirical extrapolation policy: " + policy);
+        }
+        out = std::move(empirical);
     } else if (family == "KernelDensity") {
         std::vector<double> data = spec.at("data").as_double_vector();
         KernelType kt = KernelType::Gaussian;

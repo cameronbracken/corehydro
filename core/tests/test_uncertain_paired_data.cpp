@@ -365,6 +365,18 @@ void test_tabular_function() {
         100 + (200.0 - 100.0) / (std::log(100.0) - std::log(50.0)) * (std::log(75.0) - std::log(50.0));
     double X4 = func.inverse_function(Y4);
     CHECK_NEAR(X4, 75.0, 1e-6);
+
+    func.set_extrapolation(
+        corehydro::numerics::data::paired_data::ExtrapolationSides::Both);
+    CHECK_NEAR(func.function(25.0), 0.0, 1e-12);
+    CHECK_NEAR(func.inverse_function(600.0), 312.5, 1e-12);
+}
+
+void test_nan_ordinate_equality() {
+    double nan = std::numeric_limits<double>::quiet_NaN();
+    UncertainOrdinate a(nan, Deterministic(1.0));
+    UncertainOrdinate b(nan, Deterministic(1.0));
+    CHECK_TRUE(a != b);
 }
 
 int main() {
@@ -375,5 +387,6 @@ int main() {
     test_ilist();
     test_equality();
     test_tabular_function();
+    test_nan_ordinate_equality();
     return chtest::summary("test_uncertain_paired_data");
 }

@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Paired Data/UncertainOrdinate.cs @ 2a0357a
+// ported from: Numerics/Data/Paired Data/UncertainOrdinate.cs @ 7e8e8d1
 //
 // P4 Task 9: a single (X, Y) ordinate where X is a double and Y is a whole continuous
 // distribution (nullable), plus the monotonicity checks (OrdinateValid/OrdinateErrors) that
@@ -270,11 +270,10 @@ struct UncertainOrdinate {
     }
 };
 
-// C# operator== (lines ~249-260). See transcription note 3 above: exact X equality (unlike
-// Ordinate's kDoubleMachineEpsilon slack), then delegates Y-equality to the distribution's own
-// comparison.
+// C# operator==: finite X values compare at machine epsilon; NaN never equals NaN.
 inline bool operator==(const UncertainOrdinate& l, const UncertainOrdinate& r) {
-    if (l.x != r.x) return false;
+    if (std::isnan(l.x) || std::isnan(r.x)) return false;
+    if (std::fabs(l.x - r.x) > corehydro::numerics::kDoubleMachineEpsilon) return false;
     if (!l.y && !r.y) return true;
     if (!l.y || !r.y) return false;
     return detail::distributions_equal(l.y.get(), r.y.get());

@@ -76,10 +76,15 @@ test_that("differences, cumulative sums and standardization behave as documented
   expect_equal(d$values, diff(monthly_values))
   expect_equal(as.Date(d$dates[1]), as.Date("2023-01-01"))
 
-  # Test_Cumulative, and the upstream oddity that the result drops the source's interval.
+  # Test_Cumulative; v2.2 preserves the source interval.
   cs <- ts_cumulative_sum(monthly_ts())
   expect_equal(cs$values, cumsum(monthly_values))
-  expect_equal(cs$interval, "one_day")
+  expect_equal(cs$interval, "one_month")
+
+  base <- time_series(as.Date("2024-01-01") + 0:3, c(1, 2, 4, 8))
+  expect_equal(ts_smoothed_series(base, "moving_average", 1)$values, base$values)
+  expect_equal(ts_smoothed_series(base, "moving_sum", 1)$values, base$values)
+  expect_equal(ts_smoothed_series(base, "difference", 1)$values, c(1, 2, 4))
 
   s <- ts_standardize(monthly_ts())
   expect_equal(mean(s$values), 0, tolerance = 1e-12)
@@ -111,6 +116,9 @@ test_that("transformations apply to the whole series or to chosen ordinates", {
   expect_equal(ts_transform(ts, "multiply", constant = 10)$values, c(10, 20, 40))
   expect_equal(ts_transform(ts, "logarithm", base = 2)$values, c(0, 1, 2))
   expect_equal(ts_transform(ts, "add", constant = 5, indexes = c(1, 3))$values, c(6, 2, 9))
+  expect_error(ts_transform(ts, "divide", constant = 0, indexes = 1), "Cannot divide by zero")
+  expect_silent(ts_transform(ts, "logarithm", indexes = 99))
+  expect_silent(ts_transform(ts, "inverse", indexes = 99))
   # A missing value stays missing.
   gappy <- time_series(as.Date("2023-01-01") + 0:2, c(1, NA, 4))
   expect_true(is.na(ts_transform(gappy, "add", constant = 5)$values[2]))
