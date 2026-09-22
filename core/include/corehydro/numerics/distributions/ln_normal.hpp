@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/LnNormal.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/LnNormal.cs @ 7e8e8d1
 //
 // The Ln-Normal (Galton) distribution. Parameters are the real-space mean and standard deviation;
 // internally the distribution stores the natural-log-space parameters mu_ and sigma_.
@@ -20,6 +20,7 @@
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
+#include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/tools.hpp"
 
 namespace corehydro::numerics::distributions {
@@ -48,13 +49,15 @@ class LnNormal : public UnivariateDistributionBase,
 
     // SetParameters(mean, sd) — real-space inputs, converted to log-space via DirectMethodOfMoments
     void set_parameters(double mean_val, double sd_val) {
-        if (sd_val < 1E-16 && std::signbit(sd_val) == false) sd_val = 1E-16;
         auto parms = direct_mom(mean_val, sd_val);
         // Validate against original real-space values
         parameters_valid_ = validate(mean_val, sd_val);
         if (!std::isnan(parms[0]) && !std::isnan(parms[1])) {
             mu_ = parms[0];
-            sigma_ = parms[1];
+            sigma_ = parms[1] < 1e-16 ? 1e-16 : parms[1];
+            physical_mean_ = mean_val;
+            physical_standard_deviation_ = sd_val;
+            has_physical_moments_ = true;
         } else {
             // Keep old values but mark invalid (matches C# behavior)
             parameters_valid_ = false;
@@ -63,47 +66,70 @@ class LnNormal : public UnivariateDistributionBase,
     void set_parameters(const std::vector<double>& p) override { set_parameters(p[0], p[1]); }
 
     // --- Moments / support ---
-    double mean() const override { return std::exp(mu_ + sigma_ * sigma_ / 2.0); }
+    double mean() const override {
+        return has_physical_moments_ ? physical_mean_
+                                     : std::exp(mu_ + sigma_ * sigma_ / 2.0);
+    }
     double median() const override { return std::exp(mu_); }
     double mode() const override { return std::exp(mu_ - sigma_ * sigma_); }
     double standard_deviation() const override {
-        return std::sqrt((std::exp(sigma_ * sigma_) - 1.0) *
-                         std::exp(2.0 * mu_ + sigma_ * sigma_));
+        if (has_physical_moments_) return physical_standard_deviation_;
+        const double variance = sigma_ * sigma_;
+        const double log_excess = variance > 0.5
+                                      ? variance + std::log1p(-std::exp(-variance))
+                                      : std::log(std::expm1(variance));
+        return std::exp(mu_ + 0.5 * variance + 0.5 * log_excess);
     }
     double skewness() const override {
         double s2 = sigma_ * sigma_;
-        return (std::exp(s2) + 2.0) * std::sqrt(std::exp(s2) - 1.0);
+        return (std::exp(s2) + 2.0) * std::sqrt(std::expm1(s2));
     }
     double kurtosis() const override {
         double s2 = sigma_ * sigma_;
-        return 3.0 + (std::exp(4.0 * s2) + 2.0 * std::exp(3.0 * s2) +
-                      3.0 * std::exp(2.0 * s2) - 6.0);
+        return 3.0 + std::expm1(4.0 * s2) + 2.0 * std::expm1(3.0 * s2) +
+               3.0 * std::expm1(2.0 * s2);
     }
     double minimum() const override { return 0.0; }
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
     // PDF = exp(-0.5*((ln(x)-mu)/sigma)^2) / (sqrt(2pi)*sigma*x)
-    double pdf(double x) const override {
-        if (x <= minimum()) return 0.0;
-        double d = (std::log(x) - mu_) / sigma_;
-        return std::exp(-0.5 * d * d) / (kSqrt2PI * sigma_ * x);
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("LnNormal: invalid parameters");
+        if (x <= 0.0 || x == kInf) return -kInf;
+        const double log_x = std::log(x);
+        const double z = distribution_numerics::standardize(log_x, mu_, sigma_);
+        return -0.5 * z * z - std::log(sigma_) - kLogSqrt2PI - log_x;
     }
 
     // CDF = 0.5*(1 + erf((ln(x)-mu)/(sigma*sqrt(2))))
-    double cdf(double x) const override {
-        if (x <= minimum()) return 0.0;
-        return 0.5 * (1.0 + std::erf((std::log(x) - mu_) / (sigma_ * kSqrt2)));
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("LnNormal: invalid parameters");
+        return x <= 0.0 ? -kInf
+                        : distribution_numerics::normal_log_cdf(
+                              distribution_numerics::standardize(std::log(x), mu_, sigma_));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("LnNormal: invalid parameters");
+        return x <= 0.0 ? 0.0
+                        : distribution_numerics::normal_log_survival(
+                              distribution_numerics::standardize(std::log(x), mu_, sigma_));
     }
 
     // InverseCDF = exp(mu - sigma*sqrt(2)*inverse_erfc(2p))
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (std::isnan(probability) || probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        double inv_erfc = wichura_z(-0.5 * 2.0 * probability + 1.0) * kSqrt2 / 2.0;
-        return std::exp(mu_ - sigma_ * kSqrt2 * inv_erfc);
+        return std::exp(mu_ + sigma_ * Normal::standard_z(probability));
     }
 
     // --- Parameter display names (X1; C# LnNormal.cs ParametersToString col0 +
@@ -121,6 +147,9 @@ class LnNormal : public UnivariateDistributionBase,
         c->mu_ = mu_;
         c->sigma_ = sigma_;
         c->parameters_valid_ = parameters_valid_;
+        c->has_physical_moments_ = has_physical_moments_;
+        c->physical_mean_ = physical_mean_;
+        c->physical_standard_deviation_ = physical_standard_deviation_;
         return std::unique_ptr<LnNormal>(c);
     }
 
@@ -131,11 +160,13 @@ class LnNormal : public UnivariateDistributionBase,
             mu_ = parms[0];
             sigma_ = parms[1];
             parameters_valid_ = validate_log_params(mu_, sigma_);
+            has_physical_moments_ = false;
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
             auto parms = parameters_from_linear_moments(indirect_lmom(sample));
             mu_ = parms[0];
             sigma_ = parms[1];
             parameters_valid_ = validate_log_params(mu_, sigma_);
+            has_physical_moments_ = false;
         } else {
             auto parms = mle(sample);
             set_parameters(parms);
@@ -164,13 +195,14 @@ class LnNormal : public UnivariateDistributionBase,
 
     // DirectMethodOfMoments: real-space mean, sd → log-space mu, sigma
     static std::vector<double> direct_mom(double mean_val, double sd_val) {
-        if (sd_val <= 0.0) return {kNaN, kNaN};
-        double var = sd_val * sd_val;
-        double m2 = mean_val * mean_val;
-        double mu = std::log(m2 / std::sqrt(var + m2));
-        double sigma = std::sqrt(std::log(1.0 + var / m2));
-        if (sigma < 1E-16 && std::signbit(sigma) == false) sigma = kDoubleMachineEpsilon;
-        return {mu, sigma};
+        if (!(mean_val > 0.0) || !(sd_val > 0.0) || !std::isfinite(mean_val) ||
+            !std::isfinite(sd_val))
+            return {kNaN, kNaN};
+        const double log_ratio = std::log(sd_val) - std::log(mean_val);
+        const double variance = log_ratio > 0.0
+                                    ? 2.0 * log_ratio + std::log1p(std::exp(-2.0 * log_ratio))
+                                    : std::log1p(std::exp(2.0 * log_ratio));
+        return {std::log(mean_val) - 0.5 * variance, std::sqrt(variance)};
     }
 
     // ParametersFromMoments (C# LnNormal.cs:356): real-space {mean, sd} -> log-space
@@ -361,6 +393,9 @@ class LnNormal : public UnivariateDistributionBase,
 
     double mu_ = 0.0;
     double sigma_ = 1.0;
+    bool has_physical_moments_ = false;
+    double physical_mean_ = 0.0;
+    double physical_standard_deviation_ = 0.0;
 };
 
 }  // namespace corehydro::numerics::distributions

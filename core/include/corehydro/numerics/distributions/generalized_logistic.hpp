@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/GeneralizedLogistic.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/GeneralizedLogistic.cs @ 7e8e8d1
 //
 // Generalized Logistic distribution: parameters ξ (location), α (scale), κ (shape).
 // Mirrors the C# source method-for-method. The IBootstrappable, IStandardError, and
@@ -122,43 +122,59 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
     }
 
     double minimum() const override {
-        if (kappa_ >= -kNearZero) return -kInf;
-        return xi_ + alpha_ / kappa_;
+        if (kappa_ >= 0.0) return -kInf;
+        return finite_shape_endpoint();
     }
 
     double maximum() const override {
-        if (kappa_ <= kNearZero) return kInf;
-        return xi_ + alpha_ / kappa_;
+        if (kappa_ <= 0.0) return kInf;
+        return finite_shape_endpoint();
     }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        if (x < minimum() || x > maximum()) return 0.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero)
-            y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return 1.0 / alpha_ * std::exp(-(1.0 - kappa_) * y) /
-               std::pow(1.0 + std::exp(-y), 2.0);
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (std::isnan(x)) return x;
+        if (std::isinf(x) || x < minimum() || x > maximum()) return -kInf;
+        if (x == minimum() || x == maximum())
+            return std::fabs(kappa_) < 1.0
+                       ? -kInf
+                       : std::fabs(kappa_) == 1.0 ? -std::log(alpha_) : kInf;
+        const double z = latent_logistic(x);
+        return (z >= 0.0 ? (kappa_ - 1.0) * z - 2.0 * std::log1p(std::exp(-z))
+                         : (kappa_ + 1.0) * z - 2.0 * std::log1p(std::exp(z))) -
+               std::log(alpha_);
     }
 
-    double cdf(double x) const override {
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (x <= minimum()) return -kInf;
+        if (x >= maximum()) return 0.0;
+        const double z = latent_logistic(x);
+        return z <= 0.0 ? z - std::log1p(std::exp(z)) : -std::log1p(std::exp(-z));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedLogistic: invalid parameters");
         if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero)
-            y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return 1.0 / (1.0 + std::exp(-y));
+        if (x >= maximum()) return -kInf;
+        const double z = latent_logistic(x);
+        return z >= 0.0 ? -z - std::log1p(std::exp(-z)) : -std::log1p(std::exp(z));
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        if (std::fabs(kappa_) <= kNearZero)
-            return xi_ - alpha_ * std::log((1.0 - probability) / probability);
-        return xi_ + alpha_ / kappa_ *
-                         (1.0 - std::pow((1.0 - probability) / probability, kappa_));
+        const double z = std::log(probability) - std::log1p(-probability);
+        return quantile_at_latent(z);
     }
 
     // --- Parameter display names (X1; C# GeneralizedLogistic.cs ParametersToString col0 +
@@ -318,6 +334,37 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
     }
 
    private:
+    double finite_shape_endpoint() const {
+        const double shift = alpha_ / kappa_;
+        return std::isinf(shift) && std::signbit(xi_) != std::signbit(shift)
+                   ? (xi_ * kappa_ + alpha_) / kappa_
+                   : xi_ + shift;
+    }
+
+    double latent_logistic(double x) const {
+        const double y = distribution_numerics::standardize(x, xi_, alpha_);
+        if (kappa_ == 0.0) return y;
+        return -std::log1p(-kappa_ * y) / kappa_;
+    }
+
+    double quantile_at_latent(double z) const {
+        const double v = -kappa_ * z;
+        const double standard =
+            v > 50.0 ? -std::copysign(1.0, kappa_) *
+                           std::exp(v - std::log(std::fabs(kappa_)))
+                     : v < -50.0 ? 1.0 / kappa_ : z * distribution_numerics::exprel(v);
+        const double offset =
+            v > 50.0 ? -std::copysign(1.0, kappa_) *
+                           std::exp(std::log(alpha_) + v - std::log(std::fabs(kappa_)))
+                     : alpha_ * standard;
+        const double value = xi_ + offset;
+        if (std::isinf(value) && std::isfinite(standard)) {
+            const double combined = xi_ / alpha_ + standard;
+            if (std::isfinite(combined)) return alpha_ * combined;
+        }
+        return value;
+    }
+
     static double sign(double x) { return (x > 0.0) - (x < 0.0); }
 
     static bool validate(double location, double scale, double shape) {

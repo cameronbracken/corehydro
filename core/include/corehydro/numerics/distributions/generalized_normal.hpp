@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/GeneralizedNormal.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/GeneralizedNormal.cs @ 7e8e8d1
 //
 // The Generalized Normal distribution (LogNormal-3), parameterized by location ξ (Xi),
 // scale α (Alpha), and shape κ (Kappa). κ→0 is the plain Normal; κ < 0 is bounded below at
@@ -122,14 +122,14 @@ class GeneralizedNormal : public UnivariateDistributionBase,
 
     // C# Minimum (line 222): unbounded below unless κ < -NearZero.
     double minimum() const override {
-        if (kappa_ >= -kNearZero) return -kInf;
-        return xi_ + alpha_ / kappa_;
+        if (kappa_ >= 0.0) return -kInf;
+        return finite_shape_endpoint();
     }
 
     // C# Maximum (line 238): unbounded above unless κ > NearZero.
     double maximum() const override {
-        if (kappa_ <= kNearZero) return kInf;
-        return xi_ + alpha_ / kappa_;
+        if (kappa_ <= 0.0) return kInf;
+        return finite_shape_endpoint();
     }
 
     // --- Estimation ---
@@ -298,37 +298,48 @@ class GeneralizedNormal : public UnivariateDistributionBase,
 
     // --- Distribution functions ---
     // C# PDF (line 451).
-    double pdf(double x) const override {
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
         if (!parameters_valid_)
             throw std::invalid_argument("GeneralizedNormal: invalid parameters");
-        if (x < minimum() || x > maximum()) return 0.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero) y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return 1.0 / alpha_ * std::exp(kappa_ * y - y * y / 2.0) / kSqrt2PI;
+        if (std::isnan(x)) return x;
+        if (std::isinf(x) || x <= minimum() || x >= maximum()) return -kInf;
+        const double z = latent_normal(x);
+        return -std::log(alpha_) - kLogSqrt2PI + z * (kappa_ - z / 2.0);
     }
 
     // C# CDF (line 463).
-    double cdf(double x) const override {
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_)
+            throw std::invalid_argument("GeneralizedNormal: invalid parameters");
+        if (x <= minimum()) return -kInf;
+        if (x >= maximum()) return 0.0;
+        return distribution_numerics::normal_log_cdf(latent_normal(x));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
         if (!parameters_valid_)
             throw std::invalid_argument("GeneralizedNormal: invalid parameters");
         if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero) y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return Normal::standard_cdf(y);
+        if (x >= maximum()) return -kInf;
+        return distribution_numerics::normal_log_survival(latent_normal(x));
     }
 
     // C# InverseCDF (line 478). C# ArgumentOutOfRangeException -> std::out_of_range, matching
     // every sibling port.
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
         if (!parameters_valid_)
             throw std::invalid_argument("GeneralizedNormal: invalid parameters");
-        if (std::fabs(kappa_) <= kNearZero) return xi_ + alpha_ * Normal::standard_z(probability);
-        return xi_ - alpha_ / kappa_ * (std::exp(-kappa_ * Normal::standard_z(probability)) - 1.0);
+        return quantile_at_latent(Normal::standard_z(probability));
     }
 
     // C# Clone (line 501).
@@ -404,6 +415,36 @@ class GeneralizedNormal : public UnivariateDistributionBase,
     }
 
    private:
+    double finite_shape_endpoint() const {
+        const double shift = alpha_ / kappa_;
+        return std::isinf(shift) && std::signbit(xi_) != std::signbit(shift)
+                   ? (xi_ * kappa_ + alpha_) / kappa_
+                   : xi_ + shift;
+    }
+
+    double latent_normal(double x) const {
+        const double y = distribution_numerics::standardize(x, xi_, alpha_);
+        return kappa_ == 0.0 ? y : -std::log1p(-kappa_ * y) / kappa_;
+    }
+
+    double quantile_at_latent(double z) const {
+        const double v = -kappa_ * z;
+        const double standard =
+            v > 50.0 ? -std::copysign(1.0, kappa_) *
+                           std::exp(v - std::log(std::fabs(kappa_)))
+                     : v < -50.0 ? 1.0 / kappa_ : z * distribution_numerics::exprel(v);
+        const double offset =
+            v > 50.0 ? -std::copysign(1.0, kappa_) *
+                           std::exp(std::log(alpha_) + v - std::log(std::fabs(kappa_)))
+                     : alpha_ * standard;
+        const double value = xi_ + offset;
+        if (std::isinf(value) && std::isfinite(standard)) {
+            const double combined = xi_ / alpha_ + standard;
+            if (std::isfinite(combined)) return alpha_ * combined;
+        }
+        return value;
+    }
+
     // C# reads the CentralMoments(1000) quadruple into `u` on first access and caches it
     // behind `_momentsComputed` (GeneralizedNormal.cs:45-46, 153-158). `mutable` here because
     // the four C# properties are const accessors in this port.

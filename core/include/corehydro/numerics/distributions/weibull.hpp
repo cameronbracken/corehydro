@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Weibull.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Weibull.cs @ 7e8e8d1
 //
 // Weibull distribution with scale λ (lambda) and shape κ (kappa). Logic mirrors the C#
 // source method-for-method. The WPF helpers, IBootstrappable, and IStandardError
@@ -95,28 +95,55 @@ class Weibull : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
         if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
-        if (x < minimum()) return 0.0;
-        if (x == 0.0 && kappa_ == 1.0)
-            return kappa_ / lambda_;
-        return kappa_ / lambda_ * std::pow(x / lambda_, kappa_ - 1.0)
-               * std::exp(-std::pow(x / lambda_, kappa_));
+        if (x < minimum() || x == kInf) return -kInf;
+        if (x == 0.0)
+            return kappa_ == 1.0 ? -std::log(lambda_)
+                                 : kappa_ < 1.0 ? kInf : -kInf;
+        const double logarithm = log_standardized_value(x);
+        const double power = std::exp(kappa_ * logarithm);
+        if (power == kInf) return -kInf;
+        const double value = std::log(kappa_) - std::log(lambda_) +
+                             (kappa_ - 1.0) * logarithm - power;
+        return std::isnan(value) ? -kInf : value;
     }
 
     double cdf(double x) const override {
         if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
-        if (x < minimum()) return 0.0;
-        return 1.0 - std::exp(-std::pow(x / lambda_, kappa_));
+        if (x <= minimum()) return 0.0;
+        return -std::expm1(-std::exp(kappa_ * log_standardized_value(x)));
+    }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
+        if (x <= 0.0) return -kInf;
+        const double logarithm = kappa_ * log_standardized_value(x);
+        const double power = std::exp(logarithm);
+        return power == 0.0 ? logarithm : distribution_numerics::log1m_exp(-power);
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
+        return x <= 0.0 ? 0.0 : -std::exp(kappa_ * log_standardized_value(x));
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
         if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
-        return lambda_ * std::pow(std::log(1.0 / (1.0 - probability)), 1.0 / kappa_);
+        if (kappa_ == 1.0) return -lambda_ * std::log1p(-probability);
+        const double logarithm = std::log(-std::log1p(-probability)) / kappa_;
+        const double unit_quantile = std::exp(logarithm);
+        return unit_quantile < 1e-200 || std::isinf(unit_quantile)
+                   ? std::exp(std::log(lambda_) + logarithm)
+                   : lambda_ * unit_quantile;
     }
 
     // --- Parameter display names (X1; C# Weibull.cs ParametersToString col0 +
@@ -204,6 +231,12 @@ class Weibull : public UnivariateDistributionBase,
     }
 
    private:
+    double log_standardized_value(double x) const {
+        const double ratio = x / lambda_;
+        return ratio > 0.0 && !std::isinf(ratio) ? std::log(ratio)
+                                                 : std::log(x) - std::log(lambda_);
+    }
+
     static bool validate(double scale, double shape) {
         if (std::isnan(scale) || std::isinf(scale) || scale <= 0.0) return false;
         if (std::isnan(shape) || std::isinf(shape) || shape <= 0.0) return false;

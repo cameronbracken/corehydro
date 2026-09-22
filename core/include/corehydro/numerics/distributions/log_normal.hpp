@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/LogNormal.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/LogNormal.cs @ 7e8e8d1
 //
 // The Log-Normal distribution (base 10) with location µ (mean of log) and scale σ (std dev of log).
 // Logic mirrors the C# source method-for-method. The base is fixed at 10 (the C# default);
@@ -17,6 +17,7 @@
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
+#include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/tools.hpp"
 
 namespace corehydro::numerics::distributions {
@@ -94,18 +95,9 @@ class LogNormal : public UnivariateDistributionBase,
 
     double kurtosis() const override {
         double lnB = std::log(kBase);
-        double a = sigma_ * sigma_ * lnB;
-        double mu1 = (mu_ + 0.5 * a) * lnB;
-        double mu2 = (2.0 * mu_ + 2.0 * a) * lnB;
-        double mu3 = (3.0 * mu_ + 4.5 * a) * lnB;
-        double mu4 = (4.0 * mu_ + 8.0 * a) * lnB;
-        double m1 = std::exp(mu1);
-        double m2 = std::exp(mu2);
-        double m3 = std::exp(mu3);
-        double m4 = std::exp(mu4);
-        double fourth_cm = m4 - 4.0 * m3 * m1 + 6.0 * m2 * m1 * m1 - 3.0 * m1 * m1 * m1 * m1;
-        double sd = standard_deviation();
-        return fourth_cm / (sd * sd * sd * sd);
+        double variance = sigma_ * sigma_ * lnB * lnB;
+        return 3.0 + std::expm1(4.0 * variance) + 2.0 * std::expm1(3.0 * variance) +
+               3.0 * std::expm1(2.0 * variance);
     }
 
     double minimum() const override { return 0.0; }
@@ -113,31 +105,51 @@ class LogNormal : public UnivariateDistributionBase,
 
     // --- Distribution functions ---
     // PDF = exp(-0.5*d^2) / (sqrt(2pi)*sigma) * (K/x),  d = (log_base(x) - mu)/sigma
-    double pdf(double x) const override {
-        if (x <= minimum()) return 0.0;
-        double d = (std::log(x) / std::log(kBase) - mu_) / sigma_;
-        return std::exp(-0.5 * d * d) / (kSqrt2PI * sigma_) * (k() / x);
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
+        if (x <= 0.0 || x == kInf) return -kInf;
+        const double log_x = std::log(x);
+        const double log_base = std::log(kBase);
+        const double z = distribution_numerics::standardize(log_x / log_base, mu_, sigma_);
+        return -0.5 * z * z - std::log(sigma_) - kLogSqrt2PI - std::log(log_base) -
+               log_x;
     }
 
     // CDF = 0.5*(1 + erf((log_base(x) - mu) / (sigma*sqrt(2))))
-    double cdf(double x) const override {
-        if (x <= minimum()) return 0.0;
-        double lnB = std::log(kBase);
-        return 0.5 * (1.0 + std::erf((std::log(x) / lnB - mu_) / (sigma_ * kSqrt2)));
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
+        return x <= 0.0
+                   ? -kInf
+                   : distribution_numerics::normal_log_cdf(
+                         distribution_numerics::standardize(
+                             std::log(x) / std::log(kBase), mu_, sigma_));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
+        return x <= 0.0
+                   ? 0.0
+                   : distribution_numerics::normal_log_survival(
+                         distribution_numerics::standardize(
+                             std::log(x) / std::log(kBase), mu_, sigma_));
     }
 
     // InverseCDF = exp((mu - sigma*sqrt(2)*inverse_erfc(2p)) / K)
     // where K = 1/ln(base), so divide by K = multiply by ln(base)
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (std::isnan(probability) || probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
         // inverse_erfc(y) via Wichura: Normal.StandardZ(-0.5*y+1)*sqrt(2)/2
         // For erfc(x)=2p: erfc_arg = 2p
-        double erfc_arg = 2.0 * probability;
-        double inv_erfc = wichura_z(-0.5 * erfc_arg + 1.0) * kSqrt2 / 2.0;
-        return std::exp((mu_ - sigma_ * kSqrt2 * inv_erfc) / k());
+        return std::exp((mu_ + sigma_ * Normal::standard_z(probability)) / k());
     }
 
     // --- Parameter display names (X1; C# LogNormal.cs ParametersToString col0 +

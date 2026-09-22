@@ -97,7 +97,7 @@ void exponential_quantile_gradient() {
     for (double p : {0.1, 0.5, 0.99}) {
         auto g = e.quantile_gradient(p);
         CHECK_EQ(g[0], 1.0);
-        CHECK_EQ(g[1], -std::log(1.0 - p));
+        CHECK_EQ(g[1], -std::log1p(-p));
         double h = 1e-6 * 5.0;
         double dalpha = (Exponential(10.0, 5.0 + h).inverse_cdf(p) -
                          Exponential(10.0, 5.0 - h).inverse_cdf(p)) / (2.0 * h);

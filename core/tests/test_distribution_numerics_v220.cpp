@@ -11,8 +11,14 @@
 #include "corehydro/numerics/distributions/exponential.hpp"
 #include "corehydro/numerics/distributions/gamma_distribution.hpp"
 #include "corehydro/numerics/distributions/generalized_extreme_value.hpp"
+#include "corehydro/numerics/distributions/generalized_logistic.hpp"
+#include "corehydro/numerics/distributions/generalized_normal.hpp"
+#include "corehydro/numerics/distributions/generalized_pareto.hpp"
 #include "corehydro/numerics/distributions/gumbel.hpp"
+#include "corehydro/numerics/distributions/ln_normal.hpp"
+#include "corehydro/numerics/distributions/log_normal.hpp"
 #include "corehydro/numerics/distributions/logistic.hpp"
+#include "corehydro/numerics/distributions/weibull.hpp"
 
 namespace dn = corehydro::numerics::distributions::distribution_numerics;
 
@@ -141,6 +147,26 @@ void test_workhorse_family_log_tails() {
     GeneralizedExtremeValue gev(3.0, 2.0, 1e-8);
     const double p = 0.9;
     CHECK_NEAR(gev.cdf(gev.inverse_cdf(p)), p, 2e-15);
+
+    GeneralizedLogistic glo(3.0, 2.0, 1e-8);
+    CHECK_NEAR(glo.cdf(glo.inverse_cdf(p)), p, 2e-15);
+    GeneralizedNormal gno(3.0, 2.0, 1e-8);
+    CHECK_NEAR(gno.cdf(gno.inverse_cdf(p)), p, 2e-15);
+    GeneralizedPareto gpa(3.0, 2.0, 1e-8);
+    CHECK_NEAR(gpa.cdf(gpa.inverse_cdf(p)), p, 2e-15);
+
+    Weibull weibull(2.0, 0.5);
+    CHECK_TRUE(std::isfinite(weibull.log_pdf(1e-300)));
+    CHECK_NEAR(weibull.cdf(weibull.inverse_cdf(p)), p, 2e-15);
+
+    LogNormal lognormal(-2.0, 0.5);
+    CHECK_TRUE(std::isfinite(lognormal.log_pdf(1e-300)));
+    CHECK_NEAR(lognormal.cdf(lognormal.inverse_cdf(p)), p, 2e-15);
+
+    LnNormal lnnormal(1e-200, 2e-200);
+    CHECK_EQ(lnnormal.get_parameters()[0], 1e-200);
+    CHECK_EQ(lnnormal.get_parameters()[1], 2e-200);
+    CHECK_TRUE(std::isfinite(lnnormal.log_pdf(1e-300)));
 }
 
 }  // namespace
