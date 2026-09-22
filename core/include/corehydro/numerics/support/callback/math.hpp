@@ -19,8 +19,9 @@
 //   quadrature: {"lower": 0.0, "upper": 3.0, "absolute_tolerance": 1e-8,
 //                "relative_tolerance": 1e-8, "max_function_evaluations": 10000000}
 //   quadrature_2d: {"min_x": 0.0, "max_x": 1.0, "min_y": 0.0, "max_y": 1.0,
-//                   "absolute_tolerance": 1e-8, "relative_tolerance": 1e-8,
-//                   "min_depth": 0, "max_depth": 100}
+//                   "method": "adaptive_gauss_kronrod", "absolute_tolerance": 1e-8,
+//                   "relative_tolerance": 1e-8, "min_depth": 0, "max_depth": 100,
+//                   "max_function_evaluations": 10000000}
 //   ode_solve:  {"method": "rk4", "initial_value": 0.5, "start_time": 0.0, "end_time": 2.0,
 //                "time_steps": 5}  -- or, rk4's single-step form: {"method": "rk4",
 //                "initial_value": 0.5, "start_time": 0.0, "dt": 0.5}  -- or, the adaptive forms:
@@ -33,8 +34,9 @@
 //                   "dither": 0.0}
 //   quadrature_vegas: {"min": [0.0, 0.0], "max": [1.0, 1.0], "seed": 12345, "use_sobol": true,
 //                      "sobol_path": "...", "independent_evaluations": 5, "function_calls": 2000,
-//                      "alpha": 1.5, "number_of_bins": 50, "tail_focus_parameter": 1.0,
-//                      "initialize": 0, "check_convergence": true, "target_probability": 1e-5}
+//                      "sobol_seed": 12345, "alpha": 1.5, "number_of_bins": 50,
+//                      "tail_focus_parameter": 1.0, "initialize": 0,
+//                      "check_convergence": true, "target_probability": 1e-5}
 //
 // `quadrature`'s `method` (P2 "math extras") is OPTIONAL and one of "gauss_kronrod" (the
 // default, preserving every fixture that predates this key), "simpsons", "trapezoidal",
@@ -54,9 +56,10 @@
 //
 // `quadrature_2d` (P2 "math extras") is a SEPARATE method rather than a `quadrature` arm, because
 // it needs a second callback shape (`cbs.scalar_xy`, f(x, y) rather than f(x)) -- the 2D
-// counterpart of why root_find_newton is its own method rather than a root_find option. It always
-// drives AdaptiveSimpsonsRule2D and always returns the result triple + status, exactly as
-// quadrature's Integrator-class arms do.
+// counterpart of why root_find_newton is its own method rather than a root_find option. Its
+// optional `method` selects AdaptiveSimpsonsRule2D (`"adaptive_simpson"`, the default) or the
+// v2.2 globally adaptive AdaptiveGaussKronrod2D (`"adaptive_gauss_kronrod"`). Both return the
+// result triple + status exactly as quadrature's Integrator-class arms do.
 //
 // `ode_solve` (P2 "math extras") drives the ported RungeKutta family over `cbs.scalar_xy` --
 // f(t, y), the same shape `quadrature_2d`'s f(x, y) already carries, reused rather than adding a
@@ -111,8 +114,9 @@
 // total evaluations per run -- Vegas, unlike MonteCarloIntegration, checks `max_function_evaluations`
 // as a real per-call stopping condition, so no extra throttle is needed here), `alpha`,
 // `number_of_bins` (routed through `set_number_of_bins()`, which re-initializes the class's
-// parameter arrays exactly as the C# property setter does), `tail_focus_parameter`, `initialize`,
-// `check_convergence`. `target_probability`, PRESENT, calls `configure_for_rare_events()` --
+// parameter arrays exactly as the C# property setter does), `tail_focus_parameter`, `sobol_seed`
+// (the v2.2 linear-matrix scramble and digital-shift seed), `initialize`, `check_convergence`.
+// `target_probability`, PRESENT, calls `configure_for_rare_events()` --
 // applied LAST, after every other option, so it can override `number_of_bins`/`alpha` the same way
 // the ported method itself does when a caller supplies both. Result is
 // {integral, function_evaluations, standard_error, chi_squared} + status -- the one arm on this
@@ -195,6 +199,7 @@
 #include "corehydro/numerics/math/integration/adaptive_gauss_lobatto.hpp"
 #include "corehydro/numerics/math/integration/adaptive_simpsons_rule.hpp"
 #include "corehydro/numerics/math/integration/adaptive_simpsons_rule_2d.hpp"
+#include "corehydro/numerics/math/integration/adaptive_gauss_kronrod_2d.hpp"
 #include "corehydro/numerics/math/integration/integration.hpp"
 #include "corehydro/numerics/math/integration/miser.hpp"
 #include "corehydro/numerics/math/integration/monte_carlo_integration.hpp"
@@ -590,24 +595,37 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
         double max_x = require_double(o, "max_x", "math/quadrature_2d");
         double min_y = require_double(o, "min_y", "math/quadrature_2d");
         double max_y = require_double(o, "max_y", "math/quadrature_2d");
-        integration::AdaptiveSimpsonsRule2D integ(fxy, min_x, max_x, min_y, max_y);
-        if (o.contains("absolute_tolerance"))
-            integ.absolute_tolerance = o.at("absolute_tolerance").as_double();
-        if (o.contains("relative_tolerance"))
-            integ.relative_tolerance = o.at("relative_tolerance").as_double();
-        if (o.contains("min_depth")) integ.min_depth = o.at("min_depth").as_int();
-        if (o.contains("max_depth")) integ.max_depth = o.at("max_depth").as_int();
-        try {
+        std::string qmethod = o.value_or("method", "adaptive_simpson");
+        auto configure = [&](auto& integ) {
+            if (o.contains("absolute_tolerance"))
+                integ.absolute_tolerance = o.at("absolute_tolerance").as_double();
+            if (o.contains("relative_tolerance"))
+                integ.relative_tolerance = o.at("relative_tolerance").as_double();
+            if (o.contains("min_depth")) integ.min_depth = o.at("min_depth").as_int();
+            if (o.contains("max_depth")) integ.max_depth = o.at("max_depth").as_int();
+            if (o.contains("max_function_evaluations"))
+                integ.max_function_evaluations = o.at("max_function_evaluations").as_int();
             integ.integrate();
+            r.values = {integ.result(), static_cast<double>(integ.function_evaluations()),
+                        integ.standard_error()};
+            r.names = {"integral", "function_evaluations", "standard_error"};
+            r.status = integration::status_name(integ.status());
+        };
+        try {
+            if (qmethod == "adaptive_gauss_kronrod") {
+                integration::AdaptiveGaussKronrod2D integ(fxy, min_x, max_x, min_y, max_y);
+                configure(integ);
+            } else if (qmethod == "adaptive_simpson") {
+                integration::AdaptiveSimpsonsRule2D integ(fxy, min_x, max_x, min_y, max_y);
+                configure(integ);
+            } else {
+                throw std::invalid_argument("math/quadrature_2d: unknown method '" + qmethod + "'");
+            }
         } catch (...) {
             g.rethrow_if_aborted();
             throw;
         }
         g.rethrow_if_aborted();
-        r.values = {integ.result(), static_cast<double>(integ.function_evaluations()),
-                    integ.standard_error()};
-        r.names = {"integral", "function_evaluations", "standard_error"};
-        r.status = integration::status_name(integ.status());
         return r;
     }
 
@@ -772,13 +790,14 @@ inline CallbackResult run_math(const std::string& method, const JsonValue& o,
             vegas.random =
                 bfsampling::MersenneTwister(static_cast<std::uint32_t>(o.at("seed").as_int()));
         vegas.use_sobol_sequence = o.value_or("use_sobol", true);
+        if (o.contains("sobol_seed")) vegas.set_sobol_seed(o.at("sobol_seed").as_int());
         if (o.contains("independent_evaluations"))
             vegas.independent_evaluations = o.at("independent_evaluations").as_int();
         if (o.contains("function_calls")) vegas.function_calls = o.at("function_calls").as_int();
         if (o.contains("alpha")) vegas.alpha = o.at("alpha").as_double();
         if (o.contains("number_of_bins")) vegas.set_number_of_bins(o.at("number_of_bins").as_int());
         if (o.contains("tail_focus_parameter"))
-            vegas.tail_focus_parameter = o.at("tail_focus_parameter").as_double();
+            vegas.set_tail_focus_parameter(o.at("tail_focus_parameter").as_double());
         if (o.contains("initialize")) vegas.initialize = o.at("initialize").as_int();
         if (o.contains("check_convergence"))
             vegas.check_convergence = o.at("check_convergence").as_bool();

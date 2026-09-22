@@ -5727,7 +5727,9 @@ static double SamplingDispatch(string method, List<double[]> data, JsonElement o
             ? nEl.GetInt32() : 1;
         int skip = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("skip", out var sk)
             ? sk.GetInt32() : 0;
-        var sobol = new SobolSequence(dimension);
+        var sobol = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("seed", out var seed)
+            ? new SobolSequence(dimension, seed.GetInt32())
+            : new SobolSequence(dimension);
         if (skip > 0) sobol.SkipTo(skip);
         var flat = new List<double>();
         for (int i = 0; i < n; i++) flat.AddRange(sobol.NextDouble());
@@ -7579,28 +7581,41 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             }
             else if (method == "quadrature_2d")
             {
-                // P2 "math extras": the (x, y) half of the math group, always driving
-                // AdaptiveSimpsonsRule2D and always returning the result triple + status, exactly
-                // as quadrature's Integrator-class arms do. See callback/math.hpp's file header.
                 var f2 = CallbackScalarXyFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not an (x, y) function");
-                var asr2d = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule2D(
-                    f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
-                if (options.ValueKind == JsonValueKind.Object)
+                var q2Method = options.ValueKind == JsonValueKind.Object &&
+                               options.TryGetProperty("method", out var q2mEl)
+                    ? q2mEl.GetString()! : "adaptive_simpson";
+                if (q2Method == "adaptive_gauss_kronrod")
                 {
-                    if (options.TryGetProperty("absolute_tolerance", out var at2))
-                        asr2d.AbsoluteTolerance = ParseNum(at2);
-                    if (options.TryGetProperty("relative_tolerance", out var rt2))
-                        asr2d.RelativeTolerance = ParseNum(rt2);
-                    if (options.TryGetProperty("min_depth", out var mnd))
-                        asr2d.MinDepth = (int)ParseNum(mnd);
-                    if (options.TryGetProperty("max_depth", out var mxd))
-                        asr2d.MaxDepth = (int)ParseNum(mxd);
+                    var gk2d = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod2D(
+                        f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
+                    if (Has("absolute_tolerance")) gk2d.AbsoluteTolerance = Opt("absolute_tolerance", 0d);
+                    if (Has("relative_tolerance")) gk2d.RelativeTolerance = Opt("relative_tolerance", 0d);
+                    if (Has("min_depth")) gk2d.MinDepth = (int)Opt("min_depth", 0d);
+                    if (Has("max_depth")) gk2d.MaxDepth = (int)Opt("max_depth", 0d);
+                    if (Has("max_function_evaluations"))
+                        gk2d.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    gk2d.Integrate();
+                    values = [gk2d.Result, gk2d.FunctionEvaluations, gk2d.StandardError];
+                    statusName = gk2d.Status.ToString();
                 }
-                asr2d.Integrate();
-                values = [asr2d.Result, asr2d.FunctionEvaluations, asr2d.StandardError];
+                else if (q2Method == "adaptive_simpson")
+                {
+                    var asr2d = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule2D(
+                        f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
+                    if (Has("absolute_tolerance")) asr2d.AbsoluteTolerance = Opt("absolute_tolerance", 0d);
+                    if (Has("relative_tolerance")) asr2d.RelativeTolerance = Opt("relative_tolerance", 0d);
+                    if (Has("min_depth")) asr2d.MinDepth = (int)Opt("min_depth", 0d);
+                    if (Has("max_depth")) asr2d.MaxDepth = (int)Opt("max_depth", 0d);
+                    if (Has("max_function_evaluations"))
+                        asr2d.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    asr2d.Integrate();
+                    values = [asr2d.Result, asr2d.FunctionEvaluations, asr2d.StandardError];
+                    statusName = asr2d.Status.ToString();
+                }
+                else throw new Exception($"math/quadrature_2d: unknown method '{q2Method}'");
                 dims = [];
-                statusName = asr2d.Status.ToString();
             }
             else if (method == "quadrature_nd")
             {
@@ -7680,6 +7695,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 int vDims = vMin.Length;
                 var vegas = new Numerics.Mathematics.Integration.Vegas(fw, vDims, vMin, vMax);
                 if (Has("seed")) vegas.Random = new MersenneTwister((int)Opt("seed", 0d));
+                if (Has("sobol_seed")) vegas.SobolSeed = (int)Opt("sobol_seed", 0d);
                 vegas.UseSobolSequence = !options.ValueKind.Equals(JsonValueKind.Object) ||
                                          !options.TryGetProperty("use_sobol", out var vusEl) ||
                                          vusEl.GetBoolean();

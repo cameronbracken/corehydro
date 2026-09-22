@@ -978,7 +978,8 @@ def linear_regression(x, y, intercept: bool = True) -> LinearRegressionResult:
 # indicator + correlation-matrix HPCM form). Mirrors corehydror's R/toolbox.R verb for verb.
 
 
-def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
+def sobol_sequence(n: int, dimension: int = 1, skip: int = 0,
+                   seed: int | None = None) -> np.ndarray:
     """Sobol quasi-random low-discrepancy sequence.
 
     Mirrors the C# ``SobolSequence`` class. ``dimension > 1`` needs the new-joe-kuo-6 direction
@@ -999,6 +1000,9 @@ def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
         Number of points to skip before the first returned point: ``skip=k`` returns the same
         first point as the C# ``SkipTo(k)`` call, i.e. the sequence's ``(k + 1)``-th point.
         Default 0 (no skip).
+    seed : int, optional
+        Apply the v2.2.0 linear matrix scramble and digital shift with this seed. ``None``
+        returns the original unscrambled sequence.
 
     Returns
     -------
@@ -1019,6 +1023,8 @@ def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
     if dimension > 1:
         path = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
     options = {"dimension": int(dimension), "n": int(n), "skip": int(skip), "path": path}
+    if seed is not None:
+        options["seed"] = int(seed)
     r = _toolbox_run("sampling", "sobol", [], options)
     return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
 

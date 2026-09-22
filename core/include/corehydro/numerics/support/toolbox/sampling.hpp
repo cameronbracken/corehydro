@@ -11,6 +11,7 @@
 // `options.path`, required even when `dimension == 1` (where SobolSequence never reads it).
 #pragma once
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -32,11 +33,14 @@ inline ToolboxResult run_sampling(const std::string& method,
         int dimension = options.value_or("dimension", 1);
         int n = options.value_or("n", 1);
         int skip = options.value_or("skip", 0);
-        ns::SobolSequence sobol(dimension, options.at("path").as_string());
+        std::unique_ptr<ns::SobolSequence> sobol = options.contains("seed")
+            ? std::make_unique<ns::SobolSequence>(dimension, options.at("path").as_string(),
+                                                  options.at("seed").as_int())
+            : std::make_unique<ns::SobolSequence>(dimension, options.at("path").as_string());
         ToolboxResult r;
-        if (skip > 0) sobol.skip_to(skip);
+        if (skip > 0) sobol->skip_to(skip);
         for (int i = 0; i < n; ++i) {
-            std::vector<double> pt = sobol.next_double();
+            std::vector<double> pt = sobol->next_double();
             r.values.insert(r.values.end(), pt.begin(), pt.end());
         }
         r.dims = {n, dimension};

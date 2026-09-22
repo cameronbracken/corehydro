@@ -441,6 +441,19 @@ def test_sobol_sequence_skip_moves_the_stream():
     np.testing.assert_array_equal(skipped[0], seq5[4])
 
 
+def test_sobol_sequence_seed_reproduces_the_scrambled_stream():
+    expected = np.array(
+        [
+            [0.659847889995655, 0.5825658737429362],
+            [0.8092207866147765, 0.15954710391098081],
+            [0.48233205686128877, 0.7857143836043143],
+        ]
+    )
+    first = sobol_sequence(3, dimension=2, seed=12345)
+    np.testing.assert_array_equal(first, expected)
+    np.testing.assert_array_equal(first, sobol_sequence(3, dimension=2, seed=12345))
+
+
 def test_sobol_sequence_rejects_a_non_positive_n_or_dimension():
     with pytest.raises(ValueError, match="n"):
         sobol_sequence(0)

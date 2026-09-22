@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/SobolSequence.cs @ 2a0357a
+// ported from: Numerics/Sampling/SobolSequence.cs @ 7e8e8d1
 //
 // Sobol quasi-random low-discrepancy sequence. Faithful C++17 port of the C#
 // SobolSequence (itself derived from Apache Commons Math). Bit-exact with the C#
@@ -14,10 +14,13 @@
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "corehydro/numerics/sampling/mersenne_twister.hpp"
 
 namespace corehydro::numerics::sampling {
 
@@ -39,6 +42,7 @@ class SobolSequence {
         : dimension_(dimension)
         , direction_(dimension, std::vector<std::int64_t>(kBits + 1, 0LL))
         , x_(dimension, 0LL)
+        , shift_(dimension, 0LL)
         , count_(0)
     {
         if (dimension < 1 || dimension > kMaxDimension) {
@@ -48,8 +52,16 @@ class SobolSequence {
         initialize(path);
     }
 
+    SobolSequence(int dimension, const std::string& path, int seed)
+        : SobolSequence(dimension, path) {
+        seed_ = seed;
+        MersenneTwister prng(static_cast<std::uint32_t>(seed));
+        scramble_directions(prng);
+    }
+
     // Spatial dimension passed at construction.
     int dimension() const { return dimension_; }
+    std::optional<int> seed() const { return seed_; }
 
     // Returns the next point in the sequence as a vector of length dimension_.
     // Each component is in [0, 1).
@@ -72,7 +84,7 @@ class SobolSequence {
 
         for (int i = 0; i < dimension_; ++i) {
             x_[i] ^= direction_[i][c];
-            v[i] = static_cast<double>(x_[i]) / kScale;
+            v[i] = static_cast<double>(x_[i] ^ shift_[i]) / kScale;
         }
         count_++;
         return v;
@@ -110,8 +122,47 @@ class SobolSequence {
     std::vector<std::vector<std::int64_t>> direction_;
     // Current state vector.
     std::vector<std::int64_t> x_;
+    std::vector<std::int64_t> shift_;
+    std::optional<int> seed_;
     // Sequence counter (0 before the first call to next_double()).
     int count_;
+
+    static bool parity(std::int64_t value) {
+        value ^= value >> 32;
+        value ^= value >> 16;
+        value ^= value >> 8;
+        value ^= value >> 4;
+        value ^= value >> 2;
+        value ^= value >> 1;
+        return (value & 1LL) != 0;
+    }
+
+    static std::int64_t apply_linear_scramble(
+        const std::vector<std::int64_t>& row_masks, std::int64_t vector) {
+        std::int64_t result = 0;
+        for (int i = 1; i <= kBits; ++i)
+            if (parity(row_masks[static_cast<std::size_t>(i - 1)] & vector))
+                result |= std::int64_t(1) << (kBits - i);
+        return result;
+    }
+
+    void scramble_directions(MersenneTwister& prng) {
+        std::vector<std::int64_t> row_masks(kBits);
+        for (int d = 0; d < dimension_; ++d) {
+            for (int i = 1; i <= kBits; ++i) {
+                std::int64_t mask = std::int64_t(1) << (kBits - i);
+                for (int j = 1; j < i; ++j)
+                    if (prng.next(2) == 1) mask |= std::int64_t(1) << (kBits - j);
+                row_masks[static_cast<std::size_t>(i - 1)] = mask;
+            }
+            for (int c = 1; c <= kBits; ++c)
+                direction_[d][c] = apply_linear_scramble(row_masks, direction_[d][c]);
+            std::int64_t shift = 0;
+            for (int i = 1; i <= kBits; ++i)
+                if (prng.next(2) == 1) shift |= std::int64_t(1) << (kBits - i);
+            shift_[d] = shift;
+        }
+    }
 
     void initialize(const std::string& path) {
         // Dimension 1 (index 0): unit initialization — no file needed.

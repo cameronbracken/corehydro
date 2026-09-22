@@ -549,11 +549,13 @@ interpolate_2d <- function(x1, x2, y, x1out, x2out,
 #' @param skip number of points to skip before the first returned point: `skip = k` returns the
 #'   same first point as the C# `SkipTo(k)` call, i.e. the sequence's `(k + 1)`-th point.
 #'   Default 0 (no skip).
+#' @param seed optional integer seed for the v2.2.0 linear matrix scramble and digital shift.
+#'   `NULL` returns the original unscrambled sequence.
 #' @return an `n` by `dimension` numeric matrix, every value in `[0, 1)`.
 #' @examples
 #' sobol_sequence(5, dimension = 2)
 #' @export
-sobol_sequence <- function(n, dimension = 1L, skip = 0L) {
+sobol_sequence <- function(n, dimension = 1L, skip = 0L, seed = NULL) {
   if (!is.numeric(n) || length(n) != 1L || n < 1) {
     stop("`n` must be a single positive integer", call. = FALSE)
   }
@@ -568,7 +570,7 @@ sobol_sequence <- function(n, dimension = 1L, skip = 0L) {
     }
   }
   opts <- list(dimension = as.integer(dimension), n = as.integer(n), skip = as.integer(skip),
-               path = path)
+               path = path, seed = if (is.null(seed)) NULL else as.integer(seed))
   r <- toolbox_run("sampling", "sobol", list(), opts)
   matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
 }

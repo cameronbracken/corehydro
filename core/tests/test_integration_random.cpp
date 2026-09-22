@@ -25,6 +25,7 @@
 #include "check.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/math/integration/miser.hpp"
+#include "corehydro/numerics/math/integration/adaptive_gauss_kronrod_2d.hpp"
 #include "corehydro/numerics/math/integration/monte_carlo_integration.hpp"
 #include "corehydro/numerics/math/integration/vegas.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
@@ -32,6 +33,8 @@
 
 using corehydro::numerics::distributions::Normal;
 using corehydro::numerics::math::integration::Miser;
+using corehydro::numerics::math::integration::AdaptiveGaussKronrod2D;
+using corehydro::numerics::math::integration::IntegrationStatus;
 using corehydro::numerics::math::integration::MonteCarloIntegration;
 using corehydro::numerics::math::integration::Vegas;
 using corehydro::numerics::sampling::MersenneTwister;
@@ -253,7 +256,7 @@ void vegas_power_transform_backward_compatibility() {
     Vegas vegas_power(
         [](const std::vector<double>& x, double) { return integrand_sum_of_normals(x); }, 5, min,
         max, kSobolPath);
-    vegas_power.tail_focus_parameter = 1.0;
+    vegas_power.set_tail_focus_parameter(1.0);
     vegas_power.integrate();
     double result_power = vegas_power.result();
 
@@ -275,7 +278,7 @@ void vegas_power_transform_rare_upper_tail_event() {
         },
         5, min, max, kSobolPath);
 
-    vegas.tail_focus_parameter = 2.0;
+    vegas.set_tail_focus_parameter(2.0);
     vegas.set_number_of_bins(100);
     vegas.function_calls = 50000;
     vegas.independent_evaluations = 5;
@@ -340,7 +343,7 @@ void vegas_power_transform_probability_range() {
         },
         3, min, max, kSobolPath);
 
-    vegas.tail_focus_parameter = 4.0;
+    vegas.set_tail_focus_parameter(4.0);
     vegas.function_calls = 10000;
     vegas.independent_evaluations = 2;
 
@@ -350,6 +353,40 @@ void vegas_power_transform_probability_range() {
     CHECK_TRUE(sample_count > 0);
     CHECK_TRUE(max_observed > 0.99);
     CHECK_TRUE(min_observed < 0.5);
+}
+
+void adaptive_gauss_kronrod_2d_analytic_and_recorder() {
+    AdaptiveGaussKronrod2D integ([](double x, double y) { return x + y; }, 0, 1, 0, 1);
+    double mass = 0.0, weighted = 0.0;
+    int recorded = 0;
+    integ.recorder = [&](double, double, double weight, double value) {
+        mass += weight;
+        weighted += weight * value;
+        ++recorded;
+    };
+    integ.integrate();
+    CHECK_NEAR(integ.result(), 1.0, 1e-14);
+    CHECK_NEAR(integ.standard_error(), 0.0, 1e-14);
+    CHECK_EQ(integ.function_evaluations(), 441);
+    CHECK_EQ(recorded, 441);
+    CHECK_NEAR(mass, 1.0, 1e-14);
+    CHECK_NEAR(weighted, integ.result(), 1e-14);
+}
+
+void adaptive_gauss_kronrod_2d_exhaustion_flush() {
+    AdaptiveGaussKronrod2D integ(
+        [](double x, double y) { return x < 0.3 && y < 0.7 ? 1.0 : 0.0; }, 0, 1, 0, 1);
+    integ.absolute_tolerance = 1e-15;
+    integ.relative_tolerance = 1e-15;
+    integ.max_function_evaluations = 441;
+    double mass = 0.0;
+    integ.recorder = [&](double, double, double weight, double) { mass += weight; };
+    integ.integrate();
+    CHECK_TRUE(integ.status() == IntegrationStatus::MaximumFunctionEvaluationsReached);
+    CHECK_EQ(integ.function_evaluations(), 441);
+    CHECK_NEAR(mass, 1.0, 1e-14);
+    CHECK_TRUE(std::isfinite(integ.result()));
+    CHECK_TRUE(integ.standard_error() > 0.0);
 }
 
 }  // namespace
@@ -379,6 +416,8 @@ int main() {
     vegas_power_transform_rare_upper_tail_event();
     vegas_power_transform_very_rare_event();
     vegas_power_transform_probability_range();
+    adaptive_gauss_kronrod_2d_analytic_and_recorder();
+    adaptive_gauss_kronrod_2d_exhaustion_flush();
 
     return chtest::summary("test_integration_random");
 }

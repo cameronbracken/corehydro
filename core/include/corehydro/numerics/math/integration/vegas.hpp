@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Integration/Vegas.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Integration/Vegas.cs @ 7e8e8d1
 //
 // Vegas: adaptive importance-sampling Monte Carlo integration (Lepage's algorithm, "Numerical
 // Recipes" Sec. 7.8), with the upstream Power Transform enhancement for rare-tail-event sampling
@@ -36,6 +36,7 @@
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -54,11 +55,12 @@ class Vegas : public Integrator {
    public:
     /// Constructs a new Vegas class. `function` is the multidimensional function to integrate --
     /// its second argument is the sample weight -- `dimensions` the number of dimensions it
-    /// takes (max 20), `min`/`max` the per-dimension bounds the integral is computed under.
+    /// takes (max 50), `min`/`max` the per-dimension bounds the integral is computed under.
     /// `sobol_path` is a corehydro addition -- see the file header.
     Vegas(std::function<double(const std::vector<double>&, double)> function, int dimensions,
           std::vector<double> min, std::vector<double> max, const std::string& sobol_path = "")
-        : dimensions_(validate_dimensions(dimensions, min, max)), sobol_(dimensions_, sobol_path) {
+        : dimensions_(validate_dimensions(dimensions, min, max)), sobol_path_(sobol_path),
+          sobol_(dimensions_, sobol_path) {
         for (std::size_t i = 0; i < min.size(); ++i) {
             if (max[i] <= min[i])
                 throw std::out_of_range(
@@ -127,7 +129,20 @@ class Vegas : public Integrator {
     /// samples in the upper tail; weights are corrected by the Jacobian dp'/dp = gamma(1-p)^
     /// (gamma-1), which stays O(1) -- unlike z-space transforms, this stays numerically stable in
     /// high dimensions.
-    double tail_focus_parameter = 1.0;
+    double tail_focus_parameter() const { return tail_focus_parameter_; }
+    void set_tail_focus_parameter(double value) {
+        if (!corehydro::numerics::is_finite(value) || value <= 0.0)
+            throw std::out_of_range("The tail-focus parameter must be finite and positive.");
+        tail_focus_parameter_ = value;
+    }
+
+    std::optional<int> sobol_seed() const { return sobol_seed_; }
+    void set_sobol_seed(std::optional<int> value) {
+        sobol_seed_ = value;
+        sobol_ = value.has_value()
+            ? sampling::SobolSequence(dimensions_, sobol_path_, *value)
+            : sampling::SobolSequence(dimensions_, sobol_path_);
+    }
 
     /// The stratification grid boundaries, sized `[dimensions][number_of_bins]` -- see the file
     /// header's GRID ACCESSOR note.
@@ -143,10 +158,14 @@ class Vegas : public Integrator {
     /// on `target_probability` (e.g. 1e-6). Chosen so the target probability appears in ~5% of
     /// transformed samples: gamma ~= ln(targetProbability) / ln(0.05), clamped to [1, 20].
     void configure_for_rare_events(double target_probability) {
+        if (!corehydro::numerics::is_finite(target_probability) || target_probability <= 0.0 ||
+            target_probability >= 1.0)
+            throw std::out_of_range(
+                "The target probability must be finite and between zero and one.");
         double gamma = std::log(target_probability) / std::log(0.05);
         gamma = std::max(1.0, std::min(gamma, 20.0));
 
-        tail_focus_parameter = gamma;
+        set_tail_focus_parameter(gamma);
         set_number_of_bins(std::max(100, number_of_bins()));
         alpha = 1.8;  // More aggressive grid adaptation
     }
@@ -185,18 +204,21 @@ class Vegas : public Integrator {
                 "The minimum and maximum values must be the same length as the number of "
                 "dimensions.");
         if (dimensions > kMaxDimensions)
-            throw std::out_of_range("The maximum number of dimensions is 20.");
+            throw std::out_of_range("The maximum number of dimensions is 50.");
         return dimensions;
     }
 
-    static constexpr int kMaxDimensions = 20;
+    static constexpr int kMaxDimensions = 50;
     static constexpr double kTinyValue = 1.0e-30;
 
     std::function<double(const std::vector<double>&, double)> function_;
     int dimensions_ = 0;
     std::vector<double> min_;
     std::vector<double> max_;
+    std::string sobol_path_;
     sampling::SobolSequence sobol_;
+    std::optional<int> sobol_seed_;
+    double tail_focus_parameter_ = 1.0;
 
     std::vector<double> region_;  // computed, unused elsewhere -- mirrors C#'s dead `_region`.
     int number_of_bins_ = 50;
@@ -262,7 +284,7 @@ class Vegas : public Integrator {
     // Applies the power transform to probability `p` for tail-focused sampling: p' = 1-(1-p)^gamma
     // concentrates samples in the upper tail when gamma > 1. Identity when gamma == 1.
     double apply_power_transform(double p) const {
-        double gamma = tail_focus_parameter;
+        double gamma = tail_focus_parameter_;
         if (std::fabs(gamma - 1.0) < 1e-10) return p;
         return 1.0 - std::pow(1.0 - p, gamma);
     }
@@ -270,7 +292,7 @@ class Vegas : public Integrator {
     // Computes the Jacobian for the power transform: dp'/dp = gamma(1-p)^(gamma-1). Returns 1.0
     // (identity) when gamma == 1. (1-p) is clamped away from zero to avoid numerical issues.
     double power_transform_jacobian(double p) const {
-        double gamma = tail_focus_parameter;
+        double gamma = tail_focus_parameter_;
         if (std::fabs(gamma - 1.0) < 1e-10) return 1.0;
         double one_minus_p = std::max(1.0 - p, 1e-15);
         return gamma * std::pow(one_minus_p, gamma - 1.0);

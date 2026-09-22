@@ -1,5 +1,4 @@
-// ported from: Numerics/Mathematics/Integration/AdaptiveGuassKronrod.cs @ 2a0357a
-// (upstream's filename carries the "Guass" typo; the class itself is AdaptiveGaussKronrod.)
+// ported from: Numerics/Mathematics/Integration/AdaptiveGaussKronrod.cs @ 7e8e8d1
 //
 // Adaptive Gauss-Kronrod quadrature over a pair of nested rules: the 10-point Gauss rule and its
 // 21-point Kronrod extension (G10K21). The Kronrod rule reuses every Gauss point and adds eleven
@@ -20,8 +19,10 @@
 // the class) do not change. It is a thin wrapper: construct, set, integrate, read Result.
 #pragma once
 #include <cmath>
+#include <array>
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -36,6 +37,7 @@ namespace corehydro::numerics::math::integration {
 /// A class that performs adaptive Gauss-Kronrod integration.
 class AdaptiveGaussKronrod : public Integrator {
    public:
+    using Recorder = std::function<void(double, double, double)>;
     /// Constructs a new adaptive Gauss-Kronrod rule. `function` is the function to integrate,
     /// `min` and `max` the bounds the integral is computed under.
     AdaptiveGaussKronrod(std::function<double(double)> function, double min, double max) {
@@ -121,6 +123,8 @@ class AdaptiveGaussKronrod : public Integrator {
     /// Returns an approximate measure of the standard error of the integration.
     double standard_error() const { return standard_error_; }
 
+    Recorder recorder;
+
     /// Evaluates the integral.
     void integrate() override {
         squared_error_ = 0;
@@ -130,10 +134,11 @@ class AdaptiveGaussKronrod : public Integrator {
 
         try {
             // Initial evaluation using Gauss-Kronrod rule on the whole interval
-            auto [kronrod_result, gauss_result] = evaluate_gauss_kronrod(a_, b_);
+            Recorder record = recorder;
+            Eval whole = evaluate_gauss_kronrod(a_, b_, 0, static_cast<bool>(record));
 
             // Recursively sub-divide
-            result_ = adaptive_gk(function_, a_, b_, max_depth, kronrod_result, gauss_result, a_, b_);
+            result_ = adaptive_gk(a_, b_, max_depth, whole, a_, b_, 0, record);
 
             // Standard error calculated after recursion completes
             standard_error_ = std::sqrt(squared_error_);
@@ -162,11 +167,11 @@ class AdaptiveGaussKronrod : public Integrator {
                 // Initial evaluation using Gauss-Kronrod rule on the bin interval
                 double bin_a = bins[i].lower_bound();
                 double bin_b = bins[i].upper_bound();
-                auto [kronrod_result, gauss_result] = evaluate_gauss_kronrod(bin_a, bin_b);
+                Recorder record = recorder;
+                Eval whole = evaluate_gauss_kronrod(bin_a, bin_b, 0, static_cast<bool>(record));
 
                 // Recursively sub-divide
-                mu += adaptive_gk(function_, bin_a, bin_b, max_depth, kronrod_result, gauss_result,
-                                  bin_a, bin_b);
+                mu += adaptive_gk(bin_a, bin_b, max_depth, whole, bin_a, bin_b, 0, record);
             }
 
             // Final result and standard error
@@ -187,19 +192,49 @@ class AdaptiveGaussKronrod : public Integrator {
    private:
     double standard_error_ = 0.0;
 
+    struct Eval {
+        double kronrod = 0.0;
+        double gauss = 0.0;
+        std::array<double, 21>* nodes = nullptr;
+        std::array<double, 21>* values = nullptr;
+    };
+    std::vector<std::unique_ptr<std::array<double, 21>>> node_pool_;
+    std::vector<std::unique_ptr<std::array<double, 21>>> value_pool_;
+
+    static constexpr std::array<double, 21> capture_weights() {
+        std::array<double, 21> weights{};
+        weights[0] = kWKronrod[10];
+        for (int i = 0; i < 10; ++i) {
+            weights[2 * i + 1] = kWKronrod[i];
+            weights[2 * i + 2] = kWKronrod[i];
+        }
+        return weights;
+    }
+
+    std::array<double, 21>& rent(
+        std::vector<std::unique_ptr<std::array<double, 21>>>& pool, int slot) {
+        if (slot >= static_cast<int>(pool.size())) pool.resize(static_cast<std::size_t>(slot + 1));
+        auto& entry = pool[static_cast<std::size_t>(slot)];
+        if (!entry) entry = std::make_unique<std::array<double, 21>>();
+        return *entry;
+    }
+
     /// Evaluates the Gauss-Kronrod G10K21 rule over the interval [a, b], returning
     /// (Kronrod estimate, Gauss estimate).
-    std::pair<double, double> evaluate_gauss_kronrod(double a, double b) {
+    Eval evaluate_gauss_kronrod(double a, double b, int slot, bool capture) {
         double center = 0.5 * (a + b);
         double half_length = 0.5 * (b - a);
 
         double result_gauss = 0.0;
         double result_kronrod = 0.0;
+        std::array<double, 21>* nodes = capture ? &rent(node_pool_, slot) : nullptr;
+        std::array<double, 21>* values = capture ? &rent(value_pool_, slot) : nullptr;
 
         // Evaluate at center point (x = 0)
         double f0 = function_(center);
         result_kronrod += kWKronrod[10] * f0;
         function_evaluations_++;
+        if (nodes) { (*nodes)[0] = center; (*values)[0] = f0; }
 
         // Evaluate at symmetric pairs of points
         for (int i = 0; i < 10; i++) {
@@ -218,28 +253,34 @@ class AdaptiveGaussKronrod : public Integrator {
             }
 
             function_evaluations_ += 2;
+            if (nodes) {
+                (*nodes)[2 * i + 1] = center - abscissa;
+                (*nodes)[2 * i + 2] = center + abscissa;
+                (*values)[2 * i + 1] = fval1;
+                (*values)[2 * i + 2] = fval2;
+            }
         }
 
         result_gauss *= half_length;
         result_kronrod *= half_length;
 
-        return {result_kronrod, result_gauss};
+        return {result_kronrod, result_gauss, nodes, values};
     }
 
     /// A helper function for adaptive Gauss-Kronrod integration. Subdivides [a, b] until the error
     /// between the Gauss and Kronrod estimates is small enough, and returns the Kronrod estimate.
     /// `a0`/`b0` are the original bounds, used to scale the relative tolerance by interval length.
-    double adaptive_gk(const std::function<double(double)>& f, double a, double b, int depth,
-                       double kronrod_whole, double gauss_whole, double a0, double b0) {
+    double adaptive_gk(double a, double b, int depth, const Eval& whole,
+                       double a0, double b0, int level, const Recorder& record) {
         // Error estimate: difference between Kronrod and Gauss results
-        double error = std::fabs(kronrod_whole - gauss_whole);
+        double error = std::fabs(whole.kronrod - whole.gauss);
 
         // Scaled tolerance based on interval length relative to original domain
         double tolerance_scaled = relative_tolerance * std::fabs(b - a) / std::fabs(b0 - a0);
 
         // Absolute and Relative tolerance checks
         bool absolute_tolerance_reached = error <= absolute_tolerance;
-        bool relative_tolerance_reached = error <= tolerance_scaled * std::fabs(kronrod_whole);
+        bool relative_tolerance_reached = error <= tolerance_scaled * std::fabs(whole.kronrod);
 
         // Check if convergence criteria are met
         if (depth <= 0 || std::fabs(a - b) <= kDoubleMachineEpsilon ||
@@ -248,20 +289,26 @@ class AdaptiveGaussKronrod : public Integrator {
              (absolute_tolerance_reached || relative_tolerance_reached))) {
             // Convergence is reached
             squared_error_ += error * error;  // Accumulate squared errors
-            return kronrod_whole;             // Return the more accurate Kronrod estimate
+            if (record && whole.nodes && whole.values) {
+                constexpr auto weights = capture_weights();
+                double half_length = 0.5 * (b - a);
+                for (int j = 0; j < 21; ++j)
+                    record((*whole.nodes)[j], weights[j] * half_length, (*whole.values)[j]);
+            }
+            return whole.kronrod;
         } else {
             // Subdivide the interval at the midpoint
             double m = (a + b) / 2.0;
 
             // Evaluate Gauss-Kronrod on left half
-            auto [kronrod_left, gauss_left] = evaluate_gauss_kronrod(a, m);
+            Eval left = evaluate_gauss_kronrod(a, m, 2 * level + 1, static_cast<bool>(record));
 
             // Evaluate Gauss-Kronrod on right half
-            auto [kronrod_right, gauss_right] = evaluate_gauss_kronrod(m, b);
+            Eval right = evaluate_gauss_kronrod(m, b, 2 * level + 2, static_cast<bool>(record));
 
             // Recursively subdivide the intervals and accumulate results
-            auto left_result = adaptive_gk(f, a, m, depth - 1, kronrod_left, gauss_left, a0, b0);
-            auto right_result = adaptive_gk(f, m, b, depth - 1, kronrod_right, gauss_right, a0, b0);
+            auto left_result = adaptive_gk(a, m, depth - 1, left, a0, b0, level + 1, record);
+            auto right_result = adaptive_gk(m, b, depth - 1, right, a0, b0, level + 1, record);
 
             return left_result + right_result;
         }

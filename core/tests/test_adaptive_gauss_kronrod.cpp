@@ -167,6 +167,21 @@ int main() {
 
     // --- the free wrapper the two in-tree callers use ------------------------------------------
     {
+        AdaptiveGaussKronrod a([](double x) { return x * x; }, 0.0, 1.0);
+        double mass = 0.0, weighted = 0.0;
+        int recorded = 0;
+        a.recorder = [&](double, double weight, double value) {
+            mass += weight;
+            weighted += weight * value;
+            ++recorded;
+        };
+        a.integrate();
+        CHECK_EQ(recorded, 21);
+        CHECK_NEAR(mass, 1.0, 1e-14);
+        CHECK_NEAR(weighted, a.result(), 1e-14);
+    }
+
+    {
         CHECK_NEAR(agk::integrate([](double x) { return x * x; }, 0.0, 3.0), 9.0, 1e-12);
         CHECK_NEAR(agk::integrate([](double x) { return std::sin(x); }, 0.0, corehydro::numerics::kPi),
                    2.0, 1e-10);

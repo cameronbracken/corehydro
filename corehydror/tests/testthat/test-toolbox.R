@@ -405,6 +405,18 @@ test_that("sobol_sequence() skip moves the stream: point 1 with skip = k equals 
   expect_equal(skipped[1, ], seq5[5, ], tolerance = 0)
 })
 
+test_that("sobol_sequence() seed reproduces the scrambled stream", {
+  expected <- matrix(c(
+    0.659847889995655, 0.5825658737429362,
+    0.8092207866147765, 0.15954710391098081,
+    0.48233205686128877, 0.7857143836043143
+  ), nrow = 3, byrow = TRUE)
+  first <- sobol_sequence(3, dimension = 2, seed = 12345)
+  # R's decimal parser lands one ulp away from two of the C# literals.
+  expect_equal(first, expected, tolerance = 1e-15)
+  expect_identical(first, sobol_sequence(3, dimension = 2, seed = 12345))
+})
+
 test_that("sobol_sequence() rejects a non-positive n or dimension, naming the argument", {
   expect_error(sobol_sequence(0), "n")
   expect_error(sobol_sequence(5, dimension = 0), "dimension")

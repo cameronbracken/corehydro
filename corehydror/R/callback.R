@@ -336,10 +336,8 @@ quadrature <- function(f, lower, upper,
 #' Integrate a user-written function of two variables over a rectangle
 #'
 #' Computes the definite integral of `f(x, y)` over the rectangle `[min_x, max_x] x
-#' [min_y, max_y]` with the ported Numerics adaptive Simpson's rule in two dimensions
-#' (P2 "math extras"): the tensor-product 3x3-point Simpson estimate over the whole domain is
-#' compared against the sum of the four quadrant sub-estimates, and the domain is subdivided into
-#' quadrants until the two agree to the requested tolerance.
+#' [min_y, max_y]` with either the ported adaptive Simpson rule or the globally adaptive
+#' Gauss-Kronrod rule added in Numerics 2.2.
 #'
 #' @param f a function taking two numbers (`x`, `y`) and returning one number.
 #' @param min_x,max_x,min_y,max_y the bounds of the rectangle. `max_x` must be above `min_x`, and
@@ -349,13 +347,19 @@ quadrature <- function(f, lower, upper,
 #'   `NULL`, the default, leaves the ported integrator's own defaults (1e-8) in force.
 #' @param min_depth,max_depth the recursion-depth bounds. `NULL`, the default, leaves the ported
 #'   class's own defaults (0 and 100) in force.
+#' @param max_function_evaluations maximum evaluations of `f`. `NULL` leaves the selected
+#'   integrator's default in force.
+#' @param method `"adaptive_simpson"` (the default) or `"adaptive_gauss_kronrod"`.
 #' @return the integral, a single number, carrying the same three attributes [quadrature()]
 #'   returns: `status`, `function_evaluations`, and `standard_error`.
 #' @examples
 #' quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1)
 #' @export
 quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NULL,
-                          relative_tolerance = NULL, min_depth = NULL, max_depth = NULL) {
+                          relative_tolerance = NULL, min_depth = NULL, max_depth = NULL,
+                          max_function_evaluations = NULL,
+                          method = c("adaptive_simpson", "adaptive_gauss_kronrod")) {
+  method <- match.arg(method)
   if (!is.function(f)) {
     stop("`f` must be a function taking two numbers and returning a single number", call. = FALSE)
   }
@@ -375,7 +379,7 @@ quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NU
     stop("`min_y` must be below `max_y`", call. = FALSE)
   }
   opts <- list(min_x = as.double(min_x), max_x = as.double(max_x),
-              min_y = as.double(min_y), max_y = as.double(max_y))
+              min_y = as.double(min_y), max_y = as.double(max_y), method = method)
   if (!is.null(absolute_tolerance)) {
     if (!is.numeric(absolute_tolerance) || length(absolute_tolerance) != 1L ||
         absolute_tolerance < 1e-15 || absolute_tolerance > 1) {
@@ -401,6 +405,13 @@ quadrature_2d <- function(f, min_x, max_x, min_y, max_y, absolute_tolerance = NU
       stop("`max_depth` must be a single non-negative integer", call. = FALSE)
     }
     opts$max_depth <- as.integer(max_depth)
+  }
+  if (!is.null(max_function_evaluations)) {
+    if (!is.numeric(max_function_evaluations) || length(max_function_evaluations) != 1L ||
+        max_function_evaluations < 1) {
+      stop("`max_function_evaluations` must be a single positive integer", call. = FALSE)
+    }
+    opts$max_function_evaluations <- as.integer(max_function_evaluations)
   }
   res <- ch_callback_math_xy_("quadrature_2d", to_spec_json(opts), f)
   structure(res$values[[1]],
@@ -583,12 +594,13 @@ ode_solve <- function(f, initial_value, start_time, end_time = NULL, time_steps 
 #'   the dither applied when the integrand's active region falls on a subdivision boundary. `NULL`,
 #'   the default, leaves the ported class's own defaults in force. Supplying any for another
 #'   `method` raises an error.
-#' @param independent_evaluations,function_calls,alpha,number_of_bins,tail_focus_parameter,initialize,check_convergence,target_probability
+#' @param independent_evaluations,function_calls,alpha,number_of_bins,tail_focus_parameter,sobol_seed,initialize,check_convergence,target_probability
 #'   `method = "vegas"` alone. `independent_evaluations`
 #'   and `function_calls` bound the run (their product is the maximum total evaluations);
 #'   `alpha` is the grid-refinement damping exponent; `number_of_bins` the stratification bin
 #'   count; `tail_focus_parameter` the Power Transform exponent (1.0, the default, is standard
-#'   uniform sampling); `initialize` selects a cold start (0, the default), inheriting the grid
+#'   uniform sampling); `sobol_seed` the v2.2 linear matrix scramble and digital shift seed used
+#'   when Sobol sampling is enabled; `initialize` selects a cold start (0, the default), inheriting the grid
 #'   alone (1), or inheriting the grid and its answers (2); `check_convergence` whether to exit
 #'   early on convergence. `target_probability`, if supplied, calls the ported
 #'   `configure_for_rare_events()` helper -- applied AFTER every other option, so it may override
@@ -622,7 +634,7 @@ quadrature_nd <- function(f, min, max,
                           min_bisections = NULL, dither = NULL,
                           independent_evaluations = NULL, function_calls = NULL,
                           alpha = NULL, number_of_bins = NULL,
-                          tail_focus_parameter = NULL, initialize = NULL,
+                          tail_focus_parameter = NULL, sobol_seed = NULL, initialize = NULL,
                           check_convergence = NULL, target_probability = NULL) {
   method <- match.arg(method)
   callback_check_fn(f)
@@ -665,7 +677,8 @@ quadrature_nd <- function(f, min, max,
   mc_only <- c("min_iterations", "max_iterations", "relative_tolerance")
   miser_only <- c("fraction", "min_subregion_points", "min_bisections", "dither")
   vegas_only <- c("independent_evaluations", "function_calls", "alpha", "number_of_bins",
-                  "tail_focus_parameter", "initialize", "check_convergence", "target_probability")
+                  "tail_focus_parameter", "sobol_seed", "initialize", "check_convergence",
+                  "target_probability")
   supplied <- function(...) {
     vals <- list(...)
     names(vals)[!vapply(vals, is.null, logical(1))]
@@ -685,7 +698,8 @@ quadrature_nd <- function(f, min, max,
   check_scope(supplied(independent_evaluations = independent_evaluations,
                        function_calls = function_calls, alpha = alpha,
                        number_of_bins = number_of_bins,
-                       tail_focus_parameter = tail_focus_parameter, initialize = initialize,
+                       tail_focus_parameter = tail_focus_parameter, sobol_seed = sobol_seed,
+                       initialize = initialize,
                        check_convergence = check_convergence,
                        target_probability = target_probability),
               "vegas", '"vegas"')
@@ -707,6 +721,7 @@ quadrature_nd <- function(f, min, max,
   if (!is.null(alpha)) opts$alpha <- as.double(alpha)
   if (!is.null(number_of_bins)) opts$number_of_bins <- as.integer(number_of_bins)
   if (!is.null(tail_focus_parameter)) opts$tail_focus_parameter <- as.double(tail_focus_parameter)
+  if (!is.null(sobol_seed)) opts$sobol_seed <- as.integer(sobol_seed)
   if (!is.null(initialize)) opts$initialize <- as.integer(initialize)
   if (!is.null(check_convergence)) {
     if (!is.logical(check_convergence) || length(check_convergence) != 1L || is.na(check_convergence)) {

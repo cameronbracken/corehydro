@@ -78,5 +78,27 @@ int main(int argc, char* argv[]) {
         CHECK_NEAR(jumped[1], fifth[1], 0.0);
     }
 
+    // --- Seeded linear scramble and digital shift -----------------------------------
+    {
+        SobolSequence first(2, path, 12345);
+        SobolSequence second(2, path, 12345);
+        const double expected[3][2] = {
+            {0.659847889995655, 0.5825658737429362},
+            {0.8092207866147765, 0.15954710391098081},
+            {0.48233205686128877, 0.7857143836043143},
+        };
+        for (int i = 0; i < 3; ++i) {
+            auto a = first.next_double();
+            auto b = second.next_double();
+            for (int j = 0; j < 2; ++j) {
+                CHECK_EQ(a[j], b[j]);
+                CHECK_EQ(a[j], expected[i][j]);
+            }
+        }
+        CHECK_TRUE(first.seed().has_value());
+        CHECK_EQ(*first.seed(), 12345);
+        CHECK_TRUE(!SobolSequence(2, path).seed().has_value());
+    }
+
     return chtest::summary("sobol");
 }

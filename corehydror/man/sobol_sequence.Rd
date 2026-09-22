@@ -4,7 +4,7 @@
 \alias{sobol_sequence}
 \title{Sobol quasi-random low-discrepancy sequence}
 \usage{
-sobol_sequence(n, dimension = 1L, skip = 0L)
+sobol_sequence(n, dimension = 1L, skip = 0L, seed = NULL)
 }
 \arguments{
 \item{n}{number of points to generate, at least 1.}
@@ -14,6 +14,9 @@ sobol_sequence(n, dimension = 1L, skip = 0L)
 \item{skip}{number of points to skip before the first returned point: \code{skip = k} returns the
 same first point as the C# \code{SkipTo(k)} call, i.e. the sequence's \code{(k + 1)}-th point.
 Default 0 (no skip).}
+
+\item{seed}{optional integer seed for the v2.2.0 linear matrix scramble and digital shift.
+\code{NULL} returns the original unscrambled sequence.}
 }
 \value{
 an \code{n} by \code{dimension} numeric matrix, every value in \verb{[0, 1)}.

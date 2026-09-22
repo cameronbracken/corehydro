@@ -38,5 +38,18 @@ int main() {
         CHECK_NEAR(b.next_double(), expected, 0.0);
     }
 
+    // Constructing clock-seeded instances advances only the process-wide clock-seed counter.
+    // It cannot alter an explicitly seeded stream.
+    {
+        MersenneTwister before(12345u);
+        MersenneTwister unseeded_one;
+        MersenneTwister unseeded_two;
+        (void)unseeded_one;
+        (void)unseeded_two;
+        MersenneTwister after(12345u);
+        for (int i = 0; i < 20; ++i)
+            CHECK_EQ(before.gen_rand_int32(), after.gen_rand_int32());
+    }
+
     return chtest::summary("mersenne_twister");
 }

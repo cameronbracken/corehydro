@@ -2293,12 +2293,13 @@ an Integrator to report one -- those `"status"` assertions are therefore structu
 `EMITTER-READ`, the same distinction the file header draws for `root_find`/`derivative`/
 `gradient`/`hessian`). `"adaptive_simpsons"` alone takes the optional `min_depth`/`max_depth`;
 the three fixed-step statics take the optional `steps` (default 2). `quadrature_2d` is a SEPARATE
-method rather than a `quadrature` arm, because its callback is `f(x, y)` rather than `f(x)`; it
-always drives AdaptiveSimpsonsRule2D and always returns the result triple + status, with
-`options.min_x`/`max_x`/`min_y`/`max_y` required and `absolute_tolerance`/`relative_tolerance`/
-`min_depth`/`max_depth` optional. `Quad2D_XPlusY` and `Quad2D_PI2D` in
-`fixtures/callback/math.json` are its two catalog entries, both real upstream integrands
-(`Test_AdaptiveSimpsonsRule2D.Test_XPlusY`/`Test_PI`, the latter Integrands.PI2D).
+method rather than a `quadrature` arm, because its callback is `f(x, y)` rather than `f(x)`.
+`options.method` selects AdaptiveSimpsonsRule2D (`"adaptive_simpson"`, the default) or the v2.2
+AdaptiveGaussKronrod2D (`"adaptive_gauss_kronrod"`); both return the result triple + status.
+`options.min_x`/`max_x`/`min_y`/`max_y` are required and `absolute_tolerance`/
+`relative_tolerance`/`min_depth`/`max_depth`/`max_function_evaluations` are optional.
+`Quad2D_XPlusY` and `Quad2D_PI2D` in `fixtures/callback/math.json` are real upstream integrands;
+the former also pins the one-region 441-evaluation Gauss-Kronrod path.
 
 P2 "math extras" also added `math/ode_solve`, over the ported RungeKutta family
 (`numerics/math/ode/runge_kutta.hpp`): `second_order`, `fourth_order` (plus its single-step
@@ -2748,7 +2749,8 @@ a wrapper concern (R's `system.file()`, Python's `importlib.resources`, the C++/
 harnesses' own resolution against `core/data/`), so `options` in the fixture itself never carries
 a `path` key -- each harness injects its own resolved path before dispatching, and the dotnet
 emitter does not need one at all (the real `SobolSequence` ctor takes no path; the direction
-numbers are a compiled resource). `joint_probability.json`'s six cases are scraped verbatim from
+numbers are a compiled resource). The v2.2 seeded case pins the Matousek linear-matrix scramble
+and digital shift at seed 12345. `joint_probability.json`'s six cases are scraped verbatim from
 `Test_Probability.cs`'s `Test_JointABCD_{Independent,PositivelyDependent,NegativelyDependent}`
 (the plain `probabilities` + `DependencyType` overload) and the matching `_PCM` variants (the
 `indicators` + correlation-matrix overload, which routes to `JointProbabilityHPCM` under the
