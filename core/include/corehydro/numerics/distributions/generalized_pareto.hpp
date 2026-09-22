@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/GeneralizedPareto.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/GeneralizedPareto.cs @ 7e8e8d1
 //
 // Generalized Pareto distribution: parameters ξ (location), α (scale), κ (shape).
 // Mirrors the C# source method-for-method. The IBootstrappable and WPF helpers are not
@@ -110,36 +110,56 @@ class GeneralizedPareto : public UnivariateDistributionBase,
     double minimum() const override { return xi_; }
 
     double maximum() const override {
-        if (kappa_ <= kNearZero) return kInf;
+        if (kappa_ <= 0.0) return kInf;
         return xi_ + alpha_ / kappa_;
     }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        if (x < minimum() || x > maximum()) return 0.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero)
-            y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return std::exp(-(1.0 - kappa_) * y) / alpha_;
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedPareto: invalid parameters");
+        if (x < minimum() || x > maximum() || std::isinf(x)) return -kInf;
+        if (kappa_ > 0.0 && x == maximum())
+            return kappa_ < 1.0 ? -kInf : kappa_ == 1.0 ? -std::log(alpha_) : kInf;
+        const double y = distribution_numerics::hosking_shape_transform(x, xi_, alpha_, kappa_);
+        const double value = -(1.0 - kappa_) * y - std::log(alpha_);
+        return std::isnan(value) ? -kInf : value;
     }
 
-    double cdf(double x) const override {
+    double cdf(double x) const override { return -std::expm1(log_ccdf(x)); }
+
+    double log_cdf(double x) const override {
+        return distribution_numerics::log1m_exp(log_ccdf(x));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedPareto: invalid parameters");
         if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero)
-            y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return 1.0 - std::exp(-y);
+        if (x >= maximum()) return -kInf;
+        return -distribution_numerics::hosking_shape_transform(x, xi_, alpha_, kappa_);
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        if (std::fabs(kappa_) <= kNearZero)
-            return xi_ - alpha_ * std::log(1.0 - probability);
-        return xi_ + alpha_ / kappa_ * (1.0 - std::pow(1.0 - probability, kappa_));
+        const double logarithm = std::log1p(-probability);
+        const double product = kappa_ * logarithm;
+        const double unit_quantile =
+            product == -kInf ? 1.0 / kappa_
+                             : distribution_numerics::scaled_exprel_product(
+                                   1.0, -logarithm, product);
+        const double displacement =
+            product == -kInf ? alpha_ / kappa_
+                             : distribution_numerics::scaled_exprel_product(
+                                   alpha_, -logarithm, product);
+        return std::isinf(displacement) && std::isfinite(unit_quantile)
+                   ? alpha_ * (xi_ / alpha_ + unit_quantile)
+                   : xi_ + displacement;
     }
 
     // --- Parameter display names (X1; C# GeneralizedPareto.cs ParametersToString col0 +
