@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/Base/BivariateCopulaEstimation.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/Base/BivariateCopulaEstimation.cs @ 7e8e8d1
 //
 // Free-function port of the C# `static class BivariateCopulaEstimation`: a single public
 // `estimate(copula, x, y, method)` (mirrors `Estimate(ref BivariateCopula, ...)`) dispatches
@@ -220,6 +220,7 @@ inline void mle(BivariateCopula& copula, const std::vector<double>& sample_data_
 // Estimate the bivariate copula.
 inline void estimate(BivariateCopula& copula, const std::vector<double>& sample_data_x,
                       const std::vector<double>& sample_data_y, CopulaEstimationMethod estimation_method) {
+    if (copula.number_of_copula_parameters() == 0) return;
     switch (estimation_method) {
         case CopulaEstimationMethod::PseudoLikelihood:
             detail::mpl(copula, sample_data_x, sample_data_y);

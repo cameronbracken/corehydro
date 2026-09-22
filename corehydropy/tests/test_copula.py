@@ -112,9 +112,11 @@ def test_a_named_marginal_is_refused_for_the_methods_that_never_fit_one():
     assert cop.random(3, seed=1).shape == (3, 2)
 
 
-def test_the_tau_method_is_refused_where_upstream_has_no_setthetafromtau():
-    with pytest.raises(Exception, match="tau"):
-        copula_fit("Joe", X, Y, method="tau")
+def test_frank_and_joe_support_tau_fits():
+    tau_x = [1, 2, 3, 4, 5, 6]
+    tau_y = [1, 3, 2, 5, 4, 6]
+    assert copula_fit("Frank", tau_x, tau_y, method="tau").theta > 0
+    assert copula_fit("Joe", tau_x, tau_y, method="tau").theta > 1
 
 
 def test_the_three_log_likelihoods_run_and_differ():
@@ -148,9 +150,21 @@ def test_the_density_verbs_evaluate_a_whole_vector_of_pairs():
         cop.pdf([], 0.5)
 
 
-def test_copula_names_lists_the_seven_families():
-    assert len(copula_names()) == 7
-    assert "StudentT" in copula_names()
+def test_copula_names_lists_the_eight_families():
+    assert len(copula_names()) == 8
+    assert "Independence" in copula_names()
+
+
+def test_independence_and_conditional_round_trip():
+    cop = Copula("Independence")
+    assert cop.pdf(0.2, 0.8) == 1
+    assert cop.cdf(0.2, 0.8) == pytest.approx(0.16)
+    assert cop.conditional_cdf(0.2, 0.8) == 0.8
+    assert cop.inverse_conditional_cdf(0.2, 0.8) == 0.8
+    assert copula_fit("Independence", [1, 2, 3], [3, 1, 2], method="mpl").theta is None
+    dep = Copula("Gumbel", theta=2)
+    value = dep.inverse_conditional_cdf(0.37, 0.63)
+    assert dep.conditional_cdf(0.37, value) == pytest.approx(0.63)
 
 
 def test_a_copula_round_trips_through_pickle():

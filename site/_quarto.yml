@@ -75,7 +75,7 @@ quartodoc:
         - dist_kde
     - title: Copulas
       desc: >-
-        The seven bivariate copula families (`copula_names()`), constructed directly or fitted
+        The eight bivariate copula families (`copula_names()`), constructed directly or fitted
         to paired data.
       contents:
         - Copula

@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/StudentTCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/StudentTCopula.cs @ 7e8e8d1
 //
 // The bivariate Student's t elliptical copula. Extends BivariateCopula DIRECTLY (not
 // ArchimedeanCopula -- the t-copula has no Archimedean generator, same as NormalCopula).
@@ -211,12 +211,24 @@ class StudentTCopula : public BivariateCopula {
         return mvt.cdf(std::vector<double>{x1, x2});
     }
 
+    double conditional_cdf(double u, double v) const override {
+        if (!parameters_valid()) validate_parameter(theta(), true);
+        double r = theta();
+        double nu = nu_;
+        StudentT t_nu(0.0, 1.0, nu);
+        StudentT t_nu1(0.0, 1.0, nu + 1.0);
+        double x1 = t_nu.inverse_cdf(u);
+        double x2 = t_nu.inverse_cdf(v);
+        double scale = std::sqrt((1.0 - r * r) * (nu + x1 * x1) / (nu + 1.0));
+        return t_nu1.cdf((x2 - r * x1) / scale);
+    }
+
     // Conditional-sampling InverseCDF using the conditional distribution of the bivariate
     // Student's t: X2 | X1 = x1 ~ t_{nu+1}(rho*x1, sqrt((1-rho^2)*(nu+x1^2)/(nu+1))).
     // 1) x1 = t_nu^-1(u).
     // 2) Sample from the conditional t_{nu+1} distribution using v.
     // 3) Transform the conditional sample back to uniform: v' = t_nu(x2).
-    std::array<double, 2> inverse_cdf(double u, double v) const override {
+    double inverse_conditional_cdf(double u, double t) const override {
         if (!parameters_valid()) validate_parameter(theta(), true);
 
         double r = theta();
@@ -226,13 +238,16 @@ class StudentTCopula : public BivariateCopula {
         double x1 = t_nu.inverse_cdf(u);
 
         StudentT t_nu1(0.0, 1.0, nu_ + 1.0);
-        double z2 = t_nu1.inverse_cdf(v);
+        double z2 = t_nu1.inverse_cdf(t);
 
         double conditional_scale = std::sqrt((1.0 - r * r) * (nu + x1 * x1) / (nu + 1.0));
         double x2 = r * x1 + conditional_scale * z2;
 
-        double vv = t_nu.cdf(x2);
-        return {u, vv};
+        return t_nu.cdf(x2);
+    }
+
+    std::array<double, 2> inverse_cdf(double u, double v) const override {
+        return {u, inverse_conditional_cdf(u, v)};
     }
 
     // The t-copula has symmetric upper and lower tail dependence:

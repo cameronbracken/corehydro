@@ -205,14 +205,16 @@ inline DistResult run_copula(const std::string& spec_json, const std::string& me
                               std::vector<double>(all.begin() + h, all.end()));
     };
 
-    if (method == "pdf" || method == "log_pdf" || method == "cdf") {
+    if (method == "pdf" || method == "log_pdf" || method == "cdf" ||
+        method == "conditional_cdf") {
         auto uv = split_xy();
         if (uv.first.empty())
             throw std::runtime_error("copula method '" + method + "' needs at least one (u, v) pair");
         for (std::size_t i = 0; i < uv.first.size(); ++i) {
             if (method == "pdf") r.values.push_back(c->pdf(uv.first[i], uv.second[i]));
             else if (method == "log_pdf") r.values.push_back(c->log_pdf(uv.first[i], uv.second[i]));
-            else r.values.push_back(c->cdf(uv.first[i], uv.second[i]));
+            else if (method == "cdf") r.values.push_back(c->cdf(uv.first[i], uv.second[i]));
+            else r.values.push_back(c->conditional_cdf(uv.first[i], uv.second[i]));
         }
         return r;
     }
@@ -220,6 +222,12 @@ inline DistResult run_copula(const std::string& spec_json, const std::string& me
         std::array<double, 2> uv = c->inverse_cdf(detail::arg_at(args, 0, "inverse_cdf"),
                                                   detail::arg_at(args, 1, "inverse_cdf"));
         r.values = {uv[0], uv[1]};
+        return r;
+    }
+    if (method == "inverse_conditional_cdf") {
+        r.values = {c->inverse_conditional_cdf(
+            detail::arg_at(args, 0, "inverse_conditional_cdf"),
+            detail::arg_at(args, 1, "inverse_conditional_cdf"))};
         return r;
     }
     if (method == "tail_dependence") {

@@ -52,7 +52,7 @@ with theta.
 }
 
 \code{method = "tau"} inverts Kendall's tau into theta directly and is only implemented upstream
-for Clayton, Gumbel, and AliMikhailHaq (\code{SetThetaFromTau}); it errors for every other family.
+for Clayton, Gumbel, Frank, Joe, and AliMikhailHaq (\code{SetThetaFromTau}).
 }
 \examples{
 x <- c(135.9, 104.1, 108.7, 99.3, 134.7, 91.0, 77.3, 115.4, 109.0, 79.0)

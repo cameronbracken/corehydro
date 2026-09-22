@@ -5,6 +5,8 @@
 \alias{copula_pdf}
 \alias{copula_log_pdf}
 \alias{copula_cdf}
+\alias{copula_conditional_cdf}
+\alias{copula_inverse_conditional_cdf}
 \title{Copula density, distribution, and inverse functions}
 \usage{
 copula_pdf(cop, u, v)
@@ -12,6 +14,10 @@ copula_pdf(cop, u, v)
 copula_log_pdf(cop, u, v)
 
 copula_cdf(cop, u, v)
+
+copula_conditional_cdf(cop, u, v)
+
+copula_inverse_conditional_cdf(cop, u, t)
 }
 \arguments{
 \item{cop}{a \code{corehydro_copula} from \code{\link[=copula]{copula()}} or \code{\link[=copula_fit]{copula_fit()}}.}

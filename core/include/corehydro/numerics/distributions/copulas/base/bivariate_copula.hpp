@@ -1,5 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/Base/IBivariateCopula.cs @ 2a0357a
-//           +  Numerics/Distributions/Bivariate Copulas/Base/BivariateCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/Base/BivariateCopula.cs @ 7e8e8d1
 //
 // Abstract base for every bivariate copula. Folds IBivariateCopula's members directly into
 // the base -- the Phase 1/2 pattern (interfaces fold into the abstract base rather than
@@ -35,6 +34,7 @@
 // is kept for its lower churn on the existing binding/glue call sites, not because clone()
 // still needs aliasing.
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -109,6 +109,14 @@ class BivariateCopula {
     }
 
     virtual double cdf(double u, double v) const = 0;
+    virtual double conditional_cdf(double u, double v) const {
+        double u_plus = std::min(u + 1.0e-6, 1.0);
+        double u_minus = std::max(u - 1.0e-6, 0.0);
+        return (cdf(u_plus, v) - cdf(u_minus, v)) / (u_plus - u_minus);
+    }
+    virtual double inverse_conditional_cdf(double u, double t) const {
+        return inverse_cdf(u, t)[1];
+    }
     virtual std::array<double, 2> inverse_cdf(double u, double v) const = 0;
 
     virtual double upper_tail_dependence() const = 0;

@@ -7,7 +7,7 @@
 copula_names()
 }
 \value{
-a character vector of the seven bivariate copula family names.
+a character vector of the eight bivariate copula family names.
 }
 \description{
 List the supported copula families

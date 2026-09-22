@@ -1,0 +1,24 @@
+{
+  "target": "Independence",
+  "kind": "bivariate_copula",
+  "source": "Numerics/Distributions/Bivariate Copulas/IndependenceCopula.cs",
+  "reference": "Exact product-copula identities from the upstream implementation.",
+  "cases": [
+    {
+      "name": "product_and_conditionals",
+      "construct": {},
+      "assertions": [
+        {"method": "pdf", "args": [0.2, 0.8], "expected": 1.0, "mode": "abs", "tol": 0.0},
+        {"method": "cdf", "args": [0.2, 0.8], "expected": 0.16, "mode": "abs", "tol": 1e-15},
+        {"method": "conditional_cdf", "args": [0.2, 0.8], "expected": 0.8, "mode": "abs", "tol": 0.0},
+        {"method": "inverse_conditional_cdf", "args": [0.2, 0.8], "expected": 0.8, "mode": "abs", "tol": 0.0},
+        {"method": "inverse_cdf", "args": [0.2, 0.8, 0], "expected": 0.2, "mode": "abs", "tol": 0.0},
+        {"method": "inverse_cdf", "args": [0.2, 0.8, 1], "expected": 0.8, "mode": "abs", "tol": 0.0},
+        {"method": "lower_tail_dependence", "args": [], "expected": 0.0, "mode": "abs", "tol": 0.0},
+        {"method": "upper_tail_dependence", "args": [], "expected": 0.0, "mode": "abs", "tol": 0.0},
+        {"method": "theta_minimum", "args": [], "expected": 0.0, "mode": "abs", "tol": 0.0},
+        {"method": "theta_maximum", "args": [], "expected": 0.0, "mode": "abs", "tol": 0.0}
+      ]
+    }
+  ]
+}

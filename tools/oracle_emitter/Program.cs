@@ -2573,8 +2573,12 @@ static BivariateCopula BuildCopula(string target, JsonElement construct,
         CopulaType.Joe => new JoeCopula(),
         CopulaType.Normal => new NormalCopula(),
         CopulaType.StudentT => new StudentTCopula(),
+        CopulaType.Independence => new IndependenceCopula(),
         _ => throw new Exception($"copula type not yet ported: {target}")
     };
+
+    if (type == CopulaType.Independence && !construct.TryGetProperty("fit", out _))
+        return copula;
 
     if (construct.TryGetProperty("theta", out var thetaEl))
     {
@@ -2651,8 +2655,8 @@ static void SetThetaFromTauDispatch(BivariateCopula copula, string target, doubl
     if (target == "Clayton") { ((ClaytonCopula)copula).SetThetaFromTau(x, y); return; }
     if (target == "AliMikhailHaq") { ((AMHCopula)copula).SetThetaFromTau(x, y); return; }
     if (target == "Gumbel") { ((GumbelCopula)copula).SetThetaFromTau(x, y); return; }
-    // NOTE: JoeCopula has no SetThetaFromTau in the C# source; intentionally not branched
-    // here (see joe_copula.hpp's file header and .superpowers/sdd/task-8-report.md).
+    if (target == "Frank") { ((FrankCopula)copula).SetThetaFromTau(x, y); return; }
+    if (target == "Joe") { ((JoeCopula)copula).SetThetaFromTau(x, y); return; }
     throw new Exception($"copula '{target}' has no tau-based method-of-moments fit");
 }
 
@@ -2688,6 +2692,8 @@ static double DispatchCopula(BivariateCopula c, string m, JsonElement[] a,
         case "pdf": return c.PDF(a[0].GetDouble(), a[1].GetDouble());
         case "log_pdf": return c.LogPDF(a[0].GetDouble(), a[1].GetDouble());
         case "cdf": return c.CDF(a[0].GetDouble(), a[1].GetDouble());
+        case "conditional_cdf": return c.ConditionalCDF(a[0].GetDouble(), a[1].GetDouble());
+        case "inverse_conditional_cdf": return c.InverseConditionalCDF(a[0].GetDouble(), a[1].GetDouble());
         case "inverse_cdf": return c.InverseCDF(a[0].GetDouble(), a[1].GetDouble())[a[2].GetInt32()];
         case "upper_tail_dependence": return c.UpperTailDependence;
         case "lower_tail_dependence": return c.LowerTailDependence;

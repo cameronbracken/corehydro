@@ -339,7 +339,7 @@ correctly with no batching -- see `seeded_sampling` in
 {
   "target":  "Clayton",                     // the CopulaType enum name: "AliMikhailHaq" |
                                              // "Clayton" | "Frank" | "Gumbel" | "Joe" |
-                                             // "Normal" | "StudentT"
+                                             // "Normal" | "StudentT" | "Independence"
   "kind":    "bivariate_copula",
   "source":  "Numerics/.../Test_ClaytonCopula.cs",
   "datasets": { "data1": [ ...100 numbers... ], "data1_pp": [ ...plotting positions... ] },
@@ -360,7 +360,7 @@ correctly with no batching -- see `seeded_sampling` in
 Every copula shares `BivariateCopula`'s uniform parameter API (`theta`/`get_copula_parameters`/
 `pdf`/`cdf`/...), so -- unlike `multivariate_distribution`, whose targets share no common surface
 -- all four runners dispatch through one fully generic path keyed by the factory
-(`copula_factory.hpp`, a corehydro addition with no upstream counterpart, documented in its header);
+(`copula_factory.hpp`, ported from the v2.2.0 upstream factory);
 adding a new copula target is a new header + a factory case + a fixture file, with **zero** runner
 changes (the one exception, the `"tau"` fit method, is explained below).
 
@@ -369,6 +369,7 @@ changes (the one exception, the `"tau"` fit method, is explained below).
 - `{"theta": <double>}` -- direct construction. 2-parameter copulas (StudentT, a later task) add a
   second key, `{"theta": <double>, "df": <double>}`; the runners map this to
   `set_copula_parameters([theta, df])`, matching `GetCopulaParameters`'s declared order.
+- `{}` -- direct construction of the zero-parameter Independence copula.
 - `{"theta": <double>, "marginals": {"targets": [<x-type>, <y-type>], "params": [[<x-params...>],
   [<y-params...>]]}}` -- an ADD-ON to the direct-construction key above (not a substitute for it)
   that attaches FIXED marginal distributions via the C# `Copula(theta, marginX, marginY)` ctor
@@ -388,11 +389,8 @@ changes (the one exception, the `"tau"` fit method, is explained below).
     member of each concrete Archimedean class, not `IBivariateCopula`/`IArchimedeanCopula` -- so
     every runner resolves it with a small per-target dispatch (one `if (target == "Clayton") ...`
     branch each; see `set_theta_from_tau_dispatch` in `core/tests/test_fixtures.cpp` and its R/Python/
-    emitter counterparts). Tau-capable copulas: Clayton, AliMikhailHaq (AMH), Gumbel. NOTE: an
-    earlier draft of this doc also listed Joe here, but `JoeCopula.cs` has no `SetThetaFromTau`
-    method (confirmed by grep across the whole "Bivariate Copulas" directory and by
-    `Test_JoeCopula.cs` having no `Test_MOM_Fit`) -- Joe has no "tau" fixture case and no dispatch
-    branch (Task 8, see `.superpowers/sdd/task-8-report.md`).
+    emitter counterparts). Tau-capable copulas: Clayton, AliMikhailHaq (AMH), Gumbel, Frank, and
+    Joe.
   - `"mpl"` (maximum pseudo likelihood): `"x"`/`"y"` must already be the **plotting positions** of
     the data (rank/(n+1) via `Statistics.RanksInPlace`), not the raw sample -- mirroring the C# test
     flow (`Test_MPL_Fit`), which computes plotting positions itself before calling

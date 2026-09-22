@@ -227,6 +227,14 @@ inline bool set_theta_from_tau(BivariateCopula& copula, const std::vector<double
         c->set_theta_from_tau(x, y);
         return true;
     }
+    if (auto* c = dynamic_cast<FrankCopula*>(&copula)) {
+        c->set_theta_from_tau(x, y);
+        return true;
+    }
+    if (auto* c = dynamic_cast<JoeCopula*>(&copula)) {
+        c->set_theta_from_tau(x, y);
+        return true;
+    }
     return false;
 }
 
@@ -296,7 +304,7 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
     } catch (const std::exception&) {
         throw std::runtime_error("unknown copula family '" + family +
                                  "'; expected AliMikhailHaq, Clayton, Frank, Gumbel, Joe, "
-                                 "Normal or StudentT");
+                                 "Normal, StudentT or Independence");
     }
 
     auto attach = [&](const JsonValue& holder) {
@@ -325,7 +333,7 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
             if (!copulas::set_theta_from_tau(*c, x, y))
                 throw std::runtime_error("method 'tau' is not available for '" + family +
                                          "'; upstream implements SetThetaFromTau for Clayton, "
-                                         "Gumbel and AliMikhailHaq only");
+                                         "Gumbel, Frank, Joe and AliMikhailHaq only");
         } else if (method == "mpl") {
             // Pseudo-likelihood is defined on the plotting positions, not on the data scale --
             // see plotting_positions above. Ranking here means a caller passes raw paired
@@ -343,7 +351,8 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
         return c;
     }
 
-    std::vector<double> params = {spec.at("theta").as_double()};
+    std::vector<double> params;
+    if (spec.contains("theta")) params.push_back(spec.at("theta").as_double());
     if (spec.contains("df")) params.push_back(spec.at("df").as_double());
     c->set_copula_parameters(params);
     attach(spec);

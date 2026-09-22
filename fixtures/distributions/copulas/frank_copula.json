@@ -3,8 +3,10 @@
   "kind": "bivariate_copula",
   "source": "Numerics/Test_Numerics/Distributions/Bivariate Copulas/Test_FrankCopula.cs",
   "reference": "PDF/CDF/fit literals compared against the R 'copula' package (per the C# test class remarks). Tail dependence is the closed form lambda_U = lambda_L = 0 (Frank has no tail dependence).",
-  "note": "FrankCopula.cs has NO SetThetaFromTau method (confirmed by grep across the whole 'Bivariate Copulas' directory) and Test_FrankCopula.cs correspondingly has no Test_MOM_Fit -- so this fixture has no 'tau'-method case, unlike amh_copula.json/clayton_copula.json/gumbel_copula.json. FrankCopula overrides ValidateParameter with a CORRECT implementation (unlike Clayton/Gumbel/Joe, which inherit ArchimedeanCopula's always-false-ParametersValid bug) -- see frank_copula.hpp. data1_pp/data2_pp are the plotting positions (rank/(n+1), via Statistics.RanksInPlace) of data1/data2, precomputed here to keep the mpl fit runner thin -- see fixtures/README.md.",
+  "note": "Numerics v2.2.0 adds the tau fit and corrects the conditional inverse. Updated seeded and inverse values were reproduced with the real C# library. data1_pp/data2_pp are plotting positions used by the likelihood cases.",
   "datasets": {
+    "tau_x": [1, 2, 3, 4, 5, 6],
+    "tau_y": [1, 3, 2, 5, 4, 6],
     "data1": [
       89.4465116086853,
       91.7257825797634,
@@ -415,6 +417,13 @@
     ]
   },
   "cases": [
+    {
+      "name": "method_of_moments_v220",
+      "construct": {"fit": {"x": "tau_x", "y": "tau_y", "method": "tau"}},
+      "assertions": [
+        {"method": "theta", "args": [], "expected": 13.119289445803622, "mode": "abs", "tol": 1e-12}
+      ]
+    },
     {
       "name": "pdf_theta10",
       "construct": {
@@ -875,7 +884,7 @@
             0,
             1
           ],
-          "expected": 0.9602346808628763,
+          "expected": 0.0029971786016749213,
           "mode": "abs",
           "tol": 1e-12,
           "source": "curated via oracle_emitter --dump"
@@ -888,7 +897,7 @@
             4,
             1
           ],
-          "expected": 0.6968554273858694,
+          "expected": 0.3872308550500744,
           "mode": "abs",
           "tol": 1e-12,
           "source": "curated via oracle_emitter --dump"
@@ -913,7 +922,7 @@
       "assertions": [
         {"method": "log_pdf",     "args": [0.2, 0.8],    "expected": -1.423462846506042, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
         {"method": "inverse_cdf", "args": [0.3, 0.7, 0], "expected": 0.3, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"},
-        {"method": "inverse_cdf", "args": [0.3, 0.7, 1], "expected": 0.2117945570164126, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"}
+        {"method": "inverse_cdf", "args": [0.3, 0.7, 1], "expected": 0.47410717371001554, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump"}
       ]
     },
     {

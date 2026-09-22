@@ -17,7 +17,9 @@ from .distributions import Distribution, _single_number
 
 __all__ = ["Copula", "copula_fit", "copula_names"]
 
-_COPULA_FAMILIES = ("AliMikhailHaq", "Clayton", "Frank", "Gumbel", "Joe", "Normal", "StudentT")
+_COPULA_FAMILIES = (
+    "AliMikhailHaq", "Clayton", "Frank", "Gumbel", "Joe", "Normal", "StudentT", "Independence"
+)
 
 
 def copula_names() -> list[str]:
@@ -26,7 +28,7 @@ def copula_names() -> list[str]:
     Returns
     -------
     list of str
-        The seven bivariate copula family names.
+        The eight bivariate copula family names.
 
     Examples
     --------
@@ -97,15 +99,20 @@ class Copula:
     True
     """
 
-    def __init__(self, family: str, theta: float, df: float | None = None, margin_x=None, margin_y=None):
+    def __init__(self, family: str, theta: float | None = None, df: float | None = None, margin_x=None, margin_y=None):
         if family not in _COPULA_FAMILIES:
             raise ValueError(f"family must be one of {', '.join(_COPULA_FAMILIES)}")
-        theta = _single_number(theta, "`theta` must be a single finite number")
+        if family != "Independence":
+            theta = _single_number(theta, "`theta` must be a single finite number")
+        else:
+            theta = None
         if family == "StudentT" and df is None:
             raise ValueError("df is required for the StudentT copula")
         margin_x = _check_margin(margin_x, "margin_x")
         margin_y = _check_margin(margin_y, "margin_y")
-        spec: dict = {"family": family, "theta": float(theta)}
+        spec: dict = {"family": family}
+        if theta is not None:
+            spec["theta"] = float(theta)
         if df is not None:
             spec["df"] = float(df)
         if margin_x is not None:
@@ -113,7 +120,7 @@ class Copula:
         if margin_y is not None:
             spec["margin_y"] = json.loads(margin_y.to_json())
         self._family = family
-        self._theta = float(theta)
+        self._theta = None if theta is None else float(theta)
         self._df = None if df is None else float(df)
         self._margin_x = margin_x
         self._margin_y = margin_y
@@ -169,6 +176,8 @@ class Copula:
         return self._spec
 
     def __repr__(self) -> str:
+        if self._theta is None:
+            return f"Copula({self._family})"
         extra = f", df = {self._df:g}" if self._df is not None else ""
         return f"Copula({self._family}(theta = {self._theta:g}{extra}))"
 
@@ -209,6 +218,17 @@ class Copula:
         args, scalar = _pairs(u, v, "cdf")
         vals, _ = self._run("cdf", args)
         return float(vals[0]) if scalar else np.asarray(vals)
+
+    def conditional_cdf(self, u, v):
+        """Forward conditional CDF ``P(V <= v | U = u)``."""
+        args, scalar = _pairs(u, v, "conditional_cdf")
+        vals, _ = self._run("conditional_cdf", args)
+        return float(vals[0]) if scalar else np.asarray(vals)
+
+    def inverse_conditional_cdf(self, u: float, t: float) -> float:
+        """Invert the forward conditional CDF with respect to its second variate."""
+        vals, _ = self._run("inverse_conditional_cdf", [float(u), float(t)])
+        return float(vals[0])
 
     def inverse_cdf(self, u: float, v: float):
         """Copula inverse CDF.
@@ -377,8 +397,7 @@ def copula_fit(family: str, x, y, method: str = "mpl", margin_x=None, margin_y=N
       re-estimates it jointly with theta.
 
     ``method="tau"`` inverts Kendall's tau into theta directly and is only implemented upstream
-    for Clayton, Gumbel, and AliMikhailHaq (``SetThetaFromTau``); it raises for every other
-    family.
+    for Clayton, Gumbel, Frank, Joe, and AliMikhailHaq (``SetThetaFromTau``).
 
     Parameters
     ----------
@@ -388,8 +407,7 @@ def copula_fit(family: str, x, y, method: str = "mpl", margin_x=None, margin_y=N
         Raw paired observations, the same length.
     method : {"mpl", "ifm", "mle", "tau"}, default "mpl"
         ``"mpl"`` (maximum pseudo-likelihood), ``"ifm"`` (inference from margins), ``"mle"``
-        (full maximum likelihood), or ``"tau"`` (Kendall's tau inversion; Clayton, Gumbel, and
-        AliMikhailHaq only).
+        (full maximum likelihood), or ``"tau"`` (Kendall's tau inversion).
     margin_x, margin_y : str or Distribution, optional
         Optional marginals; see Notes above.
 
@@ -443,7 +461,7 @@ def copula_fit(family: str, x, y, method: str = "mpl", margin_x=None, margin_y=N
     # One "parameters" call carries theta and, for StudentT, df -- the estimation runs once per
     # runner call, so asking for them separately would refit the copula twice.
     pars = _core.copula_run(spec_json, "parameters", "[]")["values"]
-    theta = float(pars[0])
+    theta = None if family == "Independence" else float(pars[0])
     df = float(pars[1]) if family == "StudentT" else None
 
     # Read a marginal back as a Distribution only when the fit actually moved it: "mle"

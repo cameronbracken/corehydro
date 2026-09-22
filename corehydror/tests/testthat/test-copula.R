@@ -75,8 +75,11 @@ test_that("a named marginal is refused for the methods that never fit one", {
   expect_equal(dim(copula_random(cop, 3, seed = 1)), c(3L, 2L))
 })
 
-test_that("the tau method is refused where upstream has no SetThetaFromTau", {
-  expect_error(copula_fit("Joe", x, y, method = "tau"), "tau")
+test_that("Frank and Joe support tau fits", {
+  tau_x <- 1:6
+  tau_y <- c(1, 3, 2, 5, 4, 6)
+  expect_gt(copula_fit("Frank", tau_x, tau_y, method = "tau")$theta, 0)
+  expect_gt(copula_fit("Joe", tau_x, tau_y, method = "tau")$theta, 1)
 })
 
 test_that("the three log-likelihoods run and differ", {
@@ -106,9 +109,21 @@ test_that("the density verbs evaluate a whole vector of pairs", {
   expect_error(copula_pdf(cop, numeric(0), 0.5), "non-empty")
 })
 
-test_that("copula_names lists the seven families", {
-  expect_length(copula_names(), 7L)
-  expect_true("StudentT" %in% copula_names())
+test_that("copula_names lists the eight families", {
+  expect_length(copula_names(), 8L)
+  expect_true("Independence" %in% copula_names())
+})
+
+test_that("Independence and conditional round trips are exposed", {
+  cop <- copula("Independence")
+  expect_equal(copula_pdf(cop, 0.2, 0.8), 1)
+  expect_equal(copula_cdf(cop, 0.2, 0.8), 0.16)
+  expect_equal(copula_conditional_cdf(cop, 0.2, 0.8), 0.8)
+  expect_equal(copula_inverse_conditional_cdf(cop, 0.2, 0.8), 0.8)
+  expect_null(copula_fit("Independence", 1:3, c(3, 1, 2), method = "mpl")$theta)
+  dep <- copula("Gumbel", theta = 2)
+  value <- copula_inverse_conditional_cdf(dep, 0.37, 0.63)
+  expect_equal(copula_conditional_cdf(dep, 0.37, value), 0.63, tolerance = 1e-8)
 })
 
 test_that("a copula round-trips through save and load", {

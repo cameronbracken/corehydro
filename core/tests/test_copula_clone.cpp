@@ -62,7 +62,8 @@ void check_clone_deep_copies_marginals(const std::string& copula_name) {
 
 void test_clone_deep_copies_marginals_every_family() {
     for (const std::string& name :
-         {"AliMikhailHaq", "Clayton", "Frank", "Gumbel", "Joe", "Normal", "StudentT"}) {
+         {"AliMikhailHaq", "Clayton", "Frank", "Gumbel", "Joe", "Normal", "StudentT",
+          "Independence"}) {
         check_clone_deep_copies_marginals(name);
     }
 }

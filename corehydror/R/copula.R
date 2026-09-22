@@ -1,7 +1,8 @@
 # The bivariate copula surface. Every verb serializes a corehydro_copula to the dist_spec.hpp
 # grammar and runs one method through ch_copula_run_; nothing holds C++ state.
 
-kCopulaFamilies <- c("AliMikhailHaq", "Clayton", "Frank", "Gumbel", "Joe", "Normal", "StudentT")
+kCopulaFamilies <- c("AliMikhailHaq", "Clayton", "Frank", "Gumbel", "Joe", "Normal", "StudentT",
+                     "Independence")
 
 # Internal: run a method and return the numeric result. `cop` is either a corehydro_copula or an
 # already-serialized spec string (copula_fit() has no corehydro_copula yet when it reads its own
@@ -67,31 +68,35 @@ check_margin <- function(m, nm) {
 #' @examples
 #' copula_pdf(copula("Clayton", theta = 2), 0.3, 0.7)
 #' @export
-copula <- function(family, theta, df = NULL, margin_x = NULL, margin_y = NULL) {
+copula <- function(family, theta = NULL, df = NULL, margin_x = NULL, margin_y = NULL) {
   if (!is.character(family) || length(family) != 1L || !family %in% kCopulaFamilies) {
     stop(sprintf("`family` must be one of %s", paste(kCopulaFamilies, collapse = ", ")),
          call. = FALSE)
   }
-  if (!is.numeric(theta) || length(theta) != 1L || !is.finite(theta)) {
+  if (!identical(family, "Independence") &&
+      (!is.numeric(theta) || length(theta) != 1L || !is.finite(theta))) {
     stop("`theta` must be a single finite number", call. = FALSE)
   }
+  if (identical(family, "Independence")) theta <- NULL
   if (identical(family, "StudentT") && is.null(df)) {
     stop("`df` is required for the StudentT copula", call. = FALSE)
   }
   margin_x <- check_margin(margin_x, "margin_x")
   margin_y <- check_margin(margin_y, "margin_y")
-  spec <- to_spec_json(list(family = family, theta = as.double(theta),
+  spec <- to_spec_json(list(family = family,
+                            theta = if (is.null(theta)) NULL else as.double(theta),
                             df = if (is.null(df)) NULL else as.double(df),
                             margin_x = margin_x, margin_y = margin_y))
-  structure(list(family = family, theta = as.double(theta), df = df,
+  structure(list(family = family, theta = theta, df = df,
                  margin_x = margin_x, margin_y = margin_y, spec = spec),
             class = "corehydro_copula")
 }
 
 #' @export
 print.corehydro_copula <- function(x, ...) {
-  cat(sprintf("<corehydro_copula> %s(theta = %g%s)\n", x$family, x$theta,
-              if (is.null(x$df)) "" else sprintf(", df = %g", x$df)))
+  if (is.null(x$theta)) cat(sprintf("<corehydro_copula> %s\n", x$family)) else
+    cat(sprintf("<corehydro_copula> %s(theta = %g%s)\n", x$family, x$theta,
+                if (is.null(x$df)) "" else sprintf(", df = %g", x$df)))
   invisible(x)
 }
 
@@ -118,7 +123,7 @@ print.corehydro_copula <- function(x, ...) {
 #'   with theta.
 #'
 #' `method = "tau"` inverts Kendall's tau into theta directly and is only implemented upstream
-#' for Clayton, Gumbel, and AliMikhailHaq (`SetThetaFromTau`); it errors for every other family.
+#' for Clayton, Gumbel, Frank, Joe, and AliMikhailHaq (`SetThetaFromTau`).
 #'
 #' @param family one of [copula_names()].
 #' @param x,y numeric vectors of raw paired observations, the same length.
@@ -164,7 +169,7 @@ copula_fit <- function(family, x, y, method = c("mpl", "ifm", "mle", "tau"),
   # One "parameters" call carries theta and, for StudentT, df -- the estimation runs once per
   # runner call, so asking for them separately would refit the copula twice.
   pars <- unname(copula_run(spec, "parameters"))
-  theta <- pars[1L]
+  theta <- if (identical(family, "Independence")) NULL else pars[1L]
   df <- if (identical(family, "StudentT")) pars[2L] else NULL
   # Read a marginal back as a corehydro_dist only when the fit actually moved it: "mle"
   # re-estimates both marginals jointly, and a named marginal is MLE-fitted before an "ifm"
@@ -217,6 +222,20 @@ copula_log_pdf <- function(cop, u, v) {
 copula_cdf <- function(cop, u, v) {
   check_copula(cop)
   unname(copula_run(cop, "cdf", copula_pairs(u, v, "copula_cdf")))
+}
+
+#' @rdname copula_functions
+#' @export
+copula_conditional_cdf <- function(cop, u, v) {
+  check_copula(cop)
+  unname(copula_run(cop, "conditional_cdf", copula_pairs(u, v, "copula_conditional_cdf")))
+}
+
+#' @rdname copula_functions
+#' @export
+copula_inverse_conditional_cdf <- function(cop, u, t) {
+  check_copula(cop)
+  unname(copula_run(cop, "inverse_conditional_cdf", c(u, t)))
 }
 
 #' Copula inverse CDF
@@ -357,7 +376,7 @@ copula_log_likelihood <- function(cop, x, y, method = c("pseudo", "ifm", "full")
 
 #' List the supported copula families
 #'
-#' @return a character vector of the seven bivariate copula family names.
+#' @return a character vector of the eight bivariate copula family names.
 #' @examples
 #' copula_names()
 #' @export
