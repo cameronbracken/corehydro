@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Special Functions/Erf.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Special Functions/Erf.cs @ 7e8e8d1
 //
 // Error function and its inverse, mirroring the C# Erf class method-for-method.
 //
@@ -89,9 +89,9 @@ inline double function(double x) {
     return corehydro::numerics::math::special::lower_incomplete(0.5, x * x);
 }
 
-// Computes the complementary error function erfc(x) = 1 − erf(x).
+// Computes the complementary error function without tail cancellation.
 inline double erfc(double x) {
-    return 1.0 - function(x);
+    return std::erfc(x);
 }
 
 // Computes the inverse error function: given y = erf(x), returns x.
@@ -102,10 +102,9 @@ inline double inverse_erf(double y) {
 }
 
 // Computes the inverse complementary error function: given y = erfc(x), returns x.
-// Implementation: Normal.StandardZ(−0.5*y + 1.0) * sqrt(2) / 2, exactly as in the C# source.
+// Implementation: -Normal.StandardZ(0.5*y) / sqrt(2), preserving small upper-tail probabilities.
 inline double inverse_erfc(double y) {
-    double s = detail::standard_z(-0.5 * y + 1.0);
-    return s * corehydro::numerics::kSqrt2 / 2.0;
+    return -detail::standard_z(0.5 * y) / corehydro::numerics::kSqrt2;
 }
 
 }  // namespace corehydro::numerics::math::special::erf

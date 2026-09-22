@@ -455,6 +455,7 @@ static Func<double[], double>? ResolveSpecialFunction(string target) => target s
     "Erf.erfc"         => a => Erf.Erfc(a[0]),
     "Erf.inverse_erf"  => a => Erf.InverseErf(a[0]),
     "Erf.inverse_erfc" => a => Erf.InverseErfc(a[0]),
+    "Debye.function_order_one" => a => Debye.FunctionOrderOne(a[0]),
     // Gamma family
     "Gamma.function"                 => a => Gamma.Function(a[0]),
     "Gamma.log_gamma"                => a => Gamma.LogGamma(a[0]),
@@ -464,6 +465,7 @@ static Func<double[], double>? ResolveSpecialFunction(string target) => target s
     "Gamma.upper_incomplete"         => a => Gamma.UpperIncomplete(a[0], a[1]),
     "Gamma.inverse_lower_incomplete" => a => Gamma.InverseLowerIncomplete(a[0], a[1]),
     "Gamma.inverse_upper_incomplete" => a => Gamma.InverseUpperIncomplete(a[0], a[1]),
+    "Gamma.incomplete"               => a => Gamma.Incomplete(a[0], a[1]),
     // Beta family
     "Beta.function"           => a => Beta.Function(a[0], a[1]),
     "Beta.incomplete"         => a => Beta.Incomplete(a[0], a[1], a[2]),
@@ -724,6 +726,7 @@ static Func<double[], double>? ResolveSpecialFunction(string target) => target s
     "Probability.hpcm_conditional_at" => ProbabilityHpcmConditionalAt,
     // Tools.log10 (args: [x] -- see fixtures/special_functions/tools.json)
     "Tools.log10" => a => Tools.Log10(a[0]),
+    "Tools.expm1" => a => Tools.Expm1(a[0]),
     _ => null,
 };
 
@@ -5751,8 +5754,22 @@ static double SamplingDispatch(string method, List<double[]> data, JsonElement o
 // Numerics.Data.Statistics.Probability.
 static double ProbabilityDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
-    if (method != "joint") throw new Exception($"unknown probability method: {method}");
     double[] p = data[0];
+    if (method == "union_single_factor")
+    {
+        double rho = options.GetProperty("rho").GetDouble();
+        double tolerance = options.TryGetProperty("relative_tolerance", out var t) ? t.GetDouble() : 1E-8;
+        return Probability.UnionSingleFactor(p, rho, tolerance);
+    }
+    if (method == "single_factor_conditional")
+    {
+        double rho = options.GetProperty("rho").GetDouble();
+        double z = options.GetProperty("z").GetDouble();
+        var conditional = new double[p.Length];
+        Probability.SingleFactorConditionalProbabilities(p, rho, z, conditional);
+        return ToolboxSelectFlatNoDims(asrt, conditional);
+    }
+    if (method != "joint") throw new Exception($"unknown probability method: {method}");
     string dep = OptString(options, "dependency", "independent");
     var type = dep switch
     {
@@ -6724,6 +6741,18 @@ static double StatisticsDispatch(string method, List<double[]> data, JsonElement
         RejectDimsSelect(asrt, "statistics.ranks");
         return Statistics.RanksInPlace(x)[ToolboxSelectIndex(asrt)];
     }
+    double[] y = data.Count > 1 ? data[1] : Array.Empty<double>();
+    int GetInt(string key, int fallback) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var value)
+            ? value.GetInt32() : fallback;
+    if (method == "first_order_sobol")
+        return GlobalSensitivity.FirstOrderSobol(x, y, GetInt("bins", 20));
+    if (method == "pawn")
+        return GlobalSensitivity.Pawn(x, y, GetInt("bins", 20))[ToolboxSelectIndex(asrt)];
+    if (method == "pawn_median")
+        return GlobalSensitivity.PawnMedian(x, y, GetInt("bins", 20));
+    if (method == "borgonovo_delta")
+        return GlobalSensitivity.BorgonovoDelta(x, y, GetInt("x_bins", 20), GetInt("y_bins", 20));
     if (method == "percentile") RejectDimsSelect(asrt, "statistics.percentile");
     throw new Exception($"statistics method '{method}' has no dumped oracle case wired in the emitter");
 }

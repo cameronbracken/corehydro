@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Statistics/HypothesisTests.cs @ 2a0357a
+// ported from: Numerics/Data/Statistics/HypothesisTests.cs @ 7e8e8d1
 //
 // All thirteen public statics -- every one-sample/two-sample parametric and
 // nonparametric hypothesis test upstream ships, over the P4 Task 1 helpers (mean_variance, the
@@ -47,6 +47,23 @@
 namespace corehydro::numerics::data::hypothesis_tests {
 
 namespace detail {
+
+inline std::vector<double> tie_group_sizes(const std::vector<double>& sample) {
+    std::vector<double> sorted(sample);
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<double> groups;
+    int run = 1;
+    for (std::size_t i = 1; i < sorted.size(); ++i) {
+        if (sorted[i] == sorted[i - 1]) {
+            ++run;
+        } else {
+            if (run > 1) groups.push_back(static_cast<double>(run));
+            run = 1;
+        }
+    }
+    if (run > 1) groups.push_back(static_cast<double>(run));
+    return groups;
+}
 // Mirrors C# Math.Sign(double) for the finite inputs MannKendallTest evaluates it on
 // (Math.Sign throws for NaN; that edge case is not reachable from a finite sample difference).
 inline int sign_of(double x) { return (x > 0.0) - (x < 0.0); }
@@ -228,13 +245,14 @@ inline double mann_whitney_test(const std::vector<double>& sample1, const std::v
     sample.insert(sample.end(), sample1.begin(), sample1.end());
     sample.insert(sample.end(), sample2.begin(), sample2.end());
 
-    std::vector<double> ties;
     double R = 0, T = 0;
-    auto ranks = data::ranks_in_place(sample, ties);
+    auto ranks = data::ranks_in_place(sample);
 
     for (std::size_t i = 0; i < sample1.size(); ++i) R += ranks[i];
-    for (std::size_t i = 0; i < ties.size(); ++i)
-        T += (numerics::pow(ties[i], 3) - ties[i]) / (static_cast<double>(n) * static_cast<double>(n - 1));
+    for (double group_size : detail::tie_group_sizes(sample)) {
+        T += (numerics::pow(group_size, 3) - group_size) /
+             (static_cast<double>(n) * static_cast<double>(n - 1));
+    }
 
     // C# `double V = R - n1 * (n1 + 1d) / 2d;`: the `1d`/`2d` literals promote to double before
     // any division -- no integer truncation.
@@ -262,9 +280,9 @@ inline double mann_kendall_test(const std::vector<double>& sample) {
             S += static_cast<double>(
                 detail::sign_of(sample[static_cast<std::size_t>(j)] - sample[static_cast<std::size_t>(i)]));
 
-    std::vector<double> ties;
-    data::ranks_in_place(sample, ties);  // ranks themselves are unused, matching C#
-    for (std::size_t i = 0; i < ties.size(); ++i) T += ties[i] * (ties[i] - 1.0) * (2.0 * ties[i] + 5.0);
+    for (double group_size : detail::tie_group_sizes(sample)) {
+        T += group_size * (group_size - 1.0) * (2.0 * group_size + 5.0);
+    }
     double varS = (static_cast<double>(n) * static_cast<double>(n - 1) * static_cast<double>(2 * n + 5) - T) / 18.0;
     double z = std::fabs((S - static_cast<double>(detail::sign_of(S))) / std::sqrt(varS));
 

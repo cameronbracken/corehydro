@@ -1,0 +1,24 @@
+{
+  "kind": "toolbox",
+  "group": "statistics",
+  "source": "Numerics/Data/Statistics/GlobalSensitivity.cs @ 7e8e8d1",
+  "reference": "Deterministic tied-rank fixture from Test_GlobalSensitivity.Test_TiedRanks_UseOriginalIndexOrder, reproduced against the real Numerics v2.2.0 library.",
+  "datasets": {
+    "tied_x": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    "split_y": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  },
+  "cases": [
+    {
+      "name": "tied_ranks_use_original_index_order",
+      "data": ["tied_x", "split_y"],
+      "options": {"bins": 2, "x_bins": 2, "y_bins": 2},
+      "assertions": [
+        {"method": "first_order_sobol", "expected": 1.0, "mode": "equal"},
+        {"method": "pawn", "index": 0, "expected": 0.5, "mode": "equal"},
+        {"method": "pawn", "index": 1, "expected": 0.5, "mode": "equal"},
+        {"method": "pawn_median", "expected": 0.5, "mode": "equal"},
+        {"method": "borgonovo_delta", "expected": 0.5, "mode": "equal"}
+      ]
+    }
+  ]
+}

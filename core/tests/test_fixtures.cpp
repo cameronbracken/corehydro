@@ -99,6 +99,7 @@
 #include "corehydro/numerics/math/special/erf.hpp"
 #include "corehydro/numerics/math/special/factorial.hpp"
 #include "corehydro/numerics/math/special/gamma.hpp"
+#include "corehydro/numerics/math/special/debye.hpp"
 #include "corehydro/numerics/sampling/bootstrap/bootstrap.hpp"
 #include "corehydro/numerics/sampling/bootstrap/ci_method_names.hpp"
 #include "corehydro/numerics/sampling/bootstrap/model_registry.hpp"
@@ -640,6 +641,7 @@ special_function_table() {
         {"Erf.erfc",          [](const std::vector<double>& a) { return sf::erf::erfc(a[0]); }},
         {"Erf.inverse_erf",   [](const std::vector<double>& a) { return sf::erf::inverse_erf(a[0]); }},
         {"Erf.inverse_erfc",  [](const std::vector<double>& a) { return sf::erf::inverse_erfc(a[0]); }},
+        {"Debye.function_order_one", [](const std::vector<double>& a) { return sf::debye_function_order_one(a[0]); }},
         // Gamma family
         {"Gamma.function",               [](const std::vector<double>& a) { return sf::function(a[0]); }},
         {"Gamma.log_gamma",              [](const std::vector<double>& a) { return sf::log_gamma(a[0]); }},
@@ -649,6 +651,7 @@ special_function_table() {
         {"Gamma.upper_incomplete",       [](const std::vector<double>& a) { return sf::upper_incomplete(a[0], a[1]); }},
         {"Gamma.inverse_lower_incomplete", [](const std::vector<double>& a) { return sf::inverse_lower_incomplete(a[0], a[1]); }},
         {"Gamma.inverse_upper_incomplete", [](const std::vector<double>& a) { return sf::inverse_upper_incomplete(a[0], a[1]); }},
+        {"Gamma.incomplete",             [](const std::vector<double>& a) { return sf::incomplete(a[0], a[1]); }},
         // Beta family
         {"Beta.function",           [](const std::vector<double>& a) { return sf::beta::function(a[0], a[1]); }},
         {"Beta.incomplete",         [](const std::vector<double>& a) { return sf::beta::incomplete(a[0], a[1], a[2]); }},
@@ -1071,6 +1074,7 @@ special_function_table() {
         {"Probability.hpcm_conditional_at", probability_hpcm_conditional_at},
         // Tools.log10 (args: [x] -- see fixtures/special_functions/tools.json)
         {"Tools.log10", [](const std::vector<double>& a) { return corehydro::numerics::clamped_log10(a[0]); }},
+        {"Tools.expm1", [](const std::vector<double>& a) { return corehydro::numerics::expm1(a[0]); }},
     };
     return t;
 }

@@ -39,11 +39,11 @@
    ]
   },
   {
-   "name": "rmse_k3_drops_the_tail_outliers",
+   "name": "rmse_k3_uses_all_residuals",
    "data": ["gm_obs_tail", "gm_mod_tail"],
    "options": {"k": 3},
    "assertions": [
-    {"method": "rmse", "expected": 1.0, "mode": "abs", "tol": 1e-9}
+    {"method": "rmse", "expected": 104.22475713572088, "mode": "abs", "tol": 1e-9}
    ]
   },
   {
@@ -66,7 +66,7 @@
     {"method": "ks", "expected": 0.07960224401845195, "mode": "abs", "tol": 1e-9},
     {"method": "ad", "expected": 0.0902518530148484, "mode": "abs", "tol": 1e-9},
     {"method": "chi_squared", "expected": 1.4701330690639733, "mode": "abs", "tol": 1e-9},
-    {"method": "rmse_dist", "expected": 0.8901388393562173, "mode": "abs", "tol": 1e-9}
+    {"method": "rmse_dist", "expected": 1.4019886083339788, "mode": "abs", "tol": 1e-9}
    ]
   },
   {
@@ -74,7 +74,7 @@
    "data": ["dist_obs", "dist_pp_hazen"],
    "options": {"model": {"family": "Normal", "parameters": [100.0, 10.0]}},
    "assertions": [
-    {"method": "rmse_dist", "expected": 0.6948380714375488, "mode": "abs", "tol": 1e-9}
+    {"method": "rmse_dist", "expected": 0.74789358614264789, "mode": "abs", "tol": 1e-9}
    ]
   },
   {

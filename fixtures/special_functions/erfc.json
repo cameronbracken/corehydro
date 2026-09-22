@@ -2,7 +2,7 @@
   "kind": "special_function",
   "target": "Erf.erfc",
   "source": "Numerics/Mathematics/Special Functions/Erf.cs",
-  "reference": "Numerics @ 2a0357a; 1 - Erf.Function(x)",
+  "reference": "Numerics @ 7e8e8d1; Math.Erfc(x)",
   "cases": [
     {
       "name": "erfc_zero",
@@ -18,6 +18,16 @@
       "name": "erfc_two",
       "args": [2.0],
       "assertions": [ { "method": "value", "expected": 0.0046777349810472879, "mode": "abs", "tol": 1e-12 } ]
+    },
+    {
+      "name": "erfc_far_tail_six",
+      "args": [6.0],
+      "assertions": [ { "method": "value", "expected": 2.1519736712498913e-17, "mode": "rel", "tol": 1e-12 } ]
+    },
+    {
+      "name": "erfc_far_tail_fifteen",
+      "args": [15.0],
+      "assertions": [ { "method": "value", "expected": 7.212994172451207e-100, "mode": "rel", "tol": 1e-12 } ]
     }
   ]
 }

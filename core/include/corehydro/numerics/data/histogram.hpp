@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Statistics/Histogram.cs @ 2a0357a
+// ported from: Numerics/Data/Statistics/Histogram.cs @ 7e8e8d1
 //
 // Bins a sample into a Histogram, used by ParameterResults to summarize MCMC posterior
 // draws. Ports the full public surface except the internal deserialization ctor (took
@@ -30,6 +30,8 @@
 // docs/upstream-csharp-issues.md (marked RESOLVED) and
 // fixtures/special_functions/histogram.json's `adapt_*` cases (ported from the new v2.1.4
 // Test_AddData_AdaptsEndpointBins).
+// v2.2.0 changes only the ArgumentException constructor argument order in Bin.CompareTo;
+// C++ already exposes the intended message and has no ParamName field to mirror.
 #pragma once
 #include <algorithm>
 #include <cmath>

@@ -49,6 +49,26 @@ test_that("percentile() rejects a non-numeric probs argument, naming it", {
   expect_error(percentile(c(1, 2, 3), probs = "half"), "probs")
 })
 
+test_that("global sensitivity uses deterministic tie order", {
+  x <- rep(1, 32)
+  y <- c(rep(0, 16), rep(1, 16))
+  expect_identical(first_order_sobol(x, y, bins = 2), 1)
+  expect_identical(pawn(x, y, bins = 2), c(0.5, 0.5))
+  expect_identical(pawn_median(x, y, bins = 2), 0.5)
+  expect_identical(borgonovo_delta(x, y, x_bins = 2, y_bins = 2), 0.5)
+})
+
+test_that("single factor probability methods are exposed", {
+  p <- c(0.01, 0.05, 0.2, 0.001)
+  expect_equal(union_single_factor(p, 0), 1 - prod(1 - p), tolerance = 1e-12)
+  thresholds <- c(-2.3263478740408408, -0.8416212335729142, 0.5244005127080407)
+  expect_equal(
+    single_factor_conditional_probabilities(thresholds, 0, 1.7),
+    c(0.01, 0.2, 0.7),
+    tolerance = 1e-14
+  )
+})
+
 test_that("correlation() with a matrix returns the p-by-p matrix, diagonal 1, symmetric, and off-diagonals matching the pairwise calls", {
   c0 <- c(14, 8, 32, 7, 3, 15)
   c1 <- c(10, 5, 7, 4, 3, 8)

@@ -162,6 +162,40 @@ percentile <- function(x, probs, sorted = FALSE) {
   toolbox_run("statistics", "percentile", list(x, probs), list(sorted = isTRUE(sorted)))$values
 }
 
+#' Given data global sensitivity estimates
+#'
+#' Deterministic estimators over paired input and output samples. Input bins use rank order with
+#' original sample order breaking ties.
+#'
+#' @param x,y aligned numeric input and output samples.
+#' @param bins number of equal frequency input bins.
+#' @param x_bins,y_bins numbers of input bins and output classes for Borgonovo delta.
+#' @return `first_order_sobol()`, `pawn_median()`, and `borgonovo_delta()` return one number.
+#'   `pawn()` returns one Kolmogorov-Smirnov statistic per input bin.
+#' @export
+first_order_sobol <- function(x, y, bins = 20L) {
+  toolbox_run("statistics", "first_order_sobol", list(x, y), list(bins = as.integer(bins)))$values[[1]]
+}
+
+#' @rdname first_order_sobol
+#' @export
+pawn <- function(x, y, bins = 20L) {
+  toolbox_run("statistics", "pawn", list(x, y), list(bins = as.integer(bins)))$values
+}
+
+#' @rdname first_order_sobol
+#' @export
+pawn_median <- function(x, y, bins = 20L) {
+  toolbox_run("statistics", "pawn_median", list(x, y), list(bins = as.integer(bins)))$values[[1]]
+}
+
+#' @rdname first_order_sobol
+#' @export
+borgonovo_delta <- function(x, y, x_bins = 20L, y_bins = 20L) {
+  opts <- list(x_bins = as.integer(x_bins), y_bins = as.integer(y_bins))
+  toolbox_run("statistics", "borgonovo_delta", list(x, y), opts)$values[[1]]
+}
+
 #' Streaming summary statistics
 #'
 #' Accumulates count, extremes, and the first four moments over one or more chunks of data,
@@ -638,6 +672,28 @@ joint_probability <- function(p, dependency = c("independent", "positive", "nega
     }
   }
   toolbox_run("probability", "joint", data, list(dependency = dependency))$values[[1]]
+}
+
+#' Equicorrelated single factor event probabilities
+#'
+#' @param p marginal event probabilities.
+#' @param rho common Gaussian correlation in `[0, 1]`.
+#' @param relative_tolerance quadrature relative tolerance.
+#' @return `union_single_factor()` returns one union probability.
+#' @export
+union_single_factor <- function(p, rho, relative_tolerance = 1e-8) {
+  opts <- list(rho = rho, relative_tolerance = relative_tolerance)
+  toolbox_run("probability", "union_single_factor", list(p), opts)$values[[1]]
+}
+
+#' @rdname union_single_factor
+#' @param normal_thresholds standard normal event thresholds.
+#' @param z shared standard normal factor value.
+#' @return `single_factor_conditional_probabilities()` returns one probability per threshold.
+#' @export
+single_factor_conditional_probabilities <- function(normal_thresholds, rho, z) {
+  opts <- list(rho = rho, z = z)
+  toolbox_run("probability", "single_factor_conditional", list(normal_thresholds), opts)$values
 }
 
 # The "link" and "trend" toolbox groups (Task 7). "link" mirrors the seven Numerics link

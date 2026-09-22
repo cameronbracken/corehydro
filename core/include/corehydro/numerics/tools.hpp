@@ -1,4 +1,4 @@
-// ported from: Numerics/Utilities/Tools.cs @ 2a0357a
+// ported from: Numerics/Utilities/Tools.cs @ 7e8e8d1
 // Shared numerical constants (+ Tools.Log10, the one Tools.cs function this port needs).
 // P3.3 adds is_finite (Tools.IsFinite) and is_power_of_two (Tools.IsPowerOfTwo), needed by
 // Fourier::fft (power-of-two length guard) and NumericalDerivative::gradient/hessian
@@ -53,6 +53,17 @@ inline constexpr double kE    = 2.71828182845904523536028747135266;  // e = exp(
 inline double clamped_log10(double x) {
     if (x < 1E-16 && x >= 0.0) x = 1E-16;
     return std::log10(x);
+}
+
+// Computes exp(x) - 1 without cancellation near zero and with explicit finite boundaries.
+inline double expm1(double x) {
+    const double u = std::exp(x);
+    if (u == 1.0) return x;
+    if (std::isinf(u) && u > 0.0) return u;
+    if (u <= kDoubleMachineEpsilon / 2.0) return -1.0;
+    const double numerator = (u - 1.0) * x;
+    if (std::isinf(numerator)) return u - 1.0;
+    return numerator / std::log(u);
 }
 
 // Returns true iff x is neither NaN nor +-infinity (mirrors Tools.IsFinite).

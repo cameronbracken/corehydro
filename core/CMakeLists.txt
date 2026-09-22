@@ -121,6 +121,7 @@ set(BF_TESTS
   test_augmented_lagrange
   test_network_optimization
   test_statistics_helpers
+  test_numerics_v220_foundations
   test_hypothesis_tests
   test_data_frame_facades
   test_ordinate

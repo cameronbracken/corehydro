@@ -1,6 +1,6 @@
-// ported from: Numerics/Data/Statistics/Probability.cs @ 2a0357a
+// ported from: Numerics/Data/Statistics/Probability.cs @ 7e8e8d1
 //
-// NARROW port. `Probability` is a large static utility class (basic two-event rules,
+// Selective port. `Probability` is a large static utility class (basic two-event rules,
 // joint-probability dispatch, unions, exclusive-combination enumeration, and three
 // different correlated-joint-probability engines: HPCM, the original Pandey PCM, and an
 // MVN-CDF-backed path). This file ports ONLY the members that CompetingRisks.cs's
@@ -39,7 +39,9 @@
 //   -- `union` is a C++ keyword); IndependentUnion; PositivelyDependentUnion;
 //   NegativelyDependentUnion; UnionPCM (2-arg + 6-arg).
 //
-// Explicitly OMITTED (unreachable from CompetingRisks.cs; later-phase item if some other
+// v2.2.0 additionally ports the exclusive-enumeration and equicorrelated single-factor
+// foundations added to the public upstream surface. Explicitly OMITTED (unreachable from
+// CompetingRisks.cs and unchanged by the v2.2.0 scope unless noted elsewhere):
 // caller needs them):
 //   JointProbabilityMVN / JointProbabilitiesMVN / UnionMVN (the actual MVN-CDF-backed
 //     joint-probability path -- see the finding above: CompetingRisks never calls these),
@@ -48,9 +50,7 @@
 //   JointProbabilitiesPCM (array/Parallel.For variant of JointProbabilityPCM),
 //   the `out List<...>` UnionPCM overload (diagnostic variant returning per-term detail),
 //   the entire "Basic Probability Rules" region (AAndB/AOrB/ANotB/BNotA/AGivenB/BGivenA),
-//   the entire "Exclusive Probability of all Combinations of Events" region
-//   (IndependentExclusive/PositivelyDependentExclusive/NegativelyDependentExclusive/
-//   ExclusivePCM/ExclusiveMVN and their array/out-list variants), CommonCauseAdjustment,
+//   NegativelyDependentExclusive, ExclusiveMVN, CommonCauseAdjustment, and
 //   MutuallyExclusiveAdjustment.
 //
 // Small Tools.cs helpers this file needs (Clamp; Sum/Product/Min/Max with an indicators
@@ -73,6 +73,7 @@
 #include "corehydro/numerics/distributions/multivariate/multivariate_normal.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
+#include "corehydro/numerics/math/integration/adaptive_gauss_kronrod.hpp"
 #include "corehydro/numerics/math/special/factorial.hpp"
 #include "corehydro/numerics/tools.hpp"
 
@@ -392,6 +393,264 @@ inline double independent_union(const std::vector<double>& probabilities) {
     return 1.0 - numerator;
 }
 
+inline double independent_exclusive(const std::vector<double>& probabilities,
+                                    const std::vector<int>& indicators) {
+    if (probabilities.empty() || indicators.empty() || probabilities.size() != indicators.size()) {
+        throw std::invalid_argument("probabilities and indicators must have the same nonzero length");
+    }
+    double result = 1.0;
+    for (std::size_t i = 0; i < probabilities.size(); ++i) {
+        if (std::isnan(probabilities[i])) return detail::kNaN;
+        result *= indicators[i] == 1 ? probabilities[i] : 1.0 - probabilities[i];
+    }
+    return detail::clamp(result, 0.0, 1.0);
+}
+
+inline void validate_exclusive_metadata(const std::vector<double>& probabilities,
+                                        const std::vector<int>& binomial_combinations,
+                                        const std::vector<std::vector<int>>& indicators,
+                                        double absolute_tolerance,
+                                        double relative_tolerance) {
+    if (probabilities.empty() || indicators.empty()) {
+        throw std::invalid_argument("probabilities and indicators must be non-empty");
+    }
+    if (binomial_combinations.size() != probabilities.size()) {
+        throw std::invalid_argument(
+            "binomial metadata must contain one count for each subset size");
+    }
+    if (!corehydro::numerics::is_finite(absolute_tolerance) || absolute_tolerance < 0.0 ||
+        !corehydro::numerics::is_finite(relative_tolerance) || relative_tolerance < 0.0) {
+        throw std::out_of_range("tolerances must be finite and non-negative");
+    }
+    std::size_t row_count = 0;
+    const int n = static_cast<int>(probabilities.size());
+    for (int i = 0; i < n; ++i) {
+        const double probability = probabilities[static_cast<std::size_t>(i)];
+        if (!corehydro::numerics::is_finite(probability) || probability < 0.0 ||
+            probability > 1.0) {
+            throw std::out_of_range("probabilities must be finite and between zero and one");
+        }
+        const auto expected = static_cast<std::size_t>(
+            sf::factorial::binomial_coefficient(n, i + 1));
+        if (binomial_combinations[static_cast<std::size_t>(i)] !=
+            static_cast<int>(expected)) {
+            throw std::invalid_argument(
+                "binomial metadata does not match the probability count");
+        }
+        row_count += expected;
+    }
+    if (row_count != indicators.size()) {
+        throw std::invalid_argument(
+            "indicator row count does not match the binomial metadata");
+    }
+    for (const auto& row : indicators) {
+        if (row.size() != probabilities.size()) {
+            throw std::invalid_argument(
+                "probabilities and indicator rows must have the same length");
+        }
+    }
+}
+
+// Mirrors the caller-owned-output IndependentExclusive overload. std::vector capacity and
+// nested rows are retained across calls when their dimensions already match.
+inline bool independent_exclusive(
+    const std::vector<double>& probabilities,
+    const std::vector<int>& binomial_combinations,
+    const std::vector<std::vector<int>>& indicators,
+    std::vector<double>& event_probabilities,
+    std::vector<std::vector<int>>& event_indicators,
+    double absolute_tolerance = 1e-4, double relative_tolerance = 1e-4) {
+    validate_exclusive_metadata(probabilities, binomial_combinations, indicators,
+                                absolute_tolerance, relative_tolerance);
+    const std::size_t n = probabilities.size();
+    std::size_t used = 0;
+    event_probabilities.clear();
+    auto place_row = [&](std::size_t source) -> const std::vector<int>& {
+        if (used >= event_indicators.size()) event_indicators.emplace_back(n);
+        auto& row = event_indicators[used];
+        if (row.size() != n) row.resize(n);
+        row = indicators[source];
+        ++used;
+        return row;
+    };
+
+    double union_value = 0.0;
+    double sign = 1.0;
+    std::size_t block = 0;
+    std::size_t boundary = static_cast<std::size_t>(binomial_combinations[0]);
+    double inclusion = detail::kNaN;
+    double exclusion = detail::kNaN;
+    for (std::size_t i = 0; i < indicators.size(); ++i) {
+        if (i == boundary) {
+            if (block > 0) {
+                if (sign == 1.0) inclusion = union_value;
+                else if (sign == -1.0) exclusion = union_value;
+            }
+            const double difference = std::fabs(inclusion - exclusion);
+            if (block > 0 && block < binomial_combinations.size() &&
+                difference <= absolute_tolerance &&
+                difference <= relative_tolerance * std::min(inclusion, exclusion)) {
+                place_row(indicators.size() - 1);
+                event_probabilities.push_back(detail::clamp(0.5 * difference, 0.0, 1.0));
+                event_indicators.resize(used);
+                return true;
+            }
+            sign *= -1.0;
+            ++block;
+            if (block < binomial_combinations.size()) {
+                boundary += static_cast<std::size_t>(binomial_combinations[block]);
+            }
+        }
+        const auto& row = place_row(i);
+        event_probabilities.push_back(independent_exclusive(probabilities, row));
+        union_value += sign *
+            (i < probabilities.size() ? probabilities[i]
+                                      : independent_joint_probability(probabilities, row));
+    }
+    event_indicators.resize(used);
+    return false;
+}
+
+enum class ExclusiveEnumerationStatus { Complete, Converged, Capped };
+
+struct ExclusiveEnumerationResult {
+    ExclusiveEnumerationStatus status;
+    std::vector<double> probabilities;
+    std::vector<std::vector<int>> indicators;
+};
+
+inline ExclusiveEnumerationResult independent_exclusive_lazy(
+    const std::vector<double>& probabilities, bool include_no_event_row = false,
+    long long max_emitted_combinations = 0, double absolute_tolerance = 1e-4,
+    double relative_tolerance = 1e-4) {
+    if (probabilities.empty()) throw std::invalid_argument("probabilities must not be empty");
+    if (!corehydro::numerics::is_finite(absolute_tolerance) || absolute_tolerance < 0.0 ||
+        !corehydro::numerics::is_finite(relative_tolerance) || relative_tolerance < 0.0) {
+        throw std::out_of_range("tolerances must be finite and non-negative");
+    }
+    for (double probability : probabilities) {
+        if (!corehydro::numerics::is_finite(probability) || probability < 0.0 || probability > 1.0) {
+            throw std::out_of_range("probabilities must be finite and between zero and one");
+        }
+    }
+    ExclusiveEnumerationResult output{ExclusiveEnumerationStatus::Complete, {}, {}};
+    const int n = static_cast<int>(probabilities.size());
+    auto close = [&](double mass, ExclusiveEnumerationStatus status) {
+        output.indicators.emplace_back(probabilities.size(), 1);
+        output.probabilities.push_back(detail::clamp(mass, 0.0, 1.0));
+        output.status = status;
+        return output;
+    };
+    double no_event_mass = 1.0;
+    for (double probability : probabilities) no_event_mass *= 1.0 - probability;
+    const double total_output_mass = include_no_event_row ? 1.0 : 1.0 - no_event_mass;
+    double emitted_mass = 0.0;
+    if (include_no_event_row) {
+        output.indicators.emplace_back(probabilities.size(), 0);
+        output.probabilities.push_back(detail::clamp(no_event_mass, 0.0, 1.0));
+        emitted_mass += no_event_mass;
+    }
+    double union_value = 0.0;
+    double sign = 1.0;
+    double inclusion = detail::kNaN;
+    double exclusion = detail::kNaN;
+    long long emitted = 0;
+    for (int k = 1; k <= n; ++k) {
+        if (k >= 2) {
+            const int block = k - 2;
+            if (block > 0) {
+                if (sign == 1.0)
+                    inclusion = union_value;
+                else if (sign == -1.0)
+                    exclusion = union_value;
+            }
+            const double difference = std::fabs(inclusion - exclusion);
+            if (block > 0 && block < n && difference <= absolute_tolerance &&
+                difference <= relative_tolerance * std::min(inclusion, exclusion)) {
+                return close(0.5 * difference, ExclusiveEnumerationStatus::Converged);
+            }
+            sign *= -1.0;
+        }
+        std::vector<int> combination(static_cast<std::size_t>(k));
+        for (int i = 0; i < k; ++i) combination[static_cast<std::size_t>(i)] = i;
+        do {
+            if (max_emitted_combinations > 0 && emitted >= max_emitted_combinations) {
+                return close(total_output_mass - emitted_mass, ExclusiveEnumerationStatus::Capped);
+            }
+            std::vector<int> row(probabilities.size(), 0);
+            for (int index : combination) row[static_cast<std::size_t>(index)] = 1;
+            const double exclusive = independent_exclusive(probabilities, row);
+            output.indicators.push_back(row);
+            output.probabilities.push_back(exclusive);
+            emitted_mass += exclusive;
+            ++emitted;
+            union_value += sign *
+                (k == 1 ? probabilities[static_cast<std::size_t>(combination[0])]
+                        : independent_joint_probability(probabilities, row));
+        } while (sf::factorial::detail::next_combination_unchecked(combination, n));
+    }
+    return output;
+}
+
+inline double positively_dependent_exclusive(const std::vector<double>& probabilities,
+                                             const std::vector<int>& indicators) {
+    if (probabilities.empty() || indicators.empty() || probabilities.size() != indicators.size()) {
+        throw std::invalid_argument("probabilities and indicators must have the same nonzero length");
+    }
+    double minimum = 1.0;
+    double maximum = 0.0;
+    for (std::size_t i = 0; i < probabilities.size(); ++i) {
+        if (std::isnan(probabilities[i])) return detail::kNaN;
+        if (indicators[i] == 1) minimum = std::min(minimum, probabilities[i]);
+        else maximum = std::max(maximum, probabilities[i]);
+    }
+    return detail::clamp(minimum - maximum, 0.0, 1.0);
+}
+
+inline ExclusiveEnumerationResult positively_dependent_exclusive_lazy(
+    const std::vector<double>& probabilities, double absolute_tolerance = 1e-4,
+    double relative_tolerance = 1e-4) {
+    if (probabilities.empty()) throw std::invalid_argument("probabilities must not be empty");
+    ExclusiveEnumerationResult output{ExclusiveEnumerationStatus::Complete, {}, {}};
+    const int n = static_cast<int>(probabilities.size());
+    double union_value = 0.0;
+    double sign = 1.0;
+    double inclusion = detail::kNaN;
+    double exclusion = detail::kNaN;
+    for (int subset_size = 1; subset_size <= n; ++subset_size) {
+        if (subset_size >= 2) {
+            const int block = subset_size - 2;
+            if (block > 0) {
+                if (sign == 1.0) inclusion = union_value;
+                else if (sign == -1.0) exclusion = union_value;
+            }
+            const double difference = std::fabs(inclusion - exclusion);
+            if (block > 0 && block < n && difference <= absolute_tolerance &&
+                difference <= relative_tolerance * std::min(inclusion, exclusion)) {
+                output.indicators.emplace_back(probabilities.size(), 1);
+                output.probabilities.push_back(detail::clamp(0.5 * difference, 0.0, 1.0));
+                output.status = ExclusiveEnumerationStatus::Converged;
+                return output;
+            }
+            sign *= -1.0;
+        }
+        std::vector<int> combination(static_cast<std::size_t>(subset_size));
+        for (int i = 0; i < subset_size; ++i) combination[static_cast<std::size_t>(i)] = i;
+        do {
+            std::vector<int> row(probabilities.size(), 0);
+            for (int index : combination) row[static_cast<std::size_t>(index)] = 1;
+            output.probabilities.push_back(
+                positively_dependent_exclusive(probabilities, row));
+            output.indicators.push_back(row);
+            union_value += sign *
+                (subset_size == 1
+                     ? probabilities[static_cast<std::size_t>(combination[0])]
+                     : positive_joint_probability(probabilities, row));
+        } while (sf::factorial::detail::next_combination_unchecked(combination, n));
+    }
+    return output;
+}
+
 // Mirrors Probability.PositivelyDependentUnion(IList<double>).
 inline double positively_dependent_union(const std::vector<double>& probabilities) {
     if (probabilities.empty())
@@ -418,6 +677,216 @@ inline double union_probability(const std::vector<double>& probabilities,
     if (dependency == DependencyType::PerfectlyPositive) return positively_dependent_union(probabilities);
     if (dependency == DependencyType::PerfectlyNegative) return negatively_dependent_union(probabilities);
     return detail::kNaN;
+}
+
+inline void single_factor_conditional_probabilities(const std::vector<double>& normal_thresholds,
+                                                    double rho, double z,
+                                                    std::vector<double>& conditional) {
+    if (conditional.size() < normal_thresholds.size()) {
+        throw std::invalid_argument("conditional buffer must be at least as long as thresholds");
+    }
+    if (!corehydro::numerics::is_finite(rho) || rho < 0.0 || rho >= 1.0) {
+        throw std::out_of_range("common correlation must be within [0, 1)");
+    }
+    if (!corehydro::numerics::is_finite(z)) throw std::out_of_range("factor value must be finite");
+    const double sqrt_rho = std::sqrt(rho);
+    const double sqrt_complement = std::sqrt(1.0 - rho);
+    for (std::size_t i = 0; i < normal_thresholds.size(); ++i) {
+        conditional[i] = distributions::Normal::standard_cdf(
+            (normal_thresholds[i] - sqrt_rho * z) / sqrt_complement);
+    }
+}
+
+inline double union_single_factor(const std::vector<double>& probabilities, double rho,
+                                  double relative_tolerance = 1e-8) {
+    if (probabilities.empty()) throw std::invalid_argument("probabilities must not be empty");
+    for (double probability : probabilities) {
+        if (!corehydro::numerics::is_finite(probability) || probability < 0.0 || probability > 1.0) {
+            throw std::out_of_range("probabilities must be finite and within [0, 1]");
+        }
+    }
+    if (!corehydro::numerics::is_finite(rho) || rho < 0.0 || rho > 1.0) {
+        throw std::out_of_range("common correlation must be within [0, 1]");
+    }
+    if (!corehydro::numerics::is_finite(relative_tolerance) || relative_tolerance < 1e-15 ||
+        relative_tolerance > 1.0) {
+        throw std::out_of_range("relative tolerance must be within [1e-15, 1]");
+    }
+
+    double maximum_probability = 0.0;
+    std::vector<double> thresholds;
+    thresholds.reserve(probabilities.size());
+    for (double probability : probabilities) {
+        if (probability >= 1.0) return 1.0;
+        maximum_probability = std::max(maximum_probability, probability);
+        if (probability > 0.0) thresholds.push_back(distributions::Normal::standard_z(probability));
+    }
+    if (thresholds.empty()) return 0.0;
+    if (rho == 1.0) return maximum_probability;
+
+    const double sqrt_rho = std::sqrt(rho);
+    const double sqrt_complement = std::sqrt(1.0 - rho);
+    std::vector<double> conditional(thresholds.size());
+    auto integrand = [&](double u) {
+        const double z = distributions::Normal::standard_z(u);
+        double log_survival = 0.0;
+        for (std::size_t i = 0; i < thresholds.size(); ++i) {
+            conditional[i] = distributions::Normal::standard_cdf(
+                (thresholds[i] - sqrt_rho * z) / sqrt_complement);
+            log_survival += std::log1p(-conditional[i]);
+        }
+        return -corehydro::numerics::expm1(log_survival);
+    };
+    math::integration::AdaptiveGaussKronrod quadrature(integrand, 1e-16, 1.0 - 1e-16);
+    quadrature.relative_tolerance = relative_tolerance;
+    quadrature.absolute_tolerance = 1e-15;
+    quadrature.min_depth = 2;
+    quadrature.report_failure = true;
+    quadrature.integrate();
+    if (quadrature.status() != math::integration::IntegrationStatus::Success) {
+        throw std::runtime_error(
+            "single-factor union exhausted its evaluation budget before meeting tolerance");
+    }
+    return detail::clamp(quadrature.result(), 0.0, 1.0);
+}
+
+inline double union_pcm_lazy(const std::vector<double>& probabilities,
+                             const Matrix2D& correlation_matrix,
+                             ExclusiveEnumerationStatus& status,
+                             double absolute_tolerance = 1e-4,
+                             double relative_tolerance = 1e-4) {
+    if (probabilities.empty() || correlation_matrix.empty()) {
+        throw std::invalid_argument(
+            "probabilities and correlation matrix must be non-empty");
+    }
+    const int n = static_cast<int>(probabilities.size());
+    std::vector<int> row(probabilities.size(), 0);
+    double union_value = 0.0;
+    double sign = 1.0;
+    double inclusion = detail::kNaN;
+    double exclusion = detail::kNaN;
+    for (int subset_size = 1; subset_size <= n; ++subset_size) {
+        if (subset_size >= 2) {
+            const int block = subset_size - 2;
+            if (block > 0) {
+                if (sign == 1.0) inclusion = union_value;
+                else if (sign == -1.0) exclusion = union_value;
+            }
+            const double difference = std::fabs(inclusion - exclusion);
+            if (block > 0 && block < n && difference <= absolute_tolerance &&
+                difference <= relative_tolerance * std::min(inclusion, exclusion)) {
+                status = ExclusiveEnumerationStatus::Converged;
+                return detail::clamp(union_value + 0.5 * difference, 0.0, 1.0);
+            }
+            sign *= -1.0;
+        }
+        std::vector<int> combination(static_cast<std::size_t>(subset_size));
+        for (int i = 0; i < subset_size; ++i) combination[static_cast<std::size_t>(i)] = i;
+        do {
+            std::fill(row.begin(), row.end(), 0);
+            for (int index : combination) row[static_cast<std::size_t>(index)] = 1;
+            const double joint = subset_size == 1
+                ? probabilities[static_cast<std::size_t>(combination[0])]
+                : joint_probability(probabilities, row, &correlation_matrix);
+            union_value += sign * joint;
+        } while (sf::factorial::detail::next_combination_unchecked(combination, n));
+    }
+    status = ExclusiveEnumerationStatus::Complete;
+    return detail::clamp(union_value, 0.0, 1.0);
+}
+
+inline double sum_search(const std::vector<double>& values,
+                         const std::vector<int>& required,
+                         const std::vector<std::vector<int>>& indicators,
+                         std::size_t start, std::size_t end) {
+    double result = 0.0;
+    for (std::size_t row = start; row < end; ++row) {
+        bool inclusive = true;
+        for (std::size_t column = 0; column < required.size(); ++column) {
+            if (required[column] == 1 && indicators[row][column] == 0) {
+                inclusive = false;
+                break;
+            }
+        }
+        if (inclusive) result += values[row];
+    }
+    return result;
+}
+
+inline ExclusiveEnumerationResult exclusive_pcm_lazy(
+    const std::vector<double>& probabilities, const Matrix2D& correlation_matrix,
+    double absolute_tolerance = 1e-4, double relative_tolerance = 1e-4) {
+    if (probabilities.empty() || correlation_matrix.empty()) {
+        throw std::invalid_argument(
+            "probabilities and correlation matrix must be non-empty");
+    }
+    ExclusiveEnumerationResult output{ExclusiveEnumerationStatus::Complete, {}, {}};
+    std::vector<double> joint_probabilities;
+    std::vector<std::size_t> cumulative_combinations;
+    const int n = static_cast<int>(probabilities.size());
+    double union_value = 0.0;
+    double sign = 1.0;
+    double inclusion = detail::kNaN;
+    double exclusion = detail::kNaN;
+    for (int subset_size = 1; subset_size <= n; ++subset_size) {
+        if (subset_size >= 2) {
+            const int block = subset_size - 2;
+            if (block > 0) {
+                if (sign == 1.0) inclusion = union_value;
+                else if (sign == -1.0) exclusion = union_value;
+            }
+            const double difference = std::fabs(inclusion - exclusion);
+            if (block > 0 && block < n && difference <= absolute_tolerance &&
+                difference <= relative_tolerance * std::min(inclusion, exclusion)) {
+                output.indicators.emplace_back(probabilities.size(), 1);
+                joint_probabilities.push_back(detail::clamp(0.5 * difference, 0.0, 1.0));
+                output.status = ExclusiveEnumerationStatus::Converged;
+                break;
+            }
+            sign *= -1.0;
+        }
+        std::vector<int> combination(static_cast<std::size_t>(subset_size));
+        for (int i = 0; i < subset_size; ++i) combination[static_cast<std::size_t>(i)] = i;
+        do {
+            std::vector<int> row(probabilities.size(), 0);
+            for (int index : combination) row[static_cast<std::size_t>(index)] = 1;
+            const double joint = subset_size == 1
+                ? probabilities[static_cast<std::size_t>(combination[0])]
+                : joint_probability(probabilities, row, &correlation_matrix);
+            output.indicators.push_back(row);
+            joint_probabilities.push_back(detail::clamp(joint, 0.0, 1.0));
+            union_value += sign * joint;
+        } while (sf::factorial::detail::next_combination_unchecked(combination, n));
+        if (subset_size < n) cumulative_combinations.push_back(joint_probabilities.size());
+    }
+
+    std::size_t combination_block = 0;
+    std::size_t next_block_start = cumulative_combinations.empty()
+        ? std::numeric_limits<std::size_t>::max()
+        : cumulative_combinations[0];
+    output.probabilities.reserve(joint_probabilities.size());
+    for (std::size_t i = 0; i < joint_probabilities.size(); ++i) {
+        if (i == next_block_start) {
+            ++combination_block;
+            next_block_start = combination_block < cumulative_combinations.size()
+                ? cumulative_combinations[combination_block]
+                : std::numeric_limits<std::size_t>::max();
+        }
+        double exclusive = joint_probabilities[i];
+        double association = 1.0;
+        for (std::size_t block = combination_block;
+             block < cumulative_combinations.size(); ++block) {
+            association *= -1.0;
+            const std::size_t start = cumulative_combinations[block];
+            const std::size_t end = block + 1 == cumulative_combinations.size()
+                ? cumulative_combinations[block] + 1
+                : cumulative_combinations[block + 1];
+            exclusive += association * sum_search(joint_probabilities, output.indicators[i],
+                                                  output.indicators, start, end);
+        }
+        output.probabilities.push_back(detail::clamp(exclusive, 0.0, 1.0));
+    }
+    return output;
 }
 
 // Returns the probability of union using the inclusion-exclusion method, with dependence
@@ -471,14 +940,9 @@ inline double union_pcm(const std::vector<double>& probabilities, const Matrix2D
                          double absolute_tolerance = 1e-4, double relative_tolerance = 1e-4) {
     if (probabilities.empty())
         throw std::invalid_argument("probabilities and correlation matrix must be non-empty");
-    int N = static_cast<int>(probabilities.size());
-    std::vector<int> binomial_combinations(static_cast<std::size_t>(N));
-    for (int i = 1; i <= N; ++i)
-        binomial_combinations[static_cast<std::size_t>(i - 1)] =
-            static_cast<int>(sf::factorial::binomial_coefficient(N, i));
-    auto indicators = sf::factorial::all_combinations(N);
-    return union_pcm(probabilities, binomial_combinations, indicators, correlation_matrix,
-                      absolute_tolerance, relative_tolerance);
+    ExclusiveEnumerationStatus status = ExclusiveEnumerationStatus::Complete;
+    return union_pcm_lazy(probabilities, correlation_matrix, status, absolute_tolerance,
+                          relative_tolerance);
 }
 
 }  // namespace corehydro::numerics::data::probability

@@ -1,0 +1,12 @@
+{
+  "kind": "special_function",
+  "target": "Gamma.incomplete",
+  "source": "Numerics/Mathematics/Special Functions/Gamma.cs",
+  "reference": "Numerics @ 7e8e8d1; AS239 incomplete-gamma implementation",
+  "cases": [
+    { "name": "series_branch", "args": [1.5, 0.1], "assertions": [ { "method": "value", "expected": 0.9886559833621947, "mode": "abs", "tol": 1e-11 } ] },
+    { "name": "transition", "args": [500.0, 500.0], "assertions": [ { "method": "value", "expected": 0.5059471461707603, "mode": "abs", "tol": 1e-11 } ] },
+    { "name": "small_shape", "args": [0.075, 0.5], "assertions": [ { "method": "value", "expected": 0.30146464169666126, "mode": "abs", "tol": 1e-11 } ] },
+    { "name": "large_shape_hill", "args": [10500.0, 10400.0], "assertions": [ { "method": "value", "expected": 0.8366349011570255, "mode": "abs", "tol": 1e-5 } ] }
+  ]
+}

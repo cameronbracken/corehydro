@@ -205,6 +205,10 @@ reference:
       - l_moments
       - ranks
       - percentile
+      - first_order_sobol
+      - pawn
+      - pawn_median
+      - borgonovo_delta
       - running_statistics
       - running_covariance
       - autocorrelation
@@ -236,6 +240,8 @@ reference:
       - sobol_sequence
       - stratify
       - joint_probability
+      - union_single_factor
+      - single_factor_conditional_probabilities
   - title: Links and trends
     desc: >
       The Numerics link-function layer (identity, log, logit, and friends) and the trend models

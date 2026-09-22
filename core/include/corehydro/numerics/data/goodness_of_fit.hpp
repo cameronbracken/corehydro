@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Statistics/GoodnessOfFit.cs @ 2a0357a
+// ported from: Numerics/Data/Statistics/GoodnessOfFit.cs @ 7e8e8d1
 //
 // Goodness-of-fit measures for evaluating model performance.
 // Includes information criteria (AIC, BIC), error metrics (RMSE, MAE, MSE),
@@ -140,13 +140,18 @@ class GoodnessOfFit {
         if (observed.size() != modeled.size())
             throw std::invalid_argument(
                 "The number of observed values must equal the number of modeled values.");
-        int n = static_cast<int>(observed.size()) - k;
+        const int observation_count = static_cast<int>(observed.size());
+        if (k < 0 || k >= observation_count) {
+            throw std::out_of_range(
+                "The number of model parameters must be nonnegative and less than the number of observations.");
+        }
+        const int degrees_of_freedom = observation_count - k;
         double sse = 0.0;
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < observation_count; ++i) {
             double d = modeled[static_cast<std::size_t>(i)] - observed[static_cast<std::size_t>(i)];
             sse += d * d;
         }
-        return std::sqrt(sse / n);
+        return std::sqrt(sse / degrees_of_freedom);
     }
 
     /// RMSE(observed, model): Weibull plotting positions, sort observed, compare to InverseCDF

@@ -20,6 +20,10 @@ __all__ = [
     "l_moments",
     "ranks",
     "percentile",
+    "first_order_sobol",
+    "pawn",
+    "pawn_median",
+    "borgonovo_delta",
     "RunningStatistics",
     "running_statistics",
     "RunningCovariance",
@@ -36,6 +40,8 @@ __all__ = [
     "sobol_sequence",
     "stratify",
     "joint_probability",
+    "union_single_factor",
+    "single_factor_conditional_probabilities",
     "Link",
     "link_function",
     "link",
@@ -217,6 +223,43 @@ def l_moments(x) -> dict:
     xa = np.asarray(x, dtype=float).ravel()
     r = _toolbox_run("statistics", "l_moments", [xa])
     return dict(zip(r["names"], r["values"]))
+
+
+def first_order_sobol(x, y, bins: int = 20) -> float:
+    """Estimate a first order Sobol index from paired stored samples."""
+    xa, ya = _check_pair(x, y)
+    return float(
+        _toolbox_run("statistics", "first_order_sobol", [xa, ya], {"bins": int(bins)})[
+            "values"
+        ][0]
+    )
+
+
+def pawn(x, y, bins: int = 20) -> np.ndarray:
+    """Return PAWN conditional distribution statistics for each input rank bin."""
+    xa, ya = _check_pair(x, y)
+    return np.asarray(
+        _toolbox_run("statistics", "pawn", [xa, ya], {"bins": int(bins)})["values"]
+    )
+
+
+def pawn_median(x, y, bins: int = 20) -> float:
+    """Estimate the customary median PAWN sensitivity index."""
+    xa, ya = _check_pair(x, y)
+    return float(
+        _toolbox_run("statistics", "pawn_median", [xa, ya], {"bins": int(bins)})[
+            "values"
+        ][0]
+    )
+
+
+def borgonovo_delta(x, y, x_bins: int = 20, y_bins: int = 20) -> float:
+    """Estimate Borgonovo delta from paired stored samples."""
+    xa, ya = _check_pair(x, y)
+    options = {"x_bins": int(x_bins), "y_bins": int(y_bins)}
+    return float(
+        _toolbox_run("statistics", "borgonovo_delta", [xa, ya], options)["values"][0]
+    )
 
 
 def ranks(x) -> np.ndarray:
@@ -1100,6 +1143,21 @@ def joint_probability(p, dependency: str = "independent", indicators=None, corre
             data.append(corr.ravel())
     r = _toolbox_run("probability", "joint", data, {"dependency": dependency})
     return float(r["values"][0])
+
+
+def union_single_factor(p, rho: float, relative_tolerance: float = 1e-8) -> float:
+    """Probability of a union under equicorrelated single factor Gaussian dependence."""
+    options = {"rho": float(rho), "relative_tolerance": float(relative_tolerance)}
+    return float(_toolbox_run("probability", "union_single_factor", [p], options)["values"][0])
+
+
+def single_factor_conditional_probabilities(normal_thresholds, rho: float, z: float):
+    """Conditional event probabilities at one shared Gaussian factor value."""
+    options = {"rho": float(rho), "z": float(z)}
+    result = _toolbox_run(
+        "probability", "single_factor_conditional", [normal_thresholds], options
+    )
+    return np.asarray(result["values"])
 
 
 # The "link" and "trend" toolbox groups (Task 7). "link" mirrors the seven Numerics link

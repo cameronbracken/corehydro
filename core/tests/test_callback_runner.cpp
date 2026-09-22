@@ -804,19 +804,12 @@ int main() {
                 "host language error");
         }
         {
-            // REGRESSION GUARD for the crash the block above used to be. When every jackknife
-            // sample fails -- which is exactly what a latched abort produces -- the BCa
-            // acceleration constant is `0 / 0`, and that NaN reaches `Statistics::percentile` as
-            // its `k`. `k`'s range check cannot see a NaN (every comparison against one is
-            // false), so it used to fall through to `static_cast<int>(std::floor(NaN))`:
-            // undefined behaviour that saturates to 0 on arm64 and yields INT_MIN on x86-64,
-            // where indexing the sample with it segfaulted. The block above therefore passed on
-            // macOS and killed the whole process under gcc. Asserted directly here as well as
-            // through the callback path, because the callback path only crashes on one ISA.
+            // v2.2.0 rejects a non-finite percentile before it reaches an interpolation index.
+            // This replaces the former ISA-dependent float-to-int conversion guard.
             const std::vector<double> sample = {4.1, 4.7, 4.8, 4.9, 5.1, 5.2, 5.3, 5.5};
             const double nan_k = std::numeric_limits<double>::quiet_NaN();
-            CHECK_TRUE(std::isnan(corehydro::numerics::data::percentile(sample, nan_k)));
-            CHECK_TRUE(std::isnan(corehydro::numerics::data::percentile(sample, nan_k, true)));
+            CHECK_THROWS(corehydro::numerics::data::percentile(sample, nan_k));
+            CHECK_THROWS(corehydro::numerics::data::percentile(sample, nan_k, true));
             // The defined values around it are untouched by the guard.
             CHECK_NEAR(corehydro::numerics::data::percentile(sample, 0.0), 4.1, 1e-15);
             CHECK_NEAR(corehydro::numerics::data::percentile(sample, 1.0), 5.5, 1e-15);

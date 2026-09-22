@@ -1,4 +1,4 @@
-// ported from: Numerics/Utilities/ExtensionMethods.cs @ 2a0357a
+// ported from: Numerics/Utilities/ExtensionMethods.cs @ 7e8e8d1
 //
 // C# extends `System.Random`/arrays/`Vector`/`Matrix` with instance-style extension
 // methods; C++ has no such mechanism, so each ported member becomes a free function
@@ -24,6 +24,8 @@
 // of the same name are not. `almost_equals` (the `Double` region's sole
 // member) was added additively for the BestFit v2.0.0 DataFrame plotting-position rewrite,
 // which uses it to detect/separate tied Hirsch-Stedinger positions.
+// v2.2.0 only preallocates one temporary sampling list and corrects C# exception
+// constructor argument order for array arithmetic. Neither change alters this C++ API.
 #pragma once
 #include <cmath>
 #include <cstdint>

@@ -24,8 +24,20 @@ inline ToolboxResult run_probability(const std::string& method,
                                      const std::vector<std::vector<double>>& data,
                                      const JsonValue& options) {
     namespace nd = numerics::data::probability;
-    if (method != "joint") throw std::runtime_error("unknown probability method: " + method);
     const std::vector<double>& p = data_at(data, 0, "probability", method);
+    if (method == "union_single_factor") {
+        return scalar(nd::union_single_factor(p, options.at("rho").as_double(),
+                                              options.value_or("relative_tolerance", 1e-8)));
+    }
+    if (method == "single_factor_conditional") {
+        std::vector<double> conditional(p.size());
+        nd::single_factor_conditional_probabilities(
+            p, options.at("rho").as_double(), options.at("z").as_double(), conditional);
+        ToolboxResult r;
+        r.values = std::move(conditional);
+        return r;
+    }
+    if (method != "joint") throw std::runtime_error("unknown probability method: " + method);
 
     std::string dep = options.value_or("dependency", "independent");
     nd::DependencyType type;

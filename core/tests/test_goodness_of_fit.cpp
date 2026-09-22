@@ -71,7 +71,7 @@ void test_rmse_arrays() {
     std::vector<double> observed(30);
     for (int i = 0; i < 30; ++i) observed[static_cast<std::size_t>(i)] = i + 1;
     double rmse = GoodnessOfFit::rmse(observed, data, 2);
-    CHECK_NEAR(rmse, 83.8037180707237, 1e-6);
+    CHECK_NEAR(rmse, 87.6252835187426, 1e-6);
 }
 
 void test_rmse_model() {
@@ -80,7 +80,7 @@ void test_rmse_model() {
     std::vector<double> observed(30);
     for (int i = 0; i < 30; ++i) observed[static_cast<std::size_t>(i)] = i + 1;
     double rmse = GoodnessOfFit::rmse(observed, norm);
-    CHECK_NEAR(rmse, 83.8037180707237, 1e-6);
+    CHECK_NEAR(rmse, 87.6252835187426, 1e-6);
 }
 
 void test_rmse_pp() {
@@ -92,7 +92,15 @@ void test_rmse_pp() {
     for (int i = 1; i <= 30; ++i)
         pp[static_cast<std::size_t>(i - 1)] = static_cast<double>(i) / 31.0;
     double rmse = GoodnessOfFit::rmse(observed, pp, norm);
-    CHECK_NEAR(rmse, 83.8037180707237, 1e-6);
+    CHECK_NEAR(rmse, 87.6252835187426, 1e-6);
+}
+
+void test_rmse_parameter_adjustment() {
+    const std::vector<double> observed{0, 0, 0, 0};
+    CHECK_NEAR(GoodnessOfFit::rmse(observed, {1, 2, 3, 4}, 1), std::sqrt(10.0), 1e-12);
+    CHECK_NEAR(GoodnessOfFit::rmse(observed, {4, 1, 2, 3}, 1), std::sqrt(10.0), 1e-12);
+    CHECK_THROWS(GoodnessOfFit::rmse(observed, observed, -1));
+    CHECK_THROWS(GoodnessOfFit::rmse(observed, observed, 4));
 }
 
 void test_rmse_weights() {
@@ -286,6 +294,7 @@ int main() {
     test_rmse_arrays();
     test_rmse_model();
     test_rmse_pp();
+    test_rmse_parameter_adjustment();
     test_rmse_weights();
     test_mse();
     test_mae();

@@ -268,7 +268,7 @@
         {
           "method": "summary_hypothesis",
           "label": "Mann-Whitney test for homogeneity and stationarity (jump)",
-          "expected": 0.6876140273892082,
+          "expected": 0.68756536076788932,
           "mode": "rel",
           "tol": 1e-09,
           "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
@@ -276,7 +276,7 @@
         {
           "method": "summary_hypothesis",
           "label": "Mann-Kendall test for homogeneity and stationarity (trend)",
-          "expected": 0.775729412824826,
+          "expected": 0.77568059517809895,
           "mode": "rel",
           "tol": 1e-09,
           "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library"
@@ -331,7 +331,7 @@
         {
           "method": "summary_hypothesis",
           "label": "Mann-Whitney test for homogeneity and stationarity (jump)",
-          "expected": 0.38676057842842093,
+          "expected": 0.38668248851135401,
           "mode": "rel",
           "tol": 1e-09,
           "source": "no upstream test literal (SummaryHypothesisTest's only C# caller is the WPF GUI); curated with `python3 tools/verify_oracles.py --dump` against the real library; explicit in-range split index 30"

@@ -22,6 +22,8 @@ from corehydropy import (
     interpolate,
     interpolate_2d,
     joint_probability,
+    union_single_factor,
+    single_factor_conditional_probabilities,
     l_moments,
     link,
     link_derivative,
@@ -30,6 +32,10 @@ from corehydropy import (
     link_names,
     linear_regression,
     percentile,
+    first_order_sobol,
+    pawn,
+    pawn_median,
+    borgonovo_delta,
     polynomial_eval,
     product_moments,
     qr_decomposition,
@@ -106,6 +112,27 @@ def test_percentile_accepts_a_vector_of_probabilities():
 def test_percentile_rejects_a_non_numeric_probs_argument():
     with pytest.raises(ValueError, match="probs"):
         percentile([1, 2, 3], probs="half")
+
+
+def test_global_sensitivity_uses_deterministic_tie_order():
+    x = np.ones(32)
+    y = np.r_[np.zeros(16), np.ones(16)]
+    assert first_order_sobol(x, y, bins=2) == 1.0
+    np.testing.assert_array_equal(pawn(x, y, bins=2), [0.5, 0.5])
+    assert pawn_median(x, y, bins=2) == 0.5
+    assert borgonovo_delta(x, y, x_bins=2, y_bins=2) == 0.5
+
+
+def test_single_factor_probability_surface():
+    p = np.array([0.01, 0.05, 0.2, 0.001])
+    assert union_single_factor(p, 0.0) == pytest.approx(1 - np.prod(1 - p), rel=1e-12)
+    thresholds = np.array([-2.3263478740408408, -0.8416212335729142, 0.5244005127080407])
+    np.testing.assert_allclose(
+        single_factor_conditional_probabilities(thresholds, 0.0, 1.7),
+        [0.01, 0.2, 0.7],
+        rtol=0,
+        atol=1e-14,
+    )
 
 
 def test_correlation_with_a_matrix_returns_the_p_by_p_matrix():

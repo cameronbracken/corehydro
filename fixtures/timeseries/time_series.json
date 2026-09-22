@@ -1977,7 +1977,7 @@
         {
           "method": "summary_hypothesis_test",
           "label": "Mann-Whitney test for homogeneity and stationarity (jump)",
-          "expected": 0.60158433966534,
+          "expected": 0.60152455593597187,
           "mode": "abs",
           "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
           "tol": 1e-09
@@ -1985,7 +1985,7 @@
         {
           "method": "summary_hypothesis_test",
           "label": "Mann-Kendall test for homogeneity and stationarity (trend)",
-          "expected": 0.775729412824826,
+          "expected": 0.77568059517809895,
           "mode": "abs",
           "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
           "tol": 1e-09

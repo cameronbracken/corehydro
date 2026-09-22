@@ -1,0 +1,12 @@
+{
+  "kind": "special_function",
+  "target": "Debye.function_order_one",
+  "source": "Numerics/Mathematics/Special Functions/Debye.cs",
+  "reference": "Numerics @ 7e8e8d1; Test_Debye.cs order-one values and reflection identity",
+  "cases": [
+    { "name": "zero", "args": [0.0], "assertions": [ { "method": "value", "expected": 1.0, "mode": "equal" } ] },
+    { "name": "positive_one", "args": [1.0], "assertions": [ { "method": "value", "expected": 0.7775046341122482, "mode": "rel", "tol": 1e-14 } ] },
+    { "name": "negative_one", "args": [-1.0], "assertions": [ { "method": "value", "expected": 1.2775046341122482, "mode": "rel", "tol": 1e-14 } ] },
+    { "name": "large_positive", "args": [100.0], "assertions": [ { "method": "value", "expected": 0.016449340668482266, "mode": "rel", "tol": 1e-14 } ] }
+  ]
+}

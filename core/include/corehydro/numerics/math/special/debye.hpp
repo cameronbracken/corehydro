@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Special Functions/Debye.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Special Functions/Debye.cs @ 7e8e8d1
 //
 // The Debye function:
 //
@@ -12,6 +12,8 @@
 #pragma once
 #include <cmath>
 #include <stdexcept>
+
+#include "corehydro/numerics/tools.hpp"
 
 namespace corehydro::numerics::math::special {
 
@@ -45,6 +47,37 @@ inline double debye_function(double x) {
         // (its `else if (x > 25)` branch never touches D).
         return 3.0 * (6.493939402 - D) / (x * x * x);
     }
+}
+
+// Computes the order-1 Debye function D1(x) for any real argument.
+inline double debye_function_order_one(double x) {
+    static constexpr double coefficients[] = {
+        2.7777777777777776e-02,  -2.7777777777777778e-04, 4.7241118669690098e-06,
+        -9.1857730746619641e-08, 1.8978869988971000e-09,  -4.0647616451442256e-11,
+        8.9216910204564523e-13,  -1.9939295860721074e-14, 4.5189800296199183e-16,
+        -1.0356517612181247e-17, 2.3952186210261870e-19,  -5.5817858743250090e-21};
+
+    if (x == 0.0) return 1.0;
+    if (x < 0.0) return debye_function_order_one(-x) - 0.5 * x;
+    if (x <= 1.0) {
+        const double squared = x * x;
+        double power = 1.0;
+        double sum = 0.0;
+        for (double coefficient : coefficients) {
+            power *= squared;
+            sum += coefficient * power;
+        }
+        return 1.0 - 0.25 * x + sum;
+    }
+
+    double remainder = 0.0;
+    for (int k = 1; k <= 1000; ++k) {
+        const double kd = static_cast<double>(k);
+        const double term = std::exp(-kd * x) * (1.0 / kd + 1.0 / (kd * kd * x));
+        remainder += term;
+        if (term < 1e-20) break;
+    }
+    return corehydro::numerics::kPi * corehydro::numerics::kPi / (6.0 * x) - remainder;
 }
 
 }  // namespace corehydro::numerics::math::special
