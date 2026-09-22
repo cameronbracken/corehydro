@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Global/ShuffledComplexEvolution.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Global/ShuffledComplexEvolution.cs @ 7e8e8d1
 //
 // The Shuffled Complex Evolution (SCE-UA) global optimizer of Duan et al. (1992): a population
 // is partitioned into complexes, each complex is evolved independently by the competitive
@@ -113,6 +113,9 @@ class ShuffledComplexEvolution : public Optimizer {
     int tolerance_steps = 20;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         if (complexes < 1) throw ArgumentException("The number of complexes must be greater than 0.");
         if (cce_iterations < 1)

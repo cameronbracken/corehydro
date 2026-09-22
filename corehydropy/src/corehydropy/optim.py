@@ -53,7 +53,7 @@ _METHOD_TABLE = {
     "mlsl": {"controls": _BASE_CONTROLS + ("local_method",),
              "needs_initial": True, "stochastic": True, "gradient": False},
     "bfgs": {"controls": _BASE_CONTROLS, "needs_initial": True, "stochastic": False,
-             "gradient": False},
+             "gradient": True},
     "powell": {"controls": _BASE_CONTROLS, "needs_initial": True, "stochastic": False,
                "gradient": False},
     "adam": {"controls": _BASE_CONTROLS + ("alpha", "beta1", "beta2"),
@@ -69,13 +69,8 @@ _METHOD_TABLE = {
     # The one constrained method. ``needs_initial`` is True because its default inner optimizer is
     # BFGS over the top-level ``initial``/``lower``/``upper``, and an ``inner`` spec that omits a
     # vector falls back to the same ones.
-    # ``minimize_only`` because upstream ``AugmentedLagrange.Optimize()`` always drives its inner
-    # optimizer through ``Minimize()``, over an augmented Lagrangian built from the RAW objective
-    # -- so a maximize request flips the outer bookkeeping but not the search direction, and the
-    # verb would return the constrained MINIMUM labelled "Success". The ported class mirrors that
-    # exactly; the guard is here, on the public verb, rather than in the port.
     "augmented_lagrange": {"controls": _BASE_CONTROLS, "needs_initial": True, "stochastic": False,
-                           "gradient": False, "constrained": True, "minimize_only": True},
+                           "gradient": False, "constrained": True},
 }
 _METHODS = tuple(_METHOD_TABLE)
 _CONTROL_KEYS = {name for spec in _METHOD_TABLE.values() for name in spec["controls"]}
@@ -85,9 +80,6 @@ _GRADIENT_METHODS = {m for m, spec in _METHOD_TABLE.items() if spec["gradient"]}
 # The methods taking `constraints` and `inner`. Read off the same table (an absent ``constrained``
 # key means False) so the two arguments can never drift from the method list above.
 _CONSTRAINT_METHODS = {m for m, spec in _METHOD_TABLE.items() if spec.get("constrained")}
-# The methods that can only minimize, off the same table (an absent ``minimize_only`` key means
-# False). See the ``augmented_lagrange`` row for why it is on that one.
-_MINIMIZE_ONLY_METHODS = {m for m, spec in _METHOD_TABLE.items() if spec.get("minimize_only")}
 # The three ConstraintType members, in the short spelling optimizer_runner.hpp's spec grammar
 # takes: "eq" for ==, "le" for <=, "ge" for >=.
 _CONSTRAINT_TYPES = ("eq", "le", "ge")
@@ -233,13 +225,6 @@ def _optim_run(objective, lower, upper, initial, method: str, seed, control: dic
         )
     if method not in _METHODS:
         raise ValueError(f"`method` must be one of {_METHODS}; got {method!r}")
-    if maximize and method in _MINIMIZE_ONLY_METHODS:
-        raise ValueError(
-            f"method {method!r} cannot maximize: upstream AugmentedLagrange always drives its "
-            "inner optimizer through Minimize() over the raw objective plus penalty, so a "
-            "maximize request would return the constrained MINIMUM. Negate your objective and "
-            "call optim_minimize() instead."
-        )
     if gradient is not None and method not in _GRADIENT_METHODS:
         raise ValueError(
             f"`gradient` only applies to method(s) {sorted(_GRADIENT_METHODS)}; "
@@ -442,9 +427,9 @@ def optim_minimize(objective, lower=None, upper=None, initial=None, method: str 
         so a successful run returns a Hessian, computed by extra objective evaluations, unless
         ``control={"compute_hessian": False}`` turns it off.
     gradient : callable, optional
-        Takes the parameter vector and returns one partial derivative per parameter. Accepted only
-        by ``"adam"`` and ``"gradient_descent"``, an error for every other method. Omitted, both
-        methods differentiate the objective numerically, exactly as the upstream C# classes do with
+        Takes the parameter vector and returns one partial derivative per parameter. Accepted by
+        ``"bfgs"``, ``"adam"``, and ``"gradient_descent"``, an error for every other method.
+        Omitted, these methods differentiate the objective numerically, exactly as the upstream C# classes do with
         a null gradient.
     constraints : list of Constraint, optional
         Required by, and accepted only by, ``method="augmented_lagrange"``.
@@ -488,12 +473,9 @@ def optim_maximize(objective, lower=None, upper=None, initial=None, method: str 
                    inner: dict | None = None) -> OptimResult:
     """Maximize a user-written objective. See :func:`optim_minimize` for the arguments.
 
-    Every method is accepted except ``"augmented_lagrange"``, which can only minimize: the
-    upstream C# class always drives its inner optimizer through ``Minimize()`` over an augmented
-    Lagrangian built from the raw objective, so a maximize request would flip the reported sign
-    without flipping the search direction and hand back the constrained minimum. Negate the
-    objective and call :func:`optim_minimize` instead -- minimizing ``-f`` subject to the same
-    constraints is exactly maximizing ``f``.
+    Every method is accepted, including ``"augmented_lagrange"``. Numerics v2.2.0 scales the
+    primary objective inside the augmented Lagrangian while leaving constraint penalties
+    direction neutral.
 
     Examples
     --------

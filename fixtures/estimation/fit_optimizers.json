@@ -30,11 +30,11 @@
         "optimizer": "DifferentialEvolution"
       },
       "assertions": [
-        { "method": "function_evaluations", "args": [], "expected": 1160, "mode": "equal" },
+        { "method": "function_evaluations", "args": [], "expected": 1000, "mode": "equal" },
         { "method": "status_is", "args": ["Success"], "expected": 1, "mode": "equal" },
-        { "method": "parameter", "args": [0], "expected": 16027.212055139495, "mode": "rel", "tol": 1e-08 },
+        { "method": "parameter", "args": [0], "expected": 16026.02324232448, "mode": "rel", "tol": 1e-08 },
         { "method": "max_log_likelihood", "args": [], "expected": -99.47930639020443, "mode": "rel", "tol": 1e-08 },
-        { "method": "prior_log_likelihood", "args": [], "expected": -34.550479362549034, "mode": "rel", "tol": 1e-08 }
+        { "method": "prior_log_likelihood", "args": [], "expected": -34.550616104869455, "mode": "rel", "tol": 1e-08 }
       ]
     },
     {
@@ -47,7 +47,7 @@
         "optimizer": "BFGS"
       },
       "assertions": [
-        { "method": "function_evaluations", "args": [], "expected": 164, "mode": "equal" },
+        { "method": "function_evaluations", "args": [], "expected": 144, "mode": "equal" },
         { "method": "status_is", "args": ["Success"], "expected": 1, "mode": "equal" }
       ]
     },

@@ -263,7 +263,7 @@ test_that("a control value actually reaches the optimizer: max_function_evaluati
   expect_lt(capped$function_evaluations, uncapped$function_evaluations)
 })
 
-# --- the two gradient-taking methods ------------------------------------------------------
+# --- the gradient-taking methods ----------------------------------------------------------
 #
 # f(p) = (p1 - 3)^2 + (p2 + 1)^2, minimum 0 at (3, -1), with the analytic gradient written out
 # term by term so the Python twin in corehydropy/tests/test_optim.py evaluates the identical
@@ -290,6 +290,17 @@ test_that("adam and gradient_descent fall back to numerical differentiation", {
   }
 })
 
+test_that("bfgs takes an analytic gradient and can maximize with it", {
+  fit <- optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
+                        method = "bfgs", gradient = quad_shifted_gradient)
+  expect_equal(fit$parameters, c(3, -1), tolerance = 1e-8)
+  peak <- function(p) -(p[1] - 2)^2
+  grad <- function(p) -2 * (p[1] - 2)
+  maximum <- optim_maximize(peak, initial = 0, lower = -10, upper = 10,
+                            method = "bfgs", gradient = grad)
+  expect_equal(maximum$parameters[[1]], 2, tolerance = 1e-8)
+})
+
 test_that("the analytic gradient is actually used, not just accepted", {
   # A run driven by the supplied gradient never pays for the 2*D finite-difference probes, so it
   # costs strictly fewer objective evaluations than the same run without one. Without this, a
@@ -305,7 +316,7 @@ test_that("the analytic gradient is actually used, not just accepted", {
 
 test_that("an error inside the gradient reaches the caller intact", {
   boom <- function(p) stop("boom in the gradient")
-  for (m in c("gradient_descent", "adam")) {
+  for (m in c("bfgs", "gradient_descent", "adam")) {
     expect_error(
       optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
                      method = m, gradient = boom),
@@ -326,11 +337,6 @@ test_that("`gradient` is rejected for every method that cannot take one", {
   expect_error(
     optim_minimize(quad_shifted, lower = c(-10, -10), upper = c(10, 10), method = "de", seed = 1,
                    gradient = quad_shifted_gradient),
-    "gradient"
-  )
-  expect_error(
-    optim_minimize(quad_shifted, initial = c(0, 0), lower = c(-10, -10), upper = c(10, 10),
-                   method = "bfgs", gradient = quad_shifted_gradient),
     "gradient"
   )
 })
@@ -456,28 +462,13 @@ test_that("augmented Lagrange requires at least one constraint", {
   )
 })
 
-# optim_maximize() used to accept this method and return the constrained MINIMUM labelled
-# "Success": upstream AugmentedLagrange.Optimize() always calls the inner optimizer's Minimize()
-# over an augmented Lagrangian built from the RAW objective, so the outer sign flip never reaches
-# the search. The port still mirrors that; the public verb refuses the request.
-test_that("optim_maximize rejects augmented Lagrange and the documented workaround is right", {
+test_that("optim_maximize supports augmented Lagrange", {
   peak <- function(p) -(p[1] - 3)^2                     # true constrained max at x = 1: -4
   con <- optim_constraint(function(p) p[1], value = 1, type = "le")
-  expect_error(
-    optim_maximize(peak, initial = 0, lower = -10, upper = 10,
-                   method = "augmented_lagrange", constraints = list(con)),
-    "cannot maximize"
-  )
-  # Every other method still maximizes.
-  expect_s3_class(
-    optim_maximize(function(p) -(p[1] - 3)^2, lower = -10, upper = 10, method = "de", seed = 1),
-    "corehydro_optim"
-  )
-  # The workaround the error names: minimize -f under the same constraint.
-  fit <- optim_minimize(function(p) (p[1] - 3)^2, initial = 0, lower = -10, upper = 10,
+  fit <- optim_maximize(peak, initial = 0, lower = -10, upper = 10,
                         method = "augmented_lagrange", constraints = list(con))
   expect_equal(fit$parameters[[1]], 1, tolerance = 1e-3)
-  expect_equal(-fit$value, -4, tolerance = 1e-3)
+  expect_equal(fit$value, -4, tolerance = 1e-3)
 })
 
 test_that("optim_constraint validates its own arguments", {

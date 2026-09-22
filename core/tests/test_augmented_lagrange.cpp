@@ -368,6 +368,19 @@ void augmented_lagrange_constructor_rejections() {
                      "The inner optimizer cannot also be an Augmented Lagrange optimizer.");
 }
 
+void augmented_lagrange_maximizes_in_requested_direction() {
+    auto peak = [](std::vector<double>& x) { return -(x[0] - 3.0) * (x[0] - 3.0); };
+    auto constraint = std::make_shared<Constraint>(
+        [](const std::vector<double>& x) { return x[0]; }, 1, 1.0,
+        ConstraintType::LesserThanOrEqualTo);
+    auto inner = BFGS(peak, 1, {-5.0}, {-10.0}, {10.0});
+    auto solver = AugmentedLagrange(
+        peak, inner, std::vector<std::shared_ptr<IConstraint>>{constraint});
+    solver.maximize();
+    CHECK_NEAR(solver.best_parameter_set().values[0], 1.0, 1e-3);
+    CHECK_NEAR(solver.best_parameter_set().fitness, 4.0, 1e-3);
+}
+
 }  // namespace
 
 int main() {
@@ -382,5 +395,6 @@ int main() {
     augmented_lagrange_sizes_multipliers_by_type();
     augmented_lagrange_replaces_inner_objective();
     augmented_lagrange_constructor_rejections();
+    augmented_lagrange_maximizes_in_requested_direction();
     return chtest::summary("test_augmented_lagrange");
 }

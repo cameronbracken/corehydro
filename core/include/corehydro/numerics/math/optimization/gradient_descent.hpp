@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Local/GradientDescent.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Local/GradientDescent.cs @ 7e8e8d1
 //
 // The Gradient Descent optimization algorithm -- a first-order iterative method for
 // unconstrained nonlinear optimization that steps against the gradient by a fixed learning
@@ -90,6 +90,9 @@ class GradientDescent : public Optimizer {
     GradientFunction gradient;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         int D = number_of_parameters_;
         bool cancel = false;
@@ -144,7 +147,7 @@ class GradientDescent : public Optimizer {
                 auto values = x;  // Objective/evaluate take a mutable reference
                 return evaluate(values, cancel);
             },
-            p);
+            p, lower_bounds_, upper_bounds_);
     }
 };
 

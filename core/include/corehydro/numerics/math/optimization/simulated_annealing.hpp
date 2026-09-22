@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Global/SimulatedAnnealing.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Global/SimulatedAnnealing.cs @ 7e8e8d1
 //
 // The adaptive simulated annealing global optimizer (Corana et al., "Minimizing Multimodal
 // Functions of Continuous Variables with 'Simulated Annealing' Algorithm", 1987). Each outer
@@ -119,6 +119,9 @@ class SimulatedAnnealing : public Optimizer {
     int tolerance_steps = 20;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         int i, j, k, D = number_of_parameters_;
 

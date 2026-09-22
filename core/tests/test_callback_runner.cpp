@@ -1251,7 +1251,9 @@ int main() {
             t.moment_conditions = moments3;
             sup::CallbackResult r = sup::run_callback("gmm", "fit", options, t);
 
-            CHECK_EQ(r.status, std::string("Success"));
+            // v2.2.0 preserves the finite incumbent when the final BFGS weighting update cannot
+            // satisfy the safeguarded line search, and reports that termination distinctly.
+            CHECK_EQ(r.status, std::string("LineSearchFailed"));
             CHECK_EQ(named(r, "number_of_moment_conditions"), 3.0);
             CHECK_EQ(named(r, "number_of_parameters"), 2.0);
             CHECK_EQ(named(r, "degree_of_freedom"), 1.0);

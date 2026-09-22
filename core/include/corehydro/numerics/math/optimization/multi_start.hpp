@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Global/MultiStart.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Global/MultiStart.cs @ 7e8e8d1
 //
 // The Multi-Start (MS) global optimization method (Kan, Boender & Timmer 1985): run a local search
 // from the user's initial point, then from MaxIterations - 1 further points drawn uniformly over
@@ -6,7 +6,7 @@
 // is the maximum number of local searches, which is why the constructor pins MaxIterations to 100.
 //
 // This is MLSL's simpler sibling and mlsl.hpp is the style model: the two C# classes share the
-// GetLocalOptimizer body almost verbatim (same three LocalMethod branches, same in-place bound
+// GetLocalOptimizer body almost verbatim (same three LocalMethod branches, same copied bound
 // repair, same localCancel closure, same MaxFunctionEvaluations budget arithmetic), and the same
 // transcription notes apply. See mlsl.hpp notes 3, 4 and 5 -- in particular note 5 for why the
 // NelderMead branch wraps the deliberately-standalone Phase 0 NelderMead in a real Optimizer
@@ -18,21 +18,11 @@
 //    the base's 10,000 for every MultiStart -- and a caller who sets MaxIterations afterwards
 //    still wins, exactly as in C#.
 //
-// 2. UPSTREAM ARRAY ALIASING, reproduced deliberately. C# allocates `var values = new double[D];`
-//    and then, on the first iteration, does `values = InitialValues;` -- an array REFERENCE
-//    assignment, not a copy. From that point on `values` IS the InitialValues array, so every
-//    later iteration's uniform draw writes through it and the caller-visible InitialValues
-//    property ends the run holding the LAST sampled point rather than the user's starting point.
-//    The search path is unaffected (a single scratch buffer either way), but the observable
-//    InitialValues is, so the port mirrors it with a pointer that is re-seated to the
-//    initial_values_ member instead of copying into a local. `RepairParameter` in
-//    get_local_optimizer writes through the same pointer, which is the second half of the same
-//    C# behavior (see mlsl.hpp note 3).
+// 2. v2.2.0 copies InitialValues into the local scratch vector. Later uniform draws and bound
+//    repair therefore leave the caller-visible InitialValues property unchanged.
 //
-// 3. The polish step passes `BestParameterSet.Values` to GetLocalOptimizer, which repairs THAT
-//    array in place -- so the reported best point can be clamped to the bounds by the polish call
-//    even before the polish search runs. Mirrored by passing best_parameter_set_.values as the
-//    non-const reference, exactly as mlsl.hpp does.
+// 3. The polish step also repairs a private copy, so it cannot alter the reported incumbent before
+//    the polish search runs.
 //
 // 4. Each local solver is constructed over `(x) => Evaluate(x, ref localCancel)` -- the PARENT's
 //    evaluate() -- so the parent's best-tracking, trace, evaluation counter and
@@ -126,6 +116,9 @@ class MultiStart : public Optimizer {
     bool polish = true;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         int i, j, D = number_of_parameters_;
         bool cancel = false;
@@ -140,23 +133,20 @@ class MultiStart : public Optimizer {
 
         // Set solver parameters
         sampling::MersenneTwister prng(static_cast<std::uint32_t>(prng_seed));
-        // `values` stands in for C#'s `double[] values`, an array REFERENCE that gets re-seated to
-        // the InitialValues array on the first iteration and then written through -- see hazard 2.
-        std::vector<double> values_storage(static_cast<std::size_t>(D));
-        std::vector<double>* values = &values_storage;
+        std::vector<double> values(static_cast<std::size_t>(D));
 
         while (iterations_ < max_iterations) {
             if (iterations_ == 0) {
-                values = &initial_values_;  // C#: values = InitialValues (reference assignment)
+                values = initial_values_;
             } else {
                 // Step 1. Draw a point from the uniform distribution over S.
                 for (j = 0; j < D; j++)
-                    (*values)[static_cast<std::size_t>(j)] =
+                    values[static_cast<std::size_t>(j)] =
                         uniform_dists[static_cast<std::size_t>(j)].inverse_cdf(prng.next_double());
             }
 
             // Step 2. Apply P to the new sample point.
-            solver = get_local_optimizer(*values, local_relative_tolerance,
+            solver = get_local_optimizer(values, local_relative_tolerance,
                                          local_absolute_tolerance, cancel);
             solver->minimize();
             if (cancel) return;
@@ -224,22 +214,20 @@ class MultiStart : public Optimizer {
     };
 
     // Returns an optimizer for the local search.
-    //   initial_values:     an array of initial values to evaluate (repaired IN PLACE, mutating
-    //                       the caller's vector exactly as the C# repairs the caller's IList --
-    //                       see mlsl.hpp note 3 and hazards 2/3 above).
+    //   initial_values:     initial values copied before bound repair (see hazards 2/3 above).
     //   relative_tolerance: the desired relative tolerance for the solution.
     //   absolute_tolerance: the desired absolute tolerance for the solution.
     //   cancel:             by ref. Determines if the solver should be canceled.
-    std::unique_ptr<Optimizer> get_local_optimizer(std::vector<double>& initial_values,
+    std::unique_ptr<Optimizer> get_local_optimizer(const std::vector<double>& initial_values,
                                                    double relative_tolerance,
                                                    double absolute_tolerance, bool& cancel) {
         // Heap closure standing in for the C# captured local `localCancel` (mlsl.hpp note 4).
         auto local_cancel = std::make_shared<bool>(false);
         std::unique_ptr<Optimizer> solver;
 
-        // Make sure the parameters are within the bounds.
+        std::vector<double> repaired(static_cast<std::size_t>(number_of_parameters_));
         for (int i = 0; i < number_of_parameters_; i++)
-            initial_values[static_cast<std::size_t>(i)] =
+            repaired[static_cast<std::size_t>(i)] =
                 repair_parameter(initial_values[static_cast<std::size_t>(i)],
                                  lower_bounds_[static_cast<std::size_t>(i)],
                                  upper_bounds_[static_cast<std::size_t>(i)]);
@@ -247,18 +235,18 @@ class MultiStart : public Optimizer {
         if (method == LocalMethod::BFGS) {
             solver = std::make_unique<BFGS>(
                 [this, local_cancel](std::vector<double>& x) { return evaluate(x, *local_cancel); },
-                number_of_parameters_, initial_values, lower_bounds_, upper_bounds_);
+                number_of_parameters_, repaired, lower_bounds_, upper_bounds_);
         } else if (method == LocalMethod::NelderMead) {
             // The standalone Phase 0 NelderMead is not an Optimizer subclass; MLSL already carries
             // the wrapper that makes it one, and it is reused here rather than duplicated (see
             // mlsl.hpp note 5 for the two documented residual deviations).
             solver = std::make_unique<NelderMeadLocalSolver>(
                 [this, local_cancel](std::vector<double>& x) { return evaluate(x, *local_cancel); },
-                number_of_parameters_, initial_values, lower_bounds_, upper_bounds_);
+                number_of_parameters_, repaired, lower_bounds_, upper_bounds_);
         } else if (method == LocalMethod::Powell) {
             solver = std::make_unique<Powell>(
                 [this, local_cancel](std::vector<double>& x) { return evaluate(x, *local_cancel); },
-                number_of_parameters_, initial_values, lower_bounds_, upper_bounds_);
+                number_of_parameters_, repaired, lower_bounds_, upper_bounds_);
         } else {
             // C# NotSupportedException; a plain std::runtime_error routes through the base
             // minimize()/maximize() catch-all to Failure, exactly like the C# catch-all handles

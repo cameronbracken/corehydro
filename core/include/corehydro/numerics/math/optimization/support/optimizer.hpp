@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Support/Optimizer.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Support/Optimizer.cs @ 7e8e8d1
 //
 // Abstract base class for all optimization methods: inputs (tolerances, iteration/
 // evaluation caps, ReportFailure/RecordTraces/ComputeHessian flags), outputs
@@ -143,7 +143,7 @@ class Optimizer {
     bool record_traces = true;
 
     // Determines whether to compute a numerically differentiated Hessian matrix when the
-    // optimization was successful.
+    // optimization was successful or a line search failed after producing a usable result.
     bool compute_hessian = true;
 
     // The number of parameters to evaluate in the objective function.
@@ -196,12 +196,13 @@ class Optimizer {
         function_scale_ = 1;
         try {
             optimize();
-            if (status_ == OptimizationStatus::Success && compute_hessian) {
+            if ((status_ == OptimizationStatus::Success || status_ == OptimizationStatus::LineSearchFailed) &&
+                compute_hessian) {
                 // By-value copy: the differentiation helper's point is const, but Objective
                 // takes a mutable reference (see the Objective note above).
                 hessian_ = linalg::Matrix(differentiation::hessian(
                     [this](std::vector<double> x) { return objective_function_(x); },
-                    best_parameter_set_.values));
+                    best_parameter_set_.values, parameter_lower_bounds(), parameter_upper_bounds()));
             }
         } catch (const ArgumentException& ex) {
             if (ex.kind() != ArgumentErrorKind::MaxIterations && ex.kind() != ArgumentErrorKind::MaxFunctionEvaluations)
@@ -218,12 +219,13 @@ class Optimizer {
         function_scale_ = -1;
         try {
             optimize();
-            if (status_ == OptimizationStatus::Success && compute_hessian) {
+            if ((status_ == OptimizationStatus::Success || status_ == OptimizationStatus::LineSearchFailed) &&
+                compute_hessian) {
                 // By-value copy: the differentiation helper's point is const, but Objective
                 // takes a mutable reference (see the Objective note above).
                 hessian_ = linalg::Matrix(differentiation::hessian(
                     [this](std::vector<double> x) { return objective_function_(x); },
-                    best_parameter_set_.values));
+                    best_parameter_set_.values, parameter_lower_bounds(), parameter_upper_bounds()));
             }
         } catch (const ArgumentException& ex) {
             if (ex.kind() != ArgumentErrorKind::MaxIterations && ex.kind() != ArgumentErrorKind::MaxFunctionEvaluations)
@@ -247,6 +249,17 @@ class Optimizer {
     std::vector<ParameterSet> parameter_set_trace_;
     OptimizationStatus status_ = OptimizationStatus::None;
     std::optional<linalg::Matrix> hessian_;
+
+    // Inclusive box bounds used by end-of-run finite differences. Empty vectors mean
+    // unbounded, matching the differentiation helper's contract.
+    virtual const std::vector<double>& parameter_lower_bounds() const {
+        static const std::vector<double> empty;
+        return empty;
+    }
+    virtual const std::vector<double>& parameter_upper_bounds() const {
+        static const std::vector<double> empty;
+        return empty;
+    }
 
     // Validate inputs.
     virtual void validate() {
@@ -279,7 +292,7 @@ class Optimizer {
         }
 
         // Update trace. This is tracked every evaluation.
-        if (record_traces) parameter_set_trace_.push_back(best_parameter_set_.clone());
+        if (record_traces) parameter_set_trace_.push_back(best_parameter_set_.clone(false));
 
         // Update evaluation counter.
         function_evaluations_ += 1;

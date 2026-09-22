@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Constrained/AugmentedLagrange.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Constrained/AugmentedLagrange.cs @ 7e8e8d1
 //
 // The Augmented Lagrange constrained optimization method: the constrained problem is replaced
 // by a series of unconstrained problems solved by an INNER optimizer, whose objective is the
@@ -28,16 +28,9 @@
 //    `evaluate(current_values, cancel)` calls in `optimize()` do. That asymmetry is
 //    load-bearing for the fitness the C# tests assert; do not route it through `evaluate()`.
 //
-//    ONE CONSEQUENCE OF THAT ASYMMETRY, mirrored rather than corrected: because the augmented
-//    Lagrangian is built from the RAW objective and `optimize()` drives the inner optimizer
-//    through `minimize()` unconditionally, this class CANNOT MAXIMIZE. Under `maximize()` the
-//    outer bookkeeping flips sign while the search direction does not, so the run reports Success
-//    and returns the constrained MINIMUM. Measured through the shipped packages: maximizing
-//    -(x - 3)^2 subject to x <= 1 over [-10, 10] (true optimum x = 1, value -4) returns
-//    x = -10.00011, value -169.0029, Success -- the same answer minimize() gives. The public
-//    `optim_maximize()` verb in both packages therefore REFUSES `method = "augmented_lagrange"`
-//    by name; the class itself is left exactly as upstream wrote it. See
-//    docs/upstream-csharp-issues.md.
+//    The v2.2.0 implementation scales only the primary objective by `function_scale_`; constraint
+//    penalties remain direction-neutral. The inner optimizer still minimizes the augmented
+//    function, so both outer minimization and maximization now follow the requested direction.
 //
 // 3. The three multiplier vectors are sized by COUNTING the constraints of each type in the
 //    constructor, and are then walked by three separate running indices inside both loops --
@@ -295,7 +288,7 @@ class AugmentedLagrange : public Optimizer {
     // The Augmented Lagrangian objective function (see note 2: it calls the primary objective
     // directly, never through evaluate()).
     double augmented_lagrangian_function(std::vector<double>& x) {
-        double phi = primary_objective_function_(x);
+        double phi = static_cast<double>(function_scale_) * primary_objective_function_(x);
         double rho2 = 0.5 * rho_;
 
         std::size_t lambda_idx = 0, mu_idx = 0, nu_idx = 0;
