@@ -101,6 +101,7 @@ set(BF_TESTS
   test_pivotal_bootstrap
   test_copula_clone
   test_copulas_v220
+  test_distribution_numerics_v220
   test_multivariate_normal_api
   test_brent_search
   test_adaptive_gauss_kronrod
