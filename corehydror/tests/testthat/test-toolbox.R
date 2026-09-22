@@ -793,6 +793,47 @@ test_that("univariate_function() rejects an unknown type", {
   expect_error(univariate_function("quadratic", c(1, 1), 1), "unknown function type")
 })
 
+test_that("univariate_function() evaluates v2.2 segmented, composite, and ensemble specs", {
+  segmented <- list(type = "segmented_power", parameters = c(1, 1.5, 2, 0.1))
+  expect_equal(univariate_function(segmented, c(0.5, 5)), c(0, 505.9644256269407),
+               tolerance = 1e-10)
+
+  composite <- list(
+    type = "composite", mode = "weighted_average", weights = c(0.25, 0.75),
+    functions = list(
+      list(type = "linear", parameters = c(0, 2, 0)),
+      list(type = "linear", parameters = c(10, 4, 0))
+    )
+  )
+  expect_equal(univariate_function(composite, 4), 21.5, tolerance = 1e-12)
+
+  mixture <- composite
+  mixture$mode <- "mixture"
+  mixture$confidence_level <- 0.75
+  mixture$functions <- list(
+    list(type = "linear", parameters = c(0, 1, 0)),
+    list(type = "linear", parameters = c(100, 1, 0))
+  )
+  expect_equal(univariate_function(mixture, 5), 105, tolerance = 1e-12)
+
+  ensemble <- list(
+    type = "ensemble", template = segmented,
+    parameter_sets = list(
+      c(1, 1.5, 2, 0.1), c(0.9, 1.6, 1.9, 0.12), c(1.1, 1.4, 2.1, 0.08)
+    ),
+    sample_percentile = 1
+  )
+  expect_equal(univariate_function(ensemble, 5), 10^1.4 * (5 - 1.1)^2.1,
+               tolerance = 1e-10)
+  ensemble$sample_percentile <- NULL
+  ensemble$sample_index <- 0
+  expect_equal(univariate_function(ensemble, 5), 505.9644256269407, tolerance = 1e-10)
+
+  invalid <- composite
+  invalid$weights <- c(0.3, 0.3)
+  expect_error(univariate_function(invalid, 4), "weights")
+})
+
 # The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
 # list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
 # same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs

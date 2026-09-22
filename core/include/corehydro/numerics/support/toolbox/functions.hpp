@@ -47,9 +47,11 @@
 
 #include "corehydro/numerics/distributions/support/dist_spec.hpp"
 #include "corehydro/numerics/functions/i_univariate_function.hpp"
+#include "corehydro/numerics/functions/ensemble_function.hpp"
 #include "corehydro/numerics/functions/linear_function.hpp"
 #include "corehydro/numerics/functions/power_function.hpp"
 #include "corehydro/numerics/functions/tabular_function.hpp"
+#include "corehydro/numerics/functions/univariate_function_factory.hpp"
 #include "corehydro/numerics/support/toolbox/common.hpp"
 
 namespace corehydro::numerics::support::detail {
@@ -81,6 +83,15 @@ inline std::unique_ptr<numerics::functions::IUnivariateFunction> build_univariat
         pf->set_parameters(parameters);
         if (has_confidence) pf->set_confidence_level(options.at("confidence_level").as_double());
         f = std::move(pf);
+    } else if (fn == "segmented_power") {
+        if (parameters.size() < 4 || (parameters.size() - 1) % 3 != 0)
+            throw std::runtime_error("segmented power parameters must have length 3*segments + 1");
+        auto sf = std::make_unique<numerics::functions::SegmentedPowerFunction>(
+            static_cast<int>((parameters.size() - 1) / 3));
+        sf->set_is_deterministic(!has_confidence);
+        sf->set_parameters(parameters);
+        if (has_confidence) sf->set_confidence_level(options.at("confidence_level").as_double());
+        f = std::move(sf);
     } else {
         throw std::runtime_error("unknown function type: " + fn);
     }
@@ -114,10 +125,36 @@ inline ToolboxResult run_functions(const std::string& method,
         return r;
     }
 
-    if (!options.contains("function"))
+    std::unique_ptr<numerics::functions::IUnivariateFunction> f;
+    if (options.contains("spec")) {
+        const JsonValue& spec = options.at("spec");
+        if (spec.at("type").as_string() == "ensemble") {
+            auto function_template = numerics::functions::build_function_spec(spec.at("template"));
+            std::vector<std::vector<double>> parameter_sets;
+            for (const JsonValue& values : spec.at("parameter_sets").items())
+                parameter_sets.push_back(values.as_double_vector());
+            numerics::functions::EnsembleFunction ensemble(std::move(function_template),
+                                                            std::move(parameter_sets));
+            if (spec.contains("sample_index"))
+                f = ensemble.sample_at(spec.at("sample_index").as_int());
+            else if (spec.contains("sample_percentile"))
+                f = ensemble.sample(spec.at("sample_percentile").as_double());
+            else
+                throw std::runtime_error(
+                    "ensemble function specs need sample_index or sample_percentile");
+        } else {
+            f = numerics::functions::build_function_spec(spec);
+        }
+        if (options.contains("confidence_level")) {
+            f->set_is_deterministic(false);
+            f->set_confidence_level(options.at("confidence_level").as_double());
+        }
+    } else if (options.contains("function")) {
+        f = build_univariate_function(options);
+    } else {
         throw std::runtime_error(
-            "toolbox group 'functions' needs a 'function' key in its options");
-    std::unique_ptr<numerics::functions::IUnivariateFunction> f = build_univariate_function(options);
+            "toolbox group 'functions' needs a 'function' or 'spec' key in its options");
+    }
     const std::vector<double>& x = data_at(data, 0, "functions", method);
     ToolboxResult r;
     for (double v : x) {

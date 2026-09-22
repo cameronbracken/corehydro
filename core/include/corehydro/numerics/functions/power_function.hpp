@@ -1,4 +1,4 @@
-// ported from: Numerics/Functions/PowerFunction.cs @ 2a0357a
+// ported from: Numerics/Functions/PowerFunction.cs @ 7e8e8d1
 //
 // A power function with (optionally) normally distributed noise:
 // Y = alpha * (X - xi)^beta * epsilon, epsilon ~ Normal(0, sigma) (log-space). `IsInverse` swaps
@@ -30,6 +30,10 @@ namespace corehydro::numerics::functions {
 
 class PowerFunction : public IUnivariateFunction {
    public:
+    std::unique_ptr<IUnivariateFunction> clone() const override {
+        return std::make_unique<PowerFunction>(*this);
+    }
+
     // Deterministic default: alpha=1, beta=1.5, xi=0.
     PowerFunction() {
         set_alpha(1.0);

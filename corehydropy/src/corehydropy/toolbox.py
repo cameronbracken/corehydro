@@ -1700,25 +1700,28 @@ def polynomial_eval(coefficients, x, variant: str = "standard", n: int | None = 
     return np.asarray(r["values"], dtype=float)
 
 
-# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
-# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
-# The severed third implementation, TabularFunction, depends on the unported Paired Data
-# subsystem (see upstream/CLAUDE.md) and is not exposed.
+# The "functions" toolbox group: all serializable IUnivariateFunction implementations plus the
+# posterior ensemble sampler. Nested objects use the shared JSON spec grammar.
 
 
 def univariate_function(
-    type: str,
+    type: str | dict,
     parameters,
-    x,
+    x=None,
     inverse: bool = False,
     is_inverse: bool = False,
     confidence_level: float | None = None,
 ) -> np.ndarray:
     """Evaluate a univariate function.
 
-    Mirrors the Numerics ``LinearFunction`` (``Y = alpha + beta*X + epsilon``) and
-    ``PowerFunction`` (``Y = alpha * (X - xi)**beta * epsilon``), both over optional normally
-    distributed noise (``epsilon ~ Normal(0, sigma)``) via ``confidence_level``. ``is_inverse``
+    Mirrors the Numerics linear, power, segmented power, composite, and ensemble function
+    surfaces. A string ``type`` keeps the compact linear/power interface. A dictionary ``type``
+    is a function spec and ``parameters`` is then the evaluation vector. Composite specs contain
+    nested ``functions`` and optional ``weights``/``mode``. Ensemble specs contain a ``template``,
+    ``parameter_sets``, and one of ``sample_index`` or ``sample_percentile``.
+
+    Linear and power functions support optional normally distributed noise through
+    ``confidence_level``. ``is_inverse``
     (``PowerFunction``'s own ``IsInverse`` switch) selects which of the forward power law or its
     algebraic inverse ``Function()``/``inverse=True`` evaluates -- an independent axis from
     ``inverse`` itself, which picks ``Function()`` vs. ``InverseFunction()`` on whichever of the
@@ -1726,13 +1729,14 @@ def univariate_function(
 
     Parameters
     ----------
-    type : {"linear", "power"}
-        Matched case-insensitively.
+    type : {"linear", "power", "segmented_power"} or dict
+        String names are matched case-insensitively. A dictionary follows the shared function
+        spec grammar described above.
     parameters : array_like
-        ``[alpha, beta, sigma]`` for ``"linear"``; ``[alpha, beta, xi, sigma]`` for ``"power"``.
-        ``sigma`` is still required (e.g. 0) when ``confidence_level`` is ``None`` -- it only
-        enters the calculation on the non-deterministic path.
-    x : array_like
+        ``[alpha, beta, sigma]`` for ``"linear"``; ``[alpha, beta, xi, sigma]`` for ``"power"``;
+        ``[h1, log10_alpha1, beta1, ..., sigma]`` for ``"segmented_power"``. When ``type`` is a
+        dictionary, this argument supplies the values to evaluate.
+    x : array_like, optional
         The values to evaluate the function at, or (when ``inverse=True``) the values to
         evaluate the inverse function at.
     inverse : bool, default False
@@ -1759,7 +1763,20 @@ def univariate_function(
     >>> univariate_function("power", [5, 2, 0, 3], 6, confidence_level=0.75)
     array([1361.614084])
     """
-    known = ("linear", "power")
+    if isinstance(type, dict):
+        spec = dict(type)
+        values = parameters if x is None else x
+        xa = np.atleast_1d(np.asarray(values, dtype=float))
+        if xa.size == 0:
+            raise ValueError("`x` must be a non-empty array")
+        options: dict = {"spec": spec}
+        if confidence_level is not None:
+            options["confidence_level"] = float(confidence_level)
+        method = "inverse" if inverse else "evaluate"
+        r = _toolbox_run("functions", method, [xa], options)
+        return np.asarray(r["values"], dtype=float)
+
+    known = ("linear", "power", "segmented_power")
     match = [t for t in known if t == str(type).lower()]
     if not match:
         raise ValueError(f"unknown function type '{type}'; expected one of {', '.join(known)}")

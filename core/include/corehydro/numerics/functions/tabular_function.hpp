@@ -39,6 +39,10 @@ namespace corehydro::numerics::functions {
 
 class TabularFunction : public IUnivariateFunction {
    public:
+    std::unique_ptr<IUnivariateFunction> clone() const override {
+        return std::make_unique<TabularFunction>(*this);
+    }
+
     // C# constructor (lines ~24-28). See header note above on the by-value-vs-by-reference
     // divergence.
     explicit TabularFunction(data::paired_data::UncertainOrderedPairedData paired_data)

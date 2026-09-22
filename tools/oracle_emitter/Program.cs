@@ -5935,6 +5935,60 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
 // scoped-checked exactly as the C++ arm does; `confidence_level`'s mere PRESENCE (not its value)
 // switches IsDeterministic to false before SetParameters runs, mirroring every non-deterministic
 // C# constructor overload (the one that takes sigma).
+static IUnivariateFunction BuildFunctionSpec(JsonElement spec)
+{
+    string type = spec.GetProperty("type").GetString()!;
+    bool deterministic = OptBool(spec, "is_deterministic", true);
+    double confidence = spec.TryGetProperty("confidence_level", out var confidenceElement)
+        ? confidenceElement.GetDouble() : -1d;
+    if (type == "linear")
+    {
+        var result = new LinearFunction { IsDeterministic = deterministic };
+        result.SetParameters(spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray());
+        result.ConfidenceLevel = confidence;
+        return result;
+    }
+    if (type == "power")
+    {
+        var result = new PowerFunction
+        {
+            IsDeterministic = deterministic,
+            IsInverse = OptBool(spec, "is_inverse", false),
+        };
+        result.SetParameters(spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray());
+        result.ConfidenceLevel = confidence;
+        return result;
+    }
+    if (type == "segmented_power")
+    {
+        double[] parameters = spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray();
+        var result = new SegmentedPowerFunction((parameters.Length - 1) / 3)
+        {
+            IsDeterministic = deterministic,
+            ConfidenceLevel = confidence,
+        };
+        result.SetParameters(parameters);
+        return result;
+    }
+    if (type == "composite")
+    {
+        IUnivariateFunction[] children = spec.GetProperty("functions").EnumerateArray()
+            .Select(BuildFunctionSpec).ToArray();
+        CompositeFunction result = spec.TryGetProperty("weights", out var weightsElement)
+            ? new CompositeFunction(children, weightsElement.EnumerateArray().Select(ParseNum).ToArray())
+            : new CompositeFunction(children);
+        result.Mode = OptString(spec, "mode", "weighted_average") switch
+        {
+            "weighted_average" => CompositeFunctionMode.WeightedAverage,
+            "mixture" => CompositeFunctionMode.Mixture,
+            var value => throw new Exception($"unknown composite function mode: {value}"),
+        };
+        result.ConfidenceLevel = confidence;
+        return result;
+    }
+    throw new Exception($"unknown function spec type: {type}");
+}
+
 static double FunctionsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
     if (method == "tabular" || method == "tabular_inverse")
@@ -5962,15 +6016,46 @@ static double FunctionsDispatch(string method, List<double[]> data, JsonElement 
         return ToolboxSelectFlat(asrt, tvalues, tvalues.Length, 1);
     }
 
-    string fn = options.GetProperty("function").GetString()!;
-    double[] parameters = options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+    IUnivariateFunction? specFunction = null;
+    if (options.TryGetProperty("spec", out var functionSpec))
+    {
+        if (functionSpec.GetProperty("type").GetString() == "ensemble")
+        {
+            IUnivariateFunction template = BuildFunctionSpec(functionSpec.GetProperty("template"));
+            var sets = functionSpec.GetProperty("parameter_sets").EnumerateArray()
+                .Select(values => new ParameterSet(values.EnumerateArray().Select(ParseNum).ToArray(), 0d))
+                .ToArray();
+            var ensemble = new EnsembleFunction(template, sets);
+            specFunction = functionSpec.TryGetProperty("sample_index", out var sampleIndex)
+                ? ensemble.SampleAt(sampleIndex.GetInt32())
+                : ensemble.Sample(functionSpec.GetProperty("sample_percentile").GetDouble());
+        }
+        else
+        {
+            specFunction = BuildFunctionSpec(functionSpec);
+        }
+        if (options.TryGetProperty("confidence_level", out var specConfidence))
+        {
+            specFunction.IsDeterministic = false;
+            specFunction.ConfidenceLevel = specConfidence.GetDouble();
+        }
+    }
+
+    string fn = specFunction == null ? options.GetProperty("function").GetString()! : "";
+    double[] parameters = specFunction == null
+        ? options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray()
+        : Array.Empty<double>();
     bool hasConfidence = options.TryGetProperty("confidence_level", out var clEl);
     bool hasIsInverse = options.TryGetProperty("is_inverse", out var isInvEl);
-    if (hasIsInverse && fn != "power")
+    if (specFunction == null && hasIsInverse && fn != "power")
         throw new Exception($"'is_inverse' is only valid for function 'power'; got function '{fn}'");
 
     IUnivariateFunction f;
-    if (fn == "linear")
+    if (specFunction != null)
+    {
+        f = specFunction;
+    }
+    else if (fn == "linear")
     {
         var lf = new LinearFunction();
         lf.IsDeterministic = !hasConfidence;
@@ -5986,6 +6071,16 @@ static double FunctionsDispatch(string method, List<double[]> data, JsonElement 
         pf.SetParameters(parameters);
         if (hasConfidence) pf.ConfidenceLevel = clEl.GetDouble();
         f = pf;
+    }
+    else if (fn == "segmented_power")
+    {
+        var sf = new SegmentedPowerFunction((parameters.Length - 1) / 3)
+        {
+            IsDeterministic = !hasConfidence,
+        };
+        sf.SetParameters(parameters);
+        if (hasConfidence) sf.ConfidenceLevel = clEl.GetDouble();
+        f = sf;
     }
     else
     {

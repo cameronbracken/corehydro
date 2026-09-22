@@ -886,6 +886,54 @@ def test_univariate_function_rejects_an_unknown_type():
         univariate_function("quadratic", [1, 1], 1)
 
 
+def test_univariate_function_v220_segmented_composite_and_ensemble_specs():
+    segmented = {"type": "segmented_power", "parameters": [1, 1.5, 2, 0.1]}
+    assert univariate_function(segmented, [0.5, 5]) == pytest.approx(
+        [0, 505.9644256269407]
+    )
+
+    composite = {
+        "type": "composite",
+        "mode": "weighted_average",
+        "weights": [0.25, 0.75],
+        "functions": [
+            {"type": "linear", "parameters": [0, 2, 0]},
+            {"type": "linear", "parameters": [10, 4, 0]},
+        ],
+    }
+    assert univariate_function(composite, 4) == pytest.approx([21.5])
+
+    mixture = dict(composite)
+    mixture["mode"] = "mixture"
+    mixture["confidence_level"] = 0.75
+    mixture["functions"] = [
+        {"type": "linear", "parameters": [0, 1, 0]},
+        {"type": "linear", "parameters": [100, 1, 0]},
+    ]
+    assert univariate_function(mixture, 5) == pytest.approx([105])
+
+    ensemble = {
+        "type": "ensemble",
+        "template": segmented,
+        "parameter_sets": [
+            [1, 1.5, 2, 0.1],
+            [0.9, 1.6, 1.9, 0.12],
+            [1.1, 1.4, 2.1, 0.08],
+        ],
+        "sample_percentile": 1,
+    }
+    expected = 10**1.4 * (5 - 1.1) ** 2.1
+    assert univariate_function(ensemble, 5) == pytest.approx([expected])
+    ensemble.pop("sample_percentile")
+    ensemble["sample_index"] = 0
+    assert univariate_function(ensemble, 5) == pytest.approx([505.9644256269407])
+
+    invalid = dict(composite)
+    invalid["weights"] = [0.3, 0.3]
+    with pytest.raises(IndexError, match="weights"):
+        univariate_function(invalid, 4)
+
+
 # The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
 # list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
 # same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs

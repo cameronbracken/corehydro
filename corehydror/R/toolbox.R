@@ -1056,26 +1056,29 @@ polynomial_eval <- function(coefficients, x, variant = c("standard", "reverse", 
   toolbox_run("special", method, list(as.double(coefficients), as.double(x)), opts)$values
 }
 
-# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
-# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
-# The severed third implementation, TabularFunction, depends on the unported Paired Data
-# subsystem (see upstream/CLAUDE.md) and is not exposed.
+# The "functions" toolbox group: all serializable IUnivariateFunction implementations plus the
+# posterior ensemble sampler. Nested objects use the shared JSON spec grammar.
 
 #' Evaluate a univariate function
 #'
-#' Mirrors the Numerics `LinearFunction` (`Y = alpha + beta*X + epsilon`) and `PowerFunction`
-#' (`Y = alpha * (X - xi)^beta * epsilon`), both over optional normally distributed noise
-#' (`epsilon ~ Normal(0, sigma)`) via `confidence_level`. `is_inverse` (PowerFunction's own
+#' Mirrors the Numerics linear, power, segmented power, composite, and ensemble function
+#' surfaces. A character `type` keeps the compact linear and power interface. A list `type` is a
+#' shared function spec and `parameters` is then the evaluation vector. Composite specs contain
+#' nested `functions` and optional `weights` and `mode`. Ensemble specs contain a `template`,
+#' `parameter_sets`, and either `sample_index` or `sample_percentile`.
+#'
+#' Linear and power functions support optional normally distributed noise via `confidence_level`.
+#' `is_inverse` (PowerFunction's own
 #' `IsInverse` switch) selects which of the forward power law or its algebraic inverse
 #' `Function()`/`inverse = TRUE` evaluates -- an independent axis from `inverse` itself, which
 #' picks `Function()` vs. `InverseFunction()` on whichever of the two `is_inverse` selects.
 #'
-#' @param type `"linear"` or `"power"`, matched case-insensitively.
-#' @param parameters a numeric vector: `c(alpha, beta, sigma)` for `"linear"`; `c(alpha, beta,
-#'   xi, sigma)` for `"power"`. `sigma` is still required (e.g. 0) when `confidence_level` is
-#'   `NULL` -- it only enters the calculation on the non-deterministic path.
-#' @param x a numeric vector: the values to evaluate the function at, or (when `inverse = TRUE`)
-#'   the values to evaluate the inverse function at.
+#' @param type `"linear"`, `"power"`, or `"segmented_power"`, matched case-insensitively, or a
+#'   shared function spec list.
+#' @param parameters a numeric parameter vector for a character `type`. For a spec list, the
+#'   values at which to evaluate the function.
+#' @param x optional numeric values at which to evaluate a spec list. For a character `type`, the
+#'   values at which to evaluate the function or inverse function.
 #' @param inverse if `TRUE`, evaluates the inverse function (`InverseFunction()`) instead of the
 #'   forward function (`Function()`).
 #' @param is_inverse `"power"`-only: `PowerFunction`'s own `IsInverse` property. An error for
@@ -1088,9 +1091,19 @@ polynomial_eval <- function(coefficients, x, variant = c("standard", "reverse", 
 #' univariate_function("power", c(5, 2, 0, 3), 6)
 #' univariate_function("power", c(5, 2, 0, 3), 6, confidence_level = 0.75)
 #' @export
-univariate_function <- function(type, parameters, x, inverse = FALSE, is_inverse = FALSE,
+univariate_function <- function(type, parameters, x = NULL, inverse = FALSE, is_inverse = FALSE,
                                  confidence_level = NULL) {
-  known <- c("linear", "power")
+  if (is.list(type)) {
+    values <- if (is.null(x)) parameters else x
+    if (!is.numeric(values) || length(values) == 0L) {
+      stop("`x` must be a non-empty numeric vector", call. = FALSE)
+    }
+    opts <- list(spec = type)
+    if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
+    method <- if (isTRUE(inverse)) "inverse" else "evaluate"
+    return(toolbox_run("functions", method, list(as.double(values)), opts)$values)
+  }
+  known <- c("linear", "power", "segmented_power")
   hit <- match(tolower(type), known)
   if (is.na(hit)) {
     stop(sprintf("unknown function type \"%s\". Available: %s", type,

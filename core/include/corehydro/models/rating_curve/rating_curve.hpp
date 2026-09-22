@@ -89,6 +89,7 @@
 #include "corehydro/numerics/data/time_series/time_series.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/distributions/uniform.hpp"
+#include "corehydro/numerics/functions/support/segmented_power_math.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/tools.hpp"
 
@@ -446,21 +447,8 @@ class RatingCurve : public ModelBase, public ISimulatable<std::vector<double>> {
 
     // --- Predict (C#:820): addition-mode segment sum, real-space discharge. ---
     double predict(const std::vector<double>& parameters, double stage) const {
-        double h1 = parameters[0];
-        double depth1 = stage - h1;
-        if (depth1 <= 0) return 0.0;
-
-        double q = std::pow(10, parameters[1]) * std::pow(depth1, parameters[2]);
-
-        if (number_of_segments_ >= 2) {
-            double depth2 = stage - parameters[3];
-            if (depth2 > 0) q += std::pow(10, parameters[4]) * std::pow(depth2, parameters[5]);
-        }
-        if (number_of_segments_ >= 3) {
-            double depth3 = stage - parameters[6];
-            if (depth3 > 0) q += std::pow(10, parameters[7]) * std::pow(depth3, parameters[8]);
-        }
-        return q;
+        return numerics::functions::support::segmented_power_addition(
+            parameters, number_of_segments_, stage);
     }
 
     // --- Seeded Predict (C#:915): adds log10-space Normal(0, sigma) noise. MersenneTwister

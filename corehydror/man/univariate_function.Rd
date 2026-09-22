@@ -7,20 +7,21 @@
 univariate_function(
   type,
   parameters,
-  x,
+  x = NULL,
   inverse = FALSE,
   is_inverse = FALSE,
   confidence_level = NULL
 )
 }
 \arguments{
-\item{type}{\code{"linear"} or \code{"power"}, matched case-insensitively.}
+\item{type}{\code{"linear"}, \code{"power"}, or \code{"segmented_power"}, matched case-insensitively, or a
+shared function spec list.}
 
-\item{parameters}{a numeric vector: \code{c(alpha, beta, sigma)} for \code{"linear"}; \code{c(alpha, beta, xi, sigma)} for \code{"power"}. \code{sigma} is still required (e.g. 0) when \code{confidence_level} is
-\code{NULL} -- it only enters the calculation on the non-deterministic path.}
+\item{parameters}{a numeric parameter vector for a character \code{type}. For a spec list, the
+values at which to evaluate the function.}
 
-\item{x}{a numeric vector: the values to evaluate the function at, or (when \code{inverse = TRUE})
-the values to evaluate the inverse function at.}
+\item{x}{optional numeric values at which to evaluate a spec list. For a character \code{type}, the
+values at which to evaluate the function or inverse function.}
 
 \item{inverse}{if \code{TRUE}, evaluates the inverse function (\code{InverseFunction()}) instead of the
 forward function (\code{Function()}).}
@@ -35,9 +36,15 @@ if \code{NULL} (default), evaluates deterministically.}
 a numeric vector the same length as \code{x}.
 }
 \description{
-Mirrors the Numerics \code{LinearFunction} (\code{Y = alpha + beta*X + epsilon}) and \code{PowerFunction}
-(\code{Y = alpha * (X - xi)^beta * epsilon}), both over optional normally distributed noise
-(\code{epsilon ~ Normal(0, sigma)}) via \code{confidence_level}. \code{is_inverse} (PowerFunction's own
+Mirrors the Numerics linear, power, segmented power, composite, and ensemble function
+surfaces. A character \code{type} keeps the compact linear and power interface. A list \code{type} is a
+shared function spec and \code{parameters} is then the evaluation vector. Composite specs contain
+nested \code{functions} and optional \code{weights} and \code{mode}. Ensemble specs contain a \code{template},
+\code{parameter_sets}, and either \code{sample_index} or \code{sample_percentile}.
+}
+\details{
+Linear and power functions support optional normally distributed noise via \code{confidence_level}.
+\code{is_inverse} (PowerFunction's own
 \code{IsInverse} switch) selects which of the forward power law or its algebraic inverse
 \code{Function()}/\code{inverse = TRUE} evaluates -- an independent axis from \code{inverse} itself, which
 picks \code{Function()} vs. \code{InverseFunction()} on whichever of the two \code{is_inverse} selects.
