@@ -17,7 +17,9 @@
 #include "corehydro/numerics/distributions/gumbel.hpp"
 #include "corehydro/numerics/distributions/ln_normal.hpp"
 #include "corehydro/numerics/distributions/log_normal.hpp"
+#include "corehydro/numerics/distributions/log_pearson_type_iii.hpp"
 #include "corehydro/numerics/distributions/logistic.hpp"
+#include "corehydro/numerics/distributions/pearson_type_iii.hpp"
 #include "corehydro/numerics/distributions/weibull.hpp"
 
 namespace dn = corehydro::numerics::distributions::distribution_numerics;
@@ -167,6 +169,46 @@ void test_workhorse_family_log_tails() {
     CHECK_EQ(lnnormal.get_parameters()[0], 1e-200);
     CHECK_EQ(lnnormal.get_parameters()[1], 2e-200);
     CHECK_TRUE(std::isfinite(lnnormal.log_pdf(1e-300)));
+
+    PearsonTypeIII pearson(10.0, 2.0, 1e-8);
+    CHECK_TRUE(pearson.minimum() > -std::numeric_limits<double>::infinity());
+    CHECK_TRUE(pearson.inverse_cdf(0.9) != 10.0 + 2.0 * Normal::standard_z(0.9));
+    CHECK_NEAR(pearson.cdf(pearson.inverse_cdf(0.9)), 0.9, 2e-15);
+    CHECK_TRUE(std::isfinite(pearson.log_ccdf(100.0)));
+
+    PearsonTypeIII reverse_pearson(10.0, 2.0, -0.5);
+    CHECK_NEAR(reverse_pearson.cdf(reverse_pearson.inverse_cdf(1e-10)), 1e-10, 2e-22);
+    CHECK_TRUE(std::isinf(PearsonTypeIII(0.0, 1.0, 3.0).log_pdf(-2.0 / 3.0)));
+
+    LogPearsonTypeIII log_pearson(2.0, 0.3, 1e-8);
+    CHECK_NEAR(log_pearson.cdf(log_pearson.inverse_cdf(0.9)), 0.9, 2e-15);
+    CHECK_TRUE(std::isfinite(log_pearson.log_ccdf(1e100)));
+    CHECK_TRUE(std::isinf(LogPearsonTypeIII(1.0, 1.5, 3.0).log_pdf(1.0)));
+    CHECK_TRUE(std::isinf(LogPearsonTypeIII(-1.0, 1.5, -3.0).log_pdf(1.0)));
+    LogPearsonTypeIII small_scale(0.0, 1e-4, 0.25);
+    CHECK_TRUE(std::isfinite(small_scale.skewness()));
+    CHECK_TRUE(std::isfinite(small_scale.kurtosis()));
+    LogPearsonTypeIII divergent(0.0, 1.0, 0.5);
+    CHECK_TRUE(std::isfinite(divergent.mean()));
+    CHECK_TRUE(std::isinf(divergent.standard_deviation()));
+    CHECK_TRUE(std::isnan(divergent.skewness()));
+
+    std::vector<double> initials;
+    std::vector<double> lowers;
+    std::vector<double> uppers;
+    Normal().get_parameter_constraints({-1e300, -5e299, 5e299, 1e300}, initials, lowers,
+                                       uppers);
+    CHECK_TRUE(std::isfinite(initials[0]) && std::isfinite(initials[1]));
+    CHECK_TRUE(lowers[0] < initials[0] && initials[0] < uppers[0]);
+    PearsonTypeIII().get_parameter_constraints({-12.0, -8.0, -3.0, -1.0}, initials, lowers,
+                                               uppers);
+    CHECK_TRUE(lowers[0] < initials[0] && initials[0] < uppers[0]);
+    LogPearsonTypeIII().get_parameter_constraints(
+        {0.08, 0.12, 0.25, 0.31, 0.45, 0.6, 0.75, 0.9, 1.4}, initials, lowers, uppers);
+    CHECK_TRUE(initials[0] < 0.0);
+    CHECK_TRUE(lowers[0] <= initials[0] && initials[0] <= uppers[0]);
+    CHECK_THROWS(LogPearsonTypeIII().estimate(
+        {0.1, 0.2, 0.3, 0.0}, ParameterEstimationMethod::MethodOfMoments));
 }
 
 }  // namespace
