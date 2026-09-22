@@ -2168,7 +2168,7 @@ static bool mv_delegated(const std::string& target, const std::string& m,
     if (m == "mvndst" || m == "mvndst_inform" || m == "mvndst_error") return false;
     if (target == "MultivariateNormal" && (m == "cdf" || m == "interval") && !mvn_stream_isolated)
         return false;
-    return m == "dimension" || m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis" ||
+    return m == "dimension" || m == "decomposition" || m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis" ||
            m == "mean" || m == "variance" || m == "sd" || m == "covariance" ||
            m == "median" || m == "mode" || m == "inverse_cdf" || m == "interval" ||
            m == "degrees_of_freedom" || m == "alpha" || m == "alpha_sum" ||
@@ -2198,7 +2198,7 @@ static double dispatch_multivariate_delegated(const std::string& spec, const std
     auto run = [&](const std::string& s, const std::string& method, const json& args) {
         return supp::run_mvdist(s, method, args.dump());
     };
-    if (m == "dimension" || m == "alpha_sum" || m == "degrees_of_freedom" ||
+    if (m == "dimension" || m == "decomposition" || m == "alpha_sum" || m == "degrees_of_freedom" ||
         m == "number_of_trials")
         return run(spec, m, json::array()).values.at(0);
     if (m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis")

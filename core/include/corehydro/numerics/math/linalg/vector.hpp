@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Linear Algebra/Support/Vector.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Linear Algebra/Support/Vector.cs @ 7e8e8d1
 //
 // Minimal dense vector: storage, length, indexed access, array conversion, and the
 // arithmetic subset the MCMC samplers use (DEMCzs's SnookerUpdate and HMC's leapfrog in

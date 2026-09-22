@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Multivariate/MultivariateNormal.cs @ 2a0357a
+// ported from: Numerics/Distributions/Multivariate/MultivariateNormal.cs @ 7e8e8d1
 //
 // The Multivariate Normal (Gaussian) distribution, dimensions >= 1, mean vector mu and
 // covariance matrix Sigma: the deterministic core (ctors, PDF/LogPDF/CDF for dim 1-2,
@@ -76,7 +76,9 @@
 #include "corehydro/numerics/distributions/multivariate/base/multivariate_distribution_type.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/math/linalg/cholesky_decomposition.hpp"
+#include "corehydro/numerics/math/linalg/decomposition_method.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
+#include "corehydro/numerics/math/linalg/singular_value_decomposition.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
 #include "corehydro/numerics/math/special/erf.hpp"
 #include "corehydro/numerics/sampling/latin_hypercube.hpp"
@@ -97,14 +99,34 @@ class MultivariateNormal : public MultivariateDistribution {
         set_parameters(std::move(mean), la::Matrix::identity(dimension).to_array());
     }
 
+    MultivariateNormal(int dimension, la::DecompositionMethod decomposition)
+        : decomposition_(decomposition) {
+        std::vector<double> mean(static_cast<std::size_t>(dimension), 0.0);
+        set_parameters(std::move(mean), la::Matrix::identity(dimension).to_array());
+    }
+
     // Constructs a new Multivariate Normal distribution with an identity covariance matrix.
     explicit MultivariateNormal(std::vector<double> mean) {
         int dim = static_cast<int>(mean.size());
         set_parameters(std::move(mean), la::Matrix::identity(dim).to_array());
     }
 
+
+    MultivariateNormal(std::vector<double> mean, la::DecompositionMethod decomposition)
+        : decomposition_(decomposition) {
+        int dim = static_cast<int>(mean.size());
+        set_parameters(std::move(mean), la::Matrix::identity(dim).to_array());
+    }
+
     // Constructs a new Multivariate Normal distribution.
     MultivariateNormal(std::vector<double> mean, std::vector<std::vector<double>> covariance) {
+        set_parameters(std::move(mean), std::move(covariance));
+    }
+
+
+    MultivariateNormal(std::vector<double> mean, std::vector<std::vector<double>> covariance,
+                       la::DecompositionMethod decomposition)
+        : decomposition_(decomposition) {
         set_parameters(std::move(mean), std::move(covariance));
     }
 
@@ -161,26 +183,55 @@ class MultivariateNormal : public MultivariateDistribution {
     // Gets the Variance-Covariance matrix for the distribution.
     la::Matrix2D covariance() const { return covariance_.to_array(); }
 
+    la::DecompositionMethod decomposition() const { return decomposition_; }
+
     // Element accessor (not in the C# source -- added for fixture/dispatch convenience,
     // mirroring Dirichlet's/Multinomial's `covariance(i, j)` method).
     double covariance(int i, int j) const { return covariance_(i, j); }
 
     // Determines if the covariance matrix is positive definite.
-    bool is_positive_definite() const { return cholesky_->is_positive_definite(); }
+    bool is_positive_definite() const {
+        return decomposition_ == la::DecompositionMethod::Cholesky
+                   ? cholesky_->is_positive_definite()
+                   : rank_ == dimension_;
+    }
 
     // --- Parameter setting / validation ---
 
     // Set the distribution parameters.
     void set_parameters(std::vector<double> mean, std::vector<std::vector<double>> covariance) {
-        // Validate parameters
-        validate_parameters(mean, covariance, true);
+        std::optional<la::SingularValueDecomposition> singular_values;
+        validate_parameters_impl(mean, covariance, true, singular_values);
+
+        set_parameters_core(std::move(mean), std::move(covariance), std::move(singular_values));
+    }
+
+    void set_mean(std::vector<double> mean) {
+        if (mean.size() != static_cast<std::size_t>(dimension_))
+            throw std::out_of_range("Mean length must match covariance dimension.");
+        for (double value : mean)
+            if (!std::isfinite(value)) throw std::out_of_range("Mean values must be finite.");
+        mean_ = std::move(mean);
+    }
+
+   private:
+    void set_parameters_core(std::vector<double> mean, std::vector<std::vector<double>> covariance,
+                             std::optional<la::SingularValueDecomposition> singular_values) {
 
         dimension_ = static_cast<int>(mean.size());
         mean_ = std::move(mean);
         covariance_ = la::Matrix(std::move(covariance));
-        cholesky_.emplace(covariance_);
-        double lndet = cholesky_->log_determinant();
-        lnconstant_ = -(std::log(2.0 * kPi) * static_cast<double>(mean_.size()) + lndet) * 0.5;
+        if (decomposition_ == la::DecompositionMethod::Cholesky) {
+            cholesky_.emplace(covariance_);
+            double lndet = cholesky_->log_determinant();
+            lnconstant_ = -(std::log(2.0 * kPi) * static_cast<double>(mean_.size()) + lndet) * 0.5;
+            factor_ = cholesky_->l();
+            svd_.reset();
+            nullspace_ = la::Matrix(0, 0);
+            rank_ = dimension_;
+        } else {
+            factorize_with_singular_values(std::move(*singular_values));
+        }
 
         // Set up parameters for MVN CDF
         correlation_matrix_created_ = false;
@@ -200,6 +251,8 @@ class MultivariateNormal : public MultivariateDistribution {
         correlation_ = la::Matrix(dimension_, dimension_);
     }
 
+   public:
+
     // Validate the parameters. Returns nullopt if valid; if `throw_exception` is false and
     // invalid, returns the error message instead of throwing. v2.1.4: the mean/covariance
     // finiteness checks (below) respect `throw_exception` faithfully -- unlike the
@@ -208,6 +261,15 @@ class MultivariateNormal : public MultivariateDistribution {
     std::optional<std::string> validate_parameters(const std::vector<double>& mean,
                                                      const std::vector<std::vector<double>>& covariance,
                                                      bool throw_exception) const {
+        std::optional<la::SingularValueDecomposition> singular_values;
+        return validate_parameters_impl(mean, covariance, throw_exception, singular_values);
+    }
+
+   private:
+    std::optional<std::string> validate_parameters_impl(
+        const std::vector<double>& mean, const std::vector<std::vector<double>>& covariance,
+        bool throw_exception,
+        std::optional<la::SingularValueDecomposition>& singular_values) const {
         for (double v : mean) {
             if (!std::isfinite(v)) {
                 if (throw_exception) throw std::out_of_range("Mean values must be finite.");
@@ -241,13 +303,37 @@ class MultivariateNormal : public MultivariateDistribution {
         // already succeeded by the time it runs). Ported verbatim anyway for structural
         // fidelity with the C# source. `try_set_parameters` below absorbs this always-throw
         // behavior in its own try/catch, exactly mirroring C#'s `TrySetParameters`.
-        la::CholeskyDecomposition chol(m);
-        if (!chol.is_positive_definite()) {
-            if (throw_exception) throw std::out_of_range("Covariance matrix is not positive-definite.");
-            return "Covariance matrix is not positive-definite.";
+        if (decomposition_ == la::DecompositionMethod::Cholesky) {
+            try {
+                la::CholeskyDecomposition chol(m);
+                (void)chol;
+            } catch (...) {
+                if (throw_exception)
+                    throw std::out_of_range("Covariance matrix is not positive-definite.");
+                return "Covariance matrix is not positive-definite.";
+            }
+        } else {
+            try {
+                la::SingularValueDecomposition candidate(m);
+                if (!is_symmetric_positive_semidefinite(candidate, m)) {
+                    if (throw_exception)
+                        throw std::out_of_range(
+                            "Covariance matrix is not symmetric positive-semi-definite.");
+                    return "Covariance matrix is not symmetric positive-semi-definite.";
+                }
+                singular_values.emplace(std::move(candidate));
+            } catch (const std::out_of_range&) {
+                throw;
+            } catch (...) {
+                if (throw_exception)
+                    throw std::out_of_range("The covariance matrix decomposition did not converge.");
+                return "The covariance matrix decomposition did not converge.";
+            }
         }
         return std::nullopt;
     }
+
+   public:
 
     // Attempts to set mean+covariance without throwing: the covariance is factorized
     // eagerly, and when it is not positive-definite (or otherwise invalid) the density is
@@ -262,8 +348,10 @@ class MultivariateNormal : public MultivariateDistribution {
             // covariance (the Cholesky-unconditional-throw quirk noted above) -- this
             // try/catch absorbs that, mirroring C#'s own `try { if (ValidateParameters(...)
             // is null) {...} } catch (Exception) {...}`.
-            if (!validate_parameters(mean, covariance, false).has_value()) {
-                set_parameters(std::move(mean), std::move(covariance));
+            std::optional<la::SingularValueDecomposition> singular_values;
+            if (!validate_parameters_impl(mean, covariance, false, singular_values).has_value()) {
+                set_parameters_core(std::move(mean), std::move(covariance),
+                                    std::move(singular_values));
                 density_valid_ = true;
                 return true;
             }
@@ -395,12 +483,16 @@ class MultivariateNormal : public MultivariateDistribution {
     // The Probability Density Function (PDF) of the distribution evaluated at a point X.
     double pdf(const std::vector<double>& x) const override {
         if (!density_valid_) return 0.0;
+        if (decomposition_ == la::DecompositionMethod::SingularValue && !is_on_support(x))
+            return 0.0;
         return std::exp(-0.5 * mahalanobis(x) + lnconstant_);
     }
 
     // Returns the natural log of the PDF.
     double log_pdf(const std::vector<double>& x) const override {
         if (!density_valid_) return -kInf;
+        if (decomposition_ == la::DecompositionMethod::SingularValue && !is_on_support(x))
+            return -kInf;
         double f = -0.5 * mahalanobis(x) + lnconstant_;
         if (std::isnan(f) || std::isinf(f)) return -kInf;
         return f;
@@ -412,7 +504,9 @@ class MultivariateNormal : public MultivariateDistribution {
             throw std::out_of_range("The vector must be the same dimension as the distribution.");
         std::vector<double> z(mean_.size());
         for (std::size_t i = 0; i < x.size(); ++i) z[i] = x[i] - mean_[i];
-        la::Vector a = cholesky_->solve(la::Vector(z));
+        la::Vector a = decomposition_ == la::DecompositionMethod::Cholesky
+                           ? cholesky_->solve(la::Vector(z))
+                           : svd_->solve(la::Vector(z), svd_threshold_);
         double b = 0.0;
         for (std::size_t i = 0; i < z.size(); ++i) b += a[static_cast<int>(i)] * z[i];
         return b;
@@ -475,7 +569,7 @@ class MultivariateNormal : public MultivariateDistribution {
         std::vector<double> z(static_cast<std::size_t>(dimension_));
         for (int j = 0; j < dimension_; ++j) z[static_cast<std::size_t>(j)] = Normal::standard_z(probabilities[static_cast<std::size_t>(j)]);
         // x = A*z + mu
-        la::Vector Az = cholesky_->l() * la::Vector(z);
+        la::Vector Az = factor_ * la::Vector(z);
         for (int j = 0; j < dimension_; ++j) sample[static_cast<std::size_t>(j)] = Az[j] + mean_[static_cast<std::size_t>(j)];
         return sample;
     }
@@ -507,7 +601,7 @@ class MultivariateNormal : public MultivariateDistribution {
         for (int i = 0; i < sample_size; ++i) {
             std::vector<double> z(static_cast<std::size_t>(dimension_));
             for (int j = 0; j < dimension_; ++j) z[static_cast<std::size_t>(j)] = Normal::standard_z(rng.next_double());
-            la::Vector Az = cholesky_->l() * la::Vector(z);
+            la::Vector Az = factor_ * la::Vector(z);
             for (int j = 0; j < dimension_; ++j)
                 sample[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = Az[j] + mean_[static_cast<std::size_t>(j)];
         }
@@ -524,7 +618,7 @@ class MultivariateNormal : public MultivariateDistribution {
             std::vector<double> z(static_cast<std::size_t>(dimension_));
             for (int j = 0; j < dimension_; ++j)
                 z[static_cast<std::size_t>(j)] = Normal::standard_z(r[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)]);
-            la::Vector Az = cholesky_->l() * la::Vector(z);
+            la::Vector Az = factor_ * la::Vector(z);
             for (int j = 0; j < dimension_; ++j)
                 sample[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = Az[j] + mean_[static_cast<std::size_t>(j)];
         }
@@ -550,7 +644,7 @@ class MultivariateNormal : public MultivariateDistribution {
                     z[static_cast<std::size_t>(j)] = Normal::standard_z(r.next_double());
                 }
             }
-            la::Vector Az = cholesky_->l() * la::Vector(z);
+            la::Vector Az = factor_ * la::Vector(z);
             for (int j = 0; j < dimension_; ++j)
                 sample[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = Az[j] + mean_[static_cast<std::size_t>(j)];
         }
@@ -1150,7 +1244,13 @@ class MultivariateNormal : public MultivariateDistribution {
         mvn->dimension_ = dimension_;
         mvn->mean_ = mean_;
         mvn->covariance_ = covariance_.clone();
+        mvn->decomposition_ = decomposition_;
         mvn->cholesky_ = cholesky_;
+        mvn->svd_ = svd_;
+        mvn->factor_ = factor_.clone();
+        mvn->nullspace_ = nullspace_.clone();
+        mvn->svd_threshold_ = svd_threshold_;
+        mvn->rank_ = rank_;
         mvn->lnconstant_ = lnconstant_;
         mvn->correlation_ = correlation_.clone();
         mvn->correl_ = correl_;
@@ -1189,6 +1289,77 @@ class MultivariateNormal : public MultivariateDistribution {
     static double gauss(double t) {
         // GAUSS returns the area of the lower tail of the normal curve.
         return (1.0 + sf::erf::function(t / std::sqrt(2.0))) / 2.0;
+    }
+
+    static constexpr double kZeroToleranceFactor = 1E6;
+    static constexpr double kRelativeMachineEpsilon = 2.220446049250313E-16;
+    static constexpr int kDefaultMvnuniSeed = 12345;
+
+    static double singular_value_threshold(const la::SingularValueDecomposition& singular_values) {
+        return kZeroToleranceFactor * kRelativeMachineEpsilon * singular_values.w()[0];
+    }
+
+    static bool is_symmetric_positive_semidefinite(
+        la::SingularValueDecomposition& singular_values, const la::Matrix& covariance) {
+        int n = covariance.number_of_rows();
+        double threshold = singular_value_threshold(singular_values);
+        std::vector<double> eigenvalues(static_cast<std::size_t>(n));
+        for (int j = 0; j < n; ++j) {
+            double quotient = 0.0;
+            for (int i = 0; i < n; ++i) {
+                double row = 0.0;
+                for (int k = 0; k < n; ++k) row += covariance(i, k) * singular_values.u()(k, j);
+                quotient += singular_values.u()(i, j) * row;
+            }
+            eigenvalues[static_cast<std::size_t>(j)] = quotient;
+            if (!(quotient >= -threshold)) return false;
+        }
+        for (int i = 0; i < n; ++i) {
+            for (int j = i; j < n; ++j) {
+                double reconstructed = 0.0;
+                for (int k = 0; k < n; ++k)
+                    reconstructed += eigenvalues[static_cast<std::size_t>(k)] *
+                                     singular_values.u()(i, k) * singular_values.u()(j, k);
+                if (!(std::abs(reconstructed - covariance(i, j)) <= threshold) ||
+                    !(std::abs(reconstructed - covariance(j, i)) <= threshold))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    void factorize_with_singular_values(la::SingularValueDecomposition singular_values) {
+        cholesky_.reset();
+        svd_.emplace(std::move(singular_values));
+        svd_threshold_ = singular_value_threshold(*svd_);
+        rank_ = svd_->rank(svd_threshold_);
+        nullspace_ = svd_->nullspace(svd_threshold_);
+        double lndet = svd_->log_pseudo_determinant(svd_threshold_);
+        lnconstant_ = -(std::log(2.0 * kPi) * rank_ + lndet) * 0.5;
+        factor_ = la::Matrix(dimension_, dimension_);
+        for (int j = 0; j < dimension_; ++j) {
+            double scale = svd_->w()[j] > svd_threshold_ ? std::sqrt(svd_->w()[j]) : 0.0;
+            for (int i = 0; i < dimension_; ++i) factor_(i, j) = svd_->u()(i, j) * scale;
+        }
+    }
+
+    bool is_on_support(const std::vector<double>& x) const {
+        if (nullspace_.number_of_columns() == 0 || x.size() != mean_.size()) return true;
+        std::vector<double> z(x.size());
+        double norm = 0.0;
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            z[i] = x[i] - mean_[i];
+            norm += z[i] * z[i];
+        }
+        double tolerance = kZeroToleranceFactor * kRelativeMachineEpsilon *
+                           std::max(1.0, std::sqrt(norm));
+        for (int j = 0; j < nullspace_.number_of_columns(); ++j) {
+            double projection = 0.0;
+            for (int i = 0; i < dimension_; ++i)
+                projection += nullspace_(i, j) * z[static_cast<std::size_t>(i)];
+            if (!(std::abs(projection) <= tolerance)) return false;
+        }
+        return true;
     }
 
     // Create the correlation arrays required for computing the CDF (see the file header's
@@ -1832,7 +2003,13 @@ class MultivariateNormal : public MultivariateDistribution {
     int dimension_ = 0;
     std::vector<double> mean_;
     la::Matrix covariance_ = la::Matrix(0, 0);
+    la::DecompositionMethod decomposition_ = la::DecompositionMethod::Cholesky;
     std::optional<la::CholeskyDecomposition> cholesky_;
+    mutable std::optional<la::SingularValueDecomposition> svd_;
+    la::Matrix factor_ = la::Matrix(0, 0);
+    la::Matrix nullspace_ = la::Matrix(0, 0);
+    double svd_threshold_ = 0.0;
+    int rank_ = 0;
     double lnconstant_ = 0.0;
     // (`_variance`/`_standardDeviation` lazy-cache fields omitted -- see file header note)
 
@@ -1848,7 +2025,8 @@ class MultivariateNormal : public MultivariateDistribution {
     // stateful binding/model objects; see corehydro/CLAUDE.md).
     mutable la::Matrix correlation_ = la::Matrix(0, 0);
     mutable std::vector<double> correl_;
-    mutable sampling::MersenneTwister mvnuni_ = make_clock_seeded();
+    mutable sampling::MersenneTwister mvnuni_ =
+        sampling::MersenneTwister(static_cast<std::uint32_t>(kDefaultMvnuniSeed));
     int max_evaluations_ = 100000;
     double absolute_error_ = 1E-4;
     double relative_error_ = 1E-4;

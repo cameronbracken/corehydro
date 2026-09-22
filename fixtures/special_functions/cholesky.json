@@ -2,7 +2,7 @@
   "kind": "special_function",
   "target": "Cholesky",
   "source": "Numerics/Mathematics/Linear Algebra/CholeskyDecomposition.cs; oracles cross-checked against Test_CholeskyDecomposition.cs (Test_CholeskyDecomp, Test_CholeskyDecompVals, Test_LogDeterminant, Test_Inverse, Test_Solve, Test_Forward, Test_Back)",
-  "reference": "Numerics @ a2c4dbf. Each case's `target` selects the dispatch function (falls back to the file-level `target` if a case omits it -- see run_special_function). Convention: matrices are passed as flattened row-major doubles; n is inferred from the args length (n = sqrt(len) for determinant/log_determinant/is_positive_definite; n = sqrt(len-2) for inverse_element, whose last two args are the (i, j) indices; n solves n^2+n+1=len for solve_element, whose args are [flattened n*n matrix, n-length rhs vector, index i]). The 3x3 matrix and its exact rational Cholesky factors (L = [[4,0,0],[1,2,0],[2,-3,3]]) come directly from the upstream test file; the 2x2 matrix and its expected values were computed independently with a pure-Python replica of the exact C# algorithm (see task report) so floating-point rounding (e.g. sqrt(2)) matches bit-for-bit. is_positive_definite cases pin the non-PD exception path (upstream Test_CholeskyDecomposition.cs has no test for it at all): a known-PD 2x2, the non-PD [[1,2],[2,1]] (det=-3), and a diagonal NaN entry, all expecting 1.0/0.0/0.0 via exact `equal` comparison -- construct-and-catch, verified against the real C# CholeskyDecomposition ctor by tools/verify_oracles.py.",
+  "reference": "Numerics @ 7e8e8d1. Each case's `target` selects the dispatch function. Matrices are flattened row-major; the rank-deficient covariance case pins the v2.2.0 diagonal-relative pivot tolerance.",
   "cases": [
     {
       "name": "det_3x3",
@@ -128,6 +128,12 @@
       "name": "is_pd_2x2_false_nan",
       "target": "Cholesky.is_positive_definite",
       "args": [1, 0, 0, "nan"],
+      "assertions": [ { "method": "value", "expected": 0.0, "mode": "equal" } ]
+    },
+    {
+      "name": "is_pd_3x3_false_numerically_rank_deficient",
+      "target": "Cholesky.is_positive_definite",
+      "args": [2, 0.5, 2, 0.5, 1, 0.5, 2, 0.5, 2],
       "assertions": [ { "method": "value", "expected": 0.0, "mode": "equal" } ]
     }
   ]

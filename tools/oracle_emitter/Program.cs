@@ -2297,7 +2297,11 @@ static MultivariateDistribution BuildMultivariate(string target, JsonElement con
             var row = covRows[i].EnumerateArray().Select(ParseNum).ToArray();
             for (int j = 0; j < row.Length; j++) covariance[i, j] = row[j];
         }
-        var mvn = new MultivariateNormal(mean, covariance);
+        var decomposition = construct.TryGetProperty("decomposition", out var decompositionElement)
+            && decompositionElement.GetString() is "SingularValue" or "singular_value" or "svd"
+                ? DecompositionMethod.SingularValue
+                : DecompositionMethod.Cholesky;
+        var mvn = new MultivariateNormal(mean, covariance, decomposition);
         if (construct.TryGetProperty("seed", out var seedEl))
             mvn.MVNUNI = new MersenneTwister(seedEl.GetInt32());
         if (construct.TryGetProperty("max_evaluations", out var maxEvalEl))
@@ -2404,6 +2408,7 @@ static double DispatchMultivariate(MultivariateDistribution d, string target, st
         var nn = (MultivariateNormal)d;
         switch (m)
         {
+            case "decomposition": return nn.Decomposition == DecompositionMethod.SingularValue ? 1d : 0d;
             case "mean": return nn.Mean[a[0].GetInt32()];
             case "median": return nn.Median[a[0].GetInt32()];
             case "mode": return nn.Mode[a[0].GetInt32()];

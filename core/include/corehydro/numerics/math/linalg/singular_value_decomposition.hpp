@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Linear Algebra/SingularValueDecomposition.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Linear Algebra/SingularValueDecomposition.cs @ 7e8e8d1
 //
 // Solves sets of linear equations using Singular Value Decomposition (the Numerical
 // Recipes 3rd-edition algorithm). Ported with Task B9 because LinearRegression.FitSVD
@@ -11,9 +11,7 @@
 //   - `Threshold` is mutable state recomputed by rank()/nullity()/solve() when their
 //     `threshold` argument is negative (the C# property setter side effect), so those
 //     methods are non-const here.
-//   - The C# convergence guard `if (its == 99) throw` sits inside a `for (its < 30)` loop
-//     and is therefore unreachable; it is transcribed verbatim (with this note) rather
-//     than "fixed".
+//   - v2.2.0 makes the 30-iteration convergence guard reachable.
 //   - C# Tools.Sign / Tools.DoubleMachineEpsilon map to corehydro::numerics::sign /
 //     kDoubleMachineEpsilon.
 #pragma once
@@ -176,6 +174,16 @@ class SingularValueDecomposition {
         return det;
     }
 
+    double log_pseudo_determinant(double threshold) {
+        threshold_ = threshold >= 0.0
+            ? threshold
+            : 0.5 * std::sqrt(m_ + n_ + 1.0) * w_[0] * eps_;
+        double determinant = 0.0;
+        for (int i = 0; i < w_.length(); ++i)
+            if (w_[i] > threshold_) determinant += std::log(w_[i]);
+        return determinant;
+    }
+
    private:
     // Performs the singular value decomposition.
     void decompose() {
@@ -302,9 +310,8 @@ class SingularValueDecomposition {
                     }
                     break;
                 }
-                // Unreachable in the C# source too (its < 30); transcribed verbatim.
-                if (its == 99)
-                    throw std::invalid_argument("There was no convergence in 100 iterations");
+                if (its == 29)
+                    throw std::invalid_argument("There was no convergence in 30 iterations");
                 x = w_[l];
                 nm = k - 1;
                 y = w_[nm];

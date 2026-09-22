@@ -314,6 +314,8 @@ inline std::string mvn_spec_string(const MultivariateNormal& m, const JsonValue&
         out += "]";
     }
     out += "]";
+    if (m.decomposition() == la::DecompositionMethod::SingularValue)
+        out += R"(,"decomposition":"SingularValue")";
     auto copy_int = [&](const char* key) {
         if (!parent.contains(key)) return;
         char buf[64];
@@ -389,6 +391,11 @@ inline DistResult run_mvdist(const std::string& spec_json, const std::string& me
     if (method == "cdf") { r.values = {d->cdf(detail::arg_numbers(args))}; return r; }
     if (method == "dimension") { r.values = {static_cast<double>(d->dimension())}; return r; }
     if (method == "parameters_valid") { r.values = {d->parameters_valid() ? 1.0 : 0.0}; return r; }
+    if (method == "decomposition") {
+        if (!mvn) throw std::runtime_error("'decomposition' is available for MultivariateNormal only");
+        r.values = {mvn->decomposition() == la::DecompositionMethod::SingularValue ? 1.0 : 0.0};
+        return r;
+    }
     if (method == "marginal") {
         std::vector<int> idx;
         for (double v : detail::arg_numbers(args)) idx.push_back(static_cast<int>(v));

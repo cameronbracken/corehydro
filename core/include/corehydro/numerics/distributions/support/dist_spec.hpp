@@ -18,8 +18,8 @@
 //
 // A MultivariateNormal spec accepts four optional integrator settings beside its mean and
 // covariance -- "seed", "max_evaluations", "abs_error" and "rel_error". They configure the Genz
-// quasi-Monte-Carlo integrator behind the CDF for dimension >= 3; without "seed" the instance
-// clock-seeds and repeated calls disagree. An absent key leaves the ported default untouched.
+// quasi-Monte-Carlo integrator behind the CDF for dimension >= 3. The v2.2.0 default seed is
+// 12345; an explicit seed lets callers decorrelate numerical errors across instances.
 //
 // `target`/`params` are accepted as aliases of `family`/`parameters` because every fixture file
 // spells them that way; renaming keys across the pinned corpus would buy nothing.
@@ -344,10 +344,20 @@ inline std::unique_ptr<MultivariateDistribution> build_multivariate(const JsonVa
     };
     if (family == "MultivariateNormal") {
         std::vector<double> mean = spec.at("mean").as_double_vector();
+        la::DecompositionMethod decomposition = la::DecompositionMethod::Cholesky;
+        if (spec.contains("decomposition")) {
+            std::string value = spec.at("decomposition").as_string();
+            if (value == "SingularValue" || value == "singular_value" || value == "svd")
+                decomposition = la::DecompositionMethod::SingularValue;
+            else if (value != "Cholesky" && value != "cholesky")
+                throw std::runtime_error("unknown decomposition '" + value +
+                                         "'; expected Cholesky or SingularValue");
+        }
         std::unique_ptr<MultivariateNormal> m =
             spec.contains("covariance")
-                ? std::make_unique<MultivariateNormal>(std::move(mean), rows(spec.at("covariance")))
-                : std::make_unique<MultivariateNormal>(std::move(mean));
+                ? std::make_unique<MultivariateNormal>(std::move(mean), rows(spec.at("covariance")),
+                                                       decomposition)
+                : std::make_unique<MultivariateNormal>(std::move(mean), decomposition);
         // The four Genz-integrator settings, applied AFTER construction because
         // set_parameters resets max_evaluations to its 1000 x dimension default. An absent key
         // leaves the ported default untouched. `seed` is what makes a dimension >= 3 CDF
@@ -363,9 +373,12 @@ inline std::unique_ptr<MultivariateDistribution> build_multivariate(const JsonVa
     if (family == "MultivariateStudentT") {
         double df = spec.at("df").as_double();
         std::vector<double> loc = spec.at("location").as_double_vector();
-        if (!spec.contains("scale"))
-            return std::make_unique<MultivariateStudentT>(df, std::move(loc));
-        return std::make_unique<MultivariateStudentT>(df, std::move(loc), rows(spec.at("scale")));
+        std::unique_ptr<MultivariateStudentT> m =
+            !spec.contains("scale")
+                ? std::make_unique<MultivariateStudentT>(df, std::move(loc))
+                : std::make_unique<MultivariateStudentT>(df, std::move(loc), rows(spec.at("scale")));
+        if (spec.contains("seed")) m->set_mvnuni_seed(spec.at("seed").as_int());
+        return m;
     }
     if (family == "Dirichlet") return std::make_unique<Dirichlet>(spec.at("alpha").as_double_vector());
     if (family == "Multinomial")

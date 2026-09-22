@@ -1,13 +1,11 @@
-// ported from: Numerics/Distributions/Multivariate/BivariateEmpirical.cs @ 2a0357a
+// ported from: Numerics/Distributions/Multivariate/BivariateEmpirical.cs @ 7e8e8d1
 //
 // A bivariate empirical CDF defined on a rectangular X1 x X2 grid of cumulative
 // probabilities, evaluated via 2D (bilinear) interpolation with independent optional
 // transforms on X1, X2, and the probability surface.
 //
-// PDF is not implemented upstream -- C# returns double.NaN (a documented placeholder:
-// "This approach is not ideal, and is a temporary place holder, until I learn how to do
-// this better"); ported verbatim as a stub, not a numerical-differentiation
-// approximation.
+// PDF is not implemented upstream. C# returns double.NaN so the missing joint density
+// stays explicit rather than fabricating a value; ported verbatim.
 //
 // v2.1.4 (RESOLVED -- see docs/upstream-csharp-issues.md for the pre-fix history):
 // set_parameters() now nulls the cached Bilinear interpolator (mirrors the new C#

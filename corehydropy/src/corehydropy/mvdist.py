@@ -360,6 +360,9 @@ class MultivariateDistribution:
         """
         if self._family == "MultivariateStudentT":
             return {"df": float(self._run("degrees_of_freedom")["values"][0])}
+        if self._family == "MultivariateNormal":
+            method = int(self._run("decomposition")["values"][0])
+            return {"decomposition": "SingularValue" if method else "Cholesky"}
         if self._family == "Dirichlet":
             return {
                 "alpha": np.asarray(self._run("alpha")["values"]),
@@ -375,6 +378,7 @@ class MultivariateDistribution:
 def mvdist_normal(
     mean, covariance, seed: int | None = None, max_evaluations: int | None = None,
     abs_error: float | None = None, rel_error: float | None = None,
+    decomposition: str = "Cholesky",
 ) -> MultivariateDistribution:
     """Construct a multivariate normal distribution.
 
@@ -385,13 +389,16 @@ def mvdist_normal(
     mean : array-like of float
         Means, length ``d``.
     covariance : array-like
-        ``d x d`` symmetric positive-definite covariance matrix.
+        ``d x d`` covariance matrix. It must be positive definite for ``"Cholesky"`` and
+        may be positive semidefinite for ``"SingularValue"``.
     seed : int, optional
         Seed for the Genz quasi-Monte-Carlo integrator behind :meth:`MultivariateDistribution.cdf`
-        at dimension three and above; ``None`` (the default) leaves it clock-seeded. **Without a
-        seed, the CDF at dimension >= 3 is not reproducible run to run** (it draws from a
-        per-instance Mersenne Twister), so R and Python cannot agree on a value unless `seed` is
-        set explicitly.
+        at dimension three and above. ``None`` uses the reproducible upstream default, 12345.
+        Set a distinct seed when aggregating many instances so their quadrature errors do not
+        share the same lattice shifts.
+    decomposition : {"Cholesky", "SingularValue"}, default "Cholesky"
+        Covariance factorization. The singular value option supports degenerate Gaussian
+        densities on their affine support.
     max_evaluations, abs_error, rel_error : optional
         Integrator tuning; ``None`` (the default) for each leaves the ported upstream default
         untouched.
@@ -416,6 +423,7 @@ def mvdist_normal(
     spec: dict = {
         "family": "MultivariateNormal", "mean": mean_v,
         "covariance": [row.tolist() for row in cov],
+        "decomposition": decomposition,
     }
     if seed is not None:
         spec["seed"] = int(seed)

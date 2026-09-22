@@ -333,7 +333,7 @@ def _mvn_consumes_stream(method: str) -> bool:
 
 
 _MV_DELEGATED_METHODS = frozenset({
-    "dimension", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance", "sd",
+    "dimension", "decomposition", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance", "sd",
     "covariance", "median", "mode", "inverse_cdf", "interval", "degrees_of_freedom", "alpha",
     "alpha_sum", "number_of_trials", "random_value", "lhs_value", "marginal_dimension",
     "marginal_mean", "marginal_covariance", "marginal_log_pdf", "conditional_dimension",
@@ -380,7 +380,7 @@ def _dispatch_multivariate_delegated(spec_json: str, method: str, args: list):
     def run(spec, m, a):
         return _core.mvdist_run(spec, m, _json(a))
 
-    if method in ("dimension", "alpha_sum", "degrees_of_freedom", "number_of_trials"):
+    if method in ("dimension", "decomposition", "alpha_sum", "degrees_of_freedom", "number_of_trials"):
         return run(spec_json, method, [])["values"][0]
     if method in ("pdf", "log_pdf", "cdf", "mahalanobis"):
         return run(spec_json, method, args[0])["values"][0]

@@ -13,6 +13,7 @@
 #include "check.hpp"
 
 namespace dist = corehydro::numerics::distributions;
+namespace la = corehydro::numerics::math::linalg;
 
 namespace {
 
@@ -70,11 +71,37 @@ void test_conditional_validates_indices_and_values() {
     CHECK_THROWS(mvn.conditional({1}, {1.0, 2.0}));
 }
 
+void test_singular_value_decomposition_path() {
+    dist::MultivariateNormal mvn(
+        std::vector<double>{0.0, 0.0},
+        std::vector<std::vector<double>>{{1.0, 1.0}, {1.0, 1.0}},
+        la::DecompositionMethod::SingularValue);
+    CHECK_TRUE(mvn.decomposition() == la::DecompositionMethod::SingularValue);
+    CHECK_TRUE(!mvn.is_positive_definite());
+    CHECK_NEAR(mvn.pdf({0.0, 0.0}), 0.28209479177387814, 1e-14);
+    CHECK_NEAR(mvn.mahalanobis({1.0, 1.0}), 1.0, 1e-13);
+    CHECK_EQ(mvn.pdf({1.0, -1.0}), 0.0);
+    CHECK_TRUE(std::isinf(mvn.log_pdf({1.0, -1.0})));
+
+    auto draw = mvn.generate_random_values(1, 12345).at(0);
+    CHECK_NEAR(draw[0], draw[1], 1e-13);
+
+    CHECK_THROWS(dist::MultivariateNormal(
+        std::vector<double>{0.0, 0.0},
+        std::vector<std::vector<double>>{{1.0, 2.0}, {2.0, 1.0}},
+        la::DecompositionMethod::SingularValue));
+    CHECK_THROWS(dist::MultivariateNormal(
+        std::vector<double>{0.0, 0.0},
+        std::vector<std::vector<double>>{{1.0, 0.5}, {0.25, 1.0}},
+        la::DecompositionMethod::SingularValue));
+}
+
 }  // namespace
 
 int main() {
     test_try_set_covariance_non_throwing_invalid_state();
     test_marginal_validates_indices();
     test_conditional_validates_indices_and_values();
+    test_singular_value_decomposition_path();
     return chtest::summary("test_multivariate_normal_api");
 }

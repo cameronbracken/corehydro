@@ -1201,7 +1201,7 @@ mvn_consumes_stream <- function(m) {
   m %in% c("cdf", "interval", "mvndst", "mvndst_inform", "mvndst_error")
 }
 
-kMvDelegatedMethods <- c("dimension", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance",
+kMvDelegatedMethods <- c("dimension", "decomposition", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance",
                          "sd", "covariance", "median", "mode", "inverse_cdf", "interval",
                          "degrees_of_freedom", "alpha", "alpha_sum", "number_of_trials",
                          "random_value", "lhs_value", "marginal_dimension", "marginal_mean",
@@ -1240,7 +1240,7 @@ square_dim <- function(n) {
 dispatch_multivariate_delegated <- function(spec, method, args) {
   ns <- asNamespace("corehydror")
   run <- function(s, m, a) ns$ch_mvdist_run_(s, m, to_runner_json(a))
-  if (method %in% c("dimension", "alpha_sum", "degrees_of_freedom", "number_of_trials")) {
+  if (method %in% c("dimension", "decomposition", "alpha_sum", "degrees_of_freedom", "number_of_trials")) {
     return(run(spec, method, list())$values[[1]])
   }
   if (method %in% c("pdf", "log_pdf", "cdf", "mahalanobis")) {
