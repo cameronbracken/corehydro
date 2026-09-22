@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Gumbel.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Gumbel.cs @ 7e8e8d1
 //
 // The Gumbel (Extreme Value Type I) distribution with location ξ and scale α. Logic
 // mirrors the C# source method-for-method. The WPF helpers, IBootstrappable, and
@@ -55,7 +55,7 @@ class Gumbel : public UnivariateDistributionBase,
     double median() const override { return xi_ - alpha_ * std::log(std::log(2.0)); }
     double mode() const override { return xi_; }
     double standard_deviation() const override {
-        return std::sqrt((kPi * kPi) / 6.0 * alpha_ * alpha_);
+        return alpha_ * (kPi / std::sqrt(6.0));
     }
     double skewness() const override { return 1.1396; }
     double kurtosis() const override { return 3.0 + 12.0 / 5.0; }
@@ -63,22 +63,41 @@ class Gumbel : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        return 1.0 / alpha_ * std::exp(-(z + std::exp(-z)));
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Gumbel: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        const double value = -(z + std::exp(-z)) - std::log(alpha_);
+        return std::isnan(value) ? -kInf : value;
     }
 
-    double cdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        return std::exp(-std::exp(-z));
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Gumbel: invalid parameters");
+        return -std::exp(-distribution_numerics::standardize(x, xi_, alpha_));
+    }
+
+    double ccdf(double x) const override { return -std::expm1(log_cdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Gumbel: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        const double exponential = std::exp(-z);
+        return exponential == 0.0 ? -z : distribution_numerics::log1m_exp(-exponential);
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        return xi_ - alpha_ * std::log(-std::log(probability));
+        const double unit_quantile = -std::log(-std::log(probability));
+        const double displacement = alpha_ * unit_quantile;
+        return std::isinf(displacement) && std::isfinite(unit_quantile)
+                   ? alpha_ * (xi_ / alpha_ + unit_quantile)
+                   : xi_ + displacement;
     }
 
     // --- Parameter display names (X1; C# Gumbel.cs ParametersToString col0 +

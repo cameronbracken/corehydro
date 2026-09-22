@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Logistic.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Logistic.cs @ 7e8e8d1
 //
 // The Logistic distribution with location ξ and scale α. Logic mirrors the C# source
 // method-for-method. IStandardError, IBootstrappable, and the WPF helpers are not ported
@@ -61,22 +61,43 @@ class Logistic : public UnivariateDistributionBase,
 
     // --- Distribution functions ---
     double pdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        double ez = std::exp(-z);
-        return 1.0 / alpha_ * ez * std::pow(1.0 + ez, -2.0);
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double magnitude =
+            std::fabs(distribution_numerics::standardize(x, xi_, alpha_));
+        if (magnitude > 36.0) return std::exp(log_pdf(x));
+        const double tail = std::exp(-magnitude);
+        return (tail / (1.0 + tail)) / (1.0 + tail) / alpha_;
     }
 
-    double cdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        return 1.0 / (1.0 + std::exp(-z));
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double magnitude =
+            std::fabs(distribution_numerics::standardize(x, xi_, alpha_));
+        return -std::log(alpha_) - magnitude - 2.0 * std::log1p(std::exp(-magnitude));
+    }
+
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        return z >= 0.0 ? -std::log1p(std::exp(-z)) : z - std::log1p(std::exp(z));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        return z >= 0.0 ? -z - std::log1p(std::exp(-z)) : -std::log1p(std::exp(z));
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (std::isnan(probability) || probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        return xi_ + alpha_ * std::log(probability / (1.0 - probability));
+        return xi_ + alpha_ * (std::log(probability) - std::log1p(-probability));
     }
 
     // --- Parameter display names (X1; C# Logistic.cs ParametersToString col0 +

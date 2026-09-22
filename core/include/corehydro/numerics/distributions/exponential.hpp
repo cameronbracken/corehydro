@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Exponential.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Exponential.cs @ 7e8e8d1
 //
 // The (two-parameter) Exponential distribution, location ξ and scale α. Logic mirrors
 // the C# source method-for-method. B4 adds QuantileGradient and the ConditionalMoments
@@ -58,23 +58,46 @@ class Exponential : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        if (x < minimum() || x > maximum()) return 0.0;
-        return 1.0 / alpha_ * std::exp(-((x - xi_) / alpha_));
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Exponential: invalid parameters");
+        if (x < minimum() || x > maximum()) return -kInf;
+        const double value = -std::log(alpha_) -
+                             distribution_numerics::standardize(x, xi_, alpha_);
+        return std::isnan(value) ? -kInf : value;
     }
 
     double cdf(double x) const override {
         if (x <= minimum()) return 0.0;
         if (x >= maximum()) return 1.0;
-        return 1.0 - std::exp(-((x - xi_) / alpha_));
+        return -std::expm1(-distribution_numerics::standardize(x, xi_, alpha_));
+    }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Exponential: invalid parameters");
+        if (x <= xi_) return -kInf;
+        return distribution_numerics::log1m_exp(
+            -distribution_numerics::standardize(x, xi_, alpha_));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Exponential: invalid parameters");
+        return x <= xi_ ? 0.0 : -distribution_numerics::standardize(x, xi_, alpha_);
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        return xi_ - alpha_ * std::log(1.0 - probability);
+        const double unit_quantile = -std::log1p(-probability);
+        const double displacement = alpha_ * unit_quantile;
+        return std::isinf(displacement) && std::isfinite(unit_quantile)
+                   ? alpha_ * (xi_ / alpha_ + unit_quantile)
+                   : xi_ + displacement;
     }
 
     // --- Parameter display names (X1; C# Exponential.cs ParametersToString col0 +
@@ -130,7 +153,7 @@ class Exponential : public UnivariateDistributionBase,
         uppers.assign(2, 0.0);
         if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
         lowers[0] = initials[0] - std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0]))));
-        uppers[0] = std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
+        uppers[0] = min_data + kDoubleMachineEpsilon;
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
         if (initials[0] <= lowers[0] || initials[0] >= uppers[0])
@@ -156,11 +179,12 @@ class Exponential : public UnivariateDistributionBase,
     // IStandardError.QuantileGradient, Exponential.cs:457). Q(p) = xi - alpha*log(1-p).
     // C# ValidateParameters(..., true) throw -> std::invalid_argument.
     std::vector<double> quantile_gradient(double probability) const {
+        distribution_numerics::validate_probability(probability);
         // Validate parameters
         if (!parameters_valid_) throw std::invalid_argument("Exponential: invalid parameters");
         return {
             1.0,                           // location
-            -std::log(1.0 - probability)  // scale
+            -std::log1p(-probability)  // scale
         };
     }
 

@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Normal.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Normal.cs @ 7e8e8d1
 //
 // The Normal (Gaussian) distribution, parameters µ (location) and σ (scale).
 // CDF uses std::erf (matches the C# instance Normal.CDF(x), itself erf-based -- see the
@@ -86,13 +86,34 @@ class Normal : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        double z = (x - mu_) / sigma_;
-        return std::exp(-0.5 * z * z) / (kSqrt2PI * sigma_);
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        const double z = distribution_numerics::standardize(x, mu_, sigma_);
+        return -0.5 * z * z - std::log(sigma_) - kLogSqrt2PI;
     }
 
     double cdf(double x) const override {
-        return 0.5 * (1.0 + std::erf((x - mu_) / (sigma_ * kSqrt2)));
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return standard_cdf(distribution_numerics::standardize(x, mu_, sigma_));
+    }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return distribution_numerics::normal_log_cdf(
+            distribution_numerics::standardize(x, mu_, sigma_));
+    }
+
+    double ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return standard_cdf(-distribution_numerics::standardize(x, mu_, sigma_));
+    }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return distribution_numerics::normal_log_survival(
+            distribution_numerics::standardize(x, mu_, sigma_));
     }
 
     double inverse_cdf(double probability) const override {

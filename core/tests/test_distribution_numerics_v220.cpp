@@ -8,6 +8,11 @@
 #include "corehydro/numerics/distributions/base/distribution_snapshot.hpp"
 #include "corehydro/numerics/distributions/base/distribution_moment_integration.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
+#include "corehydro/numerics/distributions/exponential.hpp"
+#include "corehydro/numerics/distributions/gamma_distribution.hpp"
+#include "corehydro/numerics/distributions/generalized_extreme_value.hpp"
+#include "corehydro/numerics/distributions/gumbel.hpp"
+#include "corehydro/numerics/distributions/logistic.hpp"
 
 namespace dn = corehydro::numerics::distributions::distribution_numerics;
 
@@ -113,6 +118,31 @@ void test_full_support_moment_integration() {
         [](double) { return 0.0; }, 0.0, 1.0, 0.0, 0.0));
 }
 
+void test_workhorse_family_log_tails() {
+    using namespace corehydro::numerics::distributions;
+    Normal normal(0.0, 1.0);
+    CHECK_NEAR(normal.log_cdf(-40.0), -804.6084420137538, 2e-13);
+    CHECK_NEAR(normal.log_ccdf(9.0), -43.62814911333212, 2e-13);
+    CHECK_TRUE(std::isfinite(normal.log_pdf(40.0)));
+
+    GammaDistribution gamma(2.0, 0.5);
+    CHECK_NEAR(gamma.log_ccdf(2000.0), -1004.0267419589519, 3e-12);
+    CHECK_TRUE(std::isinf(GammaDistribution(2.0, 0.5).log_pdf(0.0)));
+
+    Exponential exponential(3.0, 2.0);
+    CHECK_NEAR(exponential.log_ccdf(2003.0), -1000.0, 0.0);
+    CHECK_NEAR(exponential.inverse_cdf(exponential.cdf(5.0)), 5.0, 1e-14);
+
+    Gumbel gumbel(3.0, 2.0);
+    CHECK_NEAR(gumbel.log_ccdf(2003.0), -1000.0, 1e-12);
+    Logistic logistic(3.0, 2.0);
+    CHECK_NEAR(logistic.log_ccdf(2003.0), -1000.0, 1e-12);
+
+    GeneralizedExtremeValue gev(3.0, 2.0, 1e-8);
+    const double p = 0.9;
+    CHECK_NEAR(gev.cdf(gev.inverse_cdf(p)), p, 2e-15);
+}
+
 }  // namespace
 
 int main() {
@@ -122,5 +152,6 @@ int main() {
     test_log_primitives_and_determinant();
     test_snapshot_round_trip();
     test_full_support_moment_integration();
+    test_workhorse_family_log_tails();
     return chtest::summary("test_distribution_numerics_v220");
 }
