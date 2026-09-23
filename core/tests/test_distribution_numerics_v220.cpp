@@ -15,6 +15,7 @@
 #include "corehydro/numerics/distributions/generalized_normal.hpp"
 #include "corehydro/numerics/distributions/generalized_pareto.hpp"
 #include "corehydro/numerics/distributions/gumbel.hpp"
+#include "corehydro/numerics/distributions/kappa_four.hpp"
 #include "corehydro/numerics/distributions/ln_normal.hpp"
 #include "corehydro/numerics/distributions/log_normal.hpp"
 #include "corehydro/numerics/distributions/log_pearson_type_iii.hpp"
@@ -209,6 +210,99 @@ void test_workhorse_family_log_tails() {
     CHECK_TRUE(lowers[0] <= initials[0] && initials[0] <= uppers[0]);
     CHECK_THROWS(LogPearsonTypeIII().estimate(
         {0.1, 0.2, 0.3, 0.0}, ParameterEstimationMethod::MethodOfMoments));
+
+    KappaFour kappa_gumbel(0.0, 1.0, 0.0, 0.0);
+    CHECK_NEAR(kappa_gumbel.inverse_cdf(0.5), 0.366512920581664327, 2e-14);
+    CHECK_NEAR(kappa_gumbel.cdf(0.366512920581664327), 0.5, 2e-14);
+    CHECK_NEAR(kappa_gumbel.pdf(0.366512920581664327), 0.346573590279972655, 2e-14);
+    CHECK_NEAR(kappa_gumbel.log_pdf(-7.0), -1089.6331584284585, 2e-12);
+    CHECK_NEAR(kappa_gumbel.log_ccdf(40.0), -40.0, 2e-14);
+    CHECK_NEAR(kappa_gumbel.ccdf(40.0), 4.248354255291589e-18, 1e-31);
+    for (double kappa : {-1e-16, 0.0, 1e-16})
+        for (double hondo : {-1e-16, 0.0, 1e-16}) {
+            KappaFour near_zero(0.0, 1.0, kappa, hondo);
+            CHECK_NEAR(near_zero.inverse_cdf(0.5), 0.366512920581664327, 2e-14);
+            CHECK_NEAR(near_zero.cdf(0.366512920581664327), 0.5, 2e-14);
+        }
+    KappaFour exponential_kappa(0.0, 1.0, 0.0, 1.0);
+    CHECK_NEAR(exponential_kappa.mean(), 1.0, 1e-8);
+    CHECK_NEAR(exponential_kappa.standard_deviation(), 1.0, 1e-8);
+    CHECK_NEAR(exponential_kappa.skewness(), 2.0, 1e-8);
+    CHECK_NEAR(exponential_kappa.kurtosis(), 9.0, 1e-8);
+    KappaFour heavy_kappa(0.0, 1.0, -0.5, 0.0);
+    CHECK_NEAR(heavy_kappa.mean(), 1.544907701811032, 1e-8);
+    CHECK_TRUE(std::isnan(heavy_kappa.standard_deviation()));
+    CHECK_TRUE(std::isinf(KappaFour(0.0, 1.0, 0.0, 1.5).pdf(
+        KappaFour(0.0, 1.0, 0.0, 1.5).minimum())));
+    CHECK_NEAR(KappaFour(0.0, 1.0, 2.0, 0.5).log_cdf(-1.4999999999999998),
+               -74.85989550047409, 5e-12);
+    const auto kappa_lmom = kappa_gumbel.linear_moments_from_parameters({0.0, 1.0, 0.0, 0.0});
+    CHECK_NEAR(kappa_lmom[0], 0.5772156649015329, 1e-12);
+    CHECK_NEAR(kappa_lmom[1], 0.6931471805599453, 1e-12);
+    CHECK_NEAR(kappa_lmom[2], 0.16992500144231236, 1e-12);
+    CHECK_NEAR(kappa_lmom[3], 0.15037499278843736, 1e-12);
+    const auto kappa_small =
+        kappa_gumbel.linear_moments_from_parameters({0.0, 1.0, 1e-12, 1e-12});
+    CHECK_NEAR(kappa_small[0], kappa_lmom[0], 1e-8);
+    CHECK_NEAR(kappa_small[1], kappa_lmom[1], 1e-8);
+    const auto kappa_recovered = kappa_gumbel.parameters_from_linear_moments(kappa_lmom);
+    const auto kappa_round_trip =
+        kappa_gumbel.linear_moments_from_parameters(kappa_recovered);
+    for (std::size_t i = 0; i < kappa_lmom.size(); ++i)
+        CHECK_NEAR(kappa_round_trip[i], kappa_lmom[i], 1e-6);
+    const auto kappa_gradient = kappa_gumbel.quantile_gradient(0.5);
+    CHECK_NEAR(kappa_gradient[0], 1.0, 0.0);
+    CHECK_NEAR(kappa_gradient[1], 0.366512920581664327, 2e-14);
+    CHECK_NEAR(kappa_gradient[2], -0.5 * kappa_gradient[1] * kappa_gradient[1], 1e-14);
+    CHECK_NEAR(kappa_gradient[3], 0.346573590279972655, 2e-14);
+    const auto kappa_covariance = kappa_gumbel.parameter_covariance(
+        100, ParameterEstimationMethod::MaximumLikelihood);
+    for (std::size_t i = 0; i < kappa_covariance.size(); ++i) {
+        CHECK_TRUE(kappa_covariance[i][i] > 0.0 && std::isfinite(kappa_covariance[i][i]));
+        for (std::size_t j = 0; j < kappa_covariance.size(); ++j)
+            CHECK_NEAR(kappa_covariance[i][j], kappa_covariance[j][i], 0.0);
+    }
+    CHECK_TRUE(kappa_gumbel.quantile_variance(
+                   0.9, 100, ParameterEstimationMethod::MaximumLikelihood) > 0.0);
+    CHECK_THROWS(KappaFour(0.0, 1.0, 0.5, 0.0).parameter_covariance(
+        100, ParameterEstimationMethod::MaximumLikelihood));
+
+    const std::vector<double> fitting_sample = {
+        1.354784607887268, 0.41693252325057983, 0.8899999856948853,
+        0.8853314518928528, 2.170344829559326, 1.334205150604248,
+        0.5150537490844727, 0.8244029879570007, 0.5099999904632568,
+        0.44740423560142517, 0.739365816116333, 1.8200000524520874,
+        1.9778419733047485, 0.6553186774253845, 0.8488552570343018,
+        2.2905187606811523, 0.9865325689315796, 0.7076110243797302,
+        0.2929774820804596, 1.5241589546203613, 0.5311949253082275,
+        0.5221586227416992, 0.907939612865448, 0.2859921157360077,
+        0.6391091346740723, 0.6330636739730835, 0.520042359828949,
+        2.0499587059020996, 1.83543860912323, 2.450000047683716,
+        0.6613662838935852, 1.1201441287994385, 1.020573377609253,
+        0.5620101094245911, 0.5419405102729797, 2.2691876888275146,
+        1.5167182683944702, 3.119999885559082};
+    kappa_gumbel.get_parameter_constraints(fitting_sample, initials, lowers, uppers);
+    CHECK_EQ(lowers[0], -10.0);
+    CHECK_EQ(lowers[1], corehydro::numerics::kDoubleMachineEpsilon);
+    CHECK_EQ(lowers[2], -10.0);
+    CHECK_EQ(lowers[3], -2.0);
+    CHECK_EQ(uppers[0], 10.0);
+    CHECK_EQ(uppers[1], 100.0);
+    CHECK_EQ(uppers[2], 10.0);
+    CHECK_EQ(uppers[3], 2.0);
+    KappaFour fitting_initial(initials[0], initials[1], initials[2], initials[3]);
+    CHECK_TRUE(std::isfinite(fitting_initial.log_likelihood(fitting_sample)));
+    for (double observation : fitting_sample)
+        CHECK_TRUE(observation > fitting_initial.minimum() &&
+                   observation < fitting_initial.maximum());
+    auto invalid_sample = fitting_sample;
+    invalid_sample[17] = std::numeric_limits<double>::quiet_NaN();
+    const auto before_failed_fit = kappa_gumbel.get_parameters();
+    CHECK_THROWS(kappa_gumbel.estimate(
+        invalid_sample, ParameterEstimationMethod::MaximumLikelihood));
+    CHECK_TRUE(kappa_gumbel.get_parameters() == before_failed_fit);
+    CHECK_THROWS(kappa_gumbel.get_parameter_constraints(
+        {1.0, 1.0, 1.0, 1.0}, initials, lowers, uppers));
 }
 
 }  // namespace

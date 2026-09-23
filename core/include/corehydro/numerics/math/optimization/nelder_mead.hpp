@@ -12,6 +12,8 @@
 #include <functional>
 #include <vector>
 
+#include "corehydro/numerics/math/optimization/support/optimization_status.hpp"
+
 namespace corehydro::numerics::math::optimization {
 
 class NelderMead {
@@ -51,6 +53,7 @@ class NelderMead {
     }
 
     const std::vector<double>& best_parameters() const { return best_values_; }
+    OptimizationStatus status() const { return status_; }
 
    private:
     Objective objective_;
@@ -61,11 +64,13 @@ class NelderMead {
     bool has_best_ = false;
     double best_fitness_ = 0.0;
     std::vector<double> best_values_;
+    OptimizationStatus status_ = OptimizationStatus::None;
 
     void clear_and_optimize() {
         iterations_ = 0;
         has_best_ = false;
         best_values_.clear();
+        status_ = OptimizationStatus::None;
         optimize();
     }
 
@@ -168,7 +173,10 @@ class NelderMead {
                 }
             }
 
-            if (converged(f[ihi], f[ilo])) return;
+            if (converged(f[ihi], f[ilo])) {
+                status_ = OptimizationStatus::Success;
+                return;
+            }
 
             iterations_ += 1;
             for (int j = 0; j < D; ++j) pbar[j] = 0.0;
@@ -225,7 +233,7 @@ class NelderMead {
                 f[ihi] = fpr;
             }
         }
-        // Max iterations reached: upstream Maximize() swallows this and returns best-so-far.
+        status_ = OptimizationStatus::MaximumIterationsReached;
     }
 };
 

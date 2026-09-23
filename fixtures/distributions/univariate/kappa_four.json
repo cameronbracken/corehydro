@@ -54,7 +54,7 @@
       "construct": { "params": [0.0, 1.0, 0.0, -1.0] },
       "assertions": [
         { "method": "cdf",     "args": [0.0], "expected": 0.5,                    "mode": "abs", "tol": 1e-12 },
-        { "method": "quantile","args": [0.5],  "expected": -1.0986122886681098,   "mode": "abs", "tol": 1e-9 },
+        { "method": "quantile","args": [0.5],  "expected": 0.0,                   "mode": "abs", "tol": 1e-12 },
         { "method": "parameters_valid", "args": [], "expected": true,             "mode": "bool" }
       ]
     },
