@@ -2,15 +2,14 @@
 //
 // Generalized Pareto distribution: parameters ξ (location), α (scale), κ (shape).
 // Mirrors the C# source method-for-method. The IBootstrappable and WPF helpers are not
-// ported (desktop / uncertainty-analysis concerns); of the IStandardError surface only
-// ParameterCovariance is ported (M5: ThresholdDiagnostics' parameter-stability plot
-// needs it) -- QuantileVariance/QuantileGradient/QuantileJacobian remain unported.
+// ported (desktop / uncertainty-analysis concerns).
 // κ→0 limit branch: exponential distribution on [ξ, ∞).
 // κ > 0: bounded above at ξ + α/κ.
 // κ < 0: heavy tail, unbounded above.
 #pragma once
 #include <string>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -18,6 +17,7 @@
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
+#include "corehydro/numerics/distributions/base/i_standard_error.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
@@ -30,7 +30,8 @@ namespace corehydro::numerics::distributions {
 class GeneralizedPareto : public UnivariateDistributionBase,
                           public IEstimation,
                           public ILinearMomentEstimation,
-                          public IMaximumLikelihoodEstimation {
+                          public IMaximumLikelihoodEstimation,
+                          public IStandardError {
    public:
     GeneralizedPareto() { set_parameters(100.0, 10.0, 0.0); }
     GeneralizedPareto(double location, double scale, double shape) {
@@ -60,58 +61,57 @@ class GeneralizedPareto : public UnivariateDistributionBase,
 
     // --- Moments / support ---
     double mean() const override {
-        if (std::fabs(kappa_) <= kNearZero) return xi_ + alpha_;
-        if (std::fabs(kappa_) < 1.0) return xi_ + alpha_ / (1.0 + kappa_);
-        return kNaN;
+        return kappa_ > -1.0 ? xi_ + alpha_ / (1.0 + kappa_) : kNaN;
     }
 
     double median() const override {
-        if (std::fabs(kappa_) <= kNearZero)
-            return xi_ - std::log(0.5) * alpha_;
-        return xi_ + alpha_ * (std::pow(2.0, -kappa_) - 1.0) / kappa_;
+        return inverse_cdf(0.5);
     }
 
     double mode() const override {
-        if (std::fabs(kappa_) <= kNearZero) return xi_;
-        return xi_ + alpha_ * (std::pow(1.0 + kappa_, -kappa_) - 1.0) / kappa_;
+        return kappa_ < 1.0 ? xi_ : kappa_ == 1.0 ? kNaN : maximum();
     }
 
     double standard_deviation() const override {
-        if (std::fabs(kappa_) <= kNearZero) return alpha_;
-        if (std::fabs(kappa_) < 0.5) {
-            double num = alpha_ * alpha_;
-            double den = (1.0 + 2.0 * kappa_) * std::pow(1.0 + kappa_, 2.0);
-            return std::sqrt(num / den);
-        }
-        return kNaN;
+        return kappa_ > -0.5
+                   ? (alpha_ / (1.0 + kappa_)) / std::sqrt(1.0 + 2.0 * kappa_)
+                   : kNaN;
     }
 
     double skewness() const override {
-        if (std::fabs(kappa_) <= kNearZero) return 2.0;
-        if (std::fabs(kappa_) < 1.0 / 3.0) {
-            double num = 2.0 * (1.0 - kappa_) * std::sqrt(1.0 + 2.0 * kappa_);
-            double den = 1.0 + 3.0 * kappa_;
-            return num / den;
+        if (kappa_ <= -1.0 / 3.0) return kNaN;
+        if (kappa_ > 1.0) {
+            const double inverse = 1.0 / kappa_;
+            return (2.0 * (inverse - 1.0) / (inverse + 3.0)) *
+                   std::sqrt(kappa_) * std::sqrt(inverse + 2.0);
         }
-        return kNaN;
+        return 2.0 * (1.0 - kappa_) * std::sqrt(1.0 + 2.0 * kappa_) /
+               (1.0 + 3.0 * kappa_);
     }
 
     double kurtosis() const override {
-        if (std::fabs(kappa_) <= kNearZero) return 9.0;
-        if (std::fabs(kappa_) < 0.25) {
-            double num = 3.0 * (1.0 + 2.0 * kappa_) *
-                         (3.0 - kappa_ + 2.0 * std::pow(kappa_, 2.0));
-            double den = (1.0 + 3.0 * kappa_) * (1.0 + 4.0 * kappa_);
-            return num / den;
+        if (kappa_ <= -0.25) return kNaN;
+        if (kappa_ > 1.0) {
+            const double inverse = 1.0 / kappa_;
+            const double coefficient =
+                3.0 * (inverse + 2.0) *
+                (3.0 * inverse * inverse - inverse + 2.0) /
+                ((inverse + 3.0) * (inverse + 4.0));
+            return kappa_ * coefficient;
         }
-        return kNaN;
+        return 3.0 * (1.0 + 2.0 * kappa_) *
+               (3.0 - kappa_ + 2.0 * kappa_ * kappa_) /
+               ((1.0 + 3.0 * kappa_) * (1.0 + 4.0 * kappa_));
     }
 
     double minimum() const override { return xi_; }
 
     double maximum() const override {
         if (kappa_ <= 0.0) return kInf;
-        return xi_ + alpha_ / kappa_;
+        const double shift = alpha_ / kappa_;
+        return std::isinf(shift) && std::signbit(xi_) != std::signbit(shift)
+                   ? (xi_ * kappa_ + alpha_) / kappa_
+                   : xi_ + shift;
     }
 
     // --- Distribution functions ---
@@ -180,22 +180,38 @@ class GeneralizedPareto : public UnivariateDistributionBase,
     // MethodOfMoments and MaximumLikelihood branches exist upstream (anything else
     // throws, C# NotImplementedException -> std::logic_error).
     math::linalg::Matrix2D parameter_covariance(
-        int sample_size, ParameterEstimationMethod estimation_method) const {
+        int sample_size, ParameterEstimationMethod estimation_method) const override {
+        distribution_numerics::validate_sample_size(sample_size);
         if (estimation_method != ParameterEstimationMethod::MethodOfMoments &&
             estimation_method != ParameterEstimationMethod::MaximumLikelihood) {
             throw std::logic_error(
                 "GeneralizedPareto::parameter_covariance is only implemented for the "
                 "method of moments and maximum likelihood estimation methods.");
         }
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedPareto: invalid parameters");
+        if (estimation_method == ParameterEstimationMethod::MaximumLikelihood &&
+            kappa_ >= 0.5)
+            throw std::out_of_range(
+                "regular maximum-likelihood uncertainty requires kappa below one half");
+        if (estimation_method == ParameterEstimationMethod::MethodOfMoments &&
+            kappa_ <= -0.25)
+            throw std::out_of_range(
+                "method-of-moments uncertainty requires kappa above negative one fourth");
         double a = alpha_;
         double k = kappa_;
         double n = static_cast<double>(sample_size);
+        if (!(n + 2.0 * k > 0.0))
+            throw std::out_of_range(
+                "location covariance requires sample size plus twice kappa to be positive");
         math::linalg::Matrix2D covar(3, std::vector<double>(3, 0.0));
-        covar[0][0] = n * a * a / ((n + 2.0 * k) * std::pow(n + k, 2.0));  // location
+        const double location_scale = a / (n + k);
+        covar[0][0] = (n / (n + 2.0 * k)) * location_scale * location_scale;
+        const double scale_variance = (a / std::sqrt(n)) * (a / std::sqrt(n));
         if (estimation_method == ParameterEstimationMethod::MethodOfMoments) {
             double num = std::pow(1.0 + k, 2.0) * (1.0 + 6.0 * k + 12.0 * std::pow(k, 2.0));
             double den = (1.0 + 2.0 * k) * (1.0 + 3.0 * k) * (1.0 + 4.0 * k);
-            covar[1][1] = 2.0 * a * a / n * num / den;  // scale
+            covar[1][1] = 2.0 * scale_variance * num / den;
             //
             num = std::pow(1.0 + k, 2.0) * std::pow(1.0 + 2.0 * k, 2.0) *
                   (1.0 + k + 6.0 * std::pow(k, 2.0));
@@ -212,7 +228,7 @@ class GeneralizedPareto : public UnivariateDistributionBase,
             covar[2][1] = a / n * num / den;  // scale & shape
             covar[1][2] = covar[2][1];
         } else {
-            covar[1][1] = (1.0 - k) * (2.0 * a * a) / n;      // scale
+            covar[1][1] = (1.0 - k) * (2.0 * scale_variance);  // scale
             covar[2][2] = 1.0 / n * std::pow(1.0 - k, 2.0);   // shape
             //
             covar[0][1] = 0.0;
@@ -226,9 +242,53 @@ class GeneralizedPareto : public UnivariateDistributionBase,
         return covar;
     }
 
+    double quantile_variance(double probability, int sample_size,
+                             ParameterEstimationMethod method) const override {
+        distribution_numerics::validate_probability(probability);
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedPareto: invalid parameters");
+        GeneralizedPareto unit(0.0, 1.0, kappa_);
+        const auto covariance = unit.parameter_covariance(sample_size, method);
+        const double logarithm = std::log1p(-probability);
+        const double product = kappa_ * logarithm;
+        const double scale_gradient = distribution_numerics::scaled_exprel_product(
+            alpha_, -logarithm, product);
+        const double shape_gradient =
+            -distribution_numerics::scaled_exprel_derivative_product(
+                alpha_, logarithm, product);
+        return distribution_numerics::scaled_quantile_variance(
+            {{covariance[1][1], covariance[1][2]},
+             {covariance[2][1], covariance[2][2]}},
+            {scale_gradient, shape_gradient});
+    }
+
+    std::vector<double> quantile_gradient(double probability) const override {
+        distribution_numerics::validate_probability(probability);
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedPareto: invalid parameters");
+        const double logarithm = std::log1p(-probability);
+        const double product = kappa_ * logarithm;
+        return {1.0,
+                product == -kInf
+                    ? 1.0 / kappa_
+                    : distribution_numerics::scaled_exprel_product(
+                          1.0, -logarithm, product),
+                product == -kInf
+                    ? -(alpha_ / kappa_) / kappa_
+                    : -distribution_numerics::scaled_exprel_derivative_product(
+                          alpha_, logarithm, product)};
+    }
+
+    math::linalg::Matrix2D quantile_jacobian(
+        const std::vector<double>& probabilities, double& determinant) const override {
+        return distribution_numerics::quantile_jacobian(
+            *this, number_of_parameters(), probabilities, determinant);
+    }
+
     // --- Estimation ---
     void estimate(const std::vector<double>& sample,
                   ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(direct_method_of_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -301,27 +361,13 @@ class GeneralizedPareto : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        auto all_initials = parameters_from_linear_moments(data::linear_moments(sample));
-        double min_data = *std::min_element(sample.begin(), sample.end());
-        // Location bound (upper = min_data so xi <= min_data)
-        if (all_initials[0] == 0.0) all_initials[0] = kDoubleMachineEpsilon;
-        double loc_lower = all_initials[0] -
-                           std::pow(10.0, std::ceil(std::log10(std::fabs(all_initials[0]))));
-        double loc_upper = min_data + kDoubleMachineEpsilon;
-        // Scale bounds
-        double scl_lower = kDoubleMachineEpsilon;
-        double scl_upper = std::pow(10.0,
-                               std::ceil(std::log10(std::fabs(all_initials[1])) + 1.0));
-        // Correct xi initial if out of range
-        if (all_initials[0] <= loc_lower || all_initials[0] >= loc_upper)
-            all_initials[0] = 0.5 * (loc_lower + loc_upper);
-        if (all_initials[1] <= scl_lower || all_initials[1] >= scl_upper)
-            all_initials[1] = 0.5 * (scl_lower + scl_upper);
-        if (all_initials[2] <= -10.0 || all_initials[2] >= 10.0) all_initials[2] = 0.0;
-        // C# 548: the full 3-parameter (xi, alpha, kappa) constraint triple.
-        initials = {all_initials[0], all_initials[1], all_initials[2]};
-        lowers = {loc_lower, scl_lower, -10.0};
-        uppers = {loc_upper, scl_upper, 10.0};
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
     }
 
     std::vector<double> mle(const std::vector<double>& sample) const {
@@ -345,6 +391,54 @@ class GeneralizedPareto : public UnivariateDistributionBase,
     }
 
    private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto all_initials = parameters_from_linear_moments(data::linear_moments(sample));
+        double min_data = *std::min_element(sample.begin(), sample.end());
+        // Location bound (upper = min_data so xi <= min_data)
+        if (all_initials[0] == 0.0) all_initials[0] = kDoubleMachineEpsilon;
+        double loc_lower = all_initials[0] -
+                           std::pow(10.0, std::ceil(std::log10(std::fabs(all_initials[0]))));
+        double loc_upper = min_data + kDoubleMachineEpsilon;
+        // Scale bounds
+        double scl_lower = kDoubleMachineEpsilon;
+        double scl_upper = std::pow(10.0,
+                               std::ceil(std::log10(std::fabs(all_initials[1])) + 1.0));
+        // Correct xi initial if out of range
+        if (all_initials[0] <= loc_lower || all_initials[0] >= loc_upper)
+            all_initials[0] = 0.5 * (loc_lower + loc_upper);
+        if (all_initials[1] <= scl_lower || all_initials[1] >= scl_upper)
+            all_initials[1] = 0.5 * (scl_lower + scl_upper);
+        if (all_initials[2] <= -10.0 || all_initials[2] >= 10.0) all_initials[2] = 0.0;
+        return {{all_initials[0], all_initials[1], all_initials[2]},
+                {loc_lower, scl_lower, -10.0},
+                {loc_upper, scl_upper, 10.0}};
+    }
+
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        const double normalization = distribution_numerics::initialization_scale(sample);
+        std::vector<double> normalized(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            normalized[i] = sample[i] / normalization;
+        auto initials = parameters_from_linear_moments(data::linear_moments(normalized));
+        initials[0] *= normalization;
+        initials[1] *= normalization;
+        std::vector<double> lowers(3), uppers(3);
+        const auto [minimum_it, maximum_it] =
+            std::minmax_element(sample.begin(), sample.end());
+        distribution_numerics::location_parameter_bounds(
+            initials[0], initials[1], *minimum_it, *maximum_it, true, lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        lowers[2] = -10.0;
+        uppers[2] = 10.0;
+        if (!std::isfinite(initials[2]) || initials[2] <= lowers[2] ||
+            initials[2] >= uppers[2])
+            initials[2] = 0.0;
+        return {initials, lowers, uppers};
+    }
+
     static bool validate(double location, double scale, double shape) {
         if (std::isnan(location) || std::isinf(location)) return false;
         if (std::isnan(scale) || std::isinf(scale) || scale <= 0.0) return false;

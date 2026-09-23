@@ -173,15 +173,40 @@ class Weibull : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = solve_mle(sample);
-        lowers.resize(2);
-        uppers.resize(2);
+        distribution_numerics::validate_sample(sample, 2);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto initials = legacy_constraint_solve_mle(sample);
+        std::vector<double> lowers(2), uppers(2);
         lowers[0] = kDoubleMachineEpsilon;
         uppers[0] = std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 2, true);
+        auto initials = solve_mle(sample);
+        std::vector<double> lowers(2), uppers(2);
+        distribution_numerics::positive_parameter_bounds(
+            initials[0], lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        return {initials, lowers, uppers};
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);
@@ -197,7 +222,8 @@ class Weibull : public UnivariateDistributionBase,
 
     // SolveMLE: iterative closed-form Weibull MLE
     // (Qiao & Tsokos 1994 / Math.NET)
-    std::vector<double> solve_mle(const std::vector<double>& samples) const {
+    std::vector<double> legacy_constraint_solve_mle(
+        const std::vector<double>& samples) const {
         double n = static_cast<double>(samples.size());
         if (n <= 1.0)
             throw std::invalid_argument("Weibull::solve_mle: need more than 1 data point");
@@ -227,6 +253,41 @@ class Weibull : public UnivariateDistributionBase,
         }
         b = std::pow(b / n, 1.0 / c);
 
+        return {b, c};
+    }
+
+    std::vector<double> solve_mle(const std::vector<double>& samples) const {
+        distribution_numerics::validate_sample(samples, 2, true);
+        const double n = static_cast<double>(samples.size());
+        const double scale = distribution_numerics::initialization_scale(samples);
+        std::vector<double> log_ratios(samples.size());
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            const double ratio = samples[i] / scale;
+            log_ratios[i] = ratio > 0.0 ? std::log(ratio)
+                                        : std::log(samples[i]) - std::log(scale);
+        }
+        double previous_c = static_cast<double>(std::numeric_limits<int>::min());
+        double c = 10.0;
+        while (std::fabs(c - previous_c) >= 0.0001) {
+            double s1 = 0.0;
+            double s2 = 0.0;
+            double s3 = 0.0;
+            for (double logarithm : log_ratios) {
+                const double weight = std::exp(c * logarithm);
+                s1 += logarithm;
+                s2 += weight;
+                s3 += weight * logarithm;
+            }
+            const double q_of_c = n * s2 / (n * s3 - s1 * s2);
+            previous_c = c;
+            c = (c + q_of_c) / 2.0;
+            if (!(c > 0.0) || !std::isfinite(c))
+                throw std::runtime_error(
+                    "Weibull initialization did not produce a finite positive shape");
+        }
+        double b = 0.0;
+        for (double logarithm : log_ratios) b += std::exp(c * logarithm);
+        b = scale * std::pow(b / n, 1.0 / c);
         return {b, c};
     }
 

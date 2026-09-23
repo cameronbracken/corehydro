@@ -2,7 +2,7 @@
 //
 // The Log-Normal distribution (base 10) with location µ (mean of log) and scale σ (std dev of log).
 // Logic mirrors the C# source method-for-method. The base is fixed at 10 (the C# default);
-// IBootstrappable, IStandardError, and the Monte Carlo confidence-interval helper are not ported.
+// IBootstrappable and the Monte Carlo confidence-interval helper are not ported.
 // B4 adds ParametersFromMoments/MomentsFromParameters for the Bulletin 17C GMM track.
 #pragma once
 #include <string>
@@ -14,9 +14,11 @@
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
+#include "corehydro/numerics/distributions/base/i_standard_error.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
+#include "corehydro/numerics/distributions/ln_normal.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/tools.hpp"
 
@@ -25,7 +27,8 @@ namespace corehydro::numerics::distributions {
 class LogNormal : public UnivariateDistributionBase,
                   public IEstimation,
                   public ILinearMomentEstimation,
-                  public IMaximumLikelihoodEstimation {
+                  public IMaximumLikelihoodEstimation,
+                  public IStandardError {
    public:
     // Default constructor: mu=3, sigma=0.5, base=10 (mirrors C# default)
     LogNormal() { set_parameters(3.0, 0.5); }
@@ -63,34 +66,26 @@ class LogNormal : public UnivariateDistributionBase,
 
     double median() const override { return inverse_cdf(0.5); }
 
-    // Mode = exp(mu / K) = exp(mu * ln(base)) = base^mu
     double mode() const override {
-        return std::exp(mu_ / k());
+        const double log_base = std::log(kBase);
+        return std::exp(mu_ * log_base - std::pow(sigma_ * log_base, 2.0));
     }
 
     // StandardDeviation = sqrt(exp((2*mu + a)*ln(base)) * (exp(a*ln(base)) - 1))
     // where a = sigma^2 * ln(base)
     double standard_deviation() const override {
         double lnB = std::log(kBase);
-        double a = sigma_ * sigma_ * lnB;
-        double log_pre = (2.0 * mu_ + a) * lnB;
-        double exp_a = std::exp(a * lnB);
-        double variance = std::exp(log_pre) * (exp_a - 1.0);
-        return std::sqrt(variance);
+        const double variance = std::pow(sigma_ * lnB, 2.0);
+        const double log_excess = variance > 0.5
+                                      ? variance + std::log1p(-std::exp(-variance))
+                                      : std::log(std::expm1(variance));
+        return std::exp(mu_ * lnB + 0.5 * variance + 0.5 * log_excess);
     }
 
     double skewness() const override {
         double lnB = std::log(kBase);
-        double a = sigma_ * sigma_ * lnB;
-        double mu1 = (mu_ + 0.5 * a) * lnB;
-        double mu2 = (2.0 * mu_ + 2.0 * a) * lnB;
-        double mu3 = (3.0 * mu_ + 4.5 * a) * lnB;
-        double m1 = std::exp(mu1);
-        double m2 = std::exp(mu2);
-        double m3 = std::exp(mu3);
-        double third_cm = m3 - 3.0 * m2 * m1 + 2.0 * m1 * m1 * m1;
-        double sd = standard_deviation();
-        return third_cm / (sd * sd * sd);
+        const double variance = std::pow(sigma_ * lnB, 2.0);
+        return (std::exp(variance) + 2.0) * std::sqrt(std::expm1(variance));
     }
 
     double kurtosis() const override {
@@ -167,6 +162,7 @@ class LogNormal : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4, true);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(indirect_mom(sample));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -181,10 +177,8 @@ class LogNormal : public UnivariateDistributionBase,
         std::vector<double> log_sample;
         log_sample.reserve(sample.size());
         double lnB = std::log(kBase);
-        for (double v : sample) {
-            double x = (v > 0.0) ? v : 0.1;
-            log_sample.push_back(std::log(x) / lnB);
-        }
+        distribution_numerics::validate_sample(sample, 4, true);
+        for (double v : sample) log_sample.push_back(std::log(v) / lnB);
         return data::product_moments(log_sample);  // returns {mean, sd, skew, kurtosis}
     }
 
@@ -193,23 +187,17 @@ class LogNormal : public UnivariateDistributionBase,
         std::vector<double> log_sample;
         log_sample.reserve(sample.size());
         double lnB = std::log(kBase);
-        for (double v : sample) {
-            double x = (v > 0.0) ? v : 0.1;
-            log_sample.push_back(std::log(x) / lnB);
-        }
+        distribution_numerics::validate_sample(sample, 4, true);
+        for (double v : sample) log_sample.push_back(std::log(v) / lnB);
         return data::linear_moments(log_sample);  // returns {L1, L2, T3, T4}
     }
 
     // ParametersFromMoments (C# LogNormal.cs:408): real-space {mean, sd} -> base-10
     // log-space {mu, sigma}. C# Math.Log(x, Base) = ln(x)/ln(Base) with Base = 10.
     std::vector<double> parameters_from_moments(const std::vector<double>& moments) const {
-        double mean = moments[0];
-        double standard_deviation = moments[1];
-        double lnB = std::log(kBase);
-        double variance = standard_deviation * standard_deviation;
-        double mu = std::log(mean * mean / std::sqrt(variance + mean * mean)) / lnB;
-        double sigma = std::sqrt(std::log(1.0 + variance / (mean * mean)) / lnB);
-        return {mu, sigma};
+        const auto natural = LnNormal::direct_mom(moments[0], moments[1]);
+        const double lnB = std::log(kBase);
+        return {natural[0] / lnB, natural[1] / lnB};
     }
 
     // MomentsFromParameters (C# LogNormal.cs:419): {Mean, StandardDeviation, Skewness,
@@ -245,20 +233,13 @@ class LogNormal : public UnivariateDistributionBase,
     void get_parameter_constraints(const std::vector<double>& sample, std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        auto mom = indirect_mom(sample);
-        initials = {mom[0], mom[1]};
-        lowers.resize(2);
-        uppers.resize(2);
-        // Bounds of mu
-        double real = std::exp(initials[0] / k());
-        lowers[0] = kDoubleMachineEpsilon;
-        double up0 = std::ceil(std::log(std::pow(10.0, std::ceil(std::log10(real) + 1.0))) / std::log(kBase));
-        uppers[0] = std::isnan(up0) ? 5.0 : up0;
-        // Bounds of sigma
-        double real2 = std::exp(initials[1] / k());
-        lowers[1] = kDoubleMachineEpsilon;
-        double up1 = std::ceil(std::log(std::pow(10.0, std::ceil(std::log10(real2) + 1.0))) / std::log(kBase));
-        uppers[1] = std::isnan(up1) ? 4.0 : up1;
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
     }
 
     std::vector<double> mle(const std::vector<double>& sample) const {
@@ -274,7 +255,87 @@ class LogNormal : public UnivariateDistributionBase,
         return solver.best_parameters();
     }
 
+    math::linalg::Matrix2D parameter_covariance(
+        int sample_size, ParameterEstimationMethod method) const override {
+        distribution_numerics::validate_sample_size(sample_size);
+        if (method != ParameterEstimationMethod::MethodOfMoments &&
+            method != ParameterEstimationMethod::MaximumLikelihood)
+            throw std::logic_error(
+                "LogNormal covariance is implemented only for moments and maximum likelihood");
+        if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
+        const double scaled = sigma_ / std::sqrt(static_cast<double>(sample_size));
+        const double variance = scaled * scaled;
+        return {{variance, 0.0}, {0.0, variance / 2.0}};
+    }
+
+    double quantile_variance(double probability, int sample_size,
+                             ParameterEstimationMethod method) const override {
+        distribution_numerics::validate_probability(probability);
+        distribution_numerics::validate_sample_size(sample_size);
+        if (method != ParameterEstimationMethod::MethodOfMoments &&
+            method != ParameterEstimationMethod::MaximumLikelihood)
+            throw std::logic_error(
+                "LogNormal quantile variance is implemented only for moments and maximum likelihood");
+        if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
+        const double z = Normal::standard_z(probability);
+        const double log_base = std::log(kBase);
+        const double log_quantile = (mu_ + sigma_ * z) * log_base;
+        const double log_standard_error =
+            log_quantile + std::log(log_base) + std::log(sigma_) -
+            0.5 * std::log(static_cast<double>(sample_size));
+        return std::exp(2.0 * log_standard_error + std::log1p(0.5 * z * z));
+    }
+
+    std::vector<double> quantile_gradient(double probability) const override {
+        distribution_numerics::validate_probability(probability);
+        if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
+        const double z = Normal::standard_z(probability);
+        const double factor = inverse_cdf(probability) * std::log(kBase);
+        return {factor, factor * z};
+    }
+
+    math::linalg::Matrix2D quantile_jacobian(
+        const std::vector<double>& probabilities, double& determinant) const override {
+        return distribution_numerics::quantile_jacobian(
+            *this, number_of_parameters(), probabilities, determinant);
+    }
+
    private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        std::vector<double> transformed(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            transformed[i] = std::log(sample[i] > 0.0 ? sample[i] : 0.1) / std::log(kBase);
+        const auto moments = data::product_moments(transformed);
+        std::vector<double> initials = {moments[0], moments[1]};
+        std::vector<double> lowers(2), uppers(2);
+        const double real_location = std::exp(initials[0] / k());
+        if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
+        lowers[0] = std::floor(
+            std::log(std::pow(10.0, std::floor(std::log10(real_location)) - 1.0)) /
+            std::log(kBase));
+        uppers[0] = std::ceil(
+            std::log(std::pow(10.0, std::ceil(std::log10(real_location)) + 1.0)) /
+            std::log(kBase));
+        const double real_scale = std::exp(initials[1] / k());
+        lowers[1] = kDoubleMachineEpsilon;
+        uppers[1] = std::ceil(
+            std::log(std::pow(10.0, std::ceil(std::log10(real_scale) + 1.0))) /
+            std::log(kBase));
+        if (std::isnan(uppers[1])) uppers[1] = 4.0;
+        return {initials, lowers, uppers};
+    }
+
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 4, true);
+        std::vector<double> transformed(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            transformed[i] = std::log(sample[i]) / std::log(kBase);
+        Normal normal;
+        return normal.robust_parameter_constraints(transformed);
+    }
+
     static bool validate(double mu, double sigma) {
         if (std::isnan(mu) || std::isinf(mu)) return false;
         if (std::isnan(sigma) || std::isinf(sigma) || sigma <= 0.0) return false;

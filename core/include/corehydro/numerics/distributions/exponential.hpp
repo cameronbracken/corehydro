@@ -115,6 +115,7 @@ class Exponential : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(parameters_from_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -145,12 +146,25 @@ class Exponential : public UnivariateDistributionBase,
     void get_parameter_constraints(const std::vector<double>& sample, std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
         auto moments = data::product_moments(sample);
         double N = static_cast<double>(sample.size());
         double min_data = *std::min_element(sample.begin(), sample.end());
-        initials = {(N * min_data - moments[0]) / (N - 1.0), N * (moments[0] - min_data) / (N - 1.0)};
-        lowers.assign(2, 0.0);
-        uppers.assign(2, 0.0);
+        std::vector<double> initials = {
+            (N * min_data - moments[0]) / (N - 1.0),
+            N * (moments[0] - min_data) / (N - 1.0)};
+        std::vector<double> lowers(2), uppers(2);
         if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
         lowers[0] = initials[0] - std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0]))));
         uppers[0] = min_data + kDoubleMachineEpsilon;
@@ -160,8 +174,33 @@ class Exponential : public UnivariateDistributionBase,
             initials[0] = 0.5 * (lowers[0] + uppers[0]);
         if (initials[1] <= lowers[1] || initials[1] >= uppers[1])
             initials[1] = 0.5 * (lowers[1] + uppers[1]);
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        const double normalization = distribution_numerics::initialization_scale(sample);
+        std::vector<double> normalized(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            normalized[i] = sample[i] / normalization;
+        const auto moments = data::product_moments(normalized);
+        const auto [minimum_it, maximum_it] =
+            std::minmax_element(sample.begin(), sample.end());
+        const double unit_minimum = *minimum_it / normalization;
+        const double n = static_cast<double>(sample.size());
+        std::vector<double> initials = {
+            (unit_minimum - (moments[0] - unit_minimum) / (n - 1.0)) * normalization,
+            (n / (n - 1.0)) * (moments[0] - unit_minimum) * normalization};
+        std::vector<double> lowers(2), uppers(2);
+        distribution_numerics::location_parameter_bounds(
+            initials[0], initials[1], *minimum_it, *maximum_it, true,
+            lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        return {initials, lowers, uppers};
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);

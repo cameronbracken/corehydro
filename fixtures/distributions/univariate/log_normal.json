@@ -16,7 +16,7 @@
         { "method": "quantile", "args": [0.5], "expected": 1000.0, "mode": "abs", "tol": 1e-6 },
         { "method": "mean",     "args": [], "expected": 1940.0956263817814, "mode": "abs", "tol": 1e-6 },
         { "method": "median",   "args": [], "expected": 1000.0, "mode": "abs", "tol": 1e-6 },
-        { "method": "mode",     "args": [], "expected": 1000.0, "mode": "abs", "tol": 1e-6 },
+        { "method": "mode",     "args": [], "expected": 265.67685816501944, "mode": "abs", "tol": 1e-12 },
         { "method": "sd",       "args": [], "expected": 3225.4467824988237, "mode": "abs", "tol": 1e-6 },
         { "method": "skewness", "args": [], "expected": 9.582714166756007, "mode": "abs", "tol": 1e-6 },
         { "method": "kurtosis", "args": [], "expected": 346.87182013531077, "mode": "abs", "tol": 1e-3 },

@@ -16,7 +16,7 @@
         { "method": "median",   "args": [],     "expected": 103.66512,          "mode": "abs", "tol": 1e-4 },
         { "method": "mode",     "args": [],     "expected": 100,                "mode": "abs", "tol": 1e-9 },
         { "method": "sd",       "args": [],     "expected": 12.825498,          "mode": "abs", "tol": 1e-5 },
-        { "method": "skewness", "args": [],     "expected": 1.1396,             "mode": "abs", "tol": 1e-9 },
+        { "method": "skewness", "args": [],     "expected": 1.1395470994046486, "mode": "abs", "tol": 1e-12 },
         { "method": "kurtosis", "args": [],     "expected": 5.4,                "mode": "abs", "tol": 1e-9 },
         { "method": "minimum",  "args": [],     "expected": "-inf",             "mode": "equal" },
         { "method": "maximum",  "args": [],     "expected": "inf",              "mode": "equal" },
@@ -35,21 +35,21 @@
       "construct": { "params": [100, 10, 0.9] },
       "assertions": [
         { "method": "mean",   "args": [], "expected": 100.42482,   "mode": "abs", "tol": 1e-4 },
-        { "method": "median", "args": [], "expected": 104.3419519, "mode": "abs", "tol": 1e-4 }
+        { "method": "median", "args": [], "expected": 103.12196423496414, "mode": "abs", "tol": 1e-12 }
       ]
     },
     {
       "name": "shape_1_bounded",
       "construct": { "params": [100, 10, 1] },
       "assertions": [
-        { "method": "mode",     "args": [],    "expected": 95,                   "mode": "abs", "tol": 1e-9 },
+        { "method": "mode",     "args": [],    "expected": 110,                  "mode": "abs", "tol": 1e-9 },
         { "method": "maximum",  "args": [],    "expected": 110,                  "mode": "abs", "tol": 1e-9 },
         { "method": "pdf",      "args": [0],   "expected": 1.67017007902456e-06, "mode": "abs", "tol": 1e-10 },
         { "method": "cdf",      "args": [100], "expected": 0.367879,             "mode": "abs", "tol": 1e-5 },
         { "method": "cdf",      "args": [200], "expected": 1,                    "mode": "equal" },
-        { "method": "sd",       "args": [],    "expected": "nan",                "mode": "equal" },
-        { "method": "skewness", "args": [],    "expected": "nan",                "mode": "equal" },
-        { "method": "kurtosis", "args": [],    "expected": "nan",                "mode": "equal" }
+        { "method": "sd",       "args": [],    "expected": 10,                   "mode": "abs", "tol": 1e-12 },
+        { "method": "skewness", "args": [],    "expected": -2,                   "mode": "equal" },
+        { "method": "kurtosis", "args": [],    "expected": 9,                    "mode": "equal" }
       ]
     },
     {
@@ -77,7 +77,7 @@
       "name": "mean_undefined_large_shape",
       "construct": { "params": [100, 10, 10] },
       "assertions": [
-        { "method": "mean", "args": [], "expected": "nan", "mode": "equal" }
+        { "method": "mean", "args": [], "expected": -3628699.0000000028, "mode": "abs", "tol": 1e-6 }
       ]
     },
     {

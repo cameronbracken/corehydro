@@ -115,6 +115,7 @@ class Logistic : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(parameters_from_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MaximumLikelihood) {
@@ -133,9 +134,20 @@ class Logistic : public UnivariateDistributionBase,
     void get_parameter_constraints(const std::vector<double>& sample, std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = parameters_from_moments(data::product_moments(sample));
-        lowers.resize(2);
-        uppers.resize(2);
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto initials = parameters_from_moments(data::product_moments(sample));
+        std::vector<double> lowers(2), uppers(2);
         // bounds for location
         double xi0 = initials[0] != 0.0 ? initials[0] : kDoubleMachineEpsilon;
         lowers[0] = -std::pow(10.0, std::ceil(std::log10(std::fabs(xi0)) + 1.0));
@@ -143,8 +155,21 @@ class Logistic : public UnivariateDistributionBase,
         // bounds for scale
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        Normal normal;
+        auto constraints = normal.robust_parameter_constraints(sample);
+        const double correction = std::sqrt(3.0) / kPi;
+        std::get<0>(constraints)[1] *= correction;
+        std::get<1>(constraints)[1] *= correction;
+        std::get<2>(constraints)[1] *= correction;
+        return constraints;
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);

@@ -165,6 +165,9 @@ void test_workhorse_family_log_tails() {
     LogNormal lognormal(-2.0, 0.5);
     CHECK_TRUE(std::isfinite(lognormal.log_pdf(1e-300)));
     CHECK_NEAR(lognormal.cdf(lognormal.inverse_cdf(p)), p, 2e-15);
+    CHECK_TRUE(lognormal.mode() < lognormal.median());
+    CHECK_TRUE(lognormal.quantile_variance(
+                   p, 100, ParameterEstimationMethod::MaximumLikelihood) > 0.0);
 
     LnNormal lnnormal(1e-200, 2e-200);
     CHECK_EQ(lnnormal.get_parameters()[0], 1e-200);
@@ -210,6 +213,49 @@ void test_workhorse_family_log_tails() {
     CHECK_TRUE(lowers[0] <= initials[0] && initials[0] <= uppers[0]);
     CHECK_THROWS(LogPearsonTypeIII().estimate(
         {0.1, 0.2, 0.3, 0.0}, ParameterEstimationMethod::MethodOfMoments));
+
+    LogNormal().get_parameter_constraints(
+        {0.08, 0.12, 0.25, 0.31, 0.45, 0.6}, initials, lowers, uppers);
+    CHECK_TRUE(initials[0] < 0.0);
+    CHECK_TRUE(lowers[0] <= initials[0] && initials[0] <= uppers[0]);
+    Exponential().get_parameter_constraints(
+        {-1e300, -8e299, -4e299, -1e299}, initials, lowers, uppers);
+    CHECK_TRUE(std::isfinite(initials[0]) && std::isfinite(initials[1]));
+    CHECK_TRUE(lowers[0] <= initials[0] && initials[0] <= uppers[0]);
+    GammaDistribution().get_parameter_constraints(
+        {1e-300, 2e-300, 4e-300, 8e-300}, initials, lowers, uppers);
+    CHECK_TRUE(initials[0] > 0.0 && initials[1] > 0.0);
+    Gumbel().get_parameter_constraints(
+        {-1e300, -8e299, -4e299, -1e299}, initials, lowers, uppers);
+    CHECK_TRUE(std::isfinite(initials[0]) && std::isfinite(initials[1]));
+    Logistic().get_parameter_constraints(
+        {-1e300, -8e299, -4e299, -1e299}, initials, lowers, uppers);
+    CHECK_TRUE(std::isfinite(initials[0]) && std::isfinite(initials[1]));
+    LnNormal().get_parameter_constraints(
+        {1e-300, 2e-300, 4e-300, 8e-300}, initials, lowers, uppers);
+    CHECK_TRUE(initials[0] > 0.0 && initials[1] > 0.0);
+    Weibull().get_parameter_constraints(
+        {1e-300, 2e-300, 4e-300, 8e-300}, initials, lowers, uppers);
+    CHECK_TRUE(initials[0] > 0.0 && initials[1] > 0.0);
+
+    for (const auto* distribution : std::vector<const IStandardError*>{
+             static_cast<const IStandardError*>(&gev),
+             static_cast<const IStandardError*>(&glo),
+             static_cast<const IStandardError*>(&gpa)}) {
+        const auto covariance = distribution->parameter_covariance(
+            100, ParameterEstimationMethod::MaximumLikelihood);
+        CHECK_EQ(covariance.size(), 3U);
+        for (std::size_t i = 0; i < covariance.size(); ++i) {
+            CHECK_TRUE(covariance[i][i] > 0.0 && std::isfinite(covariance[i][i]));
+            for (std::size_t j = 0; j < covariance.size(); ++j)
+                CHECK_NEAR(covariance[i][j], covariance[j][i], 0.0);
+        }
+        CHECK_TRUE(distribution->quantile_variance(
+                       p, 100, ParameterEstimationMethod::MaximumLikelihood) > 0.0);
+        const auto gradient = distribution->quantile_gradient(p);
+        CHECK_EQ(gradient.size(), 3U);
+        for (double value : gradient) CHECK_TRUE(std::isfinite(value));
+    }
 
     KappaFour kappa_gumbel(0.0, 1.0, 0.0, 0.0);
     CHECK_NEAR(kappa_gumbel.inverse_cdf(0.5), 0.366512920581664327, 2e-14);

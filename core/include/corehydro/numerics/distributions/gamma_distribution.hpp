@@ -154,6 +154,7 @@ class GammaDistribution : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4, true);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(parameters_from_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -231,15 +232,45 @@ class GammaDistribution : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = parameters_from_moments(data::product_moments(sample));
-        lowers.resize(2);
-        uppers.resize(2);
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto initials = parameters_from_moments(data::product_moments(sample));
+        std::vector<double> lowers(2), uppers(2);
         lowers[0] = kDoubleMachineEpsilon;
         uppers[0] = std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 4, true);
+        const double normalization = distribution_numerics::initialization_scale(sample);
+        std::vector<double> normalized(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            normalized[i] = sample[i] / normalization;
+        auto initials = parameters_from_moments(data::product_moments(normalized));
+        initials[0] *= normalization;
+        std::vector<double> lowers(2), uppers(2);
+        distribution_numerics::positive_parameter_bounds(
+            initials[0], lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        return {initials, lowers, uppers};
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);
