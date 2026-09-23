@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/DEMCzs.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/DEMCzs.cs @ 7e8e8d1
 //
 // Differential Evolution Markov Chain with snooker update (DE-MCzs): DEMCz (see demcz.hpp) plus
 // a `SnookerThreshold`-probability "snooker update" move that, once the chain is past a short

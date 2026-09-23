@@ -69,6 +69,7 @@ struct MCMCRunSettings {
     std::optional<int> steps;            // HMC
     std::optional<int> max_tree_depth;   // NUTS
     std::optional<bool> adapt_mass_matrix;  // NUTS
+    std::optional<double> target_acceptance_rate;  // NUTS
     // ARWMH.
     std::optional<double> scale;
     std::optional<double> beta;
@@ -135,6 +136,8 @@ inline std::unique_ptr<MCMCSampler> build_sampler(const std::string& sampler_typ
                                            s.step_size.value_or(0.1), s.max_tree_depth.value_or(10),
                                            callbacks.gradient);
         if (s.adapt_mass_matrix) nuts->adapt_mass_matrix = *s.adapt_mass_matrix;
+        if (s.target_acceptance_rate)
+            nuts->set_target_acceptance_rate(*s.target_acceptance_rate);
         sampler = std::move(nuts);
     } else if (sampler_type == "ARWMH") {
         auto arwmh = std::make_unique<ARWMH>(std::move(priors), std::move(log_likelihood));
@@ -220,7 +223,7 @@ inline MCMCRunOutput collect_run(const MCMCSampler& sampler) {
         }
     }
 
-    o.acceptance_rates = sampler.acceptance_rates();
+    o.acceptance_rates = results.acceptance_rates;
     o.mean_log_likelihood = sampler.mean_log_likelihood();
     o.map_values = results.map.values;
     o.map_fitness = results.map.fitness;

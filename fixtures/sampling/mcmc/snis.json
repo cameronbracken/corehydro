@@ -166,7 +166,7 @@
             99995,
             0
           ],
-          "expected": 12675.08285000947,
+          "expected": 12650.893418409985,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -178,7 +178,7 @@
             99995,
             1
           ],
-          "expected": 4652.880631944164,
+          "expected": 4657.80495611061,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -201,7 +201,7 @@
             99996,
             0
           ],
-          "expected": 12666.985098816982,
+          "expected": 12667.12672276663,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -213,7 +213,7 @@
             99996,
             1
           ],
-          "expected": 4651.11282756423,
+          "expected": 4650.765927283253,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -236,7 +236,7 @@
             99997,
             0
           ],
-          "expected": 12675.28071073555,
+          "expected": 12675.421713798742,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -248,7 +248,7 @@
             99997,
             1
           ],
-          "expected": 4655.864716774306,
+          "expected": 4655.517180731823,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -271,7 +271,7 @@
             99998,
             0
           ],
-          "expected": 12671.021055876952,
+          "expected": 12671.162377754721,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -283,7 +283,7 @@
             99998,
             1
           ],
-          "expected": 4653.153237403519,
+          "expected": 4652.806078571252,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -306,7 +306,7 @@
             99999,
             0
           ],
-          "expected": 12670.451611958388,
+          "expected": 12670.59297645628,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -318,7 +318,7 @@
             99999,
             1
           ],
-          "expected": 4659.147334781984,
+          "expected": 4658.799037848708,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"

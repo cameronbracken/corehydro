@@ -172,11 +172,11 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   future MCMC-sampler port (ARWMH/DEMCz/DEMCzs/HMC/NUTS/Gibbs/SNIS) doesn't rediscover this the
   hard way when authoring a `Randomize`-initialized fixture case with a degenerate proposal.
 
-## CONSISTENCY — SNIS sorts its resampling list by `Fitness`, not the `Weight` the surrounding comment/CDF describe; tied `-Infinity` fitness makes the sort order itself unstable across runtimes
+## PARTIALLY RESOLVED — SNIS sorts resampling by `Fitness`, not `Weight`; v2.2.0 makes tied fitness stable
 
 - **Where:** `Numerics/Sampling/MCMC/SNIS.cs`, `Sample()`:
-  `MarkovChains[0].Sort((x, y) => x.Fitness.CompareTo(y.Fitness));` and the CDF-construction loop
-  immediately below it.
+  `MarkovChains[0] = MarkovChains[0].OrderBy(x => x.Fitness).ToList();` and the CDF construction
+  loop immediately below it. Before v2.2.0 this was the unstable `List<T>.Sort` equivalent.
 - **What:** two related issues at the same call site.
   1. **Sort key mismatch.** The line directly above the sort reads `// Sort list in ascending
      order of posterior weights`, and the very next lines build a CDF by accumulating
@@ -193,14 +193,15 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
      regardless of which key produced the ordering), but the specific `Output[0][i]` a given
      `rndOut[i]` plotting position resolves to differs from what sorting by `Weight` would
      produce.
-  2. **Sort-tie instability.** `List<T>.Sort` is .NET's unstable introspective sort. Any model
+  2. **Sort-tie instability (resolved in v2.2.0).** Before v2.2.0, `List<T>.Sort` was an
+     unstable introspective sort. Any model
      with a non-trivial fraction of `-Infinity`-fitness draws (common for a naive/wide-prior SNIS
      configuration, since `LogLikelihood` easily underflows for implausible parameter draws) has
      MANY tied elements at the bottom of the sort. An unstable sort is free to place those tied
      elements in ANY relative order -- which specific `-Infinity` draw lands at output index 0 vs.
      1 vs. ... is not determined by the algorithm's contract, only by the sort implementation's
      internal pivot/partition choices.
-- **Evidence (reproduced against the real C# library):** the `fixtures/sampling/mcmc/snis.json`
+- **Historical evidence (reproduced against the pre-v2.2.0 C# library):** the `fixtures/sampling/mcmc/snis.json`
   fixture's first authoring attempt anchored `chain_value` digest assertions to
   `MarkovChains[0]` indices `[0, 1, 2, 3, 4]` (the natural "first few" choice, matching every
   other MCMC fixture's convention). Every one of those `chain_value` assertions FAILED to
@@ -214,25 +215,18 @@ Each entry: what, where, evidence, how the port handled it, suggested fix.
   cleanly (`normal_rstan` chain companions to ~1e-8 relative via the MAP/DE/Hessian path, per the
   usual P3.5 tolerance policy; `normal_short_exact`'s naive-Monte-Carlo companions to ~1e-15
   relative).
-- **Port handling:** both aspects mirrored faithfully, not fixed -- `snis.hpp`'s `sample()` sorts
+- **Port handling:** the remaining sort-key mismatch is mirrored faithfully: `snis.hpp`'s
+  `sample()` sorts
   by `.fitness` (not `.weight`), exactly matching the C# comparator's actual (not commented)
-  behavior, using `std::stable_sort` (this port's usual convention for reproducing an unstable C#
-  `List<T>.Sort`'s comparator -- see `mcmc_sampler.hpp`'s own `stable_sort` note for the same
-  precedent in `InitializeChains()`). `stable_sort` does NOT make the two languages' outputs
-  agree on tied-element ordering (a stable sort's tie-breaking is "preserve original order",
-  which is only meaningful if BOTH languages process elements in the same original order AND use
-  a stable sort -- true for C++ here, false for C#'s `List<T>.Sort`). `fixtures/README.md`'s
-  SNIS tolerance-policy section documents the resulting draw-index hazard for future fixture
-  authors.
-- **Suggested C# fix:** for (1), either fix the comment to describe what the code does (sort by
+  behavior, using `std::stable_sort`. Numerics v2.2.0 replaced `List<T>.Sort` with stable
+  `OrderBy(x => x.Fitness)`, so both languages now preserve original draw order within tied
+  fitness runs. The prior cross-runtime draw-index hazard is closed.
+- **Suggested C# fix:** for the remaining sort-key mismatch, either fix the comment to describe
+  what the code does (sort by
   `Fitness`) or change the comparator to `x.Weight.CompareTo(y.Weight)` to match the comment and
   the CDF loop's own variable name -- these are NOT equivalent when an importance distribution is
   supplied, so this is a real behavioral choice, not just a comment fix, and should be resolved
-  with the library's intent for how the resampled `Output` list should be ordered/weighted. For
-  (2), switch to a stable sort (`OrderBy(x => x.Fitness).ToList()` or an explicit stable
-  merge-sort) if bit-reproducible resampling across runs/platforms is a design goal; otherwise
-  document that `Output`'s specific draw-to-plotting-position mapping is order-nondeterministic
-  whenever tied fitness values occur.
+  with the library's intent for how the resampled `Output` list should be ordered and weighted.
 
 ## CONSISTENCY — `NextDoubles(length, dimension)` draws each column from its own fresh sub-`MersenneTwister`, not the caller's stream
 

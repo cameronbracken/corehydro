@@ -151,6 +151,7 @@ inline chmcmc::MCMCRunSettings mcmc_settings(const JsonValue& o) {
     read_int("steps", s.steps);
     read_int("max_tree_depth", s.max_tree_depth);
     if (o.contains("adapt_mass_matrix")) s.adapt_mass_matrix = o.at("adapt_mass_matrix").as_bool();
+    read_double("target_acceptance_rate", s.target_acceptance_rate);
     read_double("scale", s.scale);
     read_double("beta", s.beta);
     read_double("jump", s.jump);

@@ -2079,8 +2079,13 @@ static MCMCSampler BuildAndSampleCallbackMcmc(JsonElement options, LogLikelihood
         if (Has("snooker_threshold")) demczsC.SnookerThreshold = Num("snooker_threshold", 0);
         if (Has("noise")) demczsC.Noise = Num("noise", 0);
     }
-    if (sampler is NUTS nutsC && Has("adapt_mass_matrix"))
-        nutsC.AdaptMassMatrix = options.GetProperty("adapt_mass_matrix").GetBoolean();
+    if (sampler is NUTS nutsC)
+    {
+        if (Has("adapt_mass_matrix"))
+            nutsC.AdaptMassMatrix = options.GetProperty("adapt_mass_matrix").GetBoolean();
+        if (Has("target_acceptance_rate"))
+            nutsC.TargetAcceptanceRate = Num("target_acceptance_rate", 0.8);
+    }
 
     sampler.Sample();
     return sampler;
@@ -2101,7 +2106,7 @@ static (double[] values, string[] names, int[] dims) FlattenCallbackMcmc(MCMCSam
     }
 
     Push("map_fitness", results.MAP.Fitness);
-    PushEach("acceptance_rate", j => sampler.AcceptanceRates[j], chains);
+    PushEach("acceptance_rate", j => results.AcceptanceRates[j], chains);
     PushEach("map", j => results.MAP.Values[j], p);
     PushEach("posterior_mean", j => results.ParameterResults[j].SummaryStatistics.Mean, p);
     PushEach("posterior_sd", j => results.ParameterResults[j].SummaryStatistics.StandardDeviation, p);
@@ -2910,6 +2915,8 @@ static MCMCSampler BuildAndSampleMcmc(string samplerTarget, JsonElement construc
         if (sampler is NUTS nuts)
         {
             if (settings.TryGetProperty("adapt_mass_matrix", out var amm)) nuts.AdaptMassMatrix = amm.GetBoolean();
+            if (settings.TryGetProperty("target_acceptance_rate", out var target))
+                nuts.TargetAcceptanceRate = target.GetDouble();
         }
     }
 
@@ -2931,7 +2938,7 @@ static double DispatchMcmc(MCMCSampler sampler, MCMCResults results, string m, J
         case "chain_fitness": return sampler.MarkovChains[Idx(0)][Idx(1)].Fitness;
         case "map_value": return results.MAP.Values[Idx(0)];
         case "map_fitness": return results.MAP.Fitness;
-        case "acceptance_rate": return sampler.AcceptanceRates[Idx(0)];
+        case "acceptance_rate": return results.AcceptanceRates[Idx(0)];
         case "mean_log_likelihood": return sampler.MeanLogLikelihood[Idx(0)];
         case "rhat": return results.ParameterResults[Idx(0)].SummaryStatistics.Rhat;
         case "ess": return results.ParameterResults[Idx(0)].SummaryStatistics.ESS;

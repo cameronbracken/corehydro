@@ -2504,6 +2504,7 @@ static mcmc::MCMCRunSettings read_settings(const json& settings) {
     read_int("steps", s.steps);
     read_int("max_tree_depth", s.max_tree_depth);
     if (settings.contains("adapt_mass_matrix")) s.adapt_mass_matrix = settings["adapt_mass_matrix"].get<bool>();
+    read_double("target_acceptance_rate", s.target_acceptance_rate);
     read_double("scale", s.scale);
     read_double("beta", s.beta);
     read_double("jump", s.jump);
@@ -2544,7 +2545,7 @@ static double dispatch_mcmc(const mcmc::MCMCSampler& sampler, const mcmc::MCMCRe
     if (m == "chain_fitness") return sampler.markov_chains()[idx(0)][idx(1)].fitness;
     if (m == "map_value") return results.map.values[idx(0)];
     if (m == "map_fitness") return results.map.fitness;
-    if (m == "acceptance_rate") return sampler.acceptance_rates()[idx(0)];
+    if (m == "acceptance_rate") return results.acceptance_rates[idx(0)];
     if (m == "mean_log_likelihood") return sampler.mean_log_likelihood()[idx(0)];
     if (m == "rhat") return results.parameter_results[idx(0)].summary_statistics.rhat;
     if (m == "ess") return results.parameter_results[idx(0)].summary_statistics.ess;

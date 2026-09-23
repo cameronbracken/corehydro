@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/SNIS.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/SNIS.cs @ 7e8e8d1
 //
 // Self-Normalizing Importance Sampling (SNIS): not a Markov chain at all -- every draw is
 // independent, either straight from the priors (naive Monte Carlo) or from an optional
@@ -38,10 +38,8 @@
 // describes and the very next lines' CDF construction actually consume). For naive Monte
 // Carlo (no importance distribution) `Weight` and `Fitness` coincide, so this is
 // unobservable; WITH importance sampling they diverge (`Weight = Fitness - mvn.LogPDF(...)`),
-// so the two orderings are genuinely different sorts. `std::stable_sort` is used for the
-// comparator itself (an unstable `List<T>.Sort` in C#, matching every other MCMCSampler sort
-// in this port -- see mcmc_sampler.hpp's own stable_sort note); ties are extremely unlikely
-// for a continuous log-likelihood.
+// so the two orderings are genuinely different sorts. `std::stable_sort` matches v2.2.0's
+// `OrderBy(x => x.Fitness)`, so tied fitness values retain seeded draw order across runtimes.
 #pragma once
 #include <algorithm>
 #include <cmath>

@@ -859,27 +859,27 @@
           "args": [
             0
           ],
-          "expected": 12619.251346321003,
+          "expected": 15152.579886079518,
           "mode": "rel",
-          "tol": 1e-09,
-          "source": "curated via oracle_emitter --dump"
+          "tol": 1e-07,
+          "source": "Numerics v2.2.0 oracle; output-phase recursive-tree drift is 4.5e-8 relative on this platform"
         },
         {
           "method": "map_value",
           "args": [
             1
           ],
-          "expected": 4598.134394112171,
+          "expected": 5677.191270920194,
           "mode": "rel",
-          "tol": 1e-09,
-          "source": "curated via oracle_emitter --dump"
+          "tol": 1e-07,
+          "source": "Numerics v2.2.0 oracle; output-phase recursive-tree drift is 6.4e-8 relative on this platform"
         },
         {
           "method": "map_fitness",
-          "expected": -473.5695762447697,
+          "expected": -479.81146279116,
           "mode": "rel",
-          "tol": 1e-09,
-          "source": "curated via oracle_emitter --dump"
+          "tol": 1e-07,
+          "source": "Numerics v2.2.0 oracle; output-phase recursive-tree drift is 4.4e-9 relative on this platform"
         },
         {
           "method": "mean_log_likelihood",
@@ -896,7 +896,7 @@
           "args": [
             0
           ],
-          "expected": 1.02183789320005,
+          "expected": 2.358857251364805,
           "mode": "rel",
           "tol": 0.0001,
           "source": "curated via oracle_emitter --dump (loosened from the digest's 1e-9: NUTS's recursive per-depth RNG draws amplify sub-ULP noise faster than any other sampler over this case's mandatory >=100-iteration window -- measured ~3.3e-5 relative at worst; see fixtures/README.md's NUTS finding)"
@@ -906,7 +906,7 @@
           "args": [
             1
           ],
-          "expected": 1.0058990517046709,
+          "expected": 17.21044900097892,
           "mode": "rel",
           "tol": 0.0001,
           "source": "curated via oracle_emitter --dump (loosened from the digest's 1e-9: NUTS's recursive per-depth RNG draws amplify sub-ULP noise faster than any other sampler over this case's mandatory >=100-iteration window -- measured ~3.3e-5 relative at worst; see fixtures/README.md's NUTS finding)"
@@ -916,52 +916,58 @@
           "args": [
             0
           ],
-          "expected": 26.804052729157135,
-          "mode": "rel",
-          "tol": 0.0001,
-          "source": "curated via oracle_emitter --dump (loosened from the digest's 1e-9: NUTS's recursive per-depth RNG draws amplify sub-ULP noise faster than any other sampler over this case's mandatory >=100-iteration window -- measured ~3.3e-5 relative at worst; see fixtures/README.md's NUTS finding)"
+          "expected": "nan",
+          "mode": "equal",
+          "source": "Numerics v2.2.0 rank-normalized conservative ESS is undefined for this degenerate short output"
         },
         {
           "method": "ess",
           "args": [
             1
           ],
-          "expected": 34.76343403320675,
-          "mode": "rel",
-          "tol": 0.0001,
-          "source": "curated via oracle_emitter --dump (loosened from the digest's 1e-9: NUTS's recursive per-depth RNG draws amplify sub-ULP noise faster than any other sampler over this case's mandatory >=100-iteration window -- measured ~3.3e-5 relative at worst; see fixtures/README.md's NUTS finding)"
+          "expected": "nan",
+          "mode": "equal",
+          "source": "Numerics v2.2.0 rank-normalized conservative ESS is undefined for this degenerate short output"
         },
         {
           "method": "acceptance_rate",
           "args": [
             0
           ],
-          "expected": 1,
-          "mode": "equal"
+          "expected": 0.010972102711975145,
+          "mode": "rel",
+          "tol": 0.0001,
+          "source": "EMITTER-READ: MCMCResults.AcceptanceRates[0], the post-warmup mean Hamiltonian acceptance probability added in Numerics v2.2.0"
         },
         {
           "method": "acceptance_rate",
           "args": [
             1
           ],
-          "expected": 1,
-          "mode": "equal"
+          "expected": 0.28398663644945926,
+          "mode": "rel",
+          "tol": 0.0001,
+          "source": "EMITTER-READ: MCMCResults.AcceptanceRates[1]; tolerance covers measured recursive-tree floating-point drift between C# and C++"
         },
         {
           "method": "acceptance_rate",
           "args": [
             2
           ],
-          "expected": 1,
-          "mode": "equal"
+          "expected": 7.266945496838004e-67,
+          "mode": "rel",
+          "tol": 0.001,
+          "source": "EMITTER-READ: MCMCResults.AcceptanceRates[2]; relative tolerance covers a tiny nonzero Hamiltonian acceptance statistic"
         },
         {
           "method": "acceptance_rate",
           "args": [
             3
           ],
-          "expected": 1,
-          "mode": "equal"
+          "expected": 0.008698169829299107,
+          "mode": "rel",
+          "tol": 0.0001,
+          "source": "EMITTER-READ: MCMCResults.AcceptanceRates[3]"
         }
       ]
     }

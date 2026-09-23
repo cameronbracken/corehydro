@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/RWMH.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/RWMH.cs @ 7e8e8d1
 //
 // Random Walk Metropolis-Hastings (RWMH): the simplest MCMCSampler concretization, and this
 // port's end-to-end exemplar for the whole sampler family. Every chain proposes a new point
@@ -60,16 +60,20 @@ class RWMH : public MCMCSampler {
     }
 
     void initialize_custom_settings() override {
-        // Set up a Multivariate Normal proposal distribution for each chain.
-        mvn_per_chain_.clear();
-        mvn_per_chain_.reserve(static_cast<std::size_t>(number_of_chains()));
-        for (int i = 0; i < number_of_chains(); ++i) mvn_per_chain_.emplace_back(number_of_parameters());
-
         // Set up the proposal matrix: if MAP initialization succeeded, adopt its
         // Fisher-information-derived covariance instead of the ctor-supplied
         // `proposal_sigma_`.
         if (initialize == InitializationType::MAP && map_successful_ && mvn_.has_value()) {
             proposal_sigma_ = linalg::Matrix(mvn_->covariance());
+        }
+        // Factorize the fixed covariance once. A chain iteration only translates the mean.
+        mvn_per_chain_.clear();
+        mvn_per_chain_.reserve(static_cast<std::size_t>(number_of_chains()));
+        for (int i = 0; i < number_of_chains(); ++i) {
+            mvn_per_chain_.emplace_back(number_of_parameters());
+            mvn_per_chain_.back().set_parameters(
+                std::vector<double>(static_cast<std::size_t>(number_of_parameters()), 0.0),
+                proposal_sigma_.to_array());
         }
     }
 
@@ -78,7 +82,7 @@ class RWMH : public MCMCSampler {
         sample_count_[static_cast<std::size_t>(index)] += 1;
 
         // Get proposal vector.
-        mvn_per_chain_[static_cast<std::size_t>(index)].set_parameters(state.values, proposal_sigma_.to_array());
+        mvn_per_chain_[static_cast<std::size_t>(index)].set_mean(state.values);
         auto xp = mvn_per_chain_[static_cast<std::size_t>(index)].inverse_cdf(
             ext::next_doubles(chain_prngs_[static_cast<std::size_t>(index)], number_of_parameters()));
 

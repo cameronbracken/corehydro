@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/Support/MCMCResults.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/Support/MCMCResults.cs @ 7e8e8d1
 //
 // Post-processes a finished MCMCSampler run (or a raw (MAP, parameter-set list) pair) into
 // posterior summaries: cloned MarkovChains + a flattened combined Output, AcceptanceRates,
@@ -38,7 +38,7 @@ class MCMCResults {
             const auto& out_i = sampler.output()[static_cast<std::size_t>(i)];
             output.insert(output.end(), out_i.begin(), out_i.end());
         }
-        acceptance_rates = sampler.acceptance_rates();
+        acceptance_rates = sampler.reported_acceptance_rates();
         mean_log_likelihood = sampler.mean_log_likelihood();
         map = sampler.map().clone();
         process_parameter_results(sampler, alpha);

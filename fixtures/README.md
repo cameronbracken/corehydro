@@ -696,28 +696,25 @@ acceptance-rate pattern.
 initialize: "MAP"`, transcribed from `Test_SNIS_NormalDist_RStan`) asserts its 10 rstan literals
 at `mode: "rel", tol: 0.05`, plus (per the P3.5 TOLERANCE POLICY REFINEMENT for MAP-init cases)
 `chain_value`/`chain_fitness` companions at `mode: "rel", tol: 1e-5` and `map_value`/`map_fitness`
-at `tol: 1e-4`. **Draw-index hazard (new, this task):** the companion draws are deliberately the
+at `tol: 1e-4`. **Historical draw-index hazard, resolved in Numerics v2.2.0:** the companion draws are deliberately the
 TOP five indices of the 100000-length `MarkovChains[0]` (`99995`-`99999`), not the first five. A
 first attempt at this fixture used the natural-looking `[0, 1, 2, 3, 4]` and every `chain_value`
 assertion in that range FAILED to reproduce against the C++ port (while `chain_fitness` passed) --
-diagnosed as a genuine cross-language sort-stability divergence, not a transcription bug: this
+diagnosed against the pre-v2.2.0 source as a genuine cross-language sort-stability divergence, not a transcription bug: this
 model's wide, uninformative Uniform priors make MANY draws' log-likelihood underflow to exactly
 `-Infinity` (`3` of `100000` in the rstan case, `12` of `100` in `normal_short_exact`), and those
-tied `-Infinity` entries cluster at the BOTTOM of the fitness-ascending sort. `List<T>.Sort` (C#,
-an unstable introspective sort) and `std::stable_sort` (this port -- see `snis.hpp`'s own
-SORT-COMPARATOR file-header note) are both free to place EQUAL elements in different relative
-order, so which specific tied `-Infinity` draw ends up at index 0 vs. index 1 vs. ... genuinely
-differs between the two languages, even though the SET of values at those indices (all
-`-Infinity`) is identical. `chain_fitness` assertions at those low indices still pass (`-Infinity
-== -Infinity` regardless of WHICH draw produced it), but a `chain_value` assertion pinned to a
-specific low index is not a safe cross-language digest. The untied, strictly-monotonic-fitness
+tied entries cluster at the bottom of the fitness-ascending sort. The old C# `List<T>.Sort` was
+unstable while this port used `std::stable_sort`, so the tied draw order differed. Numerics
+v2.2.0 now uses stable `OrderBy(x => x.Fitness)`, matching the port. The new direct C++ test
+reproduces the seeded input order within both tied runs. The untied, strictly-monotonic-fitness
 tail near the top of the sort (`chain_value` differs measurably between adjacent high indices --
 see the raw `--dump` output) has no such hazard; logged as a new finding in
-`docs/upstream-csharp-issues.md`. `normal_short_exact` (`Initialize = Randomize` -- the default;
+`docs/upstream-csharp-issues.md`. The existing high-index pins remain valid and need not move.
+`normal_short_exact` (`Initialize = Randomize` -- the default;
 `settings.iterations = 100, output_length = 100`, the smallest legal `ValidateSettings` config
 per SNIS's own override) is naive Monte Carlo with no `DifferentialEvolution`/MAP machinery, so
-its `chain_value`/`chain_fitness` companions (top 5 of 100, indices `95`-`99`, for the identical
-tie-hazard reason above) use the TRUE `mode: "rel", tol: 1e-12` digest tolerance.
+its `chain_value`/`chain_fitness` companions (top 5 of 100, indices `95`-`99`) use the TRUE
+`mode: "rel", tol: 1e-12` digest tolerance.
 
 **Tolerance policy for the DEMCz/DEMCzs cases** (`demcz.json`/`demczs.json`): both files carry
 `normal_rstan`/`logistic_rstan`/`gumbel_rstan`/`weibull_rstan` (all `Initialize = Randomize`, the

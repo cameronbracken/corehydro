@@ -1,6 +1,7 @@
 {
   "kind": "callback",
-  "source": "Numerics/Sampling/MCMC/Base/MCMCSampler.cs (the delegate constructor) @ 2a0357a",
+  "source": "Numerics/Sampling/MCMC/Base/MCMCSampler.cs (the delegate constructor) @ 7e8e8d1",
+  "upstream_reference": "Numerics v2.2.0 @ 7e8e8d1; expected values refreshed for the v2.2.0 sampler and diagnostic behavior",
   "reference": "Numerics @ 2a0357a. Runs corehydro::numerics::support::run_callback (core/include/corehydro/numerics/support/callback_runner.hpp), group \"mcmc\", method \"sample\", against the log-likelihood named by `construct.callback` -- a function each of the four runners writes itself as a native closure (a C++ lambda, an R closure, a Python function, a C# delegate), so every case exercises the real host-language callback path the runner's guard exists to protect. This is upstream's OWN constructor, MCMCSampler(List<IUnivariateDistribution> priorDistributions, LogLikelihood logLikelihoodFunction): the model registry under sampling/mcmc/ that the `mcmc_sampler` kind drives is corehydro fixture scaffolding, while these cases pass their own priors and their own delegate, exactly as a C# caller would. EVERY expected value here is EMITTER-READ: no upstream test samples these models, so the oracle is the real Numerics sampler driven by tools/oracle_emitter with the equivalent C# delegate, never a value computed by this repo's own C++. Both catalog log-densities are built from + - * / alone, with the summation written as an explicit loop rather than any language's sum(): a Markov chain amplifies one differing bit into a different chain outright (one flipped accept-or-reject changes every state after it), so a transcendental call -- or R's extended-precision sum() -- would make these oracles a coincidence of one platform's math library rather than a reproducible fact. The result layout (a named summary block, then the draws row-major by [chain][draw][parameter], with dims = {n_summary, n_chains, n_draws, n_parameters}) is documented in core/include/corehydro/numerics/support/callback/mcmc.hpp; the `named` assertions below read the summary block by label rather than by an index that shifts with the chain and parameter counts.",
   "callbacks": {
     "Mcmc_GaussianKernel": "f(mu) = -0.5 * sum((x - mu)^2) over x = {4.9, 5.1, 5.0, 5.2, 4.8}  [corehydro addition: a unit-variance Gaussian kernel with no normalizing term, one parameter]",
@@ -35,8 +36,8 @@
         { "method": "named", "name": "map_fitness", "expected": -0.05035806611513237, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Fitness, i.e. the user log-density at that state" },
         { "method": "named", "name": "acceptance_rate[0]", "expected": 0.49142857142857144, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]. A per-chain accept count is the sharpest single test that the C# and the port took the SAME accept-or-reject decision at every one of the iterations" },
         { "method": "named", "name": "acceptance_rate[1]", "expected": 0.4, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[1]" },
-        { "method": "named", "name": "rhat[0]", "expected": 1.0088723505625583, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.Rhat (Gelman-Rubin)" },
-        { "method": "named", "name": "ess[0]", "expected": 27.476758097629958, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: SummaryStatistics.ESS" },
+        { "method": "named", "name": "rhat[0]", "expected": 1.035355682851447, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 rank-normalized split/folded R-hat" },
+        { "method": "named", "name": "ess[0]", "expected": 21.948402002310356, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 conservative bulk/tail ESS" },
         { "method": "value", "args": [11], "expected": 5.0, "mode": "abs", "tol": 0, "source": "EMITTER-READ: MarkovChains[0][0].Values[0], the first entry of the draw block that follows the 11-value summary block. Exactly 5, and not by luck: Randomize initialization seeds the population with the mean of the priors first, Uniform(0, 10) has mean 5, and that state also happens to be the best of the initial population for this data" },
         { "method": "value", "args": [161], "expected": 4.682910544746855, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][150].Values[0], a mid-chain state. This is the assertion a single flipped accept-or-reject anywhere in the first 150 iterations would break, which no summary statistic guarantees on its own" },
         { "method": "value", "args": [610], "expected": 5.3408359385517175, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[1][299].Values[0], the last state of the SECOND chain -- the far end of the draw block, so the block's row-major [chain][draw][parameter] order is pinned as well as its contents" },
@@ -60,11 +61,11 @@
         }
       },
       "assertions": [
-        { "method": "named", "name": "posterior_mean[0]", "expected": 5.120566889881006, "mode": "rel", "tol": 1e-11, "source": "EMITTER-READ: SummaryStatistics.Mean off the driven C# RWMH MAP-initialized chain. Tolerance is set at 1e-11 (not this file's usual 1e-12) because the MAP path's proposal covariance is an inverted numerical Hessian whose last bits differ C#-vs-C++, measured to drift up to 3.8e-12 relative on this same case's sd; see the note on the map[0] assertion below for the full explanation" },
-        { "method": "named", "name": "posterior_median[0]", "expected": 5.183253685688589, "mode": "rel", "tol": 1e-11, "source": "EMITTER-READ: SummaryStatistics.Median off the driven C# RWMH MAP-initialized chain. Tolerance 1e-11 for the same inverted-numerical-Hessian drift documented on map[0] below (measured up to 3.8e-12 relative)" },
+        { "method": "named", "name": "posterior_mean[0]", "expected": 5.120568674228263, "mode": "rel", "tol": 1e-11, "source": "Numerics v2.2.0 RWMH factorizes the proposal once and translates its mean" },
+        { "method": "named", "name": "posterior_median[0]", "expected": 5.183255470036018, "mode": "rel", "tol": 1e-11, "source": "Numerics v2.2.0 RWMH factorizes the proposal once and translates its mean" },
         { "method": "named", "name": "posterior_sd[0]", "expected": 0.40353078509197365, "mode": "rel", "tol": 1e-11, "source": "EMITTER-READ: SummaryStatistics.StandardDeviation off the driven C# RWMH MAP-initialized chain. Tolerance 1e-11 because the MAP path's inverted numerical Hessian drifts by up to 3.8e-12 relative, measured; see the note on the map[0] assertion below" },
-        { "method": "named", "name": "map[0]", "expected": 4.999999533547282, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the MAP initialization path, which reaches the user log-density through DifferentialEvolution BEFORE the first chain iteration. `proposal_sigma` is deliberately absent here so the C# class's own all-zero default is exercised, which is only usable because InitializeCustomSettings overwrites it with the Fisher-information covariance. History on the posterior_mean/median/sd assertions above: they were first OMITTED here, because the RWMH proposal covariance on this path is an INVERTED numerical Hessian whose last bits differ C#-vs-C++, moving every proposal by that much and so drifting the posterior summaries (measured: mean 9e-14, median 1.4e-13, sd 3.8e-12 relative) -- too tight for this file's usual 1e-12 tolerance but smooth and bounded, not the chaotic short-chain divergence where the chains themselves differ and no value is meaningful (the accept-or-reject decisions here do NOT move -- both acceptance rates below match exactly -- so this is drift in state values, not a different chain). Per review, omitting them entirely was more conservative than the repo's own practice of per-assertion tolerance (489 assertions elsewhere already carry 1e-11 or 1e-10), so they are now asserted above at 1e-11, which comfortably covers the measured 3.8e-12 worst case. No tolerance is loosened past 1e-11 and no oracle_skip is used" },
-        { "method": "named", "name": "map_fitness", "expected": -0.05000000000054394, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Fitness. The analytic maximum of this kernel is -0.05 at mu = 5, which the optimizer finds to 1e-11 -- the pinned value is the optimizer's, not the analytic one" },
+        { "method": "named", "name": "map[0]", "expected": 5.000001317894198, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 emitter" },
+        { "method": "named", "name": "map_fitness", "expected": -0.05000000000434211, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 emitter" },
         { "method": "named", "name": "acceptance_rate[0]", "expected": 0.6371428571428571, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[0]. This is the assertion that carries the case: an accept count matching exactly means the C# and the port took the SAME accept-or-reject decision at all 300 iterations of this chain, off a proposal covariance built from an inverted numerical Hessian" },
         { "method": "named", "name": "acceptance_rate[1]", "expected": 0.5314285714285715, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: AcceptanceRates[1], the same for the second chain" }
       ]
@@ -83,9 +84,9 @@
         }
       },
       "assertions": [
-        { "method": "named", "name": "posterior_mean[0]", "expected": 4.9482092514171345, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: a second sampler arm, so the group's dispatch is pinned and not just RWMH's" },
-        { "method": "named", "name": "posterior_sd[0]", "expected": 0.3976873082147035, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
-        { "method": "named", "name": "map[0]", "expected": 4.994435163061497, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "posterior_mean[0]", "expected": 4.907736081991029, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 retained-state covariance adaptation" },
+        { "method": "named", "name": "posterior_sd[0]", "expected": 0.395480459575779, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 retained-state covariance adaptation" },
+        { "method": "named", "name": "map[0]", "expected": 4.99397402332072, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 retained-state covariance adaptation" },
         { "method": "named", "name": "acceptance_rate[1]", "expected": 0.6828571428571428, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" }
       ]
     },
@@ -112,7 +113,7 @@
         { "method": "named", "name": "map[0]", "expected": 0.09292785441717748, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
         { "method": "named", "name": "map[1]", "expected": 1.9744058708220267, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
         { "method": "named", "name": "map_fitness", "expected": -0.11762547033323505, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
-        { "method": "named", "name": "rhat[1]", "expected": 1.0108072063912357, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ" },
+        { "method": "named", "name": "rhat[1]", "expected": 1.1537504788390471, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 rank-normalized split/folded R-hat" },
         { "method": "dim", "args": [0], "expected": 20, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_summary = 1 + 3 chains + 8 * 2 parameters" },
         { "method": "dim", "args": [3], "expected": 2, "mode": "abs", "tol": 0, "source": "EMITTER-READ: n_parameters" }
       ]
@@ -204,9 +205,9 @@
         }
       },
       "assertions": [
-        { "method": "named", "name": "posterior_mean[0]", "expected": 4.998909978154603, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: the second sampler that takes a gradient, so the delegate's dispatch is pinned for both arms and not just HMC's" },
-        { "method": "named", "name": "map[0]", "expected": 5.000409011728744, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MCMCResults.MAP.Values[0]" },
-        { "method": "value", "args": [111], "expected": 5.467371912706708, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: MarkovChains[0][100].Values[0], a mid-chain state" }
+        { "method": "named", "name": "posterior_mean[0]", "expected": 5.042117542097767, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 default diagonal metric adaptation" },
+        { "method": "named", "name": "map[0]", "expected": 4.996024419269503, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 default diagonal metric adaptation" },
+        { "method": "value", "args": [111], "expected": 4.950672175840225, "mode": "rel", "tol": 1e-12, "source": "Numerics v2.2.0 default diagonal metric adaptation" }
       ]
     },
     {
