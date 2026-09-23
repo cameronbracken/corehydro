@@ -1,6 +1,6 @@
 // Tests for OrderedPairedData (P4 Task 8) and the six un-severed Search.cs overloads it un-gates.
 //
-// Oracle is the upstream C# test classes @ 2a0357a:
+// Oracle is the upstream C# test classes @ 7e8e8d1:
 //   upstream/Numerics/Test_Numerics/Data/Paired Data/Test_PairedData.cs
 //   upstream/Numerics/Test_Numerics/Data/Paired Data/Test_PairedDataInterpolation.cs
 //   upstream/Numerics/Test_Numerics/Data/Paired Data/Test_PairedDataLineSimplification.cs
@@ -600,11 +600,8 @@ void test_visvaligam_whyatt_simplify_out_of_range() {
     CHECK_EQ(test.count(), 2);
 }
 
-// C# Test_LangSimplify. NOTE: the C# test's own `valid` array claims four points, matching
-// douglas_peucker/visvaligam_whyatt -- but LangSimplify does not force-keep the trailing point
-// (see ordered_paired_data.hpp's sixth transcription finding), and this is verified DIRECTLY
-// against the real C# library (`dotnet run` against upstream/Numerics @ 2a0357a): the real
-// v2.2 fixes the exact-tail boundary and retains the final point.
+// C# Test_LangSimplify. Numerics v2.2.0 fixes the exact-tail boundary and retains the final point,
+// matching the test's four-point `valid` array.
 void test_lang_simplify() {
     auto data = sin_curve_data();
     OrderedPairedData ordered_pair(data, true, SortOrder::Ascending, false, SortOrder::None);

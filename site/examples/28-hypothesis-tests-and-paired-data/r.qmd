@@ -21,8 +21,8 @@ per point. This page works through both, on a real flood record and a real reser
   container, the `use_log10` switch, and the two-sample `split_index` split.
 - `correlation()`'s matrix form over more than two series at once.
 - A reservoir stage-storage curve interpolated in linear and log space, and its trapezoidal area.
-- How the three curve-simplification algorithms differ on the same curve, including one that
-  drops the curve's last point without warning.
+- How the three curve-simplification algorithms differ on the same curve and preserve its
+  endpoints.
 - Sampling an uncertain curve at its mean versus its median.
 
 ## Setup
@@ -201,11 +201,9 @@ data.frame(
 )
 ```
 
-Ramer-Douglas-Peucker and Visvalingam-Whyatt both always keep the curve's first and last point.
-Lang does not, and this is not merely a theoretical concern raised elsewhere on this site -- at
-this tolerance and look-ahead it drops the reservoir curve's own last point right here, the same
-defect `docs/upstream-csharp-issues.md` documents against the sin curve upstream's own
-`Test_LangSimplify` uses. `last_x_matches` is `FALSE` for Lang and `TRUE` for the other two.
+All three methods now keep the curve's first and last point. Numerics v2.2.0 corrected Lang's
+terminal-point handling, so `last_x_matches` is `TRUE` for every method. Lang retains nine points
+here, while the other two retain seven.
 
 ### Sampling an uncertain curve
 
@@ -236,8 +234,8 @@ number by mean instead of by median would hide.
 2. `correlation()` without a second argument treats its input as a table and returns the whole
    pairwise matrix in one call.
 3. `curve_interpolate()`/`curve_area()` work in linear or log-transformed space on the same curve.
-4. Ramer-Douglas-Peucker and Visvalingam-Whyatt always keep a curve's endpoints; Lang does not --
-   an upstream defect this port reproduces on purpose rather than silently fixing.
+4. All three simplification methods preserve the curve's endpoints; Numerics v2.2.0 corrected
+   Lang's former terminal-point defect.
 5. `uncertain_curve_sample()` collapses a distribution-valued curve to a plain one at any quantile,
    including the mean and the median, which need not agree.
 
@@ -281,10 +279,10 @@ stopifnot(
 
   nrow(rdp) == 7L,
   nrow(vis) == 7L,
-  nrow(lang) == 8L,
+  nrow(lang) == 9L,
   isTRUE(tail(rdp$x, 1) == tail(storage, 1)),
   isTRUE(tail(vis$x, 1) == tail(storage, 1)),
-  isFALSE(tail(lang$x, 1) == tail(storage, 1)),   # the LangSimplify drop, reproduced on purpose
+  isTRUE(tail(lang$x, 1) == tail(storage, 1)),    # fixed upstream in Numerics v2.2.0
   jb_log > 0.5,                                    # log-space does not reject normality
   near(mean_curve$y[1], 1519.8999999999999),
   near(median_curve$y[1], 1519.8607695154587),

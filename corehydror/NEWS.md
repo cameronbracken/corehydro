@@ -1,3 +1,27 @@
+# corehydror (development version)
+
+Numerics v2.2.0 sync. Calls affected by upstream numerical changes include tied-rank hypothesis
+tests, distribution tails and uncertainty estimates, bounded optimizers, shortest paths, Lang
+curve simplification, bootstrap intervals, MCMC diagnostics, and machine learning fits. See
+`CHANGELOG.md` at the repository root for the complete account and verification evidence.
+
+## New features
+
+* Global sensitivity functions: `first_order_sobol()`, `pawn()`, `pawn_median()`, and
+  `borgonovo_delta()`, plus `union_single_factor()` and
+  `single_factor_conditional_probabilities()`.
+* Singular multivariate Normal evaluation, seeded multivariate probability integration,
+  two-dimensional adaptive Gauss-Kronrod integration, and seeded Sobol scrambling.
+* Sided curve extrapolation, nearest-node shortest paths, `ts_smoothed_series()`, recursive
+  composite and ensemble function specifications, the Independence copula, and conditional
+  copula CDFs.
+
+## Notes
+
+* Lang simplification now preserves the final curve point, matching Numerics v2.2.0.
+* Local C++, R, Python, and real C# oracle gates pass. The remote platform matrix has not run for
+  this branch.
+
 # corehydror 0.13.0
 
 The heavy `TimeSeries` container -- the last unported portable slice of Numerics, and the one four

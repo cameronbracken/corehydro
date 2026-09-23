@@ -1170,10 +1170,7 @@ def test_curve_simplify_reproduces_the_three_algorithms_on_the_sin_curve():
     assert rdp[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
     assert vis[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
 
-    # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
-    # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here
-    # is THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test
-    # claims.
+    # Numerics v2.2.0 fixes LangSimplify so it retains the trailing point.
     lang = curve_simplify(x, y, method="lang", tolerance=0.01, look_ahead=2, strict_y=False,
                           order_y="none")
     assert lang.shape == (4, 2)
