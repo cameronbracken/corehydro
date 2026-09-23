@@ -280,7 +280,12 @@ class Matrix {
         for (int i = 0; i < number_of_rows(); ++i)
             for (int j = 0; j < other.number_of_columns(); ++j) {
                 double sum = 0.0;
-                for (int k = 0; k < number_of_columns(); ++k) sum += data_[i][k] * other(k, j);
+                for (int k = 0; k < number_of_columns(); ++k) {
+                    // C# evaluates the product before the addition. Prevent contraction so
+                    // cancellation in projected covariance matrices follows the same path.
+                    volatile double product = data_[i][k] * other(k, j);
+                    sum += product;
+                }
                 result(i, j) = sum;
             }
         return result;
@@ -295,7 +300,10 @@ class Matrix {
         std::vector<double> result(static_cast<std::size_t>(number_of_rows()));
         for (int i = 0; i < number_of_rows(); ++i) {
             double sum = 0.0;
-            for (int j = 0; j < number_of_columns(); ++j) sum += data_[i][j] * vector[j];
+            for (int j = 0; j < number_of_columns(); ++j) {
+                volatile double product = data_[i][j] * vector[j];
+                sum += product;
+            }
             result[i] = sum;
         }
         return Vector(std::move(result));

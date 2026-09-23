@@ -391,18 +391,26 @@ class PearsonTypeIII : public UnivariateDistributionBase,
         return solver.best_parameters();
     }
 
-    // Returns a list of partial derivatives of X given probability with respect to each
-    // moment (C# PearsonTypeIII.QuantileGradientForMoments, line 774). Q(p) = mu +
-    // sigma*Kp(skew, p), so the gradient is {1, Kp, sigma*dKp/dskew}. C#
-    // ValidateParameters(..., true) throw -> std::invalid_argument.
+    // Returns the quantile gradient in public mean, standard deviation, and skew coordinates.
+    // The signed-Gamma derivative and the smooth zero-skew expansion mirror v2.2.0.
     std::vector<double> quantile_gradient_for_moments(double probability) const {
-        // Validate parameters
+        distribution_numerics::validate_probability(probability);
         if (!parameters_valid_) throw std::invalid_argument("PearsonTypeIII: invalid parameters");
-        return {
-            1.0,
-            GammaDistribution::frequency_factor_kp(gamma_, probability),
-            sigma_ * GammaDistribution::partial_kp(gamma_, probability)
-        };
+        double z = Normal::standard_z(probability);
+        if (gamma_ == 0.0)
+            return {1.0, z, sigma_ * (z * z - 1.0) / 6.0};
+        if (use_local_quantile_expansion(gamma_, z)) {
+            double derivative = 0.0;
+            double quantile = local_standard_quantile(gamma_, z, &derivative);
+            return {1.0, quantile, sigma_ * derivative};
+        }
+        double unit = distribution_numerics::gamma_inverse_cdf(
+            alpha(), probability, gamma_ < 0.0);
+        double shape_derivative =
+            distribution_numerics::gamma_quantile_shape_derivative(alpha(), unit);
+        double standardized = gamma_ / 2.0 * (unit - alpha());
+        double skew_derivative = (unit + alpha()) / 2.0 - alpha() * shape_derivative;
+        return {1.0, standardized, sigma_ * skew_derivative};
     }
 
     // ConditionalMoments override (C# PearsonTypeIII.cs:820): delegates to the smooth
@@ -721,11 +729,14 @@ class PearsonTypeIII : public UnivariateDistributionBase,
                std::fabs(skew) * std::pow(1.0 + std::fabs(z), 3.0) <= 0.02;
     }
 
-    static double local_standard_quantile(double skew, double z) {
+    static double local_standard_quantile(double skew, double z,
+                                          double* derivative = nullptr) {
         const double z2 = z * z;
         const double first = (z2 - 1.0) / 6.0;
         const double second = z * (z2 - 7.0) / 144.0;
         const double third = -(3.0 * z2 * z2 + 7.0 * z2 - 16.0) / 6480.0;
+        if (derivative != nullptr)
+            *derivative = first + skew * (2.0 * second + 3.0 * skew * third);
         return z + skew * (first + skew * (second + skew * third));
     }
 

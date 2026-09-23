@@ -5173,6 +5173,16 @@ static double DataFrameDispatch(string method, BestFitModels.DataFrame df, JsonE
             return ToolboxSelectFlatNoDims(asrt, new[] { df.MannKendallTest(useLog10) });
         case "unimodality":
             return ToolboxSelectFlatNoDims(asrt, new[] { df.UnimodalityTest(useLog10) });
+        case "plotting_position":
+            df.CalculatePlottingPositions();
+            return ToolboxSelectFlatNoDims(asrt,
+                df.ExactSeries.Select(item => item.PlottingPosition).ToArray());
+        case "number_of_low_outliers":
+            df.CalculatePlottingPositions();
+            return ToolboxSelectFlatNoDims(asrt, new[] { (double)df.NumberOfLowOutliers });
+        case "low_outlier_threshold":
+            df.CalculatePlottingPositions();
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LowOutlierThreshold });
         case "summary_hypothesis":
         {
             // `index` is OPTIONAL here (unlike the two-sample facades above): the method clamps

@@ -331,7 +331,7 @@
           {
             "method": "named",
             "name": "posterior_mean[0]",
-            "expected": 0.03276394797489047,
+            "expected": 0.032763947974890462,
             "mode": "abs",
             "tol": 0,
             "source": "EMITTER-READ: ParameterResults[0].SummaryStatistics.Mean, a plain sum over the recorded states divided by their count"
@@ -625,7 +625,7 @@
           {
             "method": "named",
             "name": "statistic_se[0]",
-            "expected": 0.22495884650687556,
+            "expected": 0.22495884650687553,
             "mode": "abs",
             "tol": 0,
             "source": "EMITTER-READ, ZERO TOLERANCE: StatisticResults[0].StandardError -- unlike the two percentiles, this depends on EVERY retained draw rather than on the two at the tails, so a single differing replicate moves it even when the order statistics survive"

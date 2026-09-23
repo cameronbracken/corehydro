@@ -83,8 +83,11 @@ inline double variance(const std::vector<double>& data) {
     for (std::size_t i = 1; i < data.size(); ++i) {
         double di = static_cast<double>(i);
         t += data[i];
-        double diff = (di + 1.0) * data[i] - t;
-        variance_ += diff * diff / ((di + 1.0) * di);
+        volatile double product = (di + 1.0) * data[i];
+        double diff = product - t;
+        volatile double square = diff * diff;
+        volatile double increment = square / ((di + 1.0) * di);
+        variance_ += increment;
     }
     return variance_ / (static_cast<double>(data.size()) - 1.0);
 }
@@ -102,8 +105,11 @@ inline double population_variance(const std::vector<double>& data) {
     for (std::size_t i = 1; i < data.size(); ++i) {
         double di = static_cast<double>(i);
         t += data[i];
-        double diff = (di + 1.0) * data[i] - t;
-        variance_ += diff * diff / ((di + 1.0) * di);
+        volatile double product = (di + 1.0) * data[i];
+        double diff = product - t;
+        volatile double square = diff * diff;
+        volatile double increment = square / ((di + 1.0) * di);
+        variance_ += increment;
     }
     return variance_ / static_cast<double>(data.size());
 }
