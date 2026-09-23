@@ -164,6 +164,28 @@ void test_guards_throw() {
     CHECK_THROWS(UncertaintyAnalysisResults(parent, s.ptrs, kProbabilities, 1.0));
     CHECK_THROWS(UncertaintyAnalysisResults(parent, s.ptrs, kProbabilities, -0.5));
     CHECK_THROWS(UncertaintyAnalysisResults(parent, s.ptrs, kProbabilities, 1.5));
+
+    std::vector<const UnivariateDistributionBase*> allFailed{nullptr, nullptr};
+    CHECK_THROWS(UncertaintyAnalysisResults(parent, allFailed, kProbabilities, 0.1));
+}
+
+void test_failed_ensemble_members_are_excluded_and_recorded_as_nan() {
+    Normal parent(3.0, 0.5);
+    Normal successful(4.0, 0.75);
+    std::vector<const UnivariateDistributionBase*> ensemble{&successful, nullptr};
+    const std::vector<double> probabilities{0.25, 0.5, 0.75};
+
+    UncertaintyAnalysisResults result(parent, ensemble, probabilities, 0.1, 0.001,
+                                      1.0 - 1e-9, true);
+    for (std::size_t i = 0; i < probabilities.size(); ++i) {
+        const double expected = successful.inverse_cdf(probabilities[i]);
+        CHECK_NEAR(result.confidence_intervals[i][0], expected, 1e-12);
+        CHECK_NEAR(result.confidence_intervals[i][1], expected, 1e-12);
+        CHECK_NEAR(result.mean_curve[i], expected, 1e-8);
+    }
+    CHECK_EQ(result.parameter_sets[1].values.size(), static_cast<std::size_t>(2));
+    CHECK_TRUE(std::isnan(result.parameter_sets[1].values[0]));
+    CHECK_TRUE(std::isnan(result.parameter_sets[1].values[1]));
 }
 
 }  // namespace
@@ -176,6 +198,7 @@ int main() {
     test_fit_scalars_default_nan();
     test_no_record_leaves_parameter_sets_empty();
     test_guards_throw();
+    test_failed_ensemble_members_are_excluded_and_recorded_as_nan();
 
     return chtest::summary("uncertainty_analysis_results");
 }

@@ -45,10 +45,14 @@ PYBIND11_MODULE(_core, m) {
         .def("linear_moments_from_parameters",
              &dist::GeneralizedExtremeValue::linear_moments_from_parameters, py::arg("parameters"))
         .def("quantile_gradient", &dist::GeneralizedExtremeValue::quantile_gradient, py::arg("p"))
-        .def("parameter_covariance", &dist::GeneralizedExtremeValue::parameter_covariance,
+        .def("parameter_covariance",
+             py::overload_cast<int>(&dist::GeneralizedExtremeValue::parameter_covariance,
+                                    py::const_),
              py::arg("sample_size"))
-        .def("quantile_variance", &dist::GeneralizedExtremeValue::quantile_variance, py::arg("p"),
-             py::arg("sample_size"));
+        .def("quantile_variance",
+             py::overload_cast<double, int>(&dist::GeneralizedExtremeValue::quantile_variance,
+                                            py::const_),
+             py::arg("p"), py::arg("sample_size"));
 
     // Fit returns {location, scale, shape}.
     m.def(

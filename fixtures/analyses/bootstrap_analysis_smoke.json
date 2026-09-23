@@ -1,7 +1,7 @@
 {
   "target": "BootstrapAnalysis",
   "kind": "analysis",
-  "source": "Numerics/Distributions/Univariate/Uncertainty Analysis/BootstrapAnalysis.cs @ 2a0357a -- X12 exact oracle, emitter-verified against the real Numerics BootstrapAnalysis (tools/oracle_emitter) and reproduced bit-identically by the C++/R/Python runners. BootstrapAnalysis fits a Normal by MLE (deterministic BFGS, no RNG) then Estimate(probabilities, alpha) returns the mode/mean curve + percentile CI band over the 3 non-exceedance probabilities. The mode curve is the fitted inverse_cdf (mode_curve[0] == the Normal MLE mean 15900.386...); the mean/CI band is the seeded parametric bootstrap over the shared bit-exact MersenneTwister -- both reproduce to rel 1e-8 across C#/C++/R/Python.",
+  "source": "Numerics/Distributions/Univariate/Uncertainty Analysis/BootstrapAnalysis.cs @ 7e8e8d1 -- X12 exact oracle, emitter-verified against the real Numerics BootstrapAnalysis (tools/oracle_emitter) and reproduced bit-identically by the C++/R/Python runners. BootstrapAnalysis fits a Normal by MLE (deterministic BFGS, no RNG) then Estimate(probabilities, alpha) returns the mode/mean curve + percentile CI band over the 3 non-exceedance probabilities. The mode curve is the fitted inverse_cdf (mode_curve[0] == the Normal MLE mean 15900.386...); the mean/CI band is the seeded parametric bootstrap over the shared bit-exact MersenneTwister -- both reproduce to rel 1e-8 across C#/C++/R/Python.",
   "datasets": {
     "flow": [
       12500,

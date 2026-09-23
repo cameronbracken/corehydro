@@ -1,8 +1,6 @@
 // ported from: Numerics/Distributions/Univariate/LogNormal.cs @ 7e8e8d1
 //
-// The Log-Normal distribution (base 10) with location µ (mean of log) and scale σ (std dev of log).
-// Logic mirrors the C# source method-for-method. The base is fixed at 10 (the C# default);
-// IBootstrappable and the Monte Carlo confidence-interval helper are not ported.
+// The Log-Normal distribution with configurable logarithm base, location, and scale.
 // B4 adds ParametersFromMoments/MomentsFromParameters for the Bulletin 17C GMM track.
 #pragma once
 #include <string>
@@ -12,6 +10,7 @@
 
 #include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
+#include "corehydro/numerics/distributions/base/i_bootstrappable.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_standard_error.hpp"
@@ -28,7 +27,8 @@ class LogNormal : public UnivariateDistributionBase,
                   public IEstimation,
                   public ILinearMomentEstimation,
                   public IMaximumLikelihoodEstimation,
-                  public IStandardError {
+                  public IStandardError,
+                  public IBootstrappable {
    public:
     // Default constructor: mu=3, sigma=0.5, base=10 (mirrors C# default)
     LogNormal() { set_parameters(3.0, 0.5); }
@@ -38,6 +38,12 @@ class LogNormal : public UnivariateDistributionBase,
 
     double mu() const { return mu_; }
     double sigma() const { return sigma_; }
+    double base() const { return base_; }
+    void set_base(double value) {
+        if (!(value > 1.0) || !std::isfinite(value))
+            throw std::out_of_range("The logarithm base must be finite and greater than one.");
+        base_ = value;
+    }
 
     // --- Identity / parameters ---
     UnivariateDistributionType type() const override {
@@ -60,21 +66,21 @@ class LogNormal : public UnivariateDistributionBase,
     // --- Moments / support ---
     // Mean = exp((mu + 0.5*sigma^2*ln(base)) * ln(base))
     double mean() const override {
-        double lnB = std::log(kBase);
+        double lnB = std::log(base_);
         return std::exp((mu_ + 0.5 * sigma_ * sigma_ * lnB) * lnB);
     }
 
     double median() const override { return inverse_cdf(0.5); }
 
     double mode() const override {
-        const double log_base = std::log(kBase);
+        const double log_base = std::log(base_);
         return std::exp(mu_ * log_base - std::pow(sigma_ * log_base, 2.0));
     }
 
     // StandardDeviation = sqrt(exp((2*mu + a)*ln(base)) * (exp(a*ln(base)) - 1))
     // where a = sigma^2 * ln(base)
     double standard_deviation() const override {
-        double lnB = std::log(kBase);
+        double lnB = std::log(base_);
         const double variance = std::pow(sigma_ * lnB, 2.0);
         const double log_excess = variance > 0.5
                                       ? variance + std::log1p(-std::exp(-variance))
@@ -83,13 +89,13 @@ class LogNormal : public UnivariateDistributionBase,
     }
 
     double skewness() const override {
-        double lnB = std::log(kBase);
+        double lnB = std::log(base_);
         const double variance = std::pow(sigma_ * lnB, 2.0);
         return (std::exp(variance) + 2.0) * std::sqrt(std::expm1(variance));
     }
 
     double kurtosis() const override {
-        double lnB = std::log(kBase);
+        double lnB = std::log(base_);
         double variance = sigma_ * sigma_ * lnB * lnB;
         return 3.0 + std::expm1(4.0 * variance) + 2.0 * std::expm1(3.0 * variance) +
                3.0 * std::expm1(2.0 * variance);
@@ -106,7 +112,7 @@ class LogNormal : public UnivariateDistributionBase,
         if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
         if (x <= 0.0 || x == kInf) return -kInf;
         const double log_x = std::log(x);
-        const double log_base = std::log(kBase);
+        const double log_base = std::log(base_);
         const double z = distribution_numerics::standardize(log_x / log_base, mu_, sigma_);
         return -0.5 * z * z - std::log(sigma_) - kLogSqrt2PI - std::log(log_base) -
                log_x;
@@ -121,7 +127,7 @@ class LogNormal : public UnivariateDistributionBase,
                    ? -kInf
                    : distribution_numerics::normal_log_cdf(
                          distribution_numerics::standardize(
-                             std::log(x) / std::log(kBase), mu_, sigma_));
+                             std::log(x) / std::log(base_), mu_, sigma_));
     }
 
     double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
@@ -132,7 +138,7 @@ class LogNormal : public UnivariateDistributionBase,
                    ? 0.0
                    : distribution_numerics::normal_log_survival(
                          distribution_numerics::standardize(
-                             std::log(x) / std::log(kBase), mu_, sigma_));
+                             std::log(x) / std::log(base_), mu_, sigma_));
     }
 
     // InverseCDF = exp((mu - sigma*sqrt(2)*inverse_erfc(2p)) / K)
@@ -157,7 +163,9 @@ class LogNormal : public UnivariateDistributionBase,
     }
 
     std::unique_ptr<UnivariateDistributionBase> clone() const override {
-        return std::make_unique<LogNormal>(mu_, sigma_);
+        auto clone = std::make_unique<LogNormal>(mu_, sigma_);
+        clone->set_base(base_);
+        return clone;
     }
 
     // --- Estimation ---
@@ -172,11 +180,23 @@ class LogNormal : public UnivariateDistributionBase,
         }
     }
 
+    std::unique_ptr<UnivariateDistributionBase> bootstrap(ParameterEstimationMethod method,
+                                                          int sample_size,
+                                                          int seed = -1) const override {
+        auto distribution = std::make_unique<LogNormal>(mu_, sigma_);
+        distribution->set_base(base_);
+        const auto sample = distribution->generate_random_values(sample_size, seed);
+        distribution->estimate(sample, method);
+        if (!distribution->parameters_valid())
+            throw std::runtime_error("Bootstrapped distribution parameters are invalid.");
+        return distribution;
+    }
+
     // IndirectMethodOfMoments: compute product moments of log-transformed data
     std::vector<double> indirect_mom(const std::vector<double>& sample) const {
         std::vector<double> log_sample;
         log_sample.reserve(sample.size());
-        double lnB = std::log(kBase);
+        double lnB = std::log(base_);
         distribution_numerics::validate_sample(sample, 4, true);
         for (double v : sample) log_sample.push_back(std::log(v) / lnB);
         return data::product_moments(log_sample);  // returns {mean, sd, skew, kurtosis}
@@ -186,24 +206,25 @@ class LogNormal : public UnivariateDistributionBase,
     std::vector<double> indirect_lmom(const std::vector<double>& sample) const {
         std::vector<double> log_sample;
         log_sample.reserve(sample.size());
-        double lnB = std::log(kBase);
+        double lnB = std::log(base_);
         distribution_numerics::validate_sample(sample, 4, true);
         for (double v : sample) log_sample.push_back(std::log(v) / lnB);
         return data::linear_moments(log_sample);  // returns {L1, L2, T3, T4}
     }
 
-    // ParametersFromMoments (C# LogNormal.cs:408): real-space {mean, sd} -> base-10
+    // ParametersFromMoments: real-space {mean, sd} -> configured-base
     // log-space {mu, sigma}. C# Math.Log(x, Base) = ln(x)/ln(Base) with Base = 10.
     std::vector<double> parameters_from_moments(const std::vector<double>& moments) const {
         const auto natural = LnNormal::direct_mom(moments[0], moments[1]);
-        const double lnB = std::log(kBase);
+        const double lnB = std::log(base_);
         return {natural[0] / lnB, natural[1] / lnB};
     }
 
     // MomentsFromParameters (C# LogNormal.cs:419): {Mean, StandardDeviation, Skewness,
-    // Kurtosis} of a LogNormal built from the (base-10 log-space) parameters.
+    // Kurtosis} of a LogNormal built from the configured-base log-space parameters.
     std::vector<double> moments_from_parameters(const std::vector<double>& parameters) const {
         LogNormal dist;
+        dist.set_base(base_);
         dist.set_parameters(parameters);
         double m1 = dist.mean();
         double m2 = dist.standard_deviation();
@@ -245,8 +266,9 @@ class LogNormal : public UnivariateDistributionBase,
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);
-        auto log_lh = [&sample](const std::vector<double>& x) {
+        auto log_lh = [&sample, this](const std::vector<double>& x) {
             LogNormal ln;
+            ln.set_base(base_);
             ln.set_parameters(x[0], x[1]);
             return ln.log_likelihood(sample);
         };
@@ -278,7 +300,7 @@ class LogNormal : public UnivariateDistributionBase,
                 "LogNormal quantile variance is implemented only for moments and maximum likelihood");
         if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
         const double z = Normal::standard_z(probability);
-        const double log_base = std::log(kBase);
+        const double log_base = std::log(base_);
         const double log_quantile = (mu_ + sigma_ * z) * log_base;
         const double log_standard_error =
             log_quantile + std::log(log_base) + std::log(sigma_) -
@@ -290,7 +312,7 @@ class LogNormal : public UnivariateDistributionBase,
         distribution_numerics::validate_probability(probability);
         if (!parameters_valid_) throw std::out_of_range("LogNormal: invalid parameters");
         const double z = Normal::standard_z(probability);
-        const double factor = inverse_cdf(probability) * std::log(kBase);
+        const double factor = inverse_cdf(probability) * std::log(base_);
         return {factor, factor * z};
     }
 
@@ -305,7 +327,7 @@ class LogNormal : public UnivariateDistributionBase,
         const std::vector<double>& sample) const {
         std::vector<double> transformed(sample.size());
         for (std::size_t i = 0; i < sample.size(); ++i)
-            transformed[i] = std::log(sample[i] > 0.0 ? sample[i] : 0.1) / std::log(kBase);
+            transformed[i] = std::log(sample[i] > 0.0 ? sample[i] : 0.1) / std::log(base_);
         const auto moments = data::product_moments(transformed);
         std::vector<double> initials = {moments[0], moments[1]};
         std::vector<double> lowers(2), uppers(2);
@@ -313,15 +335,15 @@ class LogNormal : public UnivariateDistributionBase,
         if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
         lowers[0] = std::floor(
             std::log(std::pow(10.0, std::floor(std::log10(real_location)) - 1.0)) /
-            std::log(kBase));
+            std::log(base_));
         uppers[0] = std::ceil(
             std::log(std::pow(10.0, std::ceil(std::log10(real_location)) + 1.0)) /
-            std::log(kBase));
+            std::log(base_));
         const double real_scale = std::exp(initials[1] / k());
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::ceil(
             std::log(std::pow(10.0, std::ceil(std::log10(real_scale) + 1.0))) /
-            std::log(kBase));
+            std::log(base_));
         if (std::isnan(uppers[1])) uppers[1] = 4.0;
         return {initials, lowers, uppers};
     }
@@ -331,7 +353,7 @@ class LogNormal : public UnivariateDistributionBase,
         distribution_numerics::validate_sample(sample, 4, true);
         std::vector<double> transformed(sample.size());
         for (std::size_t i = 0; i < sample.size(); ++i)
-            transformed[i] = std::log(sample[i]) / std::log(kBase);
+            transformed[i] = std::log(sample[i]) / std::log(base_);
         Normal normal;
         return normal.robust_parameter_constraints(transformed);
     }
@@ -343,7 +365,7 @@ class LogNormal : public UnivariateDistributionBase,
     }
 
     // K = 1/ln(base) — the log correction factor
-    double k() const { return 1.0 / std::log(kBase); }
+    double k() const { return 1.0 / std::log(base_); }
 
     // Wichura AS241 standard-normal quantile (used by inverse_cdf / inverse_erfc)
     static double wichura_z(double p) {
@@ -400,7 +422,7 @@ class LogNormal : public UnivariateDistributionBase,
 
     double mu_ = 3.0;
     double sigma_ = 0.5;
-    static constexpr double kBase = 10.0;  // base of logarithm (mirrors C# default)
+    double base_ = 10.0;
 };
 
 }  // namespace corehydro::numerics::distributions

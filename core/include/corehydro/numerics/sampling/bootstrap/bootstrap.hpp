@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/Bootstrap/Bootstrap.cs @ 2a0357a
+// ported from: Numerics/Sampling/Bootstrap/Bootstrap.cs @ 7e8e8d1
 //
 // A general-purpose bootstrap class for parametric or non-parametric bootstrap analysis.
 // This port covers BOTH workflows the C# class supports:
@@ -77,14 +77,8 @@
 // advanced by the resampling loop -- it is consumed only when `AddPivotalJitter` is true, one
 // `NextDouble()` per pivotal vector component, in accepted-fit order.
 //
-// BCa HAZARD (see `compute_acceleration_constants`'s own comment): C#'s
-// `ComputeAccelerationConstants` uses `Tools.ParallelAdd` inside its own `Parallel.For` --  an
-// order-DEPENDENT floating-point reduction that is NOT bit-reproducible even run-to-run in
-// the real C# library (confirmed by running the oracle emitter twice and diffing `--dump`
-// output). This port replaces it with a plain serial accumulation in jackknife-index order --
-// deterministic within this port, but not guaranteed to match either C# run bit-for-bit. The
-// BCa fixture case therefore uses a LOOSE tolerance sized from the measured C# run-to-run
-// wobble (see fixtures/README.md's bootstrap schema).
+// BCa jackknife reductions are deterministic. This port retains C# v2.2's fixed chunks and
+// serial merge order while executing each chunk serially.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -257,6 +251,8 @@ class Bootstrap {
     // The number of replicates that failed after all retries. For the pivotal bootstrap, this
     // is the raw covariance-aware fit failure count.
     int failed_replicates() const { return failed_count_; }
+    // Failed leave-one-out fits from the most recent BCa interval computation.
+    int failed_jackknife_replicates() const { return failed_jackknife_replicates_; }
 
     // --- Run Methods -----------------------------------------------------------------------
 
@@ -832,6 +828,7 @@ class Bootstrap {
     int num_stats_ = 0;
     int num_params_ = 0;
     int failed_count_ = 0;
+    int failed_jackknife_replicates_ = 0;
     std::vector<bool> valid_flags_;
     std::optional<std::vector<std::vector<double>>> studentized_values_;
     std::optional<std::vector<std::vector<double>>> transformed_statistics_;
@@ -1003,32 +1000,71 @@ class Bootstrap {
     // --- BCa Support ---------------------------------------------------------------------------
 
     // Computes acceleration constants for each statistic using leave-one-out jackknife
-    // samples. See file header's BCa HAZARD note: this is a plain serial sum, NOT a
-    // reproduction of C#'s order-dependent `Tools.ParallelAdd` reduction.
-    std::vector<double> compute_acceleration_constants(const std::vector<double>& population_estimates) const {
+    // samples. Failed samples are counted and excluded from the deterministic reduction.
+    std::vector<double> compute_acceleration_constants(
+        const std::vector<double>& population_estimates) {
         int n = sample_size_function(original_data_);
-        std::vector<double> i2(static_cast<std::size_t>(num_stats_), 0.0);
-        std::vector<double> i3(static_cast<std::size_t>(num_stats_), 0.0);
+        failed_jackknife_replicates_ = 0;
+        if (n <= 0)
+            throw std::runtime_error(
+                "BCa acceleration requires at least one leave-one-out replicate");
         std::vector<double> a(static_cast<std::size_t>(num_stats_), 0.0);
+        const int chunks = std::min(64, n);
+        std::vector<std::vector<double>> chunk_i2(
+            static_cast<std::size_t>(chunks),
+            std::vector<double>(static_cast<std::size_t>(num_stats_), 0.0));
+        std::vector<std::vector<double>> chunk_i3(
+            static_cast<std::size_t>(chunks),
+            std::vector<double>(static_cast<std::size_t>(num_stats_), 0.0));
+        std::vector<int> chunk_valid(static_cast<std::size_t>(chunks), 0);
+        std::vector<int> chunk_failed(static_cast<std::size_t>(chunks), 0);
 
-        for (int idx = 0; idx < n; ++idx) {
-            try {
-                TData jack_data = jackknife_function(original_data_, idx);
-                opt::ParameterSet jack_fit = fit_function(jack_data);
-                std::vector<double> jack_stats = statistic_function(jack_fit);
+        for (int chunk = 0; chunk < chunks; ++chunk) {
+            const int start = static_cast<int>(static_cast<long long>(chunk) * n / chunks);
+            const int end = static_cast<int>(static_cast<long long>(chunk + 1) * n / chunks);
+            for (int idx = start; idx < end; ++idx) {
+                try {
+                    TData jack_data = jackknife_function(original_data_, idx);
+                    opt::ParameterSet jack_fit = fit_function(jack_data);
+                    std::vector<double> jack_stats =
+                        validate_statistics(statistic_function(jack_fit), num_stats_);
 
-                for (int i = 0; i < num_stats_; ++i) {
-                    double diff = population_estimates[static_cast<std::size_t>(i)] - jack_stats[static_cast<std::size_t>(i)];
-                    i2[static_cast<std::size_t>(i)] += diff * diff;
-                    i3[static_cast<std::size_t>(i)] += diff * diff * diff;
+                    for (int i = 0; i < num_stats_; ++i) {
+                        double diff = population_estimates[static_cast<std::size_t>(i)] -
+                                      jack_stats[static_cast<std::size_t>(i)];
+                        chunk_i2[static_cast<std::size_t>(chunk)][static_cast<std::size_t>(i)] +=
+                            diff * diff;
+                        chunk_i3[static_cast<std::size_t>(chunk)][static_cast<std::size_t>(i)] +=
+                            diff * diff * diff;
+                    }
+                    ++chunk_valid[static_cast<std::size_t>(chunk)];
+                } catch (...) {
+                    ++chunk_failed[static_cast<std::size_t>(chunk)];
                 }
-            } catch (...) {
-                // Skip failed jackknife samples.
             }
         }
 
-        for (int i = 0; i < num_stats_; ++i)
-            a[static_cast<std::size_t>(i)] = i3[static_cast<std::size_t>(i)] / (std::pow(i2[static_cast<std::size_t>(i)], 1.5) * 6.0);
+        int valid_count = 0;
+        for (int chunk = 0; chunk < chunks; ++chunk) {
+            valid_count += chunk_valid[static_cast<std::size_t>(chunk)];
+            failed_jackknife_replicates_ += chunk_failed[static_cast<std::size_t>(chunk)];
+        }
+
+        if (valid_count == 0)
+            throw std::runtime_error(
+                "Every leave-one-out replicate failed; BCa acceleration is undefined");
+
+        for (int i = 0; i < num_stats_; ++i) {
+            double second = 0.0;
+            double third = 0.0;
+            for (int chunk = 0; chunk < chunks; ++chunk) {
+                second += chunk_i2[static_cast<std::size_t>(chunk)][static_cast<std::size_t>(i)];
+                third += chunk_i3[static_cast<std::size_t>(chunk)][static_cast<std::size_t>(i)];
+            }
+            a[static_cast<std::size_t>(i)] = second > 0.0 && std::isfinite(second)
+                                                  ? third / (std::pow(second, 1.5) * 6.0)
+                                                  : 0.0;
+        }
 
         return a;
     }

@@ -334,6 +334,12 @@ class Normal : public UnivariateDistributionBase,
     static double standard_z(double probability) {
         if (probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
+        // v2.2 floors endpoint probabilities so bootstrap bias corrections stay finite. Use
+        // symmetry at one because subtracting the smallest subnormal from one rounds back to one.
+        if (probability == 0.0)
+            return r8_normal_01_cdf_inverse(std::numeric_limits<double>::denorm_min());
+        if (probability == 1.0)
+            return -r8_normal_01_cdf_inverse(std::numeric_limits<double>::denorm_min());
         return r8_normal_01_cdf_inverse(probability);
     }
 

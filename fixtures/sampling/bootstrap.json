@@ -122,12 +122,12 @@
         "alpha": 0.1
       },
       "assertions": [
-        { "method": "statistic_lower_ci", "args": [0], "expected": 4.637198667498479, "mode": "rel", "tol": 1e-6, "source": "dump (BCa acceleration is a run-to-run-unstable Tools.ParallelAdd reduction in C# -- see fixtures/README.md)" },
-        { "method": "statistic_upper_ci", "args": [0], "expected": 5.0791939853257375, "mode": "rel", "tol": 1e-6, "source": "dump (BCa acceleration is a run-to-run-unstable Tools.ParallelAdd reduction in C# -- see fixtures/README.md)" },
-        { "method": "statistic_lower_ci", "args": [4], "expected": 3.030117442443497, "mode": "rel", "tol": 1e-6, "source": "dump (BCa acceleration is a run-to-run-unstable Tools.ParallelAdd reduction in C# -- see fixtures/README.md)" },
-        { "method": "statistic_upper_ci", "args": [4], "expected": 3.2157751481797305, "mode": "rel", "tol": 1e-6, "source": "dump (BCa acceleration is a run-to-run-unstable Tools.ParallelAdd reduction in C# -- see fixtures/README.md)" },
-        { "method": "statistic_lower_ci", "args": [7], "expected": 1.6293603030521036, "mode": "rel", "tol": 1e-6, "source": "dump (BCa acceleration is a run-to-run-unstable Tools.ParallelAdd reduction in C# -- see fixtures/README.md)" },
-        { "method": "statistic_upper_ci", "args": [7], "expected": 1.9860126263144686, "mode": "rel", "tol": 1e-6, "source": "dump (BCa acceleration is a run-to-run-unstable Tools.ParallelAdd reduction in C# -- see fixtures/README.md)" }
+        { "method": "statistic_lower_ci", "args": [0], "expected": 4.637198667498473, "mode": "rel", "tol": 1e-12, "source": "dump (v2.2 fixed-chunk BCa reduction)" },
+        { "method": "statistic_upper_ci", "args": [0], "expected": 5.079193985325742, "mode": "rel", "tol": 1e-12, "source": "dump (v2.2 fixed-chunk BCa reduction)" },
+        { "method": "statistic_lower_ci", "args": [4], "expected": 3.030117442443496, "mode": "rel", "tol": 1e-12, "source": "dump (v2.2 fixed-chunk BCa reduction)" },
+        { "method": "statistic_upper_ci", "args": [4], "expected": 3.2157751481797288, "mode": "rel", "tol": 1e-12, "source": "dump (v2.2 fixed-chunk BCa reduction)" },
+        { "method": "statistic_lower_ci", "args": [7], "expected": 1.6293603030521122, "mode": "rel", "tol": 1e-12, "source": "dump (v2.2 fixed-chunk BCa reduction)" },
+        { "method": "statistic_upper_ci", "args": [7], "expected": 1.9860126263144746, "mode": "rel", "tol": 1e-12, "source": "dump (v2.2 fixed-chunk BCa reduction)" }
       ]
     }
   ]

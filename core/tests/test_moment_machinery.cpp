@@ -417,11 +417,8 @@ void ln_normal_moment_round_trip() {
 
 void log_normal_moment_round_trip() {
     // LogNormal (base 10): parameters are the base-10 log-space (mu, sigma).
-    // MomentsFromParameters returns real-space moments; ParametersFromMoments inverts
-    // the mean exactly, but its sigma formula takes the base-10 log where the exact
-    // inversion requires the natural log, so the C# round trip returns
-    // sigma * sqrt(ln 10) -- a faithful upstream asymmetry (C# governs; documented in
-    // the task report).
+    // MomentsFromParameters returns real-space moments and ParametersFromMoments converts
+    // the natural-log result into the configured base, so both parameters round trip.
     std::vector<double> theta{3.0, 0.5};
     LogNormal lg(theta[0], theta[1]);
     auto m = lg.moments_from_parameters(theta);
@@ -429,7 +426,7 @@ void log_normal_moment_round_trip() {
     CHECK_REL(m[1], lg.standard_deviation(), 1e-12);
     auto back = lg.parameters_from_moments(m);
     CHECK_REL(back[0], theta[0], 1e-10);
-    CHECK_REL(back[1], theta[1] * std::sqrt(std::log(10.0)), 1e-10);
+    CHECK_REL(back[1], theta[1], 1e-10);
 }
 
 }  // namespace

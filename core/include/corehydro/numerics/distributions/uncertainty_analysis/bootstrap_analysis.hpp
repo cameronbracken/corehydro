@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Uncertainty Analysis/BootstrapAnalysis.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Uncertainty Analysis/BootstrapAnalysis.cs @ 7e8e8d1
 //
 // The standalone frequentist parametric-bootstrap uncertainty engine. Given an IBootstrappable
 // univariate distribution, a parameter-estimation method, a bootstrap sample size and a replication
@@ -7,11 +7,9 @@
 // UncertaintyAnalysisResults (mode/CI/mean curves) via Estimate().
 //
 // DEVIATIONS from the C# source, all deliberate:
-//  * Threading REMOVED: every C# `Parallel.For` / `Tools.ParallelAdd` reduction becomes a plain
-//    serial loop. The reductions are order-independent sums / independent element writes, so the
-//    serial form is numerically identical to the parallel one (same as the ported
-//    UncertaintyAnalysisResults). Result: the async `RunAsync`-style methods are ordinary synchronous
-//    calls.
+//  * Threading REMOVED: independent element writes become serial loops. Floating-point reductions
+//    retain the upstream fixed 64-chunk partition and serial merge order, so results do not depend
+//    on thread count and match the C# accumulation order.
 //  * The owned `Distribution` is stored as an owning std::unique_ptr<UnivariateDistributionBase>
 //    (a clone of the ctor argument), with cached IBootstrappable*/IEstimation* views. The C#
 //    holds the caller's object; cloning keeps ownership simple and the parameters BCa mutates
@@ -33,6 +31,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "corehydro/numerics/data/interpolation/linear.hpp"
@@ -60,6 +59,7 @@ class BootstrapAnalysis {
     using DistView = std::vector<const UnivariateDistributionBase*>;
 
     static constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+    static constexpr std::size_t kReductionChunks = 64;
 
    public:
     // Construct a new Bootstrap Analysis. The distribution must be IBootstrappable (the C#
@@ -88,9 +88,11 @@ class BootstrapAnalysis {
     int sample_size() const { return sample_size_; }
     int replications() const { return replications_; }
     int prng_seed() const { return prng_seed_; }
+    int failed_replications() const { return failed_replications_; }
 
     // Bootstrap a list of fitted distributions.
     std::vector<DistPtr> distributions() {
+        failed_replications_ = 0;
         std::vector<DistPtr> boot(static_cast<std::size_t>(replications_));
         sampling::MersenneTwister r(static_cast<std::uint32_t>(prng_seed_));
         auto seeds = utilities::next_integers(r, replications_);
@@ -101,31 +103,44 @@ class BootstrapAnalysis {
                 try {
                     result = bootstrappable_->bootstrap(estimation_method_, sample_size_,
                                                         seeds[static_cast<std::size_t>(idx)] + 10 * m);
-                    failed = false;
+                    failed = result == nullptr;
                 } catch (...) {
                     failed = true;
                 }
                 if (!failed) break;
             }
             // MLE and certain L-moments methods can fail; on fail, leave null.
-            if (failed) result.reset();
+            if (failed) {
+                result.reset();
+                ++failed_replications_;
+            }
             boot[static_cast<std::size_t>(idx)] = std::move(result);
         }
+        if (failed_replications_ == replications_)
+            throw std::runtime_error("Every bootstrap distribution fit failed.");
         return boot;
     }
 
     // Return a list of distributions given an array of parameter sets.
     std::vector<DistPtr> distributions(const std::vector<ParameterSet>& parameterSets) {
+        failed_replications_ = 0;
         std::vector<DistPtr> boot(parameterSets.size());
         for (std::size_t idx = 0; idx < parameterSets.size(); ++idx) {
             try {
                 auto dist = distribution_->clone();
                 dist->set_parameters(parameterSets[idx].values);
+                if (!dist->parameters_valid())
+                    throw std::invalid_argument(
+                        "The parameter set does not define a valid distribution");
                 boot[idx] = std::move(dist);
             } catch (...) {
                 boot[idx].reset();
+                ++failed_replications_;
             }
         }
+        if (!parameterSets.empty() &&
+            failed_replications_ == static_cast<int>(parameterSets.size()))
+            throw std::runtime_error("Every bootstrap distribution fit failed.");
         return boot;
     }
 
@@ -195,6 +210,13 @@ class BootstrapAnalysis {
     std::vector<std::vector<double>> quantiles(const std::vector<double>& probabilities) {
         auto owned = distributions();
         DistView view = to_view(owned);
+        return quantiles(probabilities, &view);
+    }
+
+    std::vector<std::vector<double>> quantiles(const std::vector<double>& probabilities,
+                                               const DistView* distributions_in) {
+        std::vector<DistPtr> owned;
+        DistView view = resolve(distributions_in, owned);
         std::vector<std::vector<double>> out(view.size(),
                                              std::vector<double>(probabilities.size()));
         for (std::size_t i = 0; i < probabilities.size(); ++i)
@@ -207,6 +229,13 @@ class BootstrapAnalysis {
     std::vector<std::vector<double>> probabilities(const std::vector<double>& quantiles_in) {
         auto owned = distributions();
         DistView view = to_view(owned);
+        return probabilities(quantiles_in, &view);
+    }
+
+    std::vector<std::vector<double>> probabilities(const std::vector<double>& quantiles_in,
+                                                   const DistView* distributions_in) {
+        std::vector<DistPtr> owned;
+        DistView view = resolve(distributions_in, owned);
         std::vector<std::vector<double>> out(view.size(),
                                              std::vector<double>(quantiles_in.size()));
         for (std::size_t i = 0; i < quantiles_in.size(); ++i)
@@ -246,13 +275,11 @@ class BootstrapAnalysis {
         double max = minMax[1] + shift;
         int order = static_cast<int>(std::floor(std::log10(max) - std::log10(min)));
         int bins = std::max(200, std::min(1000, 100 * order));
-        double delta = (std::log10(max) - std::log10(min)) / (bins - 1);
-        double x = std::log10(min);
-        quantiles.push_back(std::pow(10.0, x) - shift);
-        for (int i = 1; i <= bins - 1; ++i) {
-            x = std::log10(quantiles[static_cast<std::size_t>(i - 1)] + shift) + delta;
-            quantiles.push_back(std::pow(10.0, x) - shift);
-        }
+        const double log_min = std::log10(min);
+        double delta = (std::log10(max) - log_min) / (bins - 1);
+        quantiles.reserve(static_cast<std::size_t>(bins));
+        for (int i = 0; i < bins; ++i)
+            quantiles.push_back(std::pow(10.0, log_min + i * delta) - shift);
 
         // Mean curve.
         results.mean_curve = expected_probabilities(quantiles, probabilities, &view);
@@ -265,22 +292,18 @@ class BootstrapAnalysis {
     std::vector<double> expected_probabilities(const std::vector<double>& quantiles,
                                                const std::vector<double>& probabilities,
                                                const DistView* distributions_in = nullptr) {
+        if (quantiles.size() < 2)
+            throw std::invalid_argument("At least two quantiles are required");
         std::vector<DistPtr> owned;
         DistView view = resolve(distributions_in, owned);
 
         std::vector<double> quants = quantiles;
         std::sort(quants.begin(), quants.end());
-        std::vector<double> expected(quantiles.size());
-        for (std::size_t i = 0; i < quantiles.size(); ++i) {
-            double total = 0.0;
-            for (std::size_t j = 0; j < view.size(); ++j)
-                if (view[j] != nullptr) total += view[j]->cdf(quants[i]);
-            expected[i] = total / static_cast<double>(view.size());
-        }
+        std::vector<double> expected = mean_cdfs(quants, view);
 
-        double minY = std::numeric_limits<double>::max();
-        double maxY = std::numeric_limits<double>::lowest();
-        std::vector<double> yVals{quantiles[0]};
+        double minY = quants[0];
+        double maxY = quants[0];
+        std::vector<double> yVals{quants[0]};
         std::vector<double> xVals{expected[0]};
         for (std::size_t i = 1; i < quantiles.size(); ++i) {
             if (expected[i] > xVals.back()) {
@@ -290,6 +313,9 @@ class BootstrapAnalysis {
                 xVals.push_back(expected[i]);
             }
         }
+        if (xVals.size() < 2)
+            throw std::runtime_error(
+                "The mean bootstrap CDF does not contain two distinct probabilities");
         bool useLogTransform = minY > 0.0 && (std::log10(maxY) - std::log10(minY)) > 1.0;
 
         data::Linear linint(xVals, yVals);
@@ -306,14 +332,7 @@ class BootstrapAnalysis {
         DistView view = resolve(distributions_in, owned);
         std::vector<double> quants = quantiles;
         std::sort(quants.begin(), quants.end());
-        std::vector<double> expected(quantiles.size());
-        for (std::size_t i = 0; i < quantiles.size(); ++i) {
-            double total = 0.0;
-            for (std::size_t j = 0; j < view.size(); ++j)
-                if (view[j] != nullptr) total += view[j]->cdf(quants[i]);
-            expected[i] = total / static_cast<double>(view.size());
-        }
-        return expected;
+        return mean_cdfs(quants, view);
     }
 
     // Returns the min and max quantiles from a bootstrap analysis {min, max}.
@@ -329,6 +348,8 @@ class BootstrapAnalysis {
                 if (maxX > output[1]) output[1] = maxX;
             }
         }
+        if (output[0] == std::numeric_limits<double>::max())
+            throw std::runtime_error("Every bootstrap distribution fit failed.");
         return output;
     }
 
@@ -343,7 +364,8 @@ class BootstrapAnalysis {
         std::array<double, 2> CIs = {alpha / 2.0, 1.0 - alpha / 2.0};
         std::vector<std::array<double, 2>> output(probabilities.size());
         for (std::size_t i = 0; i < probabilities.size(); ++i) {
-            std::vector<double> validValues = valid_quantiles(view, probabilities[i]);
+            std::vector<double> validValues =
+                valid_quantiles(view, probabilities[i], "percentile confidence intervals");
             std::sort(validValues.begin(), validValues.end());
             for (int j = 0; j < 2; ++j)
                 output[i][static_cast<std::size_t>(j)] =
@@ -365,16 +387,18 @@ class BootstrapAnalysis {
         std::array<double, 2> CIs = {alpha / 2.0, 1.0 - alpha / 2.0};
         std::vector<std::array<double, 2>> output(probabilities.size());
         for (std::size_t i = 0; i < probabilities.size(); ++i) {
-            double P0 = 0.0;
+            int count_leq = 0;
             std::vector<double> XValues(view.size());
             for (std::size_t idx = 0; idx < view.size(); ++idx) {
                 XValues[idx] = view[idx] != nullptr ? view[idx]->inverse_cdf(probabilities[i]) : kNaN;
                 // C# `XValues[idx] != double.NaN` is a no-op; effective test is value <= population.
-                if (XValues[idx] <= populationXValues[i]) P0 += 1.0;
+                if (std::isfinite(XValues[idx]) && XValues[idx] <= populationXValues[i])
+                    ++count_leq;
             }
-            P0 = P0 / (static_cast<double>(view.size()) + 1.0);
-
-            std::vector<double> validValues = filter_valid(XValues);
+            std::vector<double> validValues = finite_values_or_throw(
+                XValues, "bias-corrected confidence intervals");
+            const double P0 = static_cast<double>(count_leq) /
+                              (static_cast<double>(validValues.size()) + 1.0);
             std::sort(validValues.begin(), validValues.end());
             for (int j = 0; j < 2; ++j) {
                 double Z0 = distributions::Normal::standard_z(P0);
@@ -392,7 +416,7 @@ class BootstrapAnalysis {
         const DistView* distributions_in = nullptr) {
         std::vector<double> populationXValues(probabilities.size());
         for (std::size_t i = 0; i < probabilities.size(); ++i)
-            populationXValues[i] = std::pow(distribution_->inverse_cdf(probabilities[i]), 1.0 / 3.0);
+            populationXValues[i] = cube_root(distribution_->inverse_cdf(probabilities[i]));
 
         std::vector<DistPtr> owned;
         DistView view = resolve(distributions_in, owned);
@@ -402,9 +426,10 @@ class BootstrapAnalysis {
             std::vector<double> XValues(view.size());
             for (std::size_t idx = 0; idx < view.size(); ++idx)
                 XValues[idx] = view[idx] != nullptr
-                                   ? std::pow(view[idx]->inverse_cdf(probabilities[i]), 1.0 / 3.0)
+                                   ? cube_root(view[idx]->inverse_cdf(probabilities[i]))
                                    : kNaN;
-            std::vector<double> validValues = filter_valid(XValues);
+            std::vector<double> validValues = finite_values_or_throw(
+                XValues, "normal confidence intervals", 2);
             double SE = data::standard_deviation(validValues);
             for (int j = 0; j < 2; ++j) {
                 double Z = distributions::Normal::standard_z(CIs[static_cast<std::size_t>(j)]);
@@ -434,18 +459,21 @@ class BootstrapAnalysis {
         auto owned = distributions();
         DistView view = to_view(owned);
         for (std::size_t i = 0; i < probabilities.size(); ++i) {
-            double P0 = 0.0;
+            int count_leq = 0;
             std::vector<double> XValues(static_cast<std::size_t>(replications_));
             for (int idx = 0; idx < replications_; ++idx) {
                 XValues[static_cast<std::size_t>(idx)] =
                     view[static_cast<std::size_t>(idx)] != nullptr
                         ? view[static_cast<std::size_t>(idx)]->inverse_cdf(probabilities[i])
                         : kNaN;
-                if (XValues[static_cast<std::size_t>(idx)] <= populationXValues[i]) P0 += 1.0;
+                if (std::isfinite(XValues[static_cast<std::size_t>(idx)]) &&
+                    XValues[static_cast<std::size_t>(idx)] <= populationXValues[i])
+                    ++count_leq;
             }
-            P0 = (P0 + 1.0) / (static_cast<double>(replications_) + 1.0);
-
-            std::vector<double> validValues = filter_valid(XValues);
+            std::vector<double> validValues =
+                finite_values_or_throw(XValues, "BCa confidence intervals");
+            const double P0 = static_cast<double>(count_leq) /
+                              (static_cast<double>(validValues.size()) + 1.0);
             std::sort(validValues.begin(), validValues.end());
             for (int j = 0; j < 2; ++j) {
                 double Z0 = distributions::Normal::standard_z(P0);
@@ -465,7 +493,7 @@ class BootstrapAnalysis {
         std::size_t p = probabilities.size();
         std::vector<double> populationXValues(p);
         for (std::size_t i = 0; i < p; ++i)
-            populationXValues[i] = std::pow(distribution_->inverse_cdf(probabilities[i]), 1.0 / 3.0);
+            populationXValues[i] = cube_root(distribution_->inverse_cdf(probabilities[i]));
 
         std::vector<std::vector<double>> xValues(static_cast<std::size_t>(replications_),
                                                  std::vector<double>(p));
@@ -476,6 +504,7 @@ class BootstrapAnalysis {
 
         sampling::MersenneTwister r(static_cast<std::uint32_t>(prng_seed_));
         auto seeds = utilities::next_integers(r, replications_);
+        int failed_fits = 0;
         for (int i = 0; i < replications_; ++i) {
             std::size_t ui = static_cast<std::size_t>(i);
             try {
@@ -487,7 +516,7 @@ class BootstrapAnalysis {
 
                 std::vector<double> bootXValues(p);
                 for (std::size_t j = 0; j < p; ++j)
-                    bootXValues[j] = std::pow(newDistribution->inverse_cdf(probabilities[j]), 1.0 / 3.0);
+                    bootXValues[j] = cube_root(newDistribution->inverse_cdf(probabilities[j]));
 
                 auto bootSE = bootstrap_standard_error(*newDistribution, probabilities, 300, seeds[ui]);
                 for (std::size_t j = 0; j < p; ++j) {
@@ -495,23 +524,29 @@ class BootstrapAnalysis {
                     studentT[ui][j] = (populationXValues[j] - bootXValues[j]) / bootSE[j];
                 }
             } catch (...) {
+                ++failed_fits;
                 for (std::size_t j = 0; j < p; ++j) {
                     xValues[ui][j] = kNaN;
                     studentT[ui][j] = kNaN;
                 }
             }
         }
+        if (failed_fits == replications_)
+            throw std::runtime_error("Every studentized bootstrap fit failed.");
 
         for (std::size_t i = 0; i < p; ++i) {
             std::vector<double> XValues;
             std::vector<double> TValues;
             for (int k = 0; k < replications_; ++k) {
                 std::size_t uk = static_cast<std::size_t>(k);
-                if (!std::isnan(xValues[uk][i])) {
+                if (std::isfinite(xValues[uk][i]) && std::isfinite(studentT[uk][i])) {
                     XValues.push_back(xValues[uk][i]);
                     TValues.push_back(studentT[uk][i]);
                 }
             }
+            if (XValues.size() < 2)
+                throw std::runtime_error(
+                    "Insufficient finite fits for studentized confidence intervals");
             double SE = data::standard_deviation(XValues);
             std::sort(TValues.begin(), TValues.end());
             for (int j = 0; j < 2; ++j) {
@@ -529,31 +564,53 @@ class BootstrapAnalysis {
                                                const std::vector<double>& thetaHats) {
         std::size_t N = sampleData.size();
         std::size_t p = probabilities.size();
-        std::vector<double> I2(p, 0.0);
-        std::vector<double> I3(p, 0.0);
         std::vector<double> a(p, 0.0);
+        if (N == 0) return a;
+        const std::size_t chunks = std::min(kReductionChunks, N);
+        std::vector<std::vector<double>> chunk_i2(chunks, std::vector<double>(p, 0.0));
+        std::vector<std::vector<double>> chunk_i3(chunks, std::vector<double>(p, 0.0));
+        std::vector<std::size_t> chunk_valid(chunks, 0);
 
-        for (std::size_t idx = 0; idx < N; ++idx) {
-            std::vector<double> jackSample;
-            jackSample.reserve(N - 1);
-            for (std::size_t k = 0; k < N; ++k)
-                if (k != idx) jackSample.push_back(sampleData[k]);
+        for (std::size_t chunk = 0; chunk < chunks; ++chunk) {
+            const std::size_t start = chunk * N / chunks;
+            const std::size_t end = (chunk + 1) * N / chunks;
+            for (std::size_t idx = start; idx < end; ++idx) {
+                std::vector<double> jackSample;
+                jackSample.reserve(N - 1);
+                for (std::size_t k = 0; k < N; ++k)
+                    if (k != idx) jackSample.push_back(sampleData[k]);
 
-            auto newDistribution = distribution_->clone();
-            try {
-                auto* est = dynamic_cast<IEstimation*>(newDistribution.get());
-                est->estimate(jackSample, estimation_method_);
-                for (std::size_t i = 0; i < p; ++i) {
-                    double thetaJack = newDistribution->inverse_cdf(probabilities[i]);
-                    I2[i] += std::pow(thetaHats[i] - thetaJack, 2.0);
-                    I3[i] += std::pow(thetaHats[i] - thetaJack, 3.0);
+                auto newDistribution = distribution_->clone();
+                try {
+                    auto* est = dynamic_cast<IEstimation*>(newDistribution.get());
+                    est->estimate(jackSample, estimation_method_);
+                    for (std::size_t i = 0; i < p; ++i) {
+                        double thetaJack = newDistribution->inverse_cdf(probabilities[i]);
+                        const double difference = thetaHats[i] - thetaJack;
+                        chunk_i2[chunk][i] += difference * difference;
+                        chunk_i3[chunk][i] += difference * difference * difference;
+                    }
+                    ++chunk_valid[chunk];
+                } catch (...) {
+                    // MLE and certain L-moments methods can fail to find a solution.
                 }
-            } catch (...) {
-                // MLE and certain L-moments methods can fail to find a solution.
             }
         }
-        for (std::size_t i = 0; i < p; ++i)
-            a[i] = I3[i] / (std::pow(I2[i], 1.5) * 6.0);
+        std::size_t valid_count = 0;
+        for (std::size_t count : chunk_valid) valid_count += count;
+        if (valid_count == 0)
+            throw std::runtime_error("Every jackknife acceleration fit failed.");
+        for (std::size_t i = 0; i < p; ++i) {
+            double second = 0.0;
+            double third = 0.0;
+            for (std::size_t chunk = 0; chunk < chunks; ++chunk) {
+                second += chunk_i2[chunk][i];
+                third += chunk_i3[chunk][i];
+            }
+            a[i] = second > 0.0 && std::isfinite(second)
+                       ? third / (std::pow(second, 1.5) * 6.0)
+                       : 0.0;
+        }
         return a;
     }
 
@@ -567,6 +624,7 @@ class BootstrapAnalysis {
         std::vector<std::vector<double>> xValues(static_cast<std::size_t>(replications),
                                                  std::vector<double>(p, kNaN));
         std::vector<double> se(p);
+        int failed_fits = 0;
         for (int i = 0; i < replications; ++i) {
             std::size_t ui = static_cast<std::size_t>(i);
             try {
@@ -575,15 +633,20 @@ class BootstrapAnalysis {
                 auto* est = dynamic_cast<IEstimation*>(bootDist.get());
                 est->estimate(sample, estimation_method_);
                 for (std::size_t j = 0; j < p; ++j)
-                    xValues[ui][j] = std::pow(bootDist->inverse_cdf(probabilities[j]), 1.0 / 3.0);
+                    xValues[ui][j] = cube_root(bootDist->inverse_cdf(probabilities[j]));
             } catch (...) {
                 // On fail, leave the NaN-initialized column.
+                ++failed_fits;
             }
         }
+        if (failed_fits == replications)
+            throw std::runtime_error("Every inner bootstrap fit failed.");
         for (std::size_t i = 0; i < p; ++i) {
             std::vector<double> col(static_cast<std::size_t>(replications));
             for (int k = 0; k < replications; ++k) col[static_cast<std::size_t>(k)] = xValues[static_cast<std::size_t>(k)][i];
-            se[i] = data::standard_deviation(col);
+            const auto successful =
+                finite_values_or_throw(col, "inner bootstrap standard errors", 2);
+            se[i] = data::standard_deviation(successful);
         }
         return se;
     }
@@ -605,20 +668,68 @@ class BootstrapAnalysis {
     }
 
     // Collect the inverse-CDF quantiles at `probability` across the view, dropping null dists.
-    static std::vector<double> valid_quantiles(const DistView& view, double probability) {
+    static std::vector<double> valid_quantiles(const DistView& view, double probability,
+                                               const char* operation) {
         std::vector<double> x(view.size());
         for (std::size_t idx = 0; idx < view.size(); ++idx)
             x[idx] = view[idx] != nullptr ? view[idx]->inverse_cdf(probability) : kNaN;
-        return filter_valid(x);
+        return finite_values_or_throw(x, operation);
     }
 
-    // Drop NaN entries (order-preserving), mirroring the C# valid-value compaction.
-    static std::vector<double> filter_valid(const std::vector<double>& values) {
+    static std::vector<double> finite_values_or_throw(const std::vector<double>& values,
+                                                      const char* operation,
+                                                      std::size_t minimum_count = 1) {
         std::vector<double> out;
         out.reserve(values.size());
         for (double v : values)
-            if (!std::isnan(v)) out.push_back(v);
+            if (std::isfinite(v)) out.push_back(v);
+        if (out.size() < minimum_count)
+            throw std::runtime_error(std::string("Insufficient finite fits for ") + operation);
         return out;
+    }
+
+    static std::size_t successful_distribution_count(const DistView& view) {
+        std::size_t count = 0;
+        for (const auto* distribution : view)
+            if (distribution != nullptr) ++count;
+        if (count == 0) throw std::runtime_error("Every bootstrap distribution fit failed.");
+        return count;
+    }
+
+    static std::vector<double> mean_cdfs(const std::vector<double>& quantiles,
+                                         const DistView& view) {
+        if (quantiles.empty()) return {};
+        if (view.empty()) throw std::runtime_error("No bootstrap distributions were supplied");
+        const std::size_t chunks = std::min(kReductionChunks, view.size());
+        std::vector<std::vector<double>> chunk_sums(
+            chunks, std::vector<double>(quantiles.size(), 0.0));
+        std::vector<std::size_t> chunk_valid(chunks, 0);
+        for (std::size_t chunk = 0; chunk < chunks; ++chunk) {
+            const std::size_t start = chunk * view.size() / chunks;
+            const std::size_t end = (chunk + 1) * view.size() / chunks;
+            for (std::size_t index = start; index < end; ++index) {
+                if (view[index] == nullptr) continue;
+                ++chunk_valid[chunk];
+                for (std::size_t i = 0; i < quantiles.size(); ++i)
+                    chunk_sums[chunk][i] += view[index]->cdf(quantiles[i]);
+            }
+        }
+        std::size_t valid_count = 0;
+        for (std::size_t count : chunk_valid) valid_count += count;
+        if (valid_count == 0)
+            throw std::runtime_error("Every bootstrap distribution fit failed");
+        std::vector<double> expected(quantiles.size(), 0.0);
+        for (std::size_t i = 0; i < quantiles.size(); ++i) {
+            for (std::size_t chunk = 0; chunk < chunks; ++chunk)
+                expected[i] += chunk_sums[chunk][i];
+            expected[i] /= static_cast<double>(valid_count);
+        }
+        return expected;
+    }
+
+    static double cube_root(double value) {
+        if (value == 0.0) return value;
+        return value < 0.0 ? -std::pow(-value, 1.0 / 3.0) : std::pow(value, 1.0 / 3.0);
     }
 
     DistPtr distribution_;
@@ -629,6 +740,7 @@ class BootstrapAnalysis {
     int replications_ = 0;
     int prng_seed_ = 0;
     int retries_ = 20;
+    int failed_replications_ = 0;
 };
 
 }  // namespace corehydro::numerics

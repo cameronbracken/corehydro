@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Uncertainty Analysis/UncertaintyAnalysisResults.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Uncertainty Analysis/UncertaintyAnalysisResults.cs @ 7e8e8d1
 //
 // Result container every univariate uncertainty analysis assembles: the mode/point-estimate
 // curve, the mean (predictive) curve, the confidence-interval band, the recorded parameter sets,
@@ -61,8 +61,7 @@ class UncertaintyAnalysisResults {
         const std::vector<double>& probabilities, double alpha = 0.1,
         double minProbability = 0.001, double maxProbability = 1.0 - 1e-9,
         bool recordParameterSets = false) {
-        if (sampledDistributions.empty())
-            throw std::invalid_argument("Sampled distributions cannot be null or empty.");
+        validate_sampled_distributions(sampledDistributions);
         if (probabilities.empty())
             throw std::invalid_argument("Probabilities cannot be null or empty.");
 
@@ -129,8 +128,7 @@ class UncertaintyAnalysisResults {
     void process_confidence_intervals(
         const std::vector<const UnivariateDistributionBase*>& sampledDistributions,
         const std::vector<double>& probabilities, double alpha = 0.1) {
-        if (sampledDistributions.empty())
-            throw std::invalid_argument("Sampled distributions cannot be null or empty.");
+        validate_sampled_distributions(sampledDistributions);
         if (probabilities.empty())
             throw std::invalid_argument("Probabilities cannot be null or empty.");
         if (alpha <= 0.0 || alpha >= 1.0)
@@ -151,11 +149,14 @@ class UncertaintyAnalysisResults {
                                     : std::numeric_limits<double>::quiet_NaN();
             }
 
-            // Filter valid values (drop NaN) and sort.
+            // Filter non-finite values from failed or invalid fits and sort.
             std::vector<double> valid_values;
             valid_values.reserve(B);
             for (std::size_t j = 0; j < B; ++j)
-                if (!std::isnan(x_values[j])) valid_values.push_back(x_values[j]);
+                if (std::isfinite(x_values[j])) valid_values.push_back(x_values[j]);
+            if (valid_values.empty())
+                throw std::runtime_error(
+                    "No finite sampled quantiles are available for the requested probability.");
             std::sort(valid_values.begin(), valid_values.end());
 
             confidence_intervals[i][0] = data::percentile(valid_values, lowerCI, true);
@@ -169,18 +170,19 @@ class UncertaintyAnalysisResults {
         const std::vector<const UnivariateDistributionBase*>& sampledDistributions,
         const std::vector<double>& probabilities, double minProbability = 0.001,
         double maxProbability = 1.0 - 1e-9) {
-        if (sampledDistributions.empty())
-            throw std::invalid_argument("Sampled distributions cannot be null or empty.");
+        validate_sampled_distributions(sampledDistributions);
         if (probabilities.empty())
             throw std::invalid_argument("Probabilities cannot be null or empty.");
 
         std::size_t B = sampledDistributions.size();
+        std::size_t valid_distributions = 0;
 
         // Compute min and max X values across all distributions (C# Parallel.For -> serial).
         double minX = std::numeric_limits<double>::max();
         double maxX = std::numeric_limits<double>::lowest();
         for (std::size_t j = 0; j < B; ++j) {
             if (sampledDistributions[j] != nullptr) {
+                ++valid_distributions;
                 double innerMin = sampledDistributions[j]->inverse_cdf(minProbability);
                 double innerMax = sampledDistributions[j]->inverse_cdf(maxProbability);
                 if (innerMin < minX) minX = innerMin;
@@ -210,7 +212,8 @@ class UncertaintyAnalysisResults {
                 if (sampledDistributions[j] != nullptr)
                     total += sampledDistributions[j]->cdf(quantiles[static_cast<std::size_t>(i)]);
             }
-            expected[static_cast<std::size_t>(i)] = total / static_cast<double>(B);
+            expected[static_cast<std::size_t>(i)] =
+                total / static_cast<double>(valid_distributions);
         }
 
         // Build monotonic interpolation points.
@@ -246,14 +249,45 @@ class UncertaintyAnalysisResults {
             throw std::invalid_argument("Sampled distributions cannot be null or empty.");
 
         std::size_t B = sampledDistributions.size();
+        std::size_t number_of_parameters =
+            parent_distribution != nullptr
+                ? static_cast<std::size_t>(parent_distribution->number_of_parameters())
+                : 0;
+        if (number_of_parameters == 0) {
+            for (const auto* distribution : sampledDistributions) {
+                if (distribution != nullptr) {
+                    number_of_parameters =
+                        static_cast<std::size_t>(distribution->number_of_parameters());
+                    break;
+                }
+            }
+        }
+        if (number_of_parameters == 0)
+            throw std::invalid_argument(
+                "Every sampled distribution is null; the parameter count is unknown.");
         parameter_sets.assign(B, math::optimization::ParameterSet());
         for (std::size_t idx = 0; idx < B; ++idx) {
             if (sampledDistributions[idx] != nullptr) {
                 parameter_sets[idx] = math::optimization::ParameterSet(
                     sampledDistributions[idx]->get_parameters(),
                     std::numeric_limits<double>::quiet_NaN());
+            } else {
+                parameter_sets[idx] = math::optimization::ParameterSet(
+                    std::vector<double>(number_of_parameters,
+                                        std::numeric_limits<double>::quiet_NaN()),
+                    std::numeric_limits<double>::quiet_NaN());
             }
         }
+    }
+
+   private:
+    static void validate_sampled_distributions(
+        const std::vector<const UnivariateDistributionBase*>& sampledDistributions) {
+        if (sampledDistributions.empty())
+            throw std::invalid_argument("Sampled distributions cannot be null or empty.");
+        for (const auto* distribution : sampledDistributions)
+            if (distribution != nullptr) return;
+        throw std::runtime_error("At least one sampled distribution must be non-null.");
     }
 };
 

@@ -438,6 +438,37 @@ void test_run_regular_bootstrap_ignores_pivotal_only_properties() {
     CHECK_EQ(boot.raw_bootstrap_parameter_sets().size(), std::size_t{0});
 }
 
+void test_regular_bca_ties_and_failed_jackknife_are_deterministic() {
+    Boot boot(Data{1.0, 2.0, 3.0, 4.0},
+              ParameterSet(std::vector<double>{2.5}, kNaN));
+    boot.replicates = 4;
+    boot.max_retries = 1;
+    boot.resample_function = [](const Data& data, const ParameterSet&, MersenneTwister&) {
+        return data;
+    };
+    boot.fit_function = [](const Data& data) {
+        if (data.size() == 3 && data.front() == 2.0)
+            throw std::runtime_error("intentional jackknife failure");
+        return ParameterSet(std::vector<double>{2.5}, kNaN);
+    };
+    boot.statistic_function = [](const ParameterSet& parameters) {
+        return std::vector<double>{parameters.values[0]};
+    };
+    boot.sample_size_function = [](const Data& data) { return static_cast<int>(data.size()); };
+    boot.jackknife_function = [](const Data& data, int omitted) {
+        Data result;
+        for (std::size_t i = 0; i < data.size(); ++i)
+            if (static_cast<int>(i) != omitted) result.push_back(data[i]);
+        return result;
+    };
+
+    boot.run();
+    const auto result = boot.get_confidence_intervals(BootstrapCIMethod::BCa, 0.1);
+    CHECK_EQ(boot.failed_jackknife_replicates(), 1);
+    CHECK_NEAR(result.statistic_results[0].lower_ci, 2.5, 0.0);
+    CHECK_NEAR(result.statistic_results[0].upper_ci, 2.5, 0.0);
+}
+
 // RunPivotalBootstrap_WithoutFitWithCovarianceFunction_Throws (line 327).
 void test_run_pivotal_bootstrap_without_fit_with_covariance_function_throws() {
     auto parent = fit_of({10.0}, mat(1, {4.0}));
@@ -551,6 +582,7 @@ int main() {
     test_transform_replicate_filter_rejects_raw_fits();
     test_run_pivotal_bootstrap_ignores_regular_fit_function();
     test_run_regular_bootstrap_ignores_pivotal_only_properties();
+    test_regular_bca_ties_and_failed_jackknife_are_deterministic();
     test_run_pivotal_bootstrap_without_fit_with_covariance_function_throws();
     test_run_pivotal_bootstrap_without_original_covariance_throws();
     test_get_confidence_intervals_bca_after_pivotal_run_throws();
