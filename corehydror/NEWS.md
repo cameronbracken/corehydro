@@ -1,4 +1,4 @@
-# corehydror (development version)
+# corehydror 0.14.0
 
 Numerics v2.2.0 sync. Calls affected by upstream numerical changes include tied-rank hypothesis
 tests, distribution tails and uncertainty estimates, bounded optimizers, shortest paths, Lang

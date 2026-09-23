@@ -7,7 +7,7 @@ resolution is confirmed -- fixed upstream and ported, or fixed on the port side 
 `docs/upstream-csharp-issues-resolved.md`; a code comment that points here for a resolved finding
 is one hop away. The July 2026 upstream sync re-checked every entry against the shipped source at
 the pins above, and an August 2026 pass re-verified each entry below directly against the vendored
-source and the current packages (v0.13.0): every upstream claim in this file was re-confirmed
+source and the current packages (now v0.14.0): every upstream claim in this file was re-confirmed
 present at the pins (a handful of scope refinements from that pass are recorded inline in the
 affected entries), and at that date upstream `main` carried no code commits beyond the pins
 (Numerics v2.2.0 was reconciled on 2026-09-22; RMC-BestFit remains at the v2.0.0 pin).

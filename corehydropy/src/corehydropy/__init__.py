@@ -1,7 +1,7 @@
 """corehydropy: Bayesian flood-frequency and extreme-value analysis.
 
 Python bindings to a shared C++ port of the USACE-RMC Numerics / RMC.BestFit
-libraries, validated value-by-value against Numerics 2.1.4 and RMC.BestFit 2.0.0.
+libraries, validated value-by-value against Numerics 2.2.0 and RMC.BestFit 2.0.0.
 """
 
 from __future__ import annotations
