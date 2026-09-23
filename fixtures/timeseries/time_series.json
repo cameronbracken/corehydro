@@ -1,7 +1,7 @@
 {
   "kind": "toolbox",
   "group": "timeseries",
-  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a. Every value is a Test_TimeSeries.cs literal (Test_MovingAverage, Test_MovingSum, Test_Difference, Test_Cumulative, Test_Missing, Test_ConvertTimeInterval_1hr_to_6hr, Test_SummaryStats, Test_Stats, Test_MonthlyStats, Test_MonthlyFrequency) except the SummaryHypothesisTest case, whose upstream literals are R's own outputs compared at 1E-1; those seven were harvested with verify_oracles.py --dump so the gate pins the C# values rather than the looser R reference. core/tests/test_time_series_container.cpp asserts the R literals separately at the C# tolerance.",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 7e8e8d1. Every value is a Test_TimeSeries.cs literal (Test_MovingAverage, Test_MovingSum, Test_Difference, Test_Cumulative, Test_Missing, Test_ConvertTimeInterval_1hr_to_6hr, Test_SummaryStats, Test_Stats, Test_MonthlyStats, Test_MonthlyFrequency) except the SummaryHypothesisTest case, whose upstream literals are R's own outputs compared at 1E-1; those seven were harvested with verify_oracles.py --dump so the gate pins the C# values rather than the looser R reference. core/tests/test_time_series_container.cpp asserts the R literals separately at the C# tolerance.",
   "reference": "Dates travel as seconds since 1970-01-01; a series result is a row-major {date, value} matrix, so an even index selects a date and an odd index the value beside it.",
   "cases": [
     {

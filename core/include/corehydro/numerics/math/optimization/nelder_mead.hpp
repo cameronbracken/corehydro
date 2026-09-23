@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Local/NelderMead.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Local/NelderMead.cs @ 7e8e8d1
 //             + Numerics/Mathematics/Optimization/Support/Optimizer.cs (base behavior)
 //
 // Nelder-Mead downhill simplex (Sprott 1991 / Press et al.). The Optimizer-base

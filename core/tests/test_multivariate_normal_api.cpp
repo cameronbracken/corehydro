@@ -1,5 +1,5 @@
 // C++-only ctest for the v2.1.4 MultivariateNormal Try/Marginal/Conditional API
-// (Numerics/Distributions/Multivariate/MultivariateNormal.cs @ 2a0357a) -- the parts of the
+// (Numerics/Distributions/Multivariate/MultivariateNormal.cs @ 7e8e8d1) -- the parts of the
 // new Test_Numerics/Distributions/Multivariate/Test_MultivariateNormal.cs coverage that do not
 // fit the declarative fixture shape: a STATEFUL non-throwing-mutation sequence
 // (TrySetCovariance/TrySetParameters/IsDensityValid, where each assertion depends on the

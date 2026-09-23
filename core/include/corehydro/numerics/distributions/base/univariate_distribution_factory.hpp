@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Base/UnivariateDistributionFactory.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Base/UnivariateDistributionFactory.cs @ 7e8e8d1
 //
 // Constructs a default-parameterized distribution from its type. The C# if/else chain
 // becomes a switch; the XElement overload is dropped (serialization is a desktop concern).
@@ -18,6 +18,8 @@
 // `default:` throw doesn't distinguish "legitimately unsupported" from "not yet ported,"
 // unlike C#'s two distinct exception types, since the header comment above already treats
 // every unhandled case identically (gaps surface immediately, by design).
+// v2.2.0 only changes the C# XML construction path. Corehydro's JSON factory contract is
+// unchanged and was rechecked against the complete v2.2.0 type switch.
 //
 // `try_create_distribution` adapts C#'s new `bool TryCreateDistribution(type, out dist)` to
 // this factory's existing return-a-unique_ptr idiom: nullptr on any failure (unsupported,

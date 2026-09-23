@@ -1383,3 +1383,830 @@ J-statistic) are unchanged and still correct as written.
 - **Suggested C# fix:** validate `nodeCount` against `edges.Max(o => Math.Max(o.FromIndex,
   o.ToIndex)) + 1` at the top of both overloads and throw `ArgumentOutOfRangeException(nameof(
   nodeCount), …)`, so the caller learns which argument is wrong.
+
+## Reconciliation pass, Numerics v2.2.0
+
+The entries below moved from the open log after direct comparison with the shipped v2.2.0 source.
+Each added status line names the corehydro task that adopted the upstream behavior. The remainder
+of each entry is retained verbatim as the pre-resolution record.
+
+## CONSISTENCY/API — JoeCopula has no SetThetaFromTau, unlike its Archimedean siblings
+- **Status (Numerics v2.2.0, corehydro Task 8): RESOLVED UPSTREAM AND PORTED.** Joe now implements the method-of-moments tau fit, and corehydro ports and fixtures it.
+
+- **Where:** `Numerics/Distributions/Bivariate Copulas/JoeCopula.cs`.
+- **What:** `ClaytonCopula`, `AMHCopula`, and `GumbelCopula` each implement a `SetThetaFromTau`
+  method-of-moments fit (Kendall's tau -> theta, closed-form for Clayton/Gumbel, Brent-solved for
+  AMH). `JoeCopula` has no such method -- confirmed by `grep -n SetThetaFromTau` across the entire
+  `Numerics/Distributions/Bivariate Copulas/` directory (three hits: Clayton, AMH, Gumbel; zero for
+  Joe) and by `Test_JoeCopula.cs` having every other concrete copula's `Test_MOM_Fit` test method
+  but not its own. This is not a wrong-output bug (nothing crashes or returns a bad value) --
+  it is a missing feature relative to sibling classes that otherwise share an (almost) identical
+  API surface, and there is no algorithmic reason Joe's tau could not be Brent-solved the same way
+  AMH's is (Joe's generator, like AMH's, has no closed-form tau inversion, but that has not stopped
+  the other three).
+- **Evidence:** direct inspection of all five `Bivariate Copulas/*.cs` files (Task 8); this is also
+  why the Phase 2 plan text and an earlier draft of `fixtures/README.md` incorrectly listed Joe as
+  tau-capable (both were apparently written from the class's general shape/expected symmetry with
+  Clayton/AMH/Gumbel rather than the actual source) -- corrected in both places during Task 8.
+- **Port handling:** `joe_copula.hpp` (Task 8) does NOT add a `set_theta_from_tau` method, matching
+  the C# source exactly; `joe_copula.json` has no `"tau"` fixture case, and the three
+  `set_theta_from_tau_dispatch` glue functions (`core/tests/test_fixtures.cpp`,
+  `corehydror/src/copula.cpp`, `corehydropy/src/bindings/copula.cpp`) plus the oracle emitter's
+  `SetThetaFromTauDispatch` have no `"Joe"` branch (each has a NOTE comment explaining the
+  omission).
+- **Suggested C# fix:** add `JoeCopula.SetThetaFromTau`, e.g. `Theta = Brent.Solve(t => { ... } -
+  tau, 1d, 100d)` mirroring `GumbelCopula`'s pattern but for Joe's tau relationship, for API parity
+  with Clayton/AMH/Gumbel. Not urgent -- MPL/IFM/MLE fits already work for Joe via the shared
+  `BivariateCopulaEstimation` path.
+
+## ROBUSTNESS — `Bootstrap.ComputeAccelerationConstants`'s `Tools.ParallelAdd` reduction is not bit-reproducible run-to-run
+- **Status (Numerics v2.2.0, corehydro Task 12): RESOLVED UPSTREAM AND PORTED.** The reduction is deterministic in v2.2.0, and corehydro adopted the same ordered arithmetic.
+
+- **Where:** `Numerics/Sampling/Bootstrap/Bootstrap.cs`, `ComputeAccelerationConstants` (its
+  `Parallel.For(0, N, idx => { ... Tools.ParallelAdd(ref I2[i], diff * diff); Tools.ParallelAdd
+  (ref I3[i], diff * diff * diff); ... })` loop), backed by `Numerics/Utilities/Tools.cs`'s
+  `ParallelAdd` (a CAS retry loop over `Interlocked.CompareExchange`).
+- **What:** `ParallelAdd` is a correct lock-free accumulator (no lost updates), but it does NOT
+  fix the ORDER in which concurrent jackknife-sample contributions land in `I2[i]`/`I3[i]` --
+  that order depends on the .NET thread pool's scheduling of the `Parallel.For` partitions, which
+  is not guaranteed deterministic across runs, machines, or core counts. Floating-point addition
+  is not associative, so a different accumulation order can (in general) produce a different
+  last-few-bits sum, even though every run adds the exact same set of addends. The resulting BCa
+  acceleration constant, and therefore the BCa confidence interval bounds, inherit this
+  run-to-run variability.
+- **Evidence (reproduced against the real C# library):** the oracle emitter's `--dump` output for
+  the `bca` bootstrap fixture case was captured across four independent runs of the SAME process
+  invocation, sequentially, on the development machine, and diffed byte-for-byte -- all four
+  runs were BIT-IDENTICAL (a low-core-count environment apparently schedules this small,
+  100-jackknife-sample `Parallel.For` deterministically in practice), i.e. the measured wobble
+  was exactly `0` on this machine, though the reduction remains order-dependent BY CONSTRUCTION
+  and a different core count/thread-pool configuration/.NET version could legitimately produce a
+  different summation order and a different last-few-bits result.
+- **Port handling:** this port replaces the `Parallel.For` + `Tools.ParallelAdd` pair with a
+  plain serial accumulation in jackknife-index order (see `bootstrap.hpp`'s file header BCa
+  HAZARD note and `compute_acceleration_constants`'s own comment) -- deterministic within the
+  C++ port, but not a bit-for-bit reproduction of C#'s reduction order. The `bca` fixture case's
+  CI-bound assertions therefore use a LOOSE `mode: "rel", tol: 1e-6` (three orders of magnitude
+  looser than every other CI method's `1e-9`), sized to the reduction's inherent
+  order-dependence rather than to any measured instability (which was zero on this machine) --
+  see `fixtures/README.md`'s `bootstrap` schema section for the full tolerance rationale.
+- **Suggested C# fix:** none required upstream for correctness (the CAS loop is race-free); if
+  bit-reproducible BCa intervals across runs/machines becomes a design goal, replace the
+  `Parallel.For`/`ParallelAdd` pair with a deterministic-order reduction (e.g. `Parallel.For`
+  into per-partition local accumulators, combined in a fixed final pass) or a plain serial loop.
+
+## ROBUSTNESS — `Statistics.Percentile`'s `k` range check cannot see a NaN, and the C++ port's float-to-int conversion is undefined where C#'s is not
+- **Status (Numerics v2.2.0, corehydro Task 1): RESOLVED UPSTREAM AND PORTED.** Percentiles now reject non-finite probabilities, and corehydro applies the same validation.
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs`, `Percentile(IList<double>, double k, bool)`
+  (~line 544); ported at `core/include/corehydro/numerics/data/statistics.hpp`.
+- **What:** the guard is `if (k < 0.0 || k > 1.0) throw ...`. Every comparison against NaN is
+  false, so a NaN `k` passes it and reaches `int lower = (int)Math.Floor(h)` with `h = NaN`.
+- **Why it is harmless in C# and not in C++:** .NET Core 3.0 onward DEFINES the float-to-integer
+  conversion to saturate, so `(int)double.NaN` is 0 and C# returns
+  `sortedData[0] + NaN * (sortedData[0] - sortedData[0])`, i.e. NaN — an odd answer for an
+  out-of-range request, but a safe one. C++ leaves that conversion UNDEFINED. AArch64's `fcvtzs`
+  saturates the same way C# does, so the port returned NaN and looked correct; x86-64's
+  `cvttsd2si` yields `INT_MIN`, and indexing the sample with it is a wild read.
+- **Evidence:** an x86_64 build of the pre-fix body prints `h=nan lower=-2147483648
+  upper=-2147483648` and dies with SIGSEGV; the same source built for arm64 prints
+  `lower=0 upper=0` and returns `nan`. UBSan on macOS reports
+  `statistics.hpp:204:34: runtime error: nan is outside the range of representable values of
+  type 'int'` regardless of ISA.
+- **Reachable, not hypothetical:** `Bootstrap<TData>.ComputeAccelerationConstants` divides
+  `i3 / (i2^1.5 * 6)`, which is `0 / 0` whenever every jackknife sample fails. That NaN becomes
+  the acceleration constant, passes through `Normal.StandardCDF` unchanged, and arrives at
+  `Percentile` as `k`. It is what a BCa run does after a jackknife delegate throws, and it
+  segfaulted the R session, the Python interpreter and the C++ ctest binary on every gcc
+  platform. Fixed in the port; see the comment at the call site.
+- **Port handling:** the port now returns NaN explicitly for a NaN `k`. This REPRODUCES the C#
+  result exactly (it is what .NET's defined saturation computes) while removing the undefined
+  behaviour, so it is a fidelity fix rather than a behaviour change.
+- **Suggested C# fix:** reject a non-finite `k` in the range check —
+  `if (double.IsNaN(k) || k < 0.0 || k > 1.0) throw new ArgumentOutOfRangeException(...)`. The
+  deeper fix belongs in `ComputeAccelerationConstants`, which should report that it had no usable
+  jackknife samples rather than hand a NaN acceleration constant downstream.
+
+## BUG — `Statistics.LinearMoments` overflows `int` in its weight numerators at 1293 points and silently returns a wrong L-kurtosis
+- **Status (Numerics v2.2.0, corehydro Task 1): RESOLVED UPSTREAM AND PORTED.** The probability-weighted-moment numerators now accumulate in double, and corehydro adopted the fix.
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs` lines 509-520 (`LinearMoments`); ported at
+  `core/include/corehydro/numerics/data/statistics.hpp`.
+- **What:** the probability-weighted-moment accumulators form their numerators in `int`:
+  `B2 += (i - 2) * (i - 1) / ((N - 2) * (N - 1)) * sortedData[i - 1]` and
+  `B3 += (i - 3) * (i - 2) * (i - 1) / (...)`. `N` is a `double`, but `i` is an `int`, so the
+  products are integer arithmetic. The triple product first exceeds `int.MaxValue` at
+  `i = 1293` (`1290 * 1291 * 1292 = 2,151,683,880` against a ceiling of `2,147,483,647`), and
+  C#'s default unchecked context wraps it to a negative number rather than throwing. The pair
+  product `(i-2)*(i-1)` wraps too, at `i = 46,343` (`46,341 * 46,342 = 2,147,534,622`; the last
+  safe index is `i = 46,342`, where `46,340 * 46,341 = 2,147,441,940`). Any sample of 1293 or more values returns a
+  corrupt τ4.
+- **Evidence (real C#, driven at the pinned `2a0357a`):** for the evenly spaced sample
+  `x[i] = 1 + 0.5i`, whose L-skewness and L-kurtosis are both 0 at every length,
+  `Statistics.LinearMoments` returns
+
+  | n | τ3 | τ4 |
+  |---|---|---|
+  | 1292 | `-3.1086244689504383E-15` | `-1.7763568394002505E-15` |
+  | 1293 | `-1.7763568394002505E-15` | `-0.18525251648817065` |
+  | 1300 | `-1.3766765505351941E-14` | `-1.446418581370934` |
+
+  λ1 and λ2 are unaffected (they use no product), and τ3 is unaffected (the pair product does
+  not wrap until 46,343), so the error is confined to τ4 and grows with n. There is no warning
+  and no exception; a Kappa-4 or a GEV fit off L-moments would take the corrupt value as a real
+  shape statistic.
+- **Why it is defined in C# and not in C++:** C# specifies unchecked integer arithmetic as
+  two's-complement wrapping. C++ leaves signed overflow UNDEFINED, so the ported expression is
+  a UBSan finding: `statistics.hpp:127:37: runtime error: signed integer overflow: 1665390 *
+  1292 cannot be represented in type 'int'`. That is the class of finding CRAN's sanitizer run
+  rejects a package for, and it cannot be left in place on the grounds that the compiler
+  happens to wrap the same way today.
+- **Status: DELIBERATE DIVERGENCE.** The port now forms the numerators in `double`
+  (`(di - 3) * (di - 2) * (di - 1)`, `di = (double)i`). Below the overflow the products are
+  exact integers far under 2^53, so the result is bit-identical to the C# for every sample the
+  library has ever been pinned against — no shipped fixture carries a sample longer than a few
+  hundred points, and no oracle value moved. Above the overflow the port returns the
+  mathematically correct weight where C# returns a wrapped one. Guarded by
+  `core/tests/test_linear_moments_overflow.cpp`. Filed with RMC as
+  https://github.com/USACE-RMC/Numerics/issues/146 (still open with no maintainer response as of
+  2026-08-28), so the divergence retires if upstream adopts the fix below.
+- **Suggested C# fix:** make the numerators `double` — `((double)i - 3) * ((double)i - 2) *
+  ((double)i - 1)` — or hoist `double di = i` at the top of the loop, matching what `N` already
+  is. `long` would push the failure out to about 2.1 million points rather than removing it.
+
+## BUG — `AugmentedLagrange` cannot maximize: `Optimize()` always drives the inner optimizer through `Minimize()`
+- **Status (Numerics v2.2.0, corehydro Task 4): RESOLVED UPSTREAM AND PORTED.** Maximization now applies the required objective scaling, and corehydro ports the corrected path.
+
+- **Where:** `Numerics/Mathematics/Optimization/Constrained/AugmentedLagrange.cs` @ 2a0357a,
+  `Optimize()` (both `this.Optimizer.Minimize()` call sites) and `augmentedLagrangianFunction`.
+- **What:** the constructor replaces the inner optimizer's objective with
+  `augmentedLagrangianFunction`, which opens `double phi = _primaryObjectiveFunction(x);` — the RAW
+  objective, called directly, never through the base's `Evaluate` and so never through
+  `FunctionScale`. `Optimize()` then calls `this.Optimizer.Minimize()` unconditionally. Under
+  `Maximize()` the outer object's own bookkeeping flips sign, but the search does not: the inner
+  optimizer still MINIMIZES the objective plus penalty. The run reports `Success` and returns the
+  constrained MINIMUM.
+- **Evidence (measured through the shipped packages before the guard):** maximizing
+  `f(x) = -(x - 3)^2` subject to `x <= 1` over `[-10, 10]` — true optimum `x = 1`, value `-4` —
+  returned `x = -10.00011`, value `-169.0029`, status `Success`, byte for byte the same answer as
+  the matching `optim_minimize` call. Two-parameter constructs behave the same way: maximizing
+  `-((x-1)^2 + (y-3)^2)` on `[0,10]^2` under the inactive constraint `x + y <= 20` (true maximum 0
+  at `(1,3)`) returns `(10.000110, 9.999878)`, value `-130.0003`, status `Success`, and maximizing
+  `-((x-5)^2 + (y-7)^2)` under `x + y == 4` (true maximum `-8` at `(2,2)`) returns
+  `(4.00001, -0.00001)`, value `-50.0001`, status `Success`.
+- **Port handling:** the ported class mirrors it exactly (see
+  `core/include/corehydro/numerics/math/optimization/augmented_lagrange.hpp` note 2 and the
+  `optimizer_runner.hpp` grammar block), because a fixture case must be able to pin upstream
+  behavior. The guard lives on the two PUBLIC verbs instead:
+  `optim_maximize(method = "augmented_lagrange")` is rejected by name in both packages
+  (`kOptimMinimizeOnlyMethods` in `corehydror/R/optim.R`, `_MINIMIZE_ONLY_METHODS` in
+  `corehydropy/src/corehydropy/optim.py`), and the error names the upstream reason and the
+  workaround. The workaround is exact rather than approximate: minimizing `-f` under the same
+  constraints IS maximizing `f`, and both packages' tests run it and check the answer.
+- **Suggested C# fix:** have `augmentedLagrangianFunction` obtain `phi` through the base's
+  `Evaluate` (so `FunctionScale` applies), or call `this.Optimizer.Maximize()` when the outer run
+  is a maximization. Either way the class needs a maximizing test; all six existing ones minimize.
+
+## BUG — `MultiStart`'s polish step clamps the recorded best point after its fitness was recorded, so the reported value need not be attained at the reported parameters
+- **Status (Numerics v2.2.0, corehydro Task 4): RESOLVED UPSTREAM AND PORTED.** The polish step repairs a copied starting point before evaluation, and corehydro ports the corrected ownership and fitness pairing.
+
+- **Where:** `Numerics/Mathematics/Optimization/Global/MultiStart.cs` @ 2a0357a, the polish block at
+  the end of `Optimize()`, which passes `BestParameterSet.Values` into `GetLocalOptimizer`.
+- **What:** `GetLocalOptimizer` calls `RepairParameter` on the array it is handed, in place. On the
+  polish call that array IS `BestParameterSet.Values`, so a best point that a local search left
+  outside the box is clamped back onto the bound while `BestParameterSet.Fitness` keeps the
+  out-of-box value that was recorded for the unclamped point. The run then reports a value the
+  reported parameters do not produce. The same aliasing shape as note 2 of the ported header (the
+  re-seated `InitialValues` array), but with a numeric rather than a bookkeeping consequence.
+- **Evidence (measured through the shipped Python package, and identical in R):** minimizing the
+  Eggholder function over `[-512, 512]^2` from `(0, 0)` with `method = "multi_start"` reports
+  `value = -959.829329467467` at `(512, 404.32280392733844)`. The objective AT that point is
+  `-959.6312431930309`. A 2001 x 2001 grid scan puts the whole-box minimum at about `-959.57`
+  (the true box optimum is `-959.6407`), so the reported value is not attainable anywhere in the
+  box; just outside it, at `x = 512.5`, the same objective reads `-961.148161258961`. Task 3 of the
+  P3 phase measured the real C# `MultiStart` returning `iters=100 evals=8414286
+  fitness=-959.82932946746701 values=512, 404.32280392733844` — bit-for-bit what the port returns,
+  so this is upstream behavior faithfully reproduced, not a port defect.
+- **Port handling:** mirrored exactly (see
+  `core/include/corehydro/numerics/math/optimization/multi_start.hpp` note 3), because the search
+  path and the C# oracles depend on it. Invisible on the fixture-pinned FXYZ construct, whose value
+  and parameters are consistent, which is why no fixture case catches it. It is noted in the
+  0.10.0 release notes so a user who sees an inconsistent pair knows it is upstream, and worked
+  example 19 deliberately does not showcase this method.
+- **Suggested C# fix:** polish a COPY of `BestParameterSet.Values` and adopt the result only if its
+  re-evaluated fitness is an improvement, or re-evaluate the objective after the repair so the
+  reported fitness always belongs to the reported point.
+
+## BUG — `OrderedPairedData.LangSimplify` never force-keeps the last point of a curve, silently dropping it
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** Lang simplification now preserves the terminal point, and corehydro ports the corrected tail.
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, `LangSimplify` (line 1445)
+  and its private recursive helper `RecursiveTolerance` (~lines 1482-1518).
+- **What:** `DouglasPeuckerSimplify` and `VisvaligamWhyattSimplify`, the other two curve-
+  simplification algorithms in this class, both explicitly force-keep the first AND last ordinate of
+  the input curve (Douglas-Peucker seeds its kept-index set with `{firstPoint, lastPoint}`;
+  Visvaligam-Whyatt runs its removal loop only over the interior, `j` from 2 to `Count-2`, leaving
+  both ends untouched). `LangSimplify` has no equivalent guarantee. CORRECTED MECHANISM (P4
+  whole-branch-review finding M7b -- the loss itself is real and confirmed below; this paragraph
+  used to misdescribe where it happens, claiming the loop's own guard fires and hands
+  `RecursiveTolerance` a `lookAhead` of 0, which is backwards): the loop's own look-ahead clamp
+  (line ~1460, `if (i + lookAhead > count) lookAhead = count - i - 1;`) uses a STRICT `>`, so at the
+  exact-equality tail boundary (`i + lookAhead == count`) it does NOT fire and `lookAhead` stays at
+  its full, un-clamped value; on the curve below that happens at `i = 3` with `lookAhead` still 2.
+  `RecursiveTolerance`'s own inner guard (`if (i + n < count)`, also strict `<`) then ALSO fails at
+  that SAME exact equality (`i + n == count`) and is skipped entirely, so the call falls through to
+  `return n;` UNCHANGED rather than ever testing whether the angle condition should reduce it. Back
+  in the caller, this unreduced offset (2) points one past the last valid ordinate
+  (`i + offset == count`), so the caller's own `(i + offset) < count` check -- correctly, given that
+  oversized offset -- rejects the append, and the loop walks `i` to `count` and exits without ever
+  revisiting the final point.
+- **Evidence (reproduced against the real C# library, not merely inferred):** on the five-point sin
+  curve at `tolerance=0.01, lookAhead=2` -- the exact case upstream's own `Test_LangSimplify`
+  exercises -- `LangSimplify` returns 3 points, `{(0,0), (1.57,1), (4.71,-1)}`, dropping `(6.28,0)`
+  entirely. Confirmed with `dotnet run` against `upstream/Numerics @ 2a0357a`. Also confirmed: changing
+  line ~1460's clamp test from `>` to `>=` -- so `lookAhead` clamps down to 1 at `i = 3`,
+  `RecursiveTolerance`'s guard then fires (`4 < 5`), and the resulting smaller offset of 1 correctly
+  targets the real last ordinate -- reproduces the expected 4-point result against the real library;
+  see "Suggested C# fix" below.
+- **Why upstream's own test never catches this:** `Test_LangSimplify`'s assertion loop is bounded by
+  `test.Count` (the actual, possibly-short RESULT length), not the expected point count: with
+  `test.Count == 3` the loop only ever compares indices 0-2, and the missing fourth point is silently
+  never checked. This is a specific instance of a broader pattern worth naming on its own: several
+  tests across the simplification suite bound their comparison loop by the returned collection's own
+  length rather than by the caller's independently-known expected length, so an implementation that
+  returns too few elements still passes. This port's own test suite uses length-first assertions
+  throughout (asserting the retained-point COUNT before comparing contents) specifically as a
+  documented corehydro supplement to close that gap.
+- **Port handling:** mirrored faithfully -- `lang_simplify()` in
+  `core/include/corehydro/numerics/data/paired_data/ordered_paired_data.hpp` drops the final ordinate
+  on the same inputs. Pinned two ways: `core/tests/test_ordered_paired_data.cpp`'s
+  `test_lang_simplify` asserts the verified 3-point result (not a naively-expected 4-point one), and
+  `fixtures/toolbox/paired_data.json`'s `sin_curve_simplify_lang` case is reproduced against the real
+  C# library by the dotnet oracle gate at exact tolerance.
+- **Suggested C# fix:** two independent options, either sufficient on its own. (1) A targeted fix at
+  the actual mechanism identified above: change the loop's look-ahead clamp at line ~1460 from
+  `if (i + lookAhead > count)` to `>=`, which forces a smaller, in-range offset at the tail instead
+  of an unreduced one that overshoots `Count` -- measured to reproduce the expected 4-point result
+  against the real library. (2) A defensive, mechanism-agnostic fix: after the main loop, if the
+  last appended ordinate's index is not `Count - 1`, append the final ordinate explicitly -- the
+  same force-keep both sibling algorithms already perform. Also fix `Test_LangSimplify` to bound its
+  comparison loop by the expected point count, not the actual result's `Count`, so a future
+  regression here would be caught.
+
+## BUG — `OrderedPairedData.RemoveRange`'s off-by-one guard makes a trailing removal a silent no-op
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** Trailing ranges and copied removed items use the corrected bounds, and corehydro ports both changes.
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a,
+  `RemoveRange(int index, int count)` (line 453).
+- **What:** the bounds guard is `if (index < 0 || (index + count) >= Count) return;` -- using `>=`
+  where the off-by-one-free test `>` is correct. Removing a trailing run of elements that reaches the
+  very last element (`index + count == Count`) therefore hits the guard and returns without removing
+  anything, silently. A second, harmless defect sits in the same method: the loop that builds the
+  `items` list handed to the `CollectionChanged` event runs `for (i = index; i < count; i++)` rather
+  than `i < index + count` -- wrong, but inert, since that `items` list has no consumer once the
+  event itself fires.
+- **Evidence:** direct inspection of the guard; `Test_Indexing`'s own `RemoveRange(0, 3)` call on a
+  13-element collection is well clear of the boundary (`0 + 3 = 3 < 13`), so upstream's own test
+  never exercises the off-by-one.
+- **Port handling:** mirrored faithfully -- `remove_range(index, cnt)` in `ordered_paired_data.hpp`
+  keeps the `>=` guard (a trailing-run removal silently does nothing), documented at the call site.
+  The `CollectionChanged`-only loop-bound defect has no C++ counterpart to reproduce (the event
+  itself is severed project-wide; see the file's own header). Contrast the Uncertain twin
+  (`UncertainOrderedPairedData::remove_range`), whose C# source has NEITHER bug -- it relies on
+  `List<T>.RemoveRange`'s own correct `ArgumentOutOfRangeException` behavior -- so it is ported with
+  the CORRECT `index + count > Count` bound, throwing rather than silently no-opping.
+- **Suggested C# fix:** change the guard to `index + count > Count`, matching `List<T>.RemoveRange`'s
+  own contract (and the sibling `UncertainOrderedPairedData.RemoveRange`, which never had this bug).
+
+## BUG — `OrderedPairedData.SequentialSearchY` reads the X search-start field instead of Y's
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** The Y search now reads YSearchStart, and corehydro ports and tests the correction.
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a,
+  `SequentialSearchY(double y)` (~line 1114), its third branch.
+- **What:** the method's third branch, which resets the search start to `0` when `y` has moved
+  outside the cached search window, reads `_ordinates[XSearchStart].Y` where
+  `_ordinates[YSearchStart].Y` is the field the X/Y-mirrored logic (and `SequentialSearchX`'s own
+  analogous branch) calls for.
+- **Evidence:** direct inspection; because both `XSearchStart` and `YSearchStart` start at `0` and
+  this port's transcribed ctest never diverges them before calling `sequential_search_y`, the results
+  agree with what the correct code would produce -- exactly why upstream's own `Test_Sequential`
+  passes despite the bug.
+- **Port handling:** mirrored faithfully -- `sequential_search_y()` in `ordered_paired_data.hpp`
+  reads `x_search_start_` at the equivalent branch, with an inline comment marking it "Bug
+  transcribed verbatim."
+- **Suggested C# fix:** change `_ordinates[XSearchStart].Y` to `_ordinates[YSearchStart].Y` in
+  `SequentialSearchY`'s third branch.
+
+## BUG — `OrderedPairedData`'s `XdeltaStart`/`YdeltaStart` are never assigned, so `UseSmartSearch`'s Hunt branch almost never fires
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** The correlation windows now scale with table size, making the hunt path reachable in v2.2.0 and corehydro.
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, `XdeltaStart` (line 50) /
+  `YdeltaStart` (line 55), read in `SearchX` (line 934) / `SearchY` (line 955).
+- **What:** `XdeltaStart`/`YdeltaStart` are declared, initialized to `0`, and never assigned anywhere
+  else in the class. `SearchX`/`SearchY` set `Xcorrelated`/`Ycorrelated` to
+  `Math.Abs(start - XSearchStart) > XdeltaStart` (i.e. `> 0`), which is true almost every call -- so
+  `Xcorrelated`/`Ycorrelated` are true only when a search lands EXACTLY on the previous search-start
+  index. With `UseSmartSearch` true (the default), `SearchX`/`SearchY` therefore fall through to
+  `BisectionSearchX`/`Y` on nearly every call instead of ever taking the `HuntSearchX`/`Y` branch the
+  "smart search" is named for. Contrast the sibling `Interpolater.cs`, whose own
+  `deltaStart = Math.Min(1, (int)Math.Pow(Count, 0.25))` at least gives its correlated-search
+  machinery a (if degenerate -- see that file's own already-documented issue above) chance of firing.
+- **Evidence:** direct inspection of the field declarations and every assignment site in the class
+  (grep confirms zero writes to either field outside their `= 0` initializers).
+- **Port handling:** mirrored faithfully -- `x_delta_start_`/`y_delta_start_` in
+  `ordered_paired_data.hpp` are likewise never assigned past `0`, documented in the file header. Not
+  a correctness bug (Bisection always returns the right bracketing index; only the search's
+  asymptotic cost is affected), so no fixture specifically isolates it.
+- **Suggested C# fix:** assign `XdeltaStart`/`YdeltaStart` a real value (e.g. mirroring
+  `Interpolater.cs`'s `Math.Pow(Count, 0.25)` heuristic) so the Hunt branch is reachable as the
+  class's own naming and doc comments imply it should be.
+
+## CONSISTENCY — `OrderedPairedData.Add` can widen `IsValid` back to true; `UncertainOrderedPairedData.Add` cannot
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** OrderedPairedData.Add now only narrows validity, matching its siblings and the corehydro port.
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, `Add` (line 468) vs.
+  `Insert` (line 481); `Numerics/Data/Paired Data/UncertainOrderedPairedData.cs`, `Add`
+  (~lines 664-671).
+- **What:** `OrderedPairedData.Add` assigns `IsValid = OrdinateValid(Count - 1)` UNCONDITIONALLY --
+  `OrdinateValid` only inspects the newly-added point's immediate neighbor, not the whole series, so
+  appending one well-ordered point after an already-invalid collection can flip `IsValid` back to
+  `true` even though an earlier pair still violates the monotonicity contract. `Insert` on the same
+  class does not have this bug -- `if (IsValid) IsValid = OrdinateValid(index);` only ever NARROWS
+  validity (true -> possibly false), never widens it. `UncertainOrderedPairedData.Add` matches
+  `Insert`'s (correct) shape, not `Add`'s: `if (!OrdinateValid(Count - 1)) IsValid = false;` also
+  only narrows. The private `OrdinateValid(int)` helper mirrors the same asymmetry at its own
+  boundary: `OrderedPairedData`'s version returns `true` for an out-of-range index;
+  `UncertainOrderedPairedData`'s returns `false`.
+- **Evidence:** direct inspection of all four methods across both classes (not assumed parity between
+  the "twin" classes -- see the port's own header note on this).
+- **Port handling:** mirrored faithfully on both classes -- `add()` in `ordered_paired_data.hpp`
+  keeps the unconditional widening bug; `add()` in `uncertain_ordered_paired_data.hpp` only narrows,
+  matching its own C# source. Documented in both file headers as a DELIBERATE cross-class asymmetry,
+  not an inconsistency introduced by the port.
+- **Suggested C# fix:** change `OrderedPairedData.Add` to only narrow
+  (`if (IsValid) IsValid = OrdinateValid(Count - 1);`), matching `Insert` on the same class and
+  `Add`/`Insert` on the Uncertain twin.
+
+## CONSISTENCY — `OrderedPairedData.LangSimplify` returns an alias of the receiver on its guard path, unlike its two siblings
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** The guarded Lang simplification now returns a clone, matching the value-returning corehydro API.
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a,
+  `LangSimplify(double tolerance, int lookAhead)` (line 1445), the
+  `if (lookAhead <= 1 || tolerance <= 0) return this;` guard.
+- **What:** `DouglasPeuckerSimplify` and `VisvaligamWhyattSimplify` both always return a freshly
+  constructed `OrderedPairedData`. `LangSimplify`'s guard instead returns `this` -- the SAME object
+  the caller already holds a reference to, not a copy -- so a caller that mutates the "simplified"
+  result under a trivial `lookAhead`/`tolerance` is silently mutating the original curve too.
+- **Port handling (a genuine port DECISION, no C# analogue is possible):** `lang_simplify()` in
+  `ordered_paired_data.hpp` has a value-returning signature (`OrderedPairedData`, not a reference), so
+  there is no C++ construct that aliases `*this` the way a C# reference-type return can --
+  `return *this;` by value already copies. This port returns `clone()` instead, matching the OTHER
+  two simplifiers' not-the-same-object contract, rather than fabricating aliasing behavior no other
+  value-returning method here has. `core/tests/test_ordered_paired_data.cpp`'s
+  `test_lang_simplify_guard` asserts the guarded return is content-equal to the original AND
+  independently mutable (proving it is a distinct object) -- the only choice a value-returning API
+  leaves open.
+- **Suggested C# fix:** return a clone (e.g. `this.Clone()`) from the guard, matching
+  `DouglasPeuckerSimplify`/`VisvaligamWhyattSimplify`'s contract.
+
+## BUG — `LineSimplification.RamerDouglasPeucker`'s output parameter is cleared in one branch but appended-to in the other
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** The output is cleared before either branch, and corehydro ports the uniform contract.
+
+- **Where:** `Numerics/Data/Paired Data/LineSimplification.cs` @ 2a0357a,
+  `RamerDouglasPeucker(List<Ordinate>, double, ref List<Ordinate> output)` (line 33).
+- **What:** the "keep both endpoints" branch (`dmax <= epsilon`) does
+  `output.Clear(); output.Add(...); output.Add(...);` -- replacing whatever the caller passed in. The
+  "recurse" branch (`dmax > epsilon`) does `output.AddRange(recResults1...); output.AddRange(
+  recResults2);` (lines 59-64) -- APPENDING to whatever the caller passed in, with no `Clear()`
+  first. For every call site actually reachable in this codebase the `ref` parameter is always a
+  fresh, empty list at each call (including each recursive call), so the two behaviors happen to
+  coincide; a caller handing a pre-populated list to the top-level call would see it replaced or
+  appended-to depending purely on which branch the top-level recursion takes, which the caller cannot
+  predict from the method's own signature.
+- **Evidence:** direct inspection of both branches; not exercised by any upstream test with a
+  non-empty pre-populated output list.
+- **Port handling:** mirrored faithfully -- `ramer_douglas_peucker()` in
+  `core/include/corehydro/numerics/data/paired_data/line_simplification.hpp` reproduces both shapes
+  (`output.clear()` + two `push_back`s in the "keep both endpoints" branch;
+  `output.insert(output.end(), ...)` with no clear in the "recurse" branch), documented in the file
+  header as intentional (every reachable call site hands a fresh empty vector, so the asymmetry is
+  currently invisible, but is preserved rather than normalized to "always clear first").
+- **Suggested C# fix:** call `output.Clear()` unconditionally at the top of the method, before either
+  branch, so the `ref` parameter's contract does not depend on which branch is taken.
+
+## CONSISTENCY — two independent, incompatible `PerpendicularDistance` implementations in the Paired Data subsystem
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** The OrderedPairedData implementation now guards a zero-length base consistently, and corehydro adopts the guard.
+
+- **Where:** `Numerics/Data/Paired Data/OrderedPairedData.cs` @ 2a0357a, private
+  `PerpendicularDistance` (~lines 1376-1386, feeding `DouglasPeuckerReduction`) vs.
+  `Numerics/Data/Paired Data/LineSimplification.cs`, `PerpendicularDistance` (line 84, feeding the
+  free-function `RamerDouglasPeucker`).
+- **What:** these are two entirely independent formulas for the same named quantity, both shipped in
+  the same subsystem for two different Douglas-Peucker-family implementations. `OrderedPairedData`'s
+  version is triangle-area-over-base (`|cross product| / |base|`) and has NO guard against a
+  degenerate (zero-length) base segment -- a first/last pair that coincide divides `0.0/0.0`,
+  yielding `NaN`. `LineSimplification`'s version normalizes the segment direction to a unit vector
+  and explicitly guards the degenerate case with `if (mag > 0.0)`, falling back to the
+  point-to-line-start distance when the segment has zero length -- this is exactly the case
+  upstream's own `Test_EqualPoints` exercises for the free-function algorithm, but NOT for the
+  class-method one.
+- **Evidence:** direct inspection of both implementations; no test in either language constructs a
+  first/last pair that coincide for `OrderedPairedData`'s own `DouglasPeuckerSimplify`, so the
+  unguarded `NaN` path is unexercised on that side.
+- **Port handling:** both formulas are transcribed independently and exactly as written --
+  `OrderedPairedData::perpendicular_distance` (private, in `ordered_paired_data.hpp`) has no
+  degenerate guard; `line_simplification::perpendicular_distance` (in `line_simplification.hpp`) has
+  the `mag > 0.0` guard. Neither is "unified" into the other, since they are separate upstream
+  algorithms for two different classes, documented cross-referentially in both file headers.
+- **Suggested C# fix:** either add the same `mag > 0.0`-style degenerate guard to
+  `OrderedPairedData.PerpendicularDistance`, or document why a degenerate first/last pair cannot occur
+  at that call site (its only caller, `DouglasPeuckerReduction`, guards `firstPoint != lastPoint - 1`
+  but not `Ordinates[firstPoint] != Ordinates[lastPoint]` when they are not the same index).
+
+## CONSISTENCY — `UncertainOrdinate.operator==` compares X exactly, unlike `Ordinate`'s epsilon tolerance
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** Uncertain ordinate X equality now follows Ordinate's tolerance and rejects non-finite coordinates; corehydro matches it.
+
+- **Where:** `Numerics/Data/Paired Data/UncertainOrdinate.cs` @ 2a0357a, `operator==` (line 266), vs.
+  `Numerics/Data/Paired Data/Ordinate.cs`, `operator==` (line 317).
+- **What:** `Ordinate.operator==` compares each coordinate with `Tools.DoubleMachineEpsilon` slack
+  (see the NaN-compares-equal entry above for the consequence of that choice).
+  `UncertainOrdinate.operator==` compares `X` with EXACT inequality (`left.X != right.X`) -- no
+  epsilon at all -- before delegating `Y`-equality to the distribution's own comparison. Two X values
+  that would compare equal under `Ordinate`'s rule (differing by less than machine epsilon) compare
+  UNEQUAL here.
+- **Evidence:** direct inspection of both operators; the inconsistency is between two classes in the
+  same subsystem with the same conceptual "X coordinate," not an internal contradiction within either
+  class alone.
+- **Port handling:** transcribed exactly as written -- `operator==` for `UncertainOrdinate` in
+  `uncertain_ordinate.hpp` uses `l.x != r.x` (no tolerance); `operator==` for `Ordinate` in
+  `ordinate.hpp` uses the epsilon-tolerant comparison. Documented in `uncertain_ordinate.hpp`'s header
+  as transcription note 3.
+- **Suggested C# fix:** decide whether X-equality should be exact or tolerant across both classes, and
+  make `UncertainOrdinate.operator==` consistent with `Ordinate.operator==`'s choice (or document why
+  uncertain-Y ordinates need a stricter X test than certain ones).
+
+## BUG — `UncertainOrderedPairedData.InsertRange` narrows `IsValid` using the constant insertion index instead of each newly-inserted position
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** InsertRange now validates each inserted index, and corehydro ports the corrected loop.
+
+- **Where:** `Numerics/Data/Paired Data/UncertainOrderedPairedData.cs` @ 2a0357a,
+  `InsertRange(int index, IList<UncertainOrdinate> items)` (~lines 716-731).
+- **What:** after inserting `items.Count` new ordinates starting at `index`, the `IsValid`-narrowing
+  loop calls `OrdinateValid(index)` -- the constant, FIRST inserted position -- on every one of its
+  `items.Count` iterations, instead of `OrdinateValid(i)` for each newly-inserted position in turn.
+  Only the first inserted ordinate's monotonicity is ever actually checked; the rest are inserted
+  unchecked. This directly computes `_isValid`, a real externally-observable value (unlike
+  `AddRange`'s analogous but inert `startIndex` off-by-one in the same class, which only ever
+  feeds the severed `CollectionChanged` event).
+- **Evidence:** direct inspection of the loop body (`for (int i = index; i <= index + items.Count -
+  1; i++) { if (IsValid) { if (!OrdinateValid(index)) IsValid = false; } }` -- note
+  `OrdinateValid(index)`, not `OrdinateValid(i)`).
+- **Port handling:** mirrored faithfully -- `insert_range()` in
+  `core/include/corehydro/numerics/data/paired_data/uncertain_ordered_paired_data.hpp` calls
+  `ordinate_valid(index)` on every pass of its loop over `i`, not `ordinate_valid(i)`, with an inline
+  comment marking it as an upstream defect with a real (not inert) consequence, ported exactly as C#
+  wrote it rather than "fixed."
+- **Suggested C# fix:** change `OrdinateValid(index)` to `OrdinateValid(i)` inside the loop, so every
+  newly-inserted ordinate is actually validated against its own neighbors.
+
+## BUG — `Statistics.RanksInPlace(double[], out double[] ties)` never records the trailing tie run's length
+- **Status (Numerics v2.2.0, corehydro Task 1): RESOLVED UPSTREAM AND PORTED.** Trailing tie runs are now recorded and the dependent rank tests use full group sizes; corehydro ports both corrections.
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs` @ 2a0357a,
+  `RanksInPlace(double[] data, out double[] ties)` (line 674).
+- **What:** the method sorts a working copy, walks it once tallying consecutive near-equal runs (tie
+  test: `AlmostEquals(work[i], work[previousIndex], Tools.DoubleMachineEpsilon)`, i.e.
+  `|work[i]-work[previousIndex]| <= DoubleMachineEpsilon` -- NOT exact equality, unlike the sibling
+  no-`ties` overload of the same method), and writes each closed run's length into `ties[i - 1]`
+  inside the loop's own `else` branch. After the loop ends, a final
+  `RanksTies(ranks, index, previousIndex, work.Length)` call closes whatever run was still open --
+  correctly averaging that run's ranks -- but this closing call is OUTSIDE the loop and never writes
+  to `ties`. A tie run that ends at the very last element of `data` therefore has its rank-averaging
+  applied correctly but its run length silently never recorded in `ties`, leaving that slot at its
+  default `0`.
+- **Evidence:** direct inspection of the loop structure -- `ties[i - 1] = t;` appears only inside the
+  `for` loop's `else` branch, and the trailing `RanksTies(...)` call after the loop has no
+  `ties`-writing counterpart.
+- **Consequence downstream:** `ties` (a sparse "tie run length" array) feeds two hypothesis tests this
+  port ships: `MannWhitneyTest`'s tie correction term `T` (`sum((ties[i]^3 - ties[i]) /
+  (n*(n-1)))`) and `MannKendallTest`'s variance term `varS`
+  (`sum(ties[i]*(ties[i]-1)*(2*ties[i]+5))`). Both under-correct whenever the input's LARGEST-valued
+  elements are themselves tied, since that specific run is the one whose length silently drops out.
+- **Port handling:** mirrored faithfully -- the tolerance-based `ranks_in_place(data, ties)` overload
+  in `core/include/corehydro/numerics/data/statistics.hpp` reproduces all three fidelity points versus
+  its own exact-equality sibling overload: the `kDoubleMachineEpsilon`-tolerant tie test, the sparse
+  `ties` array indexed by run-closing position, and the never-written trailing run. Documented in the
+  file header as "a genuine upstream defect... It MUST be reproduced (not 'fixed') because it is the
+  input HypothesisTests' oracle-pinned callers were fit against."
+  `numerics::data::hypothesis_tests::mann_whitney_test`/`mann_kendall_test` (in
+  `numerics/data/hypothesis_tests.hpp`) consume it unchanged.
+- **Suggested C# fix:** move the tie-length write out of the loop's `else` branch (or duplicate it
+  after the final `RanksTies` call) so a trailing run's length is recorded like every other run's.
+
+## RESOLVED IN v2.2.0 - `Statistics.ParallelMean` was not reproducible across machines
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** v2.2.0 uses deterministic mean reductions on the affected machine-learning paths, and corehydro pins their exact outputs.
+
+- **Resolution:** v2.2.0 uses the sequential mean. CoreHydro now follows that implementation, so
+  the RandomForest and k-NN mean columns are deterministic and can be pinned with the other
+  prediction columns.
+
+- **Where:** `Numerics/Data/Statistics/Statistics.cs` @ 2a0357a, `ParallelMean(IList<double>)`
+  (line 143): `double sum = data.AsParallel().Sum(); return sum / data.Count;`.
+- **What:** PLINQ splits the source across partitions, sums each independently, and adds the
+  partial sums. Floating-point addition is not associative, so the result depends on how many
+  partitions the runtime chooses -- which is a function of `Environment.ProcessorCount`. Two
+  machines running the same build on the same data get different last bits. There is no
+  `WithDegreeOfParallelism` or ordered-accumulation constraint to pin it.
+- **Evidence (measured against the real library, this machine, `Environment.ProcessorCount = 10`,
+  `new Random(42)` uniforms scaled to [0, 1000), ULP difference of `ParallelMean` against a serial
+  left-to-right sum):**
+
+  | n | 16 | 32 | 50 | 64 | 100 | 128 | 200 | 256 | 300 | 400 | 500 | 600 | 800 | 1000 | 100000 |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | ULP | -1 | -1 | 0 | -1 | 1 | 2 | -1 | -1 | -3 | -4 | -5 | -7 | 0 | 5 | -29 |
+
+  Note there is no safe small-`n` threshold: PLINQ already partitions at n = 16. `Statistics.Mean`
+  (the serial overload) agrees with the serial sum exactly at every size, as expected.
+- **Why it matters for this port:** two ported call sites read it, both the "mean" column of a
+  prediction-interval table -- `RandomForest.Predict` (over `NumberOfTrees` tree predictions,
+  default 1000) and `KNearestNeighbors.PredictionIntervals` (over `realizations` bootstrap
+  predictions, default 1000). Every other column of both tables (`lower`/`median`/`upper`) comes
+  from `Statistics.Percentile` on a sorted array and is exactly reproducible.
+- **Current port handling:** `parallel_mean` follows v2.2.0 and sums sequentially. The affected
+  prediction columns now use exact cross-language fixtures.
+- **Suggested C# fix:** either sum serially (the arrays reaching this method are small enough that
+  the parallel overhead is unlikely to pay for itself) or, if the parallelism is wanted, make the
+  reduction deterministic -- fix the partition count and accumulate the partial sums in partition
+  order, or use a compensated (Kahan/Neumaier) sum so the partition split stops mattering.
+
+## RESOLVED IN v2.2.0 - `KNearestNeighbors.kNN` did not validate its query shape
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** v2.2.0 validates the query shape, and corehydro applies the same guard.
+
+- **Resolution:** v2.2.0 compares the query column count with the training column count and returns
+  null on either a narrow or wide mismatch. CoreHydro now applies the same guard.
+
+- **Where:** `Numerics/Machine Learning/Supervised/KNearestNeighbors.cs` @ 2a0357a, the private
+  `kNN(Matrix xTrain, Vector yTrain, Matrix xTest)` (line 243): `if (NumberOfFeatures !=
+  xTrain.NumberOfColumns) return null!;`.
+- **What:** `NumberOfFeatures` is defined as `X.NumberOfColumns` and `xTrain` is always
+  `this.X`, so the condition is always false. The guard was clearly meant to check the TEST
+  matrix -- which is what the sibling `kNNPredict` does correctly (`xTest.NumberOfColumns !=
+  xTrain.NumberOfColumns`). So all three public `GetNeighbors` overloads accept any query shape.
+- **What happens then:** `Tools.Distance(IList<double> x, IList<double> y)` loops over `x.Count`,
+  the QUERY row. A query with FEWER columns than the training matrix therefore silently computes
+  a partial-dimension distance and returns plausible-looking neighbors computed from a subset of
+  the features; a query with MORE columns indexes past the end of each training row and throws
+  `IndexOutOfRangeException` from inside the distance helper.
+- **Current port handling:** both query-shape mismatches return an empty optional, matching
+  v2.2.0. Tied distances use the training index as the secondary key.
+- **Suggested C# fix:** `if (xTest.NumberOfColumns != xTrain.NumberOfColumns) return null!;`,
+  matching `kNNPredict`.
+
+## RESOLVED IN v2.2.0 - regression trees split pure nodes to singleton leaves
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** v2.2.0 stops regression growth at pure nodes, and corehydro ports the corrected tree construction.
+
+- **Resolution:** v2.2.0 counts distinct responses in both modes. Pure regression nodes now become
+  leaves. The port also carries the new index-range growth and exact sorted sweep.
+
+- **Where:** `Numerics/Machine Learning/Supervised/DecisionTree.cs` @ 2a0357a, `GrowTree`.
+- **What:** the stopping criteria are `bestIndex == -1 || depth >= MaxDepth || numberOfLabels <= 1
+  || numberOfSamples < MinimumSplitSize`, and for regression `numberOfLabels` is set to
+  `yTrain.Length` (the SAMPLE COUNT) rather than the distinct-value count. So the
+  `numberOfLabels <= 1` test only fires on a one-row node, making it redundant with the
+  `numberOfSamples < MinimumSplitSize` test at the default `MinimumSplitSize = 2`. Nor does the
+  purity of a node stop it: `VarianceReduction` on a node whose responses are all equal returns
+  `0 - 0 = 0`, which still beats `BestSplit`'s `double.MinValue` seed, so `bestIndex` is always
+  set. The result is that a default regression tree keeps splitting until every leaf holds a
+  single training observation -- it memorizes the training set.
+- **Evidence (measured against the real library):** `new DecisionTree(x, y, 7).Train()` on twelve
+  points whose responses are only two distinct values (six 10s at x = 1..6, six 100s at
+  x = 100..105) builds a 23-node tree: the root splits at 6, and each side is then a
+  right-leaning chain splitting off one point at a time (thresholds 1, 2, 3, 4, 5 and 100, 101,
+  102, 103, 104), ending in twelve singleton leaves. A tree that stopped on purity would have two
+  leaves. The full probe transcript is pinned in `core/tests/test_decision_tree.cpp`.
+- **Consequence:** it is why upstream's own `Test_DecisionTree_Regression` asserts that the tree
+  LOSES to a linear model, and why its remark says to "use a Random Forest to get better
+  performance" -- bagging is what recovers the variance the unregularized tree throws away. A user
+  reaching for a regression tree directly gets a memorizer unless they set `MinimumSplitSize` or
+  `MaxDepth` themselves. Classification is unaffected: there `numberOfLabels` IS the distinct
+  count, so a pure node stops.
+- **Current port handling:** pure nodes stop, matching v2.2.0. The new golden tree structures,
+  exact split oracle, and equal-key order are pinned in `test_decision_tree.cpp`.
+- **Suggested C# fix:** for regression, stop on variance rather than on count -- either set
+  `numberOfLabels` to the distinct count for both modes, or have `VarianceReduction` return
+  `double.MinValue` when the parent variance is 0. Either changes fitted trees, so it needs
+  re-pinned oracles.
+
+## RESOLVED IN v2.2.0 - `GaussianMixtureModel.MStep` discarded covariance repair
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** v2.2.0 stores the repaired covariance, and corehydro verifies positive definiteness.
+
+- **Resolution:** v2.2.0 assigns the repaired matrix back to the component covariance. CoreHydro
+  does the same and checks the resulting component matrices with Cholesky factorization.
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a, the last
+  line of `MStep()`: `MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`.
+- **What:** `MakeSymmetricPositiveDefinite` is `public static Matrix
+  MakeSymmetricPositiveDefinite(Matrix M)` (`Mathematics/Linear Algebra/MatrixRegularization.cs`
+  line 111) and is PURE -- it builds `S = 0.5 * (M + M.Transpose())`, clones it, adds a
+  trace-scaled ridge, and RETURNS the clone. It never writes through its argument. The GMM
+  discards the return value, so neither the symmetrization nor the ridge ever reaches
+  `Sigmas[k]`, despite the four-line comment above the call explaining why they are needed.
+- **What actually keeps the fit alive:** the diagonal floor a few lines earlier
+  (`Sigmas[k][d, d] = Math.Max(Sigmas[k][d, d], 1E-6 * colVar)`), which is applied by assignment
+  and does work. The M-step's covariance is also symmetric by construction, so the symmetrization
+  has nothing to repair in practice; the missing piece is the off-diagonal ridge that would
+  protect a near-singular component from failing Cholesky in the next E-step.
+- **Current port handling:** the repaired matrix is assigned back, matching v2.2.0. Degenerate
+  component tests require the stored covariances to remain positive definite.
+- **Suggested C# fix:** `Sigmas[k] = MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`
+  — but note this CHANGES the fitted covariances (and therefore every downstream oracle,
+  including `HypothesisTests.UnimodalityTest`'s p-values), so it needs re-pinned test literals.
+
+## RESOLVED IN v2.2.0 - `GaussianMixtureModel.LogLikelihood` omitted the normalizing constant
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** v2.2.0 reports the normalized log likelihood at every iteration, and corehydro fixtures were re-pinned.
+
+- **Resolution:** v2.2.0 reports the full normalized log likelihood and retains the value from
+  every E-step, including an iteration-capped run. CoreHydro fixtures were re-pinned accordingly.
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a,
+  `EStep()`: `LikelihoodMatrix[i, k] = -0.5 * (sum + logDet[k]) + Math.Log(Weights[k]);`.
+- **What:** the multivariate normal log density is `-0.5 * (D*log(2*pi) + logDet(Sigma) +
+  quadform)`. The `D*log(2*pi)` term is missing, so the accumulated `LogLikelihood` is short of
+  the true mixture log-likelihood by exactly `n * D/2 * log(2*pi)`.
+- **Evidence (measured):** a one-component fit on the 150 iris sepal-length values reports
+  `LogLikelihood = -46.198986426940849`; the properly normalized Gaussian log-likelihood at the
+  same fitted mean and variance is `-184.03976640764171`. The difference is
+  `150 * 0.5 * log(2*pi) = 137.8407...` to the last bit.
+- **Impact:** none on the fit (a constant offset cannot change which parameters maximize EM) and
+  none on the one upstream consumer: `HypothesisTests.UnimodalityTest` forms
+  `2 * (logLH2 - logLH1)` over two fits of the SAME sample, so the constant cancels exactly. It
+  does matter to a user treating `LogLikelihood` as a comparable model-selection score across
+  datasets of different size or dimension, or feeding it to AIC/BIC.
+- **Current port handling:** the full normalized value is reported, matching v2.2.0. The iris and
+  one-component values are pinned in C++ and cross-language fixtures.
+- **Suggested C# fix:** subtract `0.5 * Dimension * Math.Log(2 * Math.PI)` in the E-step. Every
+  `LogLikelihood` oracle would move by a known constant; the unimodality p-values would not.
+
+## RESOLVED IN v2.2.0 - `KMeans` with `k = 1` reported an initializer as the mean
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** v2.2.0 computes centroids before the first convergence exit, and corehydro ports the corrected ordering.
+
+- **Resolution:** v2.2.0 computes centroids before the first-iteration convergence exit. It also
+  validates the cluster count and relocates empty clusters. CoreHydro ports all three changes.
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/KMeans.cs` @ 2a0357a, `Train(int seed, bool
+  kMeansPlusPlus)`.
+- **What:** `Labels` is zero-initialized by the constructor, and `Train` runs the E-step, compares
+  the new labels against the old ones, and `break`s BEFORE the M-step when nothing changed. With
+  `k = 1` every point is assigned label 0 on the first E-step, which already matches the
+  zero-initialized array, so the loop exits on iteration 1 having never computed a centroid. The
+  reported `Means[0, *]` is whatever the initializer picked -- with k-means++ that is one randomly
+  chosen DATA POINT, not the mean of the data.
+- **Evidence (measured against the real library):** `new KMeans(new double[] {1, 2, 3, 10, 11,
+  12}, 1)` then `Train(7)` reports `Means[0, 0] = 10` and `Iterations = 1`. The sample mean is
+  6.5. The same input at `k = 2` converges correctly (`Means = {11, 2}`, `Iterations = 2`), so the
+  defect is specific to the single-cluster case.
+- **Related, and NOT a defect:** for `k > 1` the same break-before-M-step ordering means a
+  converged fit's `Means` are one M-step behind its `Labels`. That is harmless -- convergence is
+  defined as "the E-step changed nothing", so recomputing the centroids from the final labels
+  reproduces the reported means exactly (pinned in `test_k_means.cpp`). Only `k = 1` degenerates,
+  because there the E-step can never change anything.
+- **Current port handling:** the centroid is computed before the first convergence exit, matching
+  v2.2.0. The one-cluster sample mean is pinned in C++, R, and Python tests.
+- **Suggested C# fix:** initialize `Labels` to `-1` rather than 0, so the first E-step always
+  counts as a change; or run one M-step unconditionally before the convergence test.
+
+## RESOLVED IN v2.2.0 - Jenks failed internally when all values were identical
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** v2.2.0 rejects multi-class samples without two distinct values, and corehydro matches the validation.
+
+- **Resolution:** v2.2.0 rejects a multi-class request when the sample has fewer than two distinct
+  values, while retaining the valid one-class fit. CoreHydro now reports the same input error.
+
+- **Where:** `Numerics/Machine Learning/Unsupervised/JenksNaturalBreaks.cs` @ 2a0357a,
+  `Estimate()` (the cluster-construction block at the end) into
+  `Support/JenksCluster.cs`'s constructor.
+- **What:** With all values equal, every candidate split has variance 0, so the dynamic program's
+  `>=` update leaves `lowerClassLimits[l, j]` at its smallest recorded start index. Walking the
+  limits back then produces `kclass[0] = lowerClassLimits[k, 2] - 2 = -1`, and
+  `new JenksCluster(SortedData, 0, -1)` immediately evaluates `data[endIndex]` = `data[-1]`.
+- **Evidence (measured against the real library):** `new JenksNaturalBreaks(new double[20] filled
+  with 3.5, 3)` throws `IndexOutOfRangeException: Index was outside the bounds of the array.` The
+  constructor's four documented guards (null, empty, `k <= 0`, `k > n`) all pass, so the failure
+  surfaces from inside the fitted algorithm rather than from validation.
+- **Note on scope:** this is the degenerate case only. Heavily tied data is fine -- upstream's own
+  7,889-value test dataset contains long runs of exact zeros and all three of its 5/7/9-class
+  oracles reproduce.
+- **Current port handling:** a multi-class all-identical sample is rejected before fitting,
+  matching v2.2.0. The one-class form remains valid.
+- **Suggested C# fix:** detect `SortedData[0] == SortedData[^1]` (or a variance of 0) up front and
+  either return a single-class fit or throw a described `ArgumentException`, rather than letting a
+  negative index reach `JenksCluster`.
+
+## CONSISTENCY — `TimeSeries.CumulativeSum` silently drops the series' time interval
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** CumulativeSum now preserves the source interval, and corehydro ports and tests that behavior.
+
+- **Where:** `Numerics/Data/Time Series/TimeSeries.cs` @ 2a0357a, `CumulativeSum()` (line 476).
+- **What:** Every other method that returns a new series builds it with `new TimeSeries(TimeInterval)`.
+  This one builds `new TimeSeries()`, whose field initializer is `TimeInterval.OneDay`, so the
+  result claims a daily interval no matter what the source had. The ordinate DATES are copied
+  intact, so the returned object is internally inconsistent: monthly dates labelled as daily.
+- **Evidence (measured against the real library):** a `OneMonth` series of `{1, 2, 3}` returns a
+  cumulative sum whose `TimeInterval` is `OneDay`. The values and dates are otherwise correct.
+- **Consequence:** anything downstream that branches on the interval sees the wrong one. Within
+  Numerics itself the only such consumer is `ConvertTimeInterval`, so a caller who cumulates and
+  then converts gets a conversion computed from a 24-hour step.
+- **Port handling:** mirrored, with the oddity named in the method's own comment and pinned by
+  `test_time_series_container.cpp` (`test_cumulative` asserts the result reports `OneDay` while the
+  source still reports `OneMonth`).
+- **Suggested C# fix:** `new TimeSeries(TimeInterval)`, matching every sibling.
+
+## ROBUSTNESS — three `TimeSeries` indexed math overloads reach through an index their own guard rejected
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** The indexed overloads now skip rejected indexes safely, and corehydro ports the guards.
+
+- **Where:** `Numerics/Data/Time Series/TimeSeries.cs` @ 2a0357a: `LogTransform(IList<int>, double)`
+  (line 410), `Inverse(IList<int>)` (line 461), and `InterpolateMissingData(int, IList<int>)`
+  (line 617).
+- **What:** The indexed math overloads share one shape -- `if (indexes[i] >= 0 && indexes[i] <
+  Count && <condition>) { ... }` -- and the seven that stop there SKIP an out-of-range index
+  silently. These three do not. `LogTransform` and `Inverse` add an `else` (or `else if`) that
+  writes or reads `this[indexes[i]]` with NO bounds check, so an out-of-range entry raises
+  `ArgumentOutOfRangeException` from the indexer. `InterpolateMissingData`'s extrapolation branch
+  reads `this[idx - 2]` with no `idx >= 2` guard, which its own non-indexed twin (line 596) DOES
+  have, so passing index 1 reads position -1.
+- **Evidence (measured against the real library), on a 3-ordinate series:**
+  `Add(5, new[]{7})` returns normally having done nothing; `LogTransform(new[]{7})` and
+  `Inverse(new[]{7})` both throw `ArgumentOutOfRangeException`; and
+  `InterpolateMissingData(1, new[]{1})` on `{1, NaN, NaN}` throws the same.
+- **Consequence:** whether an out-of-range index is ignored or fatal depends on which of the ten
+  sibling methods you call, which is not a contract a caller can guess.
+- **Port handling:** mirrored. Reading position -1 is undefined behaviour in C++, not an exception,
+  so the three sites carry an explicit bounds check that throws `std::out_of_range` at exactly the
+  point the C# indexer would; the other seven keep skipping. `test_time_series_container.cpp` pins
+  both behaviours side by side.
+- **Suggested C# fix:** give the three methods the same guard their siblings have (and give the
+  indexed `InterpolateMissingData` the `idx >= 2` check its twin already has).
+
+## COSMETIC — `TimeSeries.MovingAverage` / `MovingSum` swap their `ArgumentException` arguments
+- **Status (Numerics v2.2.0, corehydro Task 6): RESOLVED UPSTREAM AND PORTED.** v2.2.0 corrects the ArgumentException argument order, and corehydro carries the corrected metadata.
+
+- **Where:** `Numerics/Data/Time Series/TimeSeries.cs` @ 2a0357a, `MovingAverage` (line 955) and
+  `MovingSum` (line 998).
+- **What:** Both write `throw new ArgumentException(nameof(period), "The period must be less than
+  the length of the time-series.")`. `ArgumentException(string message, string paramName)` takes
+  the MESSAGE first, so the parameter name becomes the message and the message becomes the
+  parameter name.
+- **Evidence (measured against the real library):** calling `MovingAverage(3)` on a 3-ordinate
+  series raises `ArgumentException: period (Parameter 'The period must be less than the length of
+  the time-series.')`.
+- **Note:** the guard itself is `period >= Count`, not `period > Count`, so a window exactly as
+  long as the series is rejected rather than producing the single full-series value. That is
+  deliberate enough (a one-point output is rarely wanted) that it is recorded here rather than
+  filed as a bug, but it IS the boundary a caller has to know.
+- **Port handling:** the port throws `std::invalid_argument` carrying the descriptive message and
+  keeps the `>=` boundary; `test_time_series_container.cpp` pins the boundary.
+- **Suggested C# fix:** swap the two arguments.
+
+
+## CONSISTENCY (not a port defect) — MultivariateStudentT's CDF at dimension >= 3 is clock-seeded and not reproducible
+- **Status (Numerics v2.2.0, corehydro Task 2): RESOLVED UPSTREAM AND PORTED.** The internal MVN lattice generator now defaults to the documented seed 12345 and is publicly replaceable; corehydro exposes the matching seed in the shared multivariate specification.
+
+- **Where:** `Numerics/Distributions/Multivariate/MultivariateStudentT.cs`, `CDF()`;
+  `core/include/corehydro/numerics/distributions/multivariate/multivariate_student_t.hpp:23-38`.
+- **What:** for dimension 1-2, `CDF()` is closed-form (dim 1 delegates to the univariate StudentT
+  CDF; dim 2 runs the stratified mixture below over `MultivariateNormal::cdf()` calls that are
+  themselves closed-form Drezner/Genz bivariate evaluations) and is fully bit-reproducible. For
+  dimension >= 2, `CDF()` runs a deterministic K=200 stratified-quantile chi-square(v) mixture,
+  but at dimension >= 3 each of the 200 inner `MultivariateNormal.CDF()` calls invokes the
+  seeded Genz-Bretz quasi-Monte-Carlo integrator, and the `MultivariateNormal` instance
+  `MultivariateStudentT` builds internally is never given an explicit seed (`_MVNUNI = new
+  MersenneTwister()` in C#, mirrored by `make_clock_seeded()` in the port). So the MVT CDF at
+  dimension >= 3 is not reproducible run to run in either language, independent of any seed the
+  caller supplies to the outer `MultivariateStudentT`/`MultivariateDistribution` object.
+- **Port handling:** mirrored faithfully; `mvdist_student_t()` in R and Python (`corehydror/R/
+  mvdist.R`, `corehydropy/src/corehydropy/mvdist.py`) has no `seed` parameter, unlike
+  `mvdist_normal()`, which does expose one because `MultivariateNormal`'s own Genz integrator is
+  genuinely seedable. `mvdist_random()` draws from each family's own seeded Mersenne Twister stream
+  and is unaffected by this limitation.
+- **Suggested action:** none — this is an upstream design property (a class-internal
+  `MultivariateNormal` with no seed setter exposed), not something the port introduced or could fix
+  without diverging from C#.
+
+
+## COSMETIC — `Test_GeneralizedLinearModel.cs`'s commented-out `Summary()` transcripts are stale
+- **Status (Numerics v2.2.0, corehydro Task 14): RESOLVED UPSTREAM AND PORTED.** The transcripts were refreshed and the information criteria are now asserted; corehydro's GLM goldens reproduce them.
+
+- **Where:** `Numerics/Test_Numerics/Machine Learning/Supervised/Test_GeneralizedLinearModel.cs`
+  @ 2a0357a, the `/* ... */` blocks after each test's `Debug.WriteLine(summary[i])` loop.
+- **What:** each test ends with a commented-out copy of the summary table the model used to
+  print. For `Test_SimpleLinearRegression` that block reads `AIC: 71.1801  AICc: 71.2453
+  BIC: 77.6423`. The shipped library returns `343.25605266374168`, `343.32127005504606` and
+  `349.71826989745085` for that exact fit -- 272.08 higher. Nothing fails, because the block is a
+  comment and the test never asserts AIC for the identity link (only `Test_Log`, `Test_Logistic`,
+  `Test_Probit` and `Test_LogLog` do, and those four are current).
+- **How it was found:** the port reproduced the shipped library's values to all 17 digits, and the
+  transcript was mistakenly used as an oracle while writing `test_generalized_linear_model.cpp`;
+  probing the real library settled it. The parameters and standard errors in the same blocks ARE
+  current, which is what makes the stale AIC line easy to trust.
+- **Port handling:** none needed -- the port matches the library exactly. The ctest pins the
+  measured values and says in place why the transcript must not be used.
+- **Lesson worth carrying:** in this corpus, only ASSERTED values in a `[TestMethod]` are oracles.
+  A commented-out `Debug.WriteLine` transcript has nothing keeping it honest.
+- **Suggested C# fix:** refresh or delete the stale block.

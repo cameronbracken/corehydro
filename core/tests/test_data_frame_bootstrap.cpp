@@ -8,7 +8,7 @@
 // ported in A8, not A3. So this C++-only ctest is built from:
 //   1. structural / analytic invariants transcribed from the C# method bodies
 //      (RMC-BestFit/src/RMC.BestFit/Models/DataFrame/DataFrame.cs @ fc28c0c, lines
-//      2059-2543; Numerics/Utilities/ExtensionMethods.cs @ 2a0357a, lines 78/94),
+//      2059-2543; Numerics/Utilities/ExtensionMethods.cs @ 7e8e8d1, lines 78/94),
 //   2. seeded MersenneTwister determinism (the C# stream-parity guarantee), and
 //   3. draw-replication: a parallel same-seed MersenneTwister reproduces the exact
 //      inverse_cdf(u) sequence the methods consume, checked to rel 1e-9.
