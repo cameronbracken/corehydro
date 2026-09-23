@@ -831,16 +831,16 @@ def quadrature_nd(
         falls on a subdivision boundary. Left unset, the ported class's own defaults apply.
         Supplying any for another ``method`` raises ``ValueError``.
     independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter,
-    initialize, check_convergence, target_probability : optional
+    initialize, check_convergence, sobol_seed, target_probability : optional
         ``method="vegas"`` alone. ``independent_evaluations`` and ``function_calls`` bound the run
         (their product is the maximum total evaluations); ``alpha`` is the grid-refinement damping
         exponent; ``number_of_bins`` the stratification bin count; ``tail_focus_parameter`` the
         Power Transform exponent (1.0, the default, is standard uniform sampling); ``initialize``
         selects a cold start (0, the default), inheriting the grid alone (1), or inheriting the
         grid and its answers (2); ``check_convergence`` whether to exit early on convergence.
-    ``sobol_seed`` controls the linear-matrix scramble and digital shift used by Vegas when
-    Sobol sampling is enabled. ``target_probability``, if supplied, calls the ported
-    ``configure_for_rare_events()``
+        ``sobol_seed`` controls the linear-matrix scramble and digital shift used by Vegas when
+        Sobol sampling is enabled. ``target_probability``, if supplied, calls the ported
+        ``configure_for_rare_events()``
         helper -- applied AFTER every other option, so it may override
         ``number_of_bins``/``alpha``/``tail_focus_parameter``, exactly as the C# helper does. Left
         unset, the ported class's own defaults apply. Supplying any for another ``method`` raises
