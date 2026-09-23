@@ -70,16 +70,16 @@ the `corehydropy` Python package) are documented here. The format follows
   added public C# API records are exposed, internalized, or deliberately severed. .NET XML
   persistence, `TimeSeriesDownload`, and caller-owned rectangular-output overloads remain outside
   the package boundary.
-- Local release checks currently pass for the C++ core, R package, Python package, and real C#
+- Release checks pass for the C++ core, R package, Python package, and real C#
   oracle. `R CMD check --as-cran` reports three existing notes and no warning: new submission and
   file license, vendored header paths longer than 100 bytes, and unavailable local HTML validation
-  tools. The remote Linux, macOS, and Windows matrix has not run for this branch.
+  tools. The remote Linux, macOS, and Windows C++, R, Python 3.10/3.12, and documentation jobs pass.
 
 ### Validation
 
-- Clean C++ build: 123 of 123 tests passed, including 6,826 fixture checks.
-- Real C# oracle: 6,815 values reproduced, 0 failed, and 11 documented skips unchanged.
-- Clean R install and testthat: 8,102 assertions passed. CRAN-style check: 0 errors, 0 warnings,
+- Clean C++ build: 123 of 123 tests passed, including 6,823 fixture checks.
+- Real C# oracle: 6,812 values reproduced, 0 failed, and 11 documented skips unchanged.
+- Clean R install and testthat: 8,099 assertions passed. CRAN-style check: 0 errors, 0 warnings,
   and 3 notes.
 - Forced Python reinstall and pytest: 1,921 tests passed.
 

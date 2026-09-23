@@ -19,8 +19,8 @@ curve simplification, bootstrap intervals, MCMC diagnostics, and machine learnin
 ## Notes
 
 * Lang simplification now preserves the final curve point, matching Numerics v2.2.0.
-* Local C++, R, Python, and real C# oracle gates pass. The remote platform matrix has not run for
-  this branch.
+* Local C++, R, Python, and real C# oracle gates pass. The remote Linux, macOS, and Windows C++,
+  R, Python 3.10/3.12, and documentation jobs also pass.
 
 # corehydror 0.13.0
 
