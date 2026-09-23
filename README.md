@@ -5,7 +5,7 @@
 [![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-b06a3b.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 [![Version](https://img.shields.io/github/v/tag/cameronbracken/corehydro?sort=semver&label=version&color=6b7f3f)](https://github.com/cameronbracken/corehydro/releases)
 [![License: 0BSD](https://img.shields.io/badge/license-0BSD-5b7a8c.svg)](LICENSE)
-[![Upstream: Numerics 2.2.0 | RMC--BestFit 2.0.0](https://img.shields.io/badge/upstream-Numerics%202.2.0%20%7C%20RMC--BestFit%202.0.0-8c8c7a.svg)](https://github.com/USACE-RMC)
+[![Upstream: Numerics 2.1.4 | RMC--BestFit 2.0.0](https://img.shields.io/badge/upstream-Numerics%202.1.4%20%7C%20RMC--BestFit%202.0.0-8c8c7a.svg)](https://github.com/USACE-RMC)
 
 corehydro is an (unofficial) C++ port of tools developed by the 
 [United States Army Corps of Engineers](https://www.usace.army.mil/) (USACE) 
