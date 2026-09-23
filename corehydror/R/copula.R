@@ -194,6 +194,7 @@ copula_fit <- function(family, x, y, method = c("mpl", "ifm", "mle", "tau"),
 #'
 #' @param cop a `corehydro_copula` from [copula()] or [copula_fit()].
 #' @param u,v numeric vectors in `(0, 1)`, the copula's two arguments.
+#' @param t a numeric probability in `(0, 1)` for the inverse conditional CDF.
 #' @return a numeric vector, one value per recycled `(u, v)` pair.
 #' @name copula_functions
 #' @examples

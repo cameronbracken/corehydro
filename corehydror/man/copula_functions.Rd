@@ -23,6 +23,8 @@ copula_inverse_conditional_cdf(cop, u, t)
 \item{cop}{a \code{corehydro_copula} from \code{\link[=copula]{copula()}} or \code{\link[=copula_fit]{copula_fit()}}.}
 
 \item{u, v}{numeric vectors in \verb{(0, 1)}, the copula's two arguments.}
+
+\item{t}{a numeric probability in \verb{(0, 1)} for the inverse conditional CDF.}
 }
 \value{
 a numeric vector, one value per recycled \verb{(u, v)} pair.
