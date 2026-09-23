@@ -28,6 +28,7 @@ set(BF_TESTS
   test_autocorrelation
   test_mixture
   test_mixture_em_seeding
+  test_competing_risks
   test_empirical_distribution
   test_univariate_distribution_factory
   test_kernel_density

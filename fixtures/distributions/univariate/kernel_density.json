@@ -3,7 +3,8 @@
   "kind":   "univariate_distribution",
   "source": "Numerics/Test_Numerics/Distributions/Univariate/Test_KernelDensity.cs",
   "datasets": {
-    "tippecanoe": [6290, 2700, 13100, 16900, 14600, 9600, 7740, 8490, 8130, 12000, 17200, 15000, 12400, 6960, 6500, 5840, 10400, 18800, 21400, 22600, 14200, 11000, 12800, 15700, 4740, 6950, 11800, 12100, 20600, 14600, 14600, 8900, 10600, 14200, 14100, 14100, 12500, 7530, 13400, 17600, 13400, 19200, 16900, 15500, 14500, 21900, 10400, 7460]
+    "tippecanoe": [6290, 2700, 13100, 16900, 14600, 9600, 7740, 8490, 8130, 12000, 17200, 15000, 12400, 6960, 6500, 5840, 10400, 18800, 21400, 22600, 14200, 11000, 12800, 15700, 4740, 6950, 11800, 12100, 20600, 14600, 14600, 8900, 10600, 14200, 14100, 14100, 12500, 7530, 13400, 17600, 13400, 19200, 16900, 15500, 14500, 21900, 10400, 7460],
+    "constant_five": [5, 5, 5, 5]
   },
   "cases": [
     {
@@ -29,19 +30,14 @@
       ]
     },
     {
-      "name": "invalid_nan_bandwidth",
-      "note": "v2.1.4: the private Bandwidth ValidateParameters(double, bool) now rejects NaN/Infinity explicitly (previously only `value <= 0d`, false for +Infinity -- see kernel_density.hpp file header note).",
-      "construct": {"data": "tippecanoe", "kernel": "Gaussian", "bandwidth": "nan"},
+      "name": "constant_sample_near_point_mass",
+      "note": "v2.2.0 assigns a finite relative bandwidth to a constant sample.",
+      "construct": {"data": "constant_five", "kernel": "Gaussian"},
       "assertions": [
-        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
-      ]
-    },
-    {
-      "name": "invalid_inf_bandwidth",
-      "note": "v2.1.4 real fix: `Infinity <= 0d` is false, so an infinite bandwidth silently read as valid before this explicit isnan/isinf check was added.",
-      "construct": {"data": "tippecanoe", "kernel": "Gaussian", "bandwidth": "inf"},
-      "assertions": [
-        { "method": "parameters_valid", "args": [], "expected": false, "mode": "bool" }
+        { "method": "parameters_valid", "args": [], "expected": true, "mode": "bool" },
+        { "method": "minimum", "args": [], "expected": 5.0, "mode": "equal" },
+        { "method": "maximum", "args": [], "expected": 5.0, "mode": "equal" },
+        { "method": "pdf", "args": [5.0], "expected": 79788456.08028655, "mode": "rel", "tol": 1e-14 }
       ]
     },
     {

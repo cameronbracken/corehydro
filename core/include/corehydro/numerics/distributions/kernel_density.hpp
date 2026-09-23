@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/KernelDensity.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/KernelDensity.cs @ 7e8e8d1
 //
 // Re-audited against v2.1.4's "Harden distribution parameter validation" wave: the private
 // Bandwidth ValidateParameters(double, bool) now rejects NaN/Infinity explicitly (previously
@@ -113,7 +113,9 @@ class KernelDensity : public UnivariateDistributionBase {
     KernelDensity(std::vector<double> sample_data, KernelType kernel, double bandwidth)
         : kernel_type_(kernel), bandwidth_(bandwidth) {
         init_sample(std::move(sample_data));
-        parameters_valid_ = validate_bandwidth(bandwidth_) && !sample_data_.empty();
+        if (!validate_bandwidth(bandwidth_))
+            throw std::out_of_range("bandwidth must be finite and strictly positive");
+        parameters_valid_ = true;
     }
 
     // --- Property accessors ------------------------------------------------------------
@@ -203,10 +205,12 @@ class KernelDensity : public UnivariateDistributionBase {
     /// Silverman's rule of thumb: h = sigma * (4/(3n))^(1/5).
     /// Mirrors C# BandwidthRule(IList<double> sampleData) using Statistics.StandardDeviation.
     static double bandwidth_rule(const std::vector<double>& data) {
-        if (data.empty()) return kNaN;
+        validate_sample_data(data);
         auto m = data::product_moments(data);  // [mean, sample_sd, skew, kurt]
         double sigma = m[1];
-        return sigma * std::pow(4.0 / (3.0 * static_cast<double>(data.size())), 0.2);
+        const double factor =
+            std::pow(4.0 / (3.0 * static_cast<double>(data.size())), 0.2);
+        return ensure_positive_bandwidth(sigma, factor, data);
     }
 
     // --- Distribution functions --------------------------------------------------------
@@ -279,13 +283,50 @@ class KernelDensity : public UnivariateDistributionBase {
         return !std::isnan(value) && !std::isinf(value) && value > 0.0;
     }
 
+    static void validate_sample_data(const std::vector<double>& values) {
+        if (values.empty()) throw std::invalid_argument("sample must not be empty");
+        for (double value : values)
+            if (!std::isfinite(value))
+                throw std::invalid_argument("sample values must be finite");
+    }
+
+    static double ensure_positive_bandwidth(
+        double dispersion, double factor, const std::vector<double>& values) {
+        constexpr double kDegenerateRelativeBandwidth = 1e-9;
+        constexpr double kDegenerateAbsoluteBandwidth = 1e-9;
+        if (!std::isfinite(dispersion) || dispersion <= 0.0) {
+            const bool constant =
+                std::all_of(values.begin() + 1, values.end(),
+                            [&](double value) { return value == values.front(); });
+            if (constant) {
+                const double degenerate =
+                    std::fabs(values.front()) * kDegenerateRelativeBandwidth;
+                return degenerate >= std::numeric_limits<double>::min() &&
+                               std::isfinite(degenerate)
+                           ? degenerate
+                           : kDegenerateAbsoluteBandwidth;
+            }
+        }
+        double scale = dispersion;
+        if (!std::isfinite(scale)) {
+            scale = 0.0;
+            for (double value : values) scale = std::max(scale, std::fabs(value));
+            if (!(scale > 0.0)) scale = 1.0;
+        }
+        if (factor > 1.0 && scale > std::numeric_limits<double>::max() / factor)
+            return std::numeric_limits<double>::max();
+        const double bandwidth = scale * factor;
+        return bandwidth > 0.0 && std::isfinite(bandwidth)
+                   ? bandwidth
+                   : std::numeric_limits<double>::denorm_min();
+    }
+
     // Initialise from sample data: store and compute product moments.
     void init_sample(std::vector<double> data) {
+        validate_sample_data(data);
         sample_data_ = std::move(data);
-        if (!sample_data_.empty()) {
-            auto m = data::product_moments(sample_data_);
-            u_[0] = m[0]; u_[1] = m[1]; u_[2] = m[2]; u_[3] = m[3];
-        }
+        auto m = data::product_moments(sample_data_);
+        u_[0] = m[0]; u_[1] = m[1]; u_[2] = m[2]; u_[3] = m[3];
         cdf_created_ = false;
     }
 

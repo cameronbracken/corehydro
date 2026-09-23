@@ -9,8 +9,7 @@
 // [InverseCDF(1e-8), InverseCDF(1-1e-8)] with 300 equal-width bins.
 // No IEstimation / ILinearMomentEstimation: EmpiricalDistribution is non-parametric and
 // does not fit from data via the estimation interface (IBootstrappable not ported).
-// The Convolve FFT static is skipped (external dependency); all other methods are faithful
-// ports of the C# source including the boundary and clamping logic.
+// Convolution uses the ported Numerics FFT implementation.
 // NOTE: set_parameters(vector) throws (mirrors C# NotImplementedException), matching
 // the fact that Empirical is constructed with structured x/p arrays, not a flat vector.
 //
@@ -67,6 +66,7 @@
 #include "corehydro/numerics/data/paired_data/extrapolation_sides.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
+#include "corehydro/numerics/math/fourier/fourier.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/tools.hpp"
@@ -317,6 +317,160 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
         return c;
     }
 
+    static EmpiricalDistribution convolve(
+        const EmpiricalDistribution& first, const EmpiricalDistribution& second,
+        int number_of_points = 1024, bool log_spaced_output = false) {
+        if (number_of_points < 2)
+            throw std::invalid_argument("convolution requires at least two output points");
+        const double support_minimum = first.minimum() + second.minimum();
+        const double support_maximum = first.maximum() + second.maximum();
+        if (log_spaced_output &&
+            (!std::isfinite(support_minimum) || !std::isfinite(support_maximum) ||
+             support_minimum <= 0.0 || support_maximum <= support_minimum))
+            throw std::invalid_argument(
+                "logarithmic convolution output requires finite positive support");
+
+        const int fft_points = next_power_of_two(std::max(number_of_points * 8, 2048));
+        const double dx = (support_maximum - support_minimum) / fft_points;
+        std::vector<double> pdf1(static_cast<std::size_t>(fft_points));
+        std::vector<double> pdf2(static_cast<std::size_t>(fft_points));
+        for (int i = 0; i < fft_points; ++i) {
+            const double x1 = first.minimum() + i * dx;
+            const double x2 = second.minimum() + i * dx;
+            if (x1 <= first.maximum()) pdf1[static_cast<std::size_t>(i)] = first.pdf(x1);
+            if (x2 <= second.maximum()) pdf2[static_cast<std::size_t>(i)] = second.pdf(x2);
+        }
+        auto trapezoid = [dx](const std::vector<double>& density) {
+            double integral = 0.0;
+            for (std::size_t i = 0; i + 1 < density.size(); ++i)
+                integral += 0.5 * (density[i] + density[i + 1]) * dx;
+            return integral;
+        };
+        const double integral1 = trapezoid(pdf1);
+        const double integral2 = trapezoid(pdf2);
+        if (integral1 > 0.01)
+            for (double& value : pdf1) value /= integral1;
+        if (integral2 > 0.01)
+            for (double& value : pdf2) value /= integral2;
+
+        const int fft_size = next_power_of_two(fft_points * 2);
+        std::vector<double> fft1(static_cast<std::size_t>(2 * fft_size), 0.0);
+        std::vector<double> fft2(static_cast<std::size_t>(2 * fft_size), 0.0);
+        for (int i = 0; i < fft_points; ++i) {
+            fft1[static_cast<std::size_t>(2 * i)] = pdf1[static_cast<std::size_t>(i)] * dx;
+            fft2[static_cast<std::size_t>(2 * i)] = pdf2[static_cast<std::size_t>(i)] * dx;
+        }
+        math::fourier::fft(fft1);
+        math::fourier::fft(fft2);
+        std::vector<double> product(static_cast<std::size_t>(2 * fft_size), 0.0);
+        for (int i = 0; i < fft_size; ++i) {
+            const std::size_t j = static_cast<std::size_t>(2 * i);
+            product[j] = fft1[j] * fft2[j] - fft1[j + 1] * fft2[j + 1];
+            product[j + 1] = fft1[j] * fft2[j + 1] + fft1[j + 1] * fft2[j];
+        }
+        math::fourier::fft(product, true);
+        std::vector<double> cdf(static_cast<std::size_t>(fft_size), 0.0);
+        double previous_density = std::max(0.0, product[0] / fft_size);
+        for (int i = 1; i < fft_size; ++i) {
+            const double density =
+                std::max(0.0, product[static_cast<std::size_t>(2 * i)] / fft_size);
+            cdf[static_cast<std::size_t>(i)] =
+                cdf[static_cast<std::size_t>(i - 1)] +
+                0.5 * (previous_density + density) * dx;
+            previous_density = density;
+        }
+        if (cdf.back() > 1e-10)
+            for (double& value : cdf) value /= cdf.back();
+
+        std::vector<double> output_x;
+        std::vector<double> output_p;
+        output_x.reserve(static_cast<std::size_t>(number_of_points));
+        output_p.reserve(static_cast<std::size_t>(number_of_points));
+        const double log_minimum = log_spaced_output ? std::log10(support_minimum) : 0.0;
+        const double log_maximum = log_spaced_output ? std::log10(support_maximum) : 0.0;
+        double last_probability = -kInf;
+        for (int i = 0; i < number_of_points; ++i) {
+            const double fraction = static_cast<double>(i) / (number_of_points - 1.0);
+            const double x = log_spaced_output
+                                 ? std::pow(10.0, log_minimum +
+                                                      (log_maximum - log_minimum) * fraction)
+                                 : support_minimum +
+                                       (support_maximum - support_minimum) * fraction;
+            const double position = (x - support_minimum) / dx;
+            std::size_t lower = position <= 0.0
+                                    ? 0U
+                                    : std::min(static_cast<std::size_t>(position),
+                                               cdf.size() - 2U);
+            const double weight = std::clamp(position - static_cast<double>(lower), 0.0, 1.0);
+            double probability = cdf[lower] + weight * (cdf[lower + 1] - cdf[lower]);
+            probability = std::clamp(probability, 0.0, 1.0);
+            if (!log_spaced_output || probability > last_probability) {
+                output_x.push_back(x);
+                output_p.push_back(probability);
+                last_probability = probability;
+            }
+        }
+        if (output_x.size() < 2)
+            throw std::invalid_argument(
+                "convolution produced fewer than two distinct probabilities");
+        EmpiricalDistribution result(std::move(output_x), std::move(output_p));
+        result.set_probability_transform(first.probability_transform());
+        result.set_x_transform(first.x_transform());
+        return result;
+    }
+
+    static void convolve_discrete(
+        const std::vector<double>& values1, const std::vector<double>& masses1,
+        const std::vector<double>& values2, const std::vector<double>& masses2,
+        int lattice_points, std::vector<double>& values, std::vector<double>& masses) {
+        const double total1 = validate_atoms(values1, masses1);
+        const double total2 = validate_atoms(values2, masses2);
+        const int n = next_power_of_two(std::max(lattice_points, 8));
+        const auto bounds1 = positive_mass_bounds(values1, masses1);
+        const auto bounds2 = positive_mass_bounds(values2, masses2);
+        const double span = (bounds1.second - bounds1.first) +
+                            (bounds2.second - bounds2.first);
+        const double expected = total1 * total2;
+        if (span == 0.0) {
+            values = {bounds1.first + bounds2.first};
+            masses = {expected};
+            return;
+        }
+        const double step = span / (n - 1.0);
+        auto lattice1 = deposit_atoms(values1, masses1, bounds1.first, step, n);
+        auto lattice2 = deposit_atoms(values2, masses2, bounds2.first, step, n);
+        const int fft_size = next_power_of_two(2 * n);
+        std::vector<double> fft1(static_cast<std::size_t>(2 * fft_size), 0.0);
+        std::vector<double> fft2(static_cast<std::size_t>(2 * fft_size), 0.0);
+        for (int i = 0; i < n; ++i) {
+            fft1[static_cast<std::size_t>(2 * i)] = lattice1[static_cast<std::size_t>(i)];
+            fft2[static_cast<std::size_t>(2 * i)] = lattice2[static_cast<std::size_t>(i)];
+        }
+        math::fourier::fft(fft1);
+        math::fourier::fft(fft2);
+        std::vector<double> product(static_cast<std::size_t>(2 * fft_size), 0.0);
+        for (int i = 0; i < fft_size; ++i) {
+            const std::size_t j = static_cast<std::size_t>(2 * i);
+            product[j] = fft1[j] * fft2[j] - fft1[j + 1] * fft2[j + 1];
+            product[j + 1] = fft1[j] * fft2[j + 1] + fft1[j + 1] * fft2[j];
+        }
+        math::fourier::fft(product, true);
+        const int count = last_positive_index(lattice1) + last_positive_index(lattice2) + 1;
+        values.resize(static_cast<std::size_t>(count));
+        masses.resize(static_cast<std::size_t>(count));
+        double total = 0.0;
+        for (int i = 0; i < count; ++i) {
+            values[static_cast<std::size_t>(i)] =
+                bounds1.first + bounds2.first + i * step;
+            masses[static_cast<std::size_t>(i)] =
+                std::max(0.0, product[static_cast<std::size_t>(2 * i)] / fft_size);
+            total += masses[static_cast<std::size_t>(i)];
+        }
+        if (!(total > 0.0) || !std::isfinite(total))
+            throw std::runtime_error("discrete convolution produced no positive mass");
+        for (double& mass : masses) mass *= expected / total;
+    }
+
    private:
     std::vector<double> x_;  // nondecreasing x values (duplicates allowed, v2.1.4)
     std::vector<double> p_;  // strictly monotonic probability values (ascending or descending)
@@ -333,6 +487,64 @@ class EmpiricalDistribution : public UnivariateDistributionBase {
 
     mutable bool moments_computed_ = false;
     mutable double u_[4] = {kNaN, kNaN, kNaN, kNaN};  // [mean, sd, skew, kurt]
+
+    static int next_power_of_two(int value) {
+        int result = 1;
+        while (result < value) result <<= 1;
+        return result;
+    }
+
+    static double validate_atoms(
+        const std::vector<double>& values, const std::vector<double>& masses) {
+        if (values.empty() || values.size() != masses.size())
+            throw std::invalid_argument("atom values and masses must be nonempty and aligned");
+        double total = 0.0;
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (!std::isfinite(values[i]) || !std::isfinite(masses[i]) || masses[i] < 0.0)
+                throw std::invalid_argument("atom values and masses must be finite and nonnegative");
+            total += masses[i];
+        }
+        if (!(total > 0.0) || !std::isfinite(total))
+            throw std::invalid_argument("atom mass must have a finite positive total");
+        return total;
+    }
+
+    static std::pair<double, double> positive_mass_bounds(
+        const std::vector<double>& values, const std::vector<double>& masses) {
+        double minimum = std::numeric_limits<double>::max();
+        double maximum = std::numeric_limits<double>::lowest();
+        for (std::size_t i = 0; i < values.size(); ++i)
+            if (masses[i] > 0.0) {
+                minimum = std::min(minimum, values[i]);
+                maximum = std::max(maximum, values[i]);
+            }
+        return {minimum, maximum};
+    }
+
+    static int last_positive_index(const std::vector<double>& masses) {
+        for (int i = static_cast<int>(masses.size()) - 1; i >= 0; --i)
+            if (masses[static_cast<std::size_t>(i)] > 0.0) return i;
+        throw std::runtime_error("lattice contains no positive mass");
+    }
+
+    static std::vector<double> deposit_atoms(
+        const std::vector<double>& values, const std::vector<double>& masses,
+        double origin, double step, int n) {
+        std::vector<double> lattice(static_cast<std::size_t>(n), 0.0);
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            const double position = (values[i] - origin) / step;
+            int lower = std::clamp(static_cast<int>(std::floor(position)), 0, n - 1);
+            const int upper = lower + 1;
+            if (upper > n - 1) {
+                lattice.back() += masses[i];
+                continue;
+            }
+            const double fraction = std::clamp(position - lower, 0.0, 1.0);
+            lattice[static_cast<std::size_t>(lower)] += masses[i] * (1.0 - fraction);
+            lattice[static_cast<std::size_t>(upper)] += masses[i] * fraction;
+        }
+        return lattice;
+    }
 
     void set_xy(std::vector<double> x, std::vector<double> p) {
         x_ = std::move(x);

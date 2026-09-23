@@ -83,11 +83,27 @@ void test_triangular_kernel_tiny_bandwidth_cdf_does_not_throw() {
     check_cdf_and_inverse_cdf_do_not_throw(KernelType::Triangular);
 }
 
+void test_v220_bandwidth_validation_and_degenerate_sample() {
+    CHECK_THROWS(KernelDensity({1.0, 2.0}, KernelType::Gaussian,
+                               std::numeric_limits<double>::quiet_NaN()));
+    CHECK_THROWS(KernelDensity({1.0, 2.0}, KernelType::Gaussian,
+                               std::numeric_limits<double>::infinity()));
+    CHECK_THROWS(KernelDensity({}, KernelType::Gaussian));
+    CHECK_THROWS(KernelDensity({1.0, std::numeric_limits<double>::infinity()},
+                               KernelType::Gaussian));
+    KernelDensity constant({5.0, 5.0, 5.0, 5.0}, KernelType::Gaussian);
+    CHECK_EQ(constant.bandwidth(), 5e-9);
+    CHECK_TRUE(std::isfinite(constant.pdf(5.0)));
+    KernelDensity zero({0.0, 0.0, 0.0, 0.0}, KernelType::Gaussian);
+    CHECK_EQ(zero.bandwidth(), 1e-9);
+}
+
 }  // namespace
 
 int main() {
     test_epanechnikov_kernel_tiny_bandwidth_cdf_does_not_throw();
     test_uniform_kernel_tiny_bandwidth_cdf_does_not_throw();
     test_triangular_kernel_tiny_bandwidth_cdf_does_not_throw();
+    test_v220_bandwidth_validation_and_degenerate_sample();
     return chtest::summary("test_kernel_density");
 }

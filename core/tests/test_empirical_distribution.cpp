@@ -159,6 +159,39 @@ void test_sided_extrapolation() {
     CHECK_NEAR(clone->inverse_cdf(1e-16), 0.5, 1e-12);
 }
 
+void test_v220_convolution() {
+    std::vector<double> values;
+    std::vector<double> masses;
+    EmpiricalDistribution::convolve_discrete(
+        {0.0, 2.0}, {0.25, 0.75}, {1.0, 3.0}, {0.5, 0.5}, 64, values, masses);
+    CHECK_TRUE(!values.empty());
+    double total = 0.0;
+    double mean = 0.0;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        CHECK_TRUE(masses[i] >= 0.0 && std::isfinite(masses[i]));
+        total += masses[i];
+        mean += values[i] * masses[i];
+    }
+    CHECK_NEAR(total, 1.0, 1e-14);
+    CHECK_NEAR(mean, 3.5, 1e-13);
+
+    EmpiricalDistribution first({1.0, 2.0, 3.0}, {0.1, 0.5, 0.9},
+                                EmpiricalTransform::None);
+    EmpiricalDistribution second({2.0, 3.0, 4.0}, {0.1, 0.5, 0.9},
+                                 EmpiricalTransform::None);
+    const auto linear = EmpiricalDistribution::convolve(first, second, 64);
+    CHECK_TRUE(linear.parameters_valid());
+    CHECK_NEAR(linear.minimum(), 3.0, 0.0);
+    CHECK_NEAR(linear.maximum(), 7.0, 0.0);
+    const auto logarithmic = EmpiricalDistribution::convolve(first, second, 64, true);
+    CHECK_TRUE(logarithmic.parameters_valid());
+    CHECK_NEAR(logarithmic.minimum(), 3.0, 1e-14);
+    CHECK_NEAR(logarithmic.maximum(), 7.0, 1e-14);
+    CHECK_THROWS(EmpiricalDistribution::convolve(
+        EmpiricalDistribution({-2.0, -1.0}, {0.1, 0.9}, EmpiricalTransform::None),
+        second, 64, true));
+}
+
 }  // namespace
 
 int main() {
@@ -172,5 +205,6 @@ int main() {
     test_descending_probability_order_supported();
     test_descending_probability_without_declaring_is_invalid();
     test_sided_extrapolation();
+    test_v220_convolution();
     return chtest::summary("test_empirical_distribution");
 }

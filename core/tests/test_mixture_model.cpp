@@ -886,23 +886,16 @@ void test_mixture_model_seasonal_flood_populations() {
 // Edge cases.
 // ===========================================================================================
 
-// Test_MixtureModel_SingleDataPoint
+// Numerics v2.2 rejects a one-observation sample before a positive scale can be initialized.
 void test_mixture_model_single_data_point() {
     DataFrame df;
     df.set_exact_series(ExactSeries(std::vector<ExactData>{ExactData(2000, 1000)}));
     std::vector<UnivariateDistributionType> types{UnivariateDistributionType::Normal};
 
-    MixtureModel model(std::move(df), types);
-
-    // Should handle single data point.
-    CHECK_TRUE(model.has_mixture());
+    CHECK_THROWS(MixtureModel(std::move(df), types));
 }
 
-// Test_MixtureModel_AllSameValue_ThrowsOnDegenerateData: constant data collapses the
-// auto-fit Uniform prior to an invalid (min > max) parameterization, which Uniform's
-// PDF rejects during prior evaluation (C# ArgumentOutOfRangeException -> the port's
-// std::out_of_range). This surfaces the data degeneracy instead of silently returning
-// NaN / -inf.
+// Numerics v2.2 rejects a constant initialization sample before constructing the model.
 void test_mixture_model_all_same_value_throws_on_degenerate_data() {
     DataFrame df;
     std::vector<ExactData> data;
@@ -910,17 +903,7 @@ void test_mixture_model_all_same_value_throws_on_degenerate_data() {
     df.set_exact_series(ExactSeries(data));
 
     std::vector<UnivariateDistributionType> types{UnivariateDistributionType::Normal};
-    MixtureModel model(std::move(df), types);
-
-    std::vector<double> parameters = parameter_values(model);
-
-    bool threw_out_of_range = false;
-    try {
-        (void)model.log_likelihood(parameters);
-    } catch (const std::out_of_range&) {
-        threw_out_of_range = true;
-    }
-    CHECK_TRUE(threw_out_of_range);
+    CHECK_THROWS(MixtureModel(std::move(df), types));
 }
 
 // Test_MixtureModel_LargeValues
