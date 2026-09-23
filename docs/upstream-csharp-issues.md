@@ -1469,7 +1469,11 @@ a numbered transcription note at the call site citing the C# line numbers below.
 - **Port handling:** none required -- not yet ported (P5).
 - **Suggested action:** none -- the C# is correct as written.
 
-## BUG — `Statistics.ParallelMean` is not reproducible against itself across machines
+## RESOLVED IN v2.2.0 - `Statistics.ParallelMean` was not reproducible across machines
+
+- **Resolution:** v2.2.0 uses the sequential mean. CoreHydro now follows that implementation, so
+  the RandomForest and k-NN mean columns are deterministic and can be pinned with the other
+  prediction columns.
 
 - **Where:** `Numerics/Data/Statistics/Statistics.cs` @ 2a0357a, `ParallelMean(IList<double>)`
   (line 143): `double sum = data.AsParallel().Sum(); return sum / data.Count;`.
@@ -1493,11 +1497,8 @@ a numbered transcription note at the call site citing the C# line numbers below.
   default 1000) and `KNearestNeighbors.PredictionIntervals` (over `realizations` bootstrap
   predictions, default 1000). Every other column of both tables (`lower`/`median`/`upper`) comes
   from `Statistics.Percentile` on a sorted array and is exactly reproducible.
-- **Port handling (intentional divergence, P5 Task 1):** `numerics/data/statistics.hpp`'s
-  `parallel_mean` sums SERIALLY, making it exactly `mean`. There is nothing else it could
-  faithfully do: upstream has no single value to be faithful to. The consequence is stated at the
-  call sites and the affected fixture assertions carry a relative tolerance with this measurement
-  named in their `source` string, rather than an `oracle_skip` mask.
+- **Current port handling:** `parallel_mean` follows v2.2.0 and sums sequentially. The affected
+  prediction columns now use exact cross-language fixtures.
 - **Suggested C# fix:** either sum serially (the arrays reaching this method are small enough that
   the parallel overhead is unlikely to pay for itself) or, if the parallelism is wanted, make the
   reduction deterministic -- fix the partition count and accumulate the partial sums in partition
@@ -1523,7 +1524,10 @@ a numbered transcription note at the call site citing the C# line numbers below.
   A commented-out `Debug.WriteLine` transcript has nothing keeping it honest.
 - **Suggested C# fix:** refresh or delete the stale block.
 
-## BUG — `KNearestNeighbors.kNN`'s shape guard is a tautology, so `GetNeighbors` never validates its query
+## RESOLVED IN v2.2.0 - `KNearestNeighbors.kNN` did not validate its query shape
+
+- **Resolution:** v2.2.0 compares the query column count with the training column count and returns
+  null on either a narrow or wide mismatch. CoreHydro now applies the same guard.
 
 - **Where:** `Numerics/Machine Learning/Supervised/KNearestNeighbors.cs` @ 2a0357a, the private
   `kNN(Matrix xTrain, Vector yTrain, Matrix xTest)` (line 243): `if (NumberOfFeatures !=
@@ -1537,16 +1541,15 @@ a numbered transcription note at the call site citing the C# line numbers below.
   a partial-dimension distance and returns plausible-looking neighbors computed from a subset of
   the features; a query with MORE columns indexes past the end of each training row and throws
   `IndexOutOfRangeException` from inside the distance helper.
-- **Port handling:** the tautological guard is kept for structural fidelity (and does nothing, as
-  upstream); the narrower-query behavior is reproduced exactly, since that is a returned answer a
-  caller could depend on; and the wider-query case throws `std::out_of_range` -- the port's
-  standard mapping for a C# index exception -- rather than reading out of bounds, which would be
-  undefined behavior in C++ rather than a catchable exception. Pinned in
-  `test_k_nearest_neighbors.cpp`.
+- **Current port handling:** both query-shape mismatches return an empty optional, matching
+  v2.2.0. Tied distances use the training index as the secondary key.
 - **Suggested C# fix:** `if (xTest.NumberOfColumns != xTrain.NumberOfColumns) return null!;`,
   matching `kNNPredict`.
 
-## ROBUSTNESS — a default `DecisionTree` regression fit always recurses to one observation per leaf
+## RESOLVED IN v2.2.0 - regression trees split pure nodes to singleton leaves
+
+- **Resolution:** v2.2.0 counts distinct responses in both modes. Pure regression nodes now become
+  leaves. The port also carries the new index-range growth and exact sorted sweep.
 
 - **Where:** `Numerics/Machine Learning/Supervised/DecisionTree.cs` @ 2a0357a, `GrowTree`.
 - **What:** the stopping criteria are `bestIndex == -1 || depth >= MaxDepth || numberOfLabels <= 1
@@ -1570,14 +1573,17 @@ a numbered transcription note at the call site citing the C# line numbers below.
   reaching for a regression tree directly gets a memorizer unless they set `MinimumSplitSize` or
   `MaxDepth` themselves. Classification is unaffected: there `numberOfLabels` IS the distinct
   count, so a pure node stops.
-- **Port handling:** mirrored exactly (the tree shape above is pinned as a C#-measured oracle),
-  with the ordering recorded as a numbered transcription note in `decision_tree.hpp`.
+- **Current port handling:** pure nodes stop, matching v2.2.0. The new golden tree structures,
+  exact split oracle, and equal-key order are pinned in `test_decision_tree.cpp`.
 - **Suggested C# fix:** for regression, stop on variance rather than on count -- either set
   `numberOfLabels` to the distinct count for both modes, or have `VarianceReduction` return
   `double.MinValue` when the parent variance is 0. Either changes fitted trees, so it needs
   re-pinned oracles.
 
-## BUG — `GaussianMixtureModel.MStep`'s positive-definite repair is a no-op (the return value is discarded)
+## RESOLVED IN v2.2.0 - `GaussianMixtureModel.MStep` discarded covariance repair
+
+- **Resolution:** v2.2.0 assigns the repaired matrix back to the component covariance. CoreHydro
+  does the same and checks the resulting component matrices with Cholesky factorization.
 
 - **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a, the last
   line of `MStep()`: `MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`.
@@ -1592,15 +1598,16 @@ a numbered transcription note at the call site citing the C# line numbers below.
   and does work. The M-step's covariance is also symmetric by construction, so the symmetrization
   has nothing to repair in practice; the missing piece is the off-diagonal ridge that would
   protect a near-singular component from failing Cholesky in the next E-step.
-- **Port handling:** mirrored, with the call kept and its result explicitly discarded
-  (`(void)...`) so the upstream diff keeps mapping line-for-line, and a numbered transcription
-  note in `gaussian_mixture_model.hpp` saying why assigning it would be a silent behavior change
-  against every oracle.
+- **Current port handling:** the repaired matrix is assigned back, matching v2.2.0. Degenerate
+  component tests require the stored covariances to remain positive definite.
 - **Suggested C# fix:** `Sigmas[k] = MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);`
   — but note this CHANGES the fitted covariances (and therefore every downstream oracle,
   including `HypothesisTests.UnimodalityTest`'s p-values), so it needs re-pinned test literals.
 
-## BUG — `GaussianMixtureModel.LogLikelihood` omits the multivariate-normal normalizing constant
+## RESOLVED IN v2.2.0 - `GaussianMixtureModel.LogLikelihood` omitted the normalizing constant
+
+- **Resolution:** v2.2.0 reports the full normalized log likelihood and retains the value from
+  every E-step, including an iteration-capped run. CoreHydro fixtures were re-pinned accordingly.
 
 - **Where:** `Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs` @ 2a0357a,
   `EStep()`: `LikelihoodMatrix[i, k] = -0.5 * (sum + logDet[k]) + Math.Log(Weights[k]);`.
@@ -1616,13 +1623,15 @@ a numbered transcription note at the call site citing the C# line numbers below.
   `2 * (logLH2 - logLH1)` over two fits of the SAME sample, so the constant cancels exactly. It
   does matter to a user treating `LogLikelihood` as a comparable model-selection score across
   datasets of different size or dimension, or feeding it to AIC/BIC.
-- **Port handling:** mirrored, pinned in `test_gaussian_mixture_model.cpp` by asserting the
-  reported value against `normalized + n * D/2 * log(2*pi)` (so the test states the size of the
-  omission rather than hiding it), with a transcription note in the header.
+- **Current port handling:** the full normalized value is reported, matching v2.2.0. The iris and
+  one-component values are pinned in C++ and cross-language fixtures.
 - **Suggested C# fix:** subtract `0.5 * Dimension * Math.Log(2 * Math.PI)` in the E-step. Every
   `LogLikelihood` oracle would move by a known constant; the unimodality p-values would not.
 
-## BUG — `KMeans` with `k = 1` reports a random observation as the cluster mean
+## RESOLVED IN v2.2.0 - `KMeans` with `k = 1` reported an initializer as the mean
+
+- **Resolution:** v2.2.0 computes centroids before the first-iteration convergence exit. It also
+  validates the cluster count and relocates empty clusters. CoreHydro ports all three changes.
 
 - **Where:** `Numerics/Machine Learning/Unsupervised/KMeans.cs` @ 2a0357a, `Train(int seed, bool
   kMeansPlusPlus)`.
@@ -1641,12 +1650,15 @@ a numbered transcription note at the call site citing the C# line numbers below.
   defined as "the E-step changed nothing", so recomputing the centroids from the final labels
   reproduces the reported means exactly (pinned in `test_k_means.cpp`). Only `k = 1` degenerates,
   because there the E-step can never change anything.
-- **Port handling:** mirrored, and pinned by `test_k_means.cpp` against the C#-measured values.
-  `k_means.hpp` carries the ordering as a numbered transcription note.
+- **Current port handling:** the centroid is computed before the first convergence exit, matching
+  v2.2.0. The one-cluster sample mean is pinned in C++, R, and Python tests.
 - **Suggested C# fix:** initialize `Labels` to `-1` rather than 0, so the first E-step always
   counts as a change; or run one M-step unconditionally before the convergence test.
 
-## BUG — `JenksNaturalBreaks` throws `IndexOutOfRangeException` when every input value is identical
+## RESOLVED IN v2.2.0 - Jenks failed internally when all values were identical
+
+- **Resolution:** v2.2.0 rejects a multi-class request when the sample has fewer than two distinct
+  values, while retaining the valid one-class fit. CoreHydro now reports the same input error.
 
 - **Where:** `Numerics/Machine Learning/Unsupervised/JenksNaturalBreaks.cs` @ 2a0357a,
   `Estimate()` (the cluster-construction block at the end) into
@@ -1662,10 +1674,8 @@ a numbered transcription note at the call site citing the C# line numbers below.
 - **Note on scope:** this is the degenerate case only. Heavily tied data is fine -- upstream's own
   7,889-value test dataset contains long runs of exact zeros and all three of its 5/7/9-class
   oracles reproduce.
-- **Port handling:** mirrored. `JenksCluster`'s C++ constructor range-checks and throws
-  `std::out_of_range` (the port's standard mapping for a C# index exception) instead of reading
-  out of bounds, so the failure is the same failure with defined behavior;
-  `test_jenks_natural_breaks.cpp` pins the throw.
+- **Current port handling:** a multi-class all-identical sample is rejected before fitting,
+  matching v2.2.0. The one-class form remains valid.
 - **Suggested C# fix:** detect `SortedData[0] == SortedData[^1]` (or a variance of 0) up front and
   either return a single-class fit or throw a described `ArgumentException`, rather than letting a
   negative index reach `JenksCluster`.

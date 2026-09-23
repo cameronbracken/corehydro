@@ -66,13 +66,12 @@ ml_reshape <- function(r) {
 #' belonging to the cluster with the nearest centroid. Initialization is k-means++ by default.
 #'
 #' @details
-#' Two behaviours inherited from upstream are worth knowing:
+#' Two details inherited from upstream are worth knowing:
 #' * `labels` are 0-BASED in both R and Python, matching the library's own indexing (the same
 #'   choice [shortest_path()] made for node indices). Add 1 before using them to subset an R
 #'   object.
-#' * With `k = 1` the algorithm stops before its first update step, so the single reported
-#'   "cluster mean" is a randomly chosen observation rather than the mean of `x`. Use `mean()`
-#'   instead if that is what you want.
+#' * `k` must be between 1 and `nrow(x)`. Empty clusters are relocated to distinct farthest
+#'   observations, and a one-cluster fit reports the sample mean.
 #'
 #' @param x a numeric matrix or data frame with one row per observation, or a numeric vector for
 #'   a single feature.
@@ -112,13 +111,8 @@ ml_kmeans <- function(x, k, seed = NULL, kmeans_plus_plus = TRUE, max_iterations
 #' carrying a full covariance per component rather than only a centre.
 #'
 #' @details
-#' `labels` are 0-BASED, as in [ml_kmeans()]. `log_likelihood` follows the library's own
-#' definition, which OMITS the multivariate-normal normalizing constant
-#' `-0.5 * ncol(x) * log(2 * pi)` per observation -- so it is short of the true mixture
-#' log-likelihood by `nrow(x) * ncol(x) / 2 * log(2 * pi)`. That constant cancels when comparing
-#' two fits of the same data (which is what the library uses it for), but do not feed this value
-#' to an information criterion without adding it back. A run that hits `max_iterations` without
-#' converging reports `log_likelihood` as 0.
+#' `labels` are 0-BASED, as in [ml_kmeans()]. `log_likelihood` is the full normalized mixture log
+#' likelihood from the latest expectation step, including when the fit reaches `max_iterations`.
 #'
 #' @param x a numeric matrix or data frame with one row per observation, or a numeric vector.
 #' @param k the number of mixture components.
@@ -203,10 +197,8 @@ ml_jenks_breaks <- function(x, n_clusters, is_data_sorted = FALSE) {
 #' (classification), then predicts by walking a new observation down the tree.
 #'
 #' @details
-#' At the library's defaults a REGRESSION tree recurses until every leaf holds a single training
-#' observation, so it memorizes the training data and generalizes poorly. That is upstream's
-#' behaviour, not a port artifact, and it is why [ml_random_forest()] exists. Set
-#' `minimum_split_size` or `max_depth` to regularize it.
+#' Pure nodes stop in both regression and classification. `minimum_split_size` and `max_depth`
+#' provide additional controls over tree size.
 #'
 #' @param x a numeric matrix or data frame of training predictors, one row per observation.
 #' @param y the training response, one value per row of `x`.
@@ -299,6 +291,7 @@ ml_random_forest <- function(x, y, newdata, seed = NULL, regression = TRUE, feat
 #' Mirrors the C# `KNearestNeighbors` class: predicts from the `k` training rows closest to each
 #' new observation -- an inverse-squared-distance weighted average of their responses for
 #' regression, or their most common response for classification.
+#' Exact distance ties are resolved by the lowest training-row index.
 #'
 #' @param x a numeric matrix or data frame of training predictors, one row per observation.
 #' @param y the training response, one value per row of `x`.

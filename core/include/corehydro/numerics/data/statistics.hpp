@@ -407,8 +407,11 @@ inline double percentile(const std::vector<double>& data, double k, bool data_is
     int lower = static_cast<int>(std::floor(h));
     int upper = static_cast<int>(std::ceil(h));
     double w = h - lower;
-    return (*sorted)[static_cast<std::size_t>(lower)] +
-           w * ((*sorted)[static_cast<std::size_t>(upper)] - (*sorted)[static_cast<std::size_t>(lower)]);
+    double lower_value = (*sorted)[static_cast<std::size_t>(lower)];
+    // Preserve the separate multiply and add used by the C# expression.
+    volatile double interpolation =
+        w * ((*sorted)[static_cast<std::size_t>(upper)] - lower_value);
+    return lower_value + interpolation;
 }
 
 // Returns the k-th percentile of `data` for every k in `k`, sorting `data` ONCE and calling the

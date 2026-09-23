@@ -1,7 +1,7 @@
 // P5 Task 4 -- GaussianMixtureModel.
 //
 // Transcribes Test_GMM_Iris from
-// upstream/Numerics/Test_Numerics/Machine Learning/Unsupervised/Test_GMM.cs @ 2a0357a. Upstream's
+// upstream/Numerics/Test_Numerics/Machine Learning/Unsupervised/Test_GMM.cs @ 7e8e8d1. Upstream's
 // expected weights and means are R `mclust` output, asserted at 1e-2 -- a loose tolerance because
 // it compares two DIFFERENT EM implementations, not because the fit is imprecise.
 //
@@ -51,6 +51,8 @@ void test_gmm_iris() {
         CHECK_NEAR(gmm.means()[1][static_cast<std::size_t>(i)], true_mean2[i], 1e-2);
         CHECK_NEAR(gmm.means()[2][static_cast<std::size_t>(i)], true_mean3[i], 1e-2);
     }
+    CHECK_NEAR(gmm.log_likelihood(), -180.18547746042975, 1e-9);
+    CHECK_EQ(gmm.iterations(), 26);
 }
 
 // --- COREHYDRO SUPPLEMENT (no C# counterpart) ---------------------------------------------
@@ -116,26 +118,14 @@ void test_single_component_closed_form() {
     for (std::size_t i = 0; i < gmm.likelihood_matrix().size(); i++)
         CHECK_NEAR(gmm.likelihood_matrix()[i][0], 1.0, 1e-15);
 
-    // UPSTREAM DEFECT, mirrored and pinned. The E-step forms
-    //   likelihood[i][k] = -0.5 * (quadform + logDet(Sigma_k)) + log(weight_k)
-    // which OMITS the multivariate-normal normalizing constant -0.5 * D * log(2*pi). So
-    // `LogLikelihood` is short of the true Gaussian mixture log-likelihood by exactly
-    // n * D/2 * log(2*pi) -- here 150 * 0.5 * log(2*pi) = 137.84. Verified below by asserting
-    // both the reported value and the properly normalized one.
-    //
-    // It is a constant for fixed n and D, so it changes nothing about the EM fit, and it CANCELS
-    // in the only place upstream consumes it: HypothesisTests.UnimodalityTest's likelihood-ratio
-    // statistic 2 * (logLH2 - logLH1) compares two fits over the same sample. It would matter to
-    // anyone using this value as a model-selection criterion. See docs/upstream-csharp-issues.md.
+    // v2.2 reports the fully normalized Gaussian mixture log likelihood.
     double mu = gmm.means()[0][0];
     double var = gmm.sigmas()[0](0, 0);
     double normalized = 0;
     for (double x : iris::kSepalLength)
         normalized += -0.5 * (std::log(2.0 * corehydro::numerics::kPi) + std::log(var) +
                               (x - mu) * (x - mu) / var);
-    double omitted_constant =
-        0.5 * static_cast<double>(iris::kSepalLength.size()) * std::log(2.0 * corehydro::numerics::kPi);
-    CHECK_NEAR(gmm.log_likelihood(), normalized + omitted_constant, 1e-6);
+    CHECK_NEAR(gmm.log_likelihood(), normalized, 1e-6);
 }
 
 void test_seeded_determinism() {
@@ -153,13 +143,13 @@ void test_seeded_determinism() {
 }
 
 void test_tolerance_and_iteration_cap() {
-    // A tight iteration cap stops the run before convergence, which leaves `log_likelihood()` at
-    // its default 0 -- transcription note 2, mirrored from upstream rather than "fixed".
+    // A tight iteration cap reports the last evaluated log likelihood.
     ml::GaussianMixtureModel capped(iris_features(), 3);
     capped.set_max_iterations(3);
     capped.train(12345);
     CHECK_EQ(capped.iterations(), 4);  // the loop variable overshoots the cap by one
-    CHECK_EQ(capped.log_likelihood(), 0.0);
+    CHECK_TRUE(std::isfinite(capped.log_likelihood()));
+    CHECK_TRUE(capped.log_likelihood() < 0.0);
     // The fit itself is still usable -- weights and labels were produced.
     double w = 0;
     for (double wk : capped.weights()) w += wk;
@@ -175,6 +165,25 @@ void test_tolerance_and_iteration_cap() {
     CHECK_TRUE(std::isfinite(loose.log_likelihood()));
 }
 
+void test_degenerate_components_stay_finite_and_positive_definite() {
+    std::vector<double> values(24, 0.0);
+    for (int i = 6; i < 12; ++i) {
+        values[static_cast<std::size_t>(2 * i)] = 10.0;
+        values[static_cast<std::size_t>(2 * i + 1)] = 10.0;
+    }
+    ml::GaussianMixtureModel gmm(la::Matrix(12, 2, values), 3);
+    gmm.train(12345);
+    CHECK_TRUE(std::isfinite(gmm.log_likelihood()));
+    for (int k = 0; k < 3; ++k) {
+        CHECK_TRUE(std::isfinite(gmm.weights()[static_cast<std::size_t>(k)]));
+        for (int d = 0; d < 2; ++d)
+            CHECK_TRUE(std::isfinite(
+                gmm.means()[static_cast<std::size_t>(k)][static_cast<std::size_t>(d)]));
+        CHECK_TRUE(la::CholeskyDecomposition(gmm.sigmas()[static_cast<std::size_t>(k)])
+                       .is_positive_definite());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -183,5 +192,6 @@ int main() {
     test_single_component_closed_form();
     test_seeded_determinism();
     test_tolerance_and_iteration_cap();
+    test_degenerate_components_stay_finite_and_positive_definite();
     return chtest::summary("test_gaussian_mixture_model");
 }

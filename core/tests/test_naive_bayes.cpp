@@ -1,7 +1,7 @@
 // P5 Task 10 -- NaiveBayes.
 //
 // Transcribes Test_NaiveBayes_Iris from
-// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_NaiveBayes.cs @ 2a0357a --
+// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_NaiveBayes.cs @ 7e8e8d1 --
 // the richest oracle in this subsystem: twelve conditional means, twelve conditional standard
 // deviations and three priors at 1e-6, plus the exact 60-value prediction vector (which contains
 // two deliberate misclassifications, at positions 42 and 53). Expected values are R's `naiveBayes`
@@ -118,13 +118,13 @@ void test_classes_are_in_first_appearance_order() {
 }
 
 void test_singleton_class_gets_the_floor_standard_deviation() {
-    // Transcription note 3: a class with one member gets sd = 1e-6 rather than 0/0, so the Normal
-    // constructor accepts it and the class stays predictable.
+    // The pooled-variance floor keeps a singleton class predictable.
     std::vector<double> y = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
     std::vector<double> x = {1, 2, 3, 4, 5, 6, 7, 8, 9, 100};
     ml::NaiveBayes nb(x, y);
     nb.train();
-    CHECK_EQ(nb.standard_deviations()[1][0], 1e-6);
+    CHECK_TRUE(nb.standard_deviations()[1][0] > 0.0);
+    CHECK_TRUE(std::isfinite(nb.standard_deviations()[1][0]));
     CHECK_NEAR(nb.means()[1][0], 100.0, 1e-12);
     CHECK_NEAR(nb.priors()[1], 0.1, 1e-12);
 
@@ -135,10 +135,7 @@ void test_singleton_class_gets_the_floor_standard_deviation() {
     CHECK_EQ((*p)[1], 0.0);
 }
 
-void test_standard_deviation_uses_the_two_moment_form() {
-    // Transcription note 2: the per-class sd is the naive `sqrt((u2 - u1^2) * n/(n-1))`, which
-    // agrees with the stable sample standard deviation to rounding on well-scaled data. Pinned
-    // as an identity here (there is no separate C# literal for a hand-made class).
+void test_standard_deviation_uses_shifted_moments() {
     std::vector<double> y = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1};
     std::vector<double> x = {2, 4, 4, 4, 5, 20, 22, 22, 22, 23};
     ml::NaiveBayes nb(x, y);
@@ -149,8 +146,7 @@ void test_standard_deviation_uses_the_two_moment_form() {
     CHECK_NEAR(nb.means()[1][0], 21.8, 1e-12);
     CHECK_NEAR(nb.standard_deviations()[1][0], std::sqrt(1.2), 1e-9);
 
-    // The `Math.Max(0, ...)` guard: a zero-variance class cancels to (possibly negative) noise,
-    // and the guard keeps the result real rather than NaN. A constant class gives sd exactly 0.
+    // If every within-class variance is zero, the upstream floor is also zero.
     std::vector<double> yc = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1};
     std::vector<double> xc = {7, 7, 7, 7, 7, 9, 9, 9, 9, 9};
     ml::NaiveBayes flat(xc, yc);
@@ -169,6 +165,37 @@ void test_standard_deviation_uses_the_two_moment_form() {
     CHECK_EQ((*p)[0], 0.0);
     CHECK_EQ((*p)[1], 1.0);
     CHECK_EQ((*p)[2], 0.0);
+}
+
+void test_variance_floor_and_large_datum() {
+    la::Matrix constant(12, 2,
+                        {1.2, 1.0, 1.9, 1.0, 0.8, 1.0, 1.5, 1.0, 1.1, 1.0, 1.7, 1.0,
+                         6.1, 0.0, 5.8, 0.0, 6.6, 0.0, 5.2, 0.0, 6.9, 0.0, 5.5, 0.0});
+    la::Vector labels(std::vector<double>{0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1});
+    ml::NaiveBayes floored(constant, labels);
+    floored.train();
+    CHECK_TRUE(floored.standard_deviations()[0][1] > 0.0);
+    CHECK_TRUE(floored.standard_deviations()[1][1] > 0.0);
+    auto fp = floored.predict(la::Matrix(4, 2, {1.4, 1.0, 6.3, 0.0, 3.4, 0.6, 1.0, 0.0}));
+    CHECK_TRUE(fp.has_value());
+    const double expected[4] = {0, 1, 0, 1};
+    for (int i = 0; i < 4; ++i) CHECK_EQ((*fp)[static_cast<std::size_t>(i)], expected[i]);
+
+    double off = 1e10;
+    la::Matrix shifted(12, 2,
+                       {off + 0, 1.2, off + 1, 1.9, off + 2, 0.8, off + 3, 1.5,
+                        off + 4, 1.1, off + 5, 1.7, off + 50, 6.1, off + 51, 5.8,
+                        off + 52, 6.6, off + 53, 5.2, off + 54, 6.9, off + 55, 5.5});
+    ml::NaiveBayes stable(shifted, labels);
+    stable.train();
+    CHECK_NEAR(stable.standard_deviations()[0][0], 1.8708286933869707, 1e-9);
+    CHECK_NEAR(stable.standard_deviations()[0][1], 0.408248290463863, 1e-9);
+    auto sp = stable.predict(
+        la::Matrix(3, 2, {off + 2.5, 1.4, off + 52.5, 6.3, off + 27, 3.4}));
+    CHECK_TRUE(sp.has_value());
+    CHECK_EQ((*sp)[0], 0.0);
+    CHECK_EQ((*sp)[1], 1.0);
+    CHECK_EQ((*sp)[2], 0.0);
 }
 
 void test_guards_and_null_returns() {
@@ -194,7 +221,8 @@ int main() {
     test_naive_bayes_iris();
     test_classes_are_in_first_appearance_order();
     test_singleton_class_gets_the_floor_standard_deviation();
-    test_standard_deviation_uses_the_two_moment_form();
+    test_standard_deviation_uses_shifted_moments();
+    test_variance_floor_and_large_datum();
     test_guards_and_null_returns();
     return chtest::summary("test_naive_bayes");
 }

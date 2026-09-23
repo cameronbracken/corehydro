@@ -55,6 +55,8 @@ def test_ml_kmeans_reproduces_the_iris_cluster_means_and_label_counts():
     assert int((fit["labels"] == 1).sum()) == 38
     assert int((fit["labels"] == 2).sum()) == 50
     assert fit["iterations"] >= 2
+    one = ch.ml_kmeans([1, 2, 3, 10, 11, 12], k=1, seed=7)
+    assert one["means"][0, 0] == 6.5
 
 
 def test_ml_gaussian_mixture_returns_a_weight_simplex_and_one_covariance_per_component():
@@ -68,6 +70,7 @@ def test_ml_gaussian_mixture_returns_a_weight_simplex_and_one_covariance_per_com
         assert np.allclose(s, s.T, atol=1e-12)  # symmetric
         assert all(v > 0 for v in np.diag(s))
     assert math.isfinite(fit["log_likelihood"])
+    assert fit["log_likelihood"] == pytest.approx(-180.18547746042975, abs=1e-12)
     assert set(fit["labels"].tolist()) <= {0, 1, 2}
 
 
@@ -81,6 +84,8 @@ def test_ml_jenks_breaks_classifies_a_small_vector():
     assert fit["clusters"][0, 0] == 0.0
     assert fit["clusters"][2, 1] == 8.0
     assert 0.9 < fit["gvf"] < 1.0
+    with pytest.raises(Exception, match="distinct value"):
+        ch.ml_jenks_breaks([3.5] * 20, n_clusters=3)
 
 
 def test_ml_naive_bayes_reproduces_the_iris_means_and_predictions():
@@ -104,6 +109,20 @@ def test_ml_naive_bayes_reproduces_the_iris_means_and_predictions():
     trained = ch.ml_naive_bayes(_iris_train(), _iris_species_train())
     assert "prediction" not in trained
     assert trained["means"].tolist() == fit["means"].tolist()
+
+    off = 1e10
+    large_x = np.column_stack([
+        off + np.asarray([*range(6), *range(50, 56)]),
+        [1.2, 1.9, 0.8, 1.5, 1.1, 1.7, 6.1, 5.8, 6.6, 5.2, 6.9, 5.5],
+    ])
+    stable = ch.ml_naive_bayes(
+        large_x, [0] * 6 + [1] * 6,
+        newdata=np.column_stack([off + np.asarray([2.5, 52.5, 27]), [1.4, 6.3, 3.4]]),
+    )
+    assert stable["standard_deviations"][0].tolist() == pytest.approx(
+        [1.8708286933869707, 0.408248290463863], abs=1e-9
+    )
+    assert stable["prediction"].tolist() == [0.0, 1.0, 0.0]
 
 
 def test_ml_knn_reproduces_the_iris_classification_oracle_and_its_four_result_kinds():
@@ -132,6 +151,12 @@ def test_ml_knn_reproduces_the_iris_classification_oracle_and_its_four_result_ki
     assert band.shape == (2, 4)  # lower, median, upper, mean
     assert all(band[i, 0] <= band[i, 1] <= band[i, 2] for i in range(band.shape[0]))
 
+    tied_x = np.column_stack([[1.0] * 20 + [0.5, 10, 10, 10], [0.0] * 24])
+    tied_y = list(range(20)) + [100, 999, 999, 999]
+    assert ch.ml_knn(tied_x, tied_y, newdata=[[0, 0]], k=3,
+                     what="neighbors").tolist() == [[20, 0, 1]]
+    assert ch.ml_knn(tied_x, tied_y, newdata=[[0, 0]], k=3)[0] == pytest.approx(401 / 6)
+
 
 def test_ml_decision_tree_and_random_forest_separate_a_clean_two_group_problem():
     x = [1, 2, 3, 4, 5, 6, 100, 101, 102, 103, 104, 105]
@@ -145,6 +170,7 @@ def test_ml_decision_tree_and_random_forest_separate_a_clean_two_group_problem()
     assert m.shape == (2, 4)  # lower, median, upper, mean
     assert all(m[i, 0] <= m[i, 1] <= m[i, 2] for i in range(2))
     assert m[0, 2] < 50 and m[1, 0] > 50
+    assert m.tolist() == [[10.0, 10.0, 11.0, 10.4], [100.0, 100.0, 101.0, 100.4]]
 
     # A seeded forest is reproducible, including the mean column.
     again = ch.ml_random_forest(x, y, newdata=[3, 104], seed=42, number_of_trees=25)
@@ -218,5 +244,9 @@ def test_the_ml_verbs_validate_their_arguments():
     # Upstream's own guards reach the caller intact.
     with pytest.raises(Exception, match="cannot be greater than the length of the data array"):
         ch.ml_jenks_breaks(x, n_clusters=11)
+    with pytest.raises(Exception, match="between 1"):
+        ch.ml_kmeans(x, k=0)
+    with pytest.raises(Exception, match="between 1"):
+        ch.ml_kmeans(x, k=11)
     with pytest.raises(Exception, match="at least ten training data points"):
         ch.ml_decision_tree(x[:9], y[:9], newdata=[1])

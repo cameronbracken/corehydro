@@ -48,6 +48,7 @@ there.
 Mirrors the C# \code{KNearestNeighbors} class: predicts from the \code{k} training rows closest to each
 new observation -- an inverse-squared-distance weighted average of their responses for
 regression, or their most common response for classification.
+Exact distance ties are resolved by the lowest training-row index.
 }
 \examples{
 x <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)

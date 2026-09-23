@@ -37,13 +37,8 @@ expectation-maximization, initialized from a k-means fit. It generalizes \code{\
 carrying a full covariance per component rather than only a centre.
 }
 \details{
-\code{labels} are 0-BASED, as in \code{\link[=ml_kmeans]{ml_kmeans()}}. \code{log_likelihood} follows the library's own
-definition, which OMITS the multivariate-normal normalizing constant
-\code{-0.5 * ncol(x) * log(2 * pi)} per observation -- so it is short of the true mixture
-log-likelihood by \code{nrow(x) * ncol(x) / 2 * log(2 * pi)}. That constant cancels when comparing
-two fits of the same data (which is what the library uses it for), but do not feed this value
-to an information criterion without adding it back. A run that hits \code{max_iterations} without
-converging reports \code{log_likelihood} as 0.
+\code{labels} are 0-BASED, as in \code{\link[=ml_kmeans]{ml_kmeans()}}. \code{log_likelihood} is the full normalized mixture log
+likelihood from the latest expectation step, including when the fit reaches \code{max_iterations}.
 }
 \examples{
 x <- c(1, 1.2, 0.9, 1.1, 1.05, 8, 8.3, 7.9, 8.1, 8.2, 1.0, 8.0)

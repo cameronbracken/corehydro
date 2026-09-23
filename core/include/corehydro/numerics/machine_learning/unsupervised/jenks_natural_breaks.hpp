@@ -1,4 +1,4 @@
-// ported from: Numerics/Machine Learning/Unsupervised/JenksNaturalBreaks.cs @ 2a0357a
+// ported from: Numerics/Machine Learning/Unsupervised/JenksNaturalBreaks.cs @ 7e8e8d1
 //
 // The Jenks optimization method (natural-breaks classification): partition a one-dimensional
 // sample into k classes minimizing the within-class sum of squared deviations. Upstream follows
@@ -54,6 +54,9 @@ class JenksNaturalBreaks {
         // Sort the data in numerical order.
         sorted_data_ = data;
         if (!is_data_sorted) std::sort(sorted_data_.begin(), sorted_data_.end());
+        if (number_of_clusters > 1 && sorted_data_.front() == sorted_data_.back())
+            throw std::invalid_argument(
+                "The data must contain at least two distinct values to form more than one cluster.");
 
         number_of_clusters_ = number_of_clusters;
         estimate();

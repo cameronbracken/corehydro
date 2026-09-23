@@ -1,4 +1,4 @@
-// ported from: Numerics/Machine Learning/Unsupervised/KMeans.cs @ 2a0357a
+// ported from: Numerics/Machine Learning/Unsupervised/KMeans.cs @ 7e8e8d1
 //
 // k-Means clustering: partition n observations into k clusters, each observation belonging to the
 // cluster with the nearest centroid.
@@ -10,16 +10,12 @@
 // 1. `Parallel.For` -> SERIAL LOOP, and that is exact. `GetLabels` writes only `labels[idx]` per
 //    iteration and reads nothing another iteration writes, so serial execution gives bit-identical
 //    results. Nothing else in this class is parallel.
-// 2. `Train` runs the E-step, compares the new labels against the previous ones, and BREAKS
-//    BEFORE the M-step when nothing moved. So `means()` on a converged fit is the centroid set the
-//    LAST E-step assigned against -- one M-step behind the final labels -- and `iterations()`
-//    counts E-steps. This is why upstream's iris test can assert the label counts and the means
-//    together.
+// 2. If the first E-step leaves the zero-initialized labels unchanged, `Train` computes centroids
+//    once before stopping. On later convergence the existing means already represent the labels.
 // 3. `Iterations` is the loop variable itself, so a run that never converges leaves it at
 //    `MaxIterations + 1`. Mirrored.
-// 4. `GetCentroids` divides by `count[k] > 0 ? count[k] : 1`, so an EMPTY cluster keeps an
-//    all-zero centroid rather than becoming NaN. That zero centroid then competes for points in
-//    the next E-step. Mirrored; do not "fix" it to a re-seed.
+// 4. Each empty cluster is relocated to the farthest not-yet-consumed point from its assigned
+//    centroid, matching the upstream scikit-learn treatment.
 // 5. The k-means++ selection loop divides `D[i] /= sum` IN PLACE while accumulating `cdf[i]` and
 //    breaks on the first `u <= cdf[i]`. If rounding leaves `u` above the final CDF entry, no
 //    break fires and `idx` KEEPS ITS PREVIOUS VALUE -- the index chosen for the previous center,
@@ -47,10 +43,10 @@ class KMeans {
 
     // Creates a new k-Means clustering analysis.
     KMeans(const math::linalg::Matrix& x, int k)
-        : k_(k),
+        : k_(validate_k(x, k)),
           x_(x),
           dimension_(x.number_of_columns()),
-          means_(static_cast<std::size_t>(k),
+          means_(static_cast<std::size_t>(k_),
                  std::vector<double>(static_cast<std::size_t>(x.number_of_columns()), 0.0)),
           labels_(static_cast<std::size_t>(x.number_of_rows()), 0) {}
 
@@ -95,7 +91,10 @@ class KMeans {
                     break;
                 }
             }
-            if (labels_changed == false) break;
+            if (labels_changed == false) {
+                if (iterations_ == 1) means_ = get_centroids(labels_);
+                break;
+            }
 
             // M-step: calculate new centroids from the clusters.
             means_ = get_centroids(labels_);
@@ -204,14 +203,37 @@ class KMeans {
                 centroids[l][static_cast<std::size_t>(j)] += x_(i, j);
         }
 
-        // Get the mean of each cluster. An empty cluster divides by 1, keeping a zero centroid
-        // rather than producing NaN (see note 4).
+        // Get the mean of each non-empty cluster.
         for (int kk = 0; kk < k_; kk++)
             for (int j = 0; j < dimension_; j++)
                 centroids[static_cast<std::size_t>(kk)][static_cast<std::size_t>(j)] /=
                     count[static_cast<std::size_t>(kk)] > 0
                         ? count[static_cast<std::size_t>(kk)]
                         : 1;
+
+        std::vector<bool> consumed(static_cast<std::size_t>(x_.number_of_rows()), false);
+        for (int kk = 0; kk < k_; ++kk) {
+            if (count[static_cast<std::size_t>(kk)] > 0.0) continue;
+            int farthest = -1;
+            double max_distance = -1.0;
+            for (int i = 0; i < x_.number_of_rows(); ++i) {
+                if (consumed[static_cast<std::size_t>(i)]) continue;
+                int assigned = labels[static_cast<std::size_t>(i)];
+                double d = 0.0;
+                for (int j = 0; j < dimension_; ++j)
+                    d += sqr(x_(i, j) - centroids[static_cast<std::size_t>(assigned)]
+                                                   [static_cast<std::size_t>(j)]);
+                if (d > max_distance) {
+                    max_distance = d;
+                    farthest = i;
+                }
+            }
+            if (farthest < 0) continue;
+            consumed[static_cast<std::size_t>(farthest)] = true;
+            for (int j = 0; j < dimension_; ++j)
+                centroids[static_cast<std::size_t>(kk)][static_cast<std::size_t>(j)] =
+                    x_(farthest, j);
+        }
 
         return centroids;
     }
@@ -229,6 +251,13 @@ class KMeans {
             }
         }
         return min_idx;
+    }
+
+    static int validate_k(const math::linalg::Matrix& x, int k) {
+        if (k < 1 || k > x.number_of_rows())
+            throw std::out_of_range(
+                "The number of clusters must be between 1 and the number of data rows.");
+        return k;
     }
 
     int k_;

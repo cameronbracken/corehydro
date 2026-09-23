@@ -2034,10 +2034,10 @@ full naive-Bayes oracle (twelve means, twelve standard deviations, three priors 
 predictions, 1e-6), the sixty kNN classification predictions (`Test_kNN_Iris`), and the GLM
 identity and log fits (`Test_SimpleLinearRegression`, `Test_Log`) -- and curates the rest with
 `python3 tools/verify_oracles.py --dump`, saying so in each assertion's `source`. The
-DecisionTree and RandomForest C# tests assert only INEQUALITIES (an accuracy floor, an R-squared
-comparison), so they contribute no literal here; their behavior is pinned by
-`core/tests/test_decision_tree.cpp` and `test_random_forest.cpp` instead, including a
-C#-measured tree shape.
+The v2.2.0 DecisionTree tests add exact tree structures and an exact-arithmetic split oracle.
+`core/tests/test_decision_tree.cpp` pins those structures and the stable equal-key ordering. The
+RandomForest cross-language fixture pins all four prediction columns after upstream replaced its
+parallel mean with a sequential reduction.
 
 The Jenks case uses a 30-value CURATED dataset rather than the C# oracle's. The three
 `Test_Jenks_*Classes` methods all run against one 7,889-value array whose R BAMMtools breaks are
@@ -2054,11 +2054,10 @@ group (unlike those three, this layer needs no nested kinds, so it needs no besp
 own), but every assertion is at ZERO tolerance and its job is the guarantee rather than the
 accuracy: three seeded fits covering the three ways randomness enters this layer -- k-means++
 initialization, the random forest's two-generator bootstrap, and kNN's
-resample-per-realization stream. Read its own `reference` field for the two deliberate omissions
-and the measurements behind them: the prediction-interval MEAN column (upstream's
-`Statistics.ParallelMean` is not reproducible against itself across machines) and one kNN lower
-bound (a measured 2 ULP FMA-contraction difference inside the shared core, which the shipped
-packages have too because they compile the core the same way).
+resample-per-realization stream. The v2.2.0 sequential mean makes both kNN mean cells exact C#
+oracles. Read the fixture's `reference` field for the remaining omission: one kNN lower bound has
+a measured 2 ULP FMA-contraction difference inside the shared core. The shipped packages compile
+the core the same way and agree with each other exactly.
 
 P6 "time series" added the `timeseries` group, the nineteenth, over the ported Numerics
 `TimeSeries` container (`numerics/data/time_series/time_series.hpp`) and the `DateTime` value type

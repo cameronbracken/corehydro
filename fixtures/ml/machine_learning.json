@@ -1,7 +1,7 @@
 {
  "kind": "toolbox",
  "group": "ml",
- "source": "Numerics/Machine Learning/ @ 2a0357a, ported to core/include/corehydro/numerics/machine_learning/ (P5). Every case reaches the shared `ml` toolbox group; see fixtures/README.md's ### toolbox `ml` section for the data layout.",
+ "source": "Numerics/Machine Learning/ @ 7e8e8d1, ported to core/include/corehydro/numerics/machine_learning/. Every case reaches the shared `ml` toolbox group; see fixtures/README.md's ### toolbox `ml` section for the data layout.",
  "datasets": {
   "iris_flat": [
    5.1,
@@ -2146,14 +2146,14 @@
     },
     {
      "method": "gmm_log_likelihood",
-     "expected": 371.1776417620997,
+     "expected": -180.18547746042975,
      "mode": "rel",
      "tol": 1e-09,
      "source": "curated with --dump"
     },
     {
      "method": "gmm_iterations",
-     "expected": 25,
+     "expected": 26,
      "mode": "abs",
      "tol": 1e-09,
      "source": "curated with --dump"

@@ -86,12 +86,12 @@ def ml_kmeans(x, k: int, seed: int | None = None, kmeans_plus_plus: bool = True,
     Mirrors the C# ``KMeans`` class: partitions the rows of ``x`` into ``k`` clusters, each row
     belonging to the cluster with the nearest centroid. Initialization is k-means++ by default.
 
-    Two behaviours inherited from upstream are worth knowing:
+    Two details inherited from upstream are worth knowing:
 
     - ``labels`` are 0-BASED in both Python and R, matching the library's own indexing (the same
       choice :func:`shortest_path` made for node indices).
-    - With ``k = 1`` the algorithm stops before its first update step, so the single reported
-      "cluster mean" is a randomly chosen observation rather than the mean of ``x``.
+    - ``k`` must be between 1 and the number of rows. Empty clusters are relocated to distinct
+      farthest observations, and a one-cluster fit reports the sample mean.
 
     Parameters
     ----------
@@ -146,13 +146,9 @@ def ml_gaussian_mixture(x, k: int, seed: int | None = None, kmeans_plus_plus: bo
     by expectation-maximization, initialized from a k-means fit. It generalizes
     :func:`ml_kmeans` by carrying a full covariance per component rather than only a centre.
 
-    ``labels`` are 0-BASED, as in :func:`ml_kmeans`. ``log_likelihood`` follows the library's own
-    definition, which OMITS the multivariate-normal normalizing constant
-    ``-0.5 * x.shape[1] * log(2 * pi)`` per observation -- so it is short of the true mixture
-    log-likelihood by ``x.shape[0] * x.shape[1] / 2 * log(2 * pi)``. That constant cancels when
-    comparing two fits of the same data (which is what the library uses it for), but do not feed
-    this value to an information criterion without adding it back. A run that hits
-    ``max_iterations`` without converging reports ``log_likelihood`` as 0.
+    ``labels`` are 0-BASED, as in :func:`ml_kmeans`. ``log_likelihood`` is the full normalized
+    mixture log likelihood from the latest expectation step, including when the fit reaches
+    ``max_iterations``.
 
     Parameters
     ----------
@@ -262,10 +258,8 @@ def ml_decision_tree(x, y, newdata, seed: int | None = None, regression: bool = 
     and threshold that most reduce variance (regression) or most increase information gain
     (classification), then predicts by walking a new observation down the tree.
 
-    At the library's defaults a REGRESSION tree recurses until every leaf holds a single training
-    observation, so it memorizes the training data and generalizes poorly. That is upstream's
-    behaviour, not a port artifact, and it is why :func:`ml_random_forest` exists. Set
-    ``minimum_split_size`` or ``max_depth`` to regularize it.
+    Pure nodes stop in both regression and classification. ``minimum_split_size`` and
+    ``max_depth`` provide additional controls over tree size.
 
     Parameters
     ----------
@@ -398,6 +392,7 @@ def ml_knn(x, y, newdata, k: int, regression: bool = True, what: str = "predicti
     Mirrors the C# ``KNearestNeighbors`` class: predicts from the ``k`` training rows closest to
     each new observation -- an inverse-squared-distance weighted average of their responses for
     regression, or their most common response for classification.
+    Exact distance ties are resolved by the lowest training-row index.
 
     Parameters
     ----------

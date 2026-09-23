@@ -1,7 +1,7 @@
 // P5 Task 7 -- DecisionTree and DecisionNode.
 //
 // Transcribes both [TestMethod]s of
-// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_DecisionTree.cs @ 2a0357a.
+// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_DecisionTree.cs @ 7e8e8d1.
 //
 // Both C# assertions are INEQUALITIES (classification accuracy at least 90%, and the tree's
 // regression R-squared BELOW a linear model's -- upstream's own comment says the second test is
@@ -10,7 +10,12 @@
 // are computable by hand, the null-returning guards, and the seeded-determinism contract every
 // RandomForest oracle in this phase rests on.
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <iomanip>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "check.hpp"
@@ -27,6 +32,37 @@ namespace iris = corehydro::testdata::iris;
 namespace fpp3 = corehydro::testdata::fpp3;
 
 namespace {
+
+std::uint64_t fnv1a(const std::string& value) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+std::uint64_t csharp_bits(double value) {
+    if (std::isnan(value)) return 0xFFF8000000000000ULL;
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+void serialize_tree(const ml::DecisionNode* node, std::ostringstream& out) {
+    if (node == nullptr) return;
+    out << node->feature_index << ';' << std::uppercase << std::hex << std::setw(16)
+        << std::setfill('0') << csharp_bits(node->threshold) << ';' << std::setw(16)
+        << csharp_bits(node->value) << std::dec << ';' << (node->is_leaf_node ? '1' : '0') << '|';
+    serialize_tree(node->left.get(), out);
+    serialize_tree(node->right.get(), out);
+}
+
+std::uint64_t tree_golden_hash(const ml::DecisionTree& tree) {
+    std::ostringstream out;
+    serialize_tree(tree.root().get(), out);
+    return fnv1a(out.str());
+}
 
 // C# `Subset(start, end)` is INCLUSIVE of `end`; `Subset(start)` runs to the end of the array.
 // (Numerics/Utilities/ExtensionMethods.cs lines 266 and 285 -- checked, not assumed.)
@@ -63,6 +99,7 @@ void test_decision_tree_iris() {
 
     // Accuracy should be greater than or equal to 90%.
     CHECK_TRUE(accuracy >= 90.0);
+    CHECK_EQ(tree_golden_hash(tree), 0x944188AA31E203A1ULL);
 }
 
 void test_decision_tree_regression() {
@@ -95,6 +132,7 @@ void test_decision_tree_regression() {
 
     // Linear regression is better (upstream's point: use a Random Forest for regression).
     CHECK_TRUE(tree_r2 < lm_r2);
+    CHECK_EQ(tree_golden_hash(tree), 0x3D2E4098296867CBULL);
 }
 
 // --- COREHYDRO SUPPLEMENT (no C# counterpart) ---------------------------------------------
@@ -102,14 +140,8 @@ void test_decision_tree_regression() {
 void test_hand_computable_regression_split() {
     // A 12-point 1-D problem with a clean gap at x = 5: y is 10 below the gap and 100 above.
     //
-    // The whole tree shape is pinned below because it is a MEASURED C# oracle (probed against the
-    // real library at this seed) and because it demonstrates transcription note 2's real
-    // consequence: for regression, `numberOfLabels` is the SAMPLE COUNT, not the distinct-value
-    // count, so a pure node does not stop -- and `VarianceReduction` on a pure node is 0, which
-    // still beats the `double.MinValue` seed, so a split is always found. A default regression
-    // tree therefore recurses until every leaf holds ONE observation, memorizing the training
-    // data. That is what makes upstream's own regression test expect the tree to lose to a linear
-    // model. See docs/upstream-csharp-issues.md.
+    // v2.2 counts distinct responses when testing node purity. The clean root split therefore
+    // produces two pure leaves instead of chains of zero-gain splits.
     std::vector<double> x = {1, 2, 3, 4, 5, 6, 100, 101, 102, 103, 104, 105};
     std::vector<double> y = {10, 10, 10, 10, 10, 10, 100, 100, 100, 100, 100, 100};
     ml::DecisionTree tree(x, y, 7);
@@ -122,35 +154,14 @@ void test_hand_computable_regression_split() {
     // An internal node's `value` stays NaN.
     CHECK_TRUE(std::isnan(tree.root()->value));
 
-    // The measured C# tree, left branch: a right-leaning chain splitting off one point at a
-    // time at thresholds 1, 2, 3, 4, 5, ending in two singleton leaves.
-    const ml::DecisionNode* n = tree.root()->left.get();
-    for (double expected_threshold : {1.0, 2.0, 3.0, 4.0, 5.0}) {
-        CHECK_TRUE(n != nullptr && !n->is_leaf_node);
-        CHECK_EQ(n->feature_index, 0);
-        CHECK_EQ(n->threshold, expected_threshold);
-        CHECK_TRUE(n->left != nullptr && n->left->is_leaf_node);
-        CHECK_EQ(n->left->value, 10.0);
-        n = n->right.get();
-    }
-    CHECK_TRUE(n != nullptr && n->is_leaf_node);
-    CHECK_EQ(n->value, 10.0);
-
-    // The same shape on the right branch, at thresholds 100, 101, 102, 103, 104.
-    n = tree.root()->right.get();
-    for (double expected_threshold : {100.0, 101.0, 102.0, 103.0, 104.0}) {
-        CHECK_TRUE(n != nullptr && !n->is_leaf_node);
-        CHECK_EQ(n->threshold, expected_threshold);
-        CHECK_TRUE(n->left != nullptr && n->left->is_leaf_node);
-        CHECK_EQ(n->left->value, 100.0);
-        n = n->right.get();
-    }
-    CHECK_TRUE(n != nullptr && n->is_leaf_node);
-    CHECK_EQ(n->value, 100.0);
+    CHECK_TRUE(tree.root()->left != nullptr && tree.root()->left->is_leaf_node);
+    CHECK_TRUE(tree.root()->right != nullptr && tree.root()->right->is_leaf_node);
+    CHECK_EQ(tree.root()->left->value, 10.0);
+    CHECK_EQ(tree.root()->right->value, 100.0);
 
     // A leaf keeps the -1 / NaN defaults for the fields it does not use.
-    CHECK_EQ(tree.root()->left->left->feature_index, -1);
-    CHECK_TRUE(std::isnan(tree.root()->left->left->threshold));
+    CHECK_EQ(tree.root()->left->feature_index, -1);
+    CHECK_TRUE(std::isnan(tree.root()->left->threshold));
 
     // Predictions follow the splits: `<= threshold` goes left. C# returns {10, 10, 100, 100}.
     std::optional<std::vector<double>> p =
@@ -255,6 +266,87 @@ void test_max_depth_and_minimum_split_size() {
     CHECK_EQ(unsplittable.root()->value, 55.0);
 }
 
+void test_exact_split_oracles() {
+    const std::vector<double> x0 = {
+        4.744781, 6.255026, 1.160139, 8.741791, 0.319224, 1.201623, 7.703759, 8.249999,
+        7.763458, 2.561846, 7.844684, 9.530505, 5.237435, 7.938164, 7.634402, 3.538497,
+        3.908757, 0.798954, 4.233405, 4.819062, 4.704432, 8.131584, 7.138561, 5.718968,
+        0.230697, 8.428248, 2.642866, 0.617403, 9.190608, 5.605545, 9.120073, 5.506271,
+        1.210414, 7.754063, 6.823279, 8.004035, 7.097406, 5.353946, 3.109105, 1.01253};
+    const std::vector<double> x1 = {
+        6.041412, 1.540177, 0.705583, 2.134676, 3.987951, 8.706857, 4.997143, 7.688693,
+        7.269118, 9.894784, 2.850013, 2.908263, 4.640485, 9.239211, 2.437277, 9.911633,
+        5.759533, 1.255405, 2.324209, 0.226532, 2.977218, 1.713005, 4.749645, 2.982202,
+        8.679028, 2.531092, 8.802673, 1.569402, 4.644899, 2.859959, 8.467362, 0.291196,
+        5.153139, 1.003399, 3.90648, 6.822431, 9.421524, 6.81047, 2.76754, 4.48085};
+    const std::vector<double> x2 = {
+        8.287756, 2.053361, 1.083714, 0.926085, 2.324783, 6.528751, 1.224496, 0.580007,
+        5.802834, 7.568654, 5.376091, 3.487552, 8.249803, 4.264968, 8.381896, 1.098973,
+        6.334179, 6.910272, 7.131958, 8.413748, 7.770878, 5.584611, 1.671792, 9.032317,
+        4.131488, 1.241772, 5.149096, 3.04752, 6.142418, 9.40855, 4.380326, 6.494782,
+        3.475771, 7.189178, 5.217128, 8.68896, 2.452654, 1.702436, 4.397793, 0.220322};
+    const std::vector<double> y = {
+        9.203648, 6.973726, 5.396438, 7.922964, 5.253539, 8.372256, 6.887424, 10.483275,
+        10.398861, 8.988918, 7.161026, 7.715756, 6.251278, 10.311859, 7.417448, 9.087316,
+        9.140687, 5.769176, 6.332959, 6.354408, 6.481743, 7.217564, 7.019442, 6.991094,
+        7.940477, 7.538989, 8.986207, 5.176143, 7.738771, 6.852212, 11.024926, 6.459788,
+        8.495679, 7.49478, 7.280696, 10.587507, 10.360391, 9.330927, 5.997098, 5.517587};
+    ml::DecisionTree exact(la::Matrix::from_columns({x0, x1, x2}), la::Vector(y), 12345);
+    exact.set_features(3);
+    exact.train();
+    CHECK_EQ(exact.root()->feature_index, 1);
+    CHECK_EQ(exact.root()->threshold, 4.997143);
+
+    std::vector<double> tied_x;
+    for (int i = 0; i < 6; ++i) {
+        tied_x.push_back(0.0);
+        tied_x.push_back(1.0);
+        tied_x.push_back(2.0);
+    }
+    const std::vector<double> tied_y = {
+        999902848968.3931, 1000000117649.4011, 1000097151031.6069,
+        999896129867.9054, 999995338077.3125, 1000103870132.0946,
+        999901810715.8024, 999996663357.6908, 1000098189284.1976,
+        999898807264.0746, 1000003336642.3092, 1000101192735.9254,
+        999896810273.0493, 1000004661922.6875, 1000103189726.9507,
+        999901331037.1741, 999999882350.5989, 1000098668962.8259};
+    ml::DecisionTree tied(tied_x, tied_y, 12345);
+    tied.set_features(1);
+    tied.train();
+    CHECK_EQ(tied.root()->threshold, 0.0);
+}
+
+void test_iris_golden_structure() {
+    ml::DecisionTree tree(iris_train(), la::Vector(iris::kSpeciesTrain), 12345);
+    tree.set_is_regression(false);
+    tree.set_features(4);
+    tree.train();
+
+    auto split = [](const std::shared_ptr<ml::DecisionNode>& node, int feature,
+                    double threshold) {
+        CHECK_TRUE(node != nullptr && !node->is_leaf_node);
+        CHECK_EQ(node->feature_index, feature);
+        CHECK_EQ(node->threshold, threshold);
+    };
+    auto leaf = [](const std::shared_ptr<ml::DecisionNode>& node, double value) {
+        CHECK_TRUE(node != nullptr && node->is_leaf_node);
+        CHECK_EQ(node->value, value);
+    };
+
+    const auto& root = tree.root();
+    split(root, 2, 4.4);
+    split(root->left, 2, 1.9);
+    leaf(root->left->left, 1.0);
+    leaf(root->left->right, 2.0);
+    split(root->right, 2, 5.0);
+    split(root->right->left, 2, 4.8);
+    leaf(root->right->left->left, 2.0);
+    split(root->right->left->right, 0, 6.1);
+    leaf(root->right->left->right->left, 3.0);
+    leaf(root->right->left->right->right, 2.0);
+    leaf(root->right->right, 3.0);
+}
+
 }  // namespace
 
 int main() {
@@ -265,5 +357,7 @@ int main() {
     test_guards_and_null_returns();
     test_seeded_determinism();
     test_max_depth_and_minimum_split_size();
+    test_exact_split_oracles();
+    test_iris_golden_structure();
     return chtest::summary("test_decision_tree");
 }

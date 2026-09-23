@@ -1,4 +1,4 @@
-// ported from: Numerics/Machine Learning/Supervised/NaiveBayes.cs @ 2a0357a
+// ported from: Numerics/Machine Learning/Supervised/NaiveBayes.cs @ 7e8e8d1
 //
 // Gaussian naive Bayes classification: each feature is assumed conditionally normal given the
 // class, and independent of the other features.
@@ -11,14 +11,11 @@
 //    `Means[i]`, `StandardDeviations[i]` and `Priors[i]` index classes in the order they appear
 //    in the training response, NOT in sorted order. The iris test data happens to arrive sorted
 //    by species, which hides the dependence; a shuffled response would not.
-// 2. The per-class standard deviation is the naive two-moment form
-//    `sqrt(max(0, (u2 - u1^2) * n/(n-1)))`, NOT `Statistics.StandardDeviation`. It is
-//    catastrophically cancelling for large-magnitude features -- and it is what the oracle sees,
-//    so the stable running-difference recurrence must NOT be substituted. The `Math.Max(0, ...)`
-//    is what keeps a cancelled negative from becoming NaN.
-// 3. A class with one or zero members gets a hard-coded standard deviation of 1e-6 rather than
-//    the formula (which would be 0/0). A class with zero members also gets `Means[i, j] = 0/0 =
-//    NaN`, since the mean has no such guard.
+// 2. The two moments are accumulated after shifting by the first member of each class, avoiding
+//    cancellation for large-magnitude features while preserving the shipped arithmetic order.
+// 3. A class with one or zero members starts with a standard deviation of 1e-6 rather than the
+//    formula (which would be 0/0). All deviations are then floored at the square root of 1e-9
+//    times the largest fitted within-class variance.
 // 4. `MAP` seeds `max` with `double.MinValue` and uses a strict `>`, so ties go to the FIRST
 //    class in `Classes` order; and it constructs a fresh `Normal(mean, sd)` per feature per class
 //    per prediction row rather than caching. The construction is kept -- it validates the
@@ -106,15 +103,18 @@ class NaiveBayes {
             // Compute the mean and standard deviation of each feature j given the class i.
             for (int j = 0; j < n_features; j++) {
                 std::size_t js = static_cast<std::size_t>(j);
-                double x = 0;   // sum
+                double shift = std::numeric_limits<double>::quiet_NaN();
+                double x = 0;   // shifted sum
                 double x2 = 0;  // sum of X^2
                 double u1, u2;
                 double n = 0;
                 // Compute the sums.
                 for (int k = 0; k < n_samples; k++) {
                     if (y_[k] == classes_[is]) {
-                        x += x_(k, j);
-                        x2 += std::pow(x_(k, j), 2);
+                        if (std::isnan(shift)) shift = x_(k, j);
+                        double value = x_(k, j) - shift;
+                        x += value;
+                        x2 += value * value;
                         n++;
                     }
                 }
@@ -122,7 +122,7 @@ class NaiveBayes {
                 u1 = x / n;
                 u2 = x2 / n;
                 // Set the means.
-                means_[is][js] = u1;
+                means_[is][js] = shift + u1;
                 // Set the standard deviations (notes 2 and 3).
                 if (n <= 1) {
                     standard_deviations_[is][js] = 1e-6;
@@ -132,6 +132,14 @@ class NaiveBayes {
                 }
             }
         }
+
+        double max_variance = 0.0;
+        for (const auto& row : standard_deviations_)
+            for (double sd : row) max_variance = std::max(max_variance, sd * sd);
+        double floor = std::sqrt(1e-9 * max_variance);
+        if (floor > 0.0)
+            for (auto& row : standard_deviations_)
+                for (double& sd : row) sd = std::max(sd, floor);
 
         is_trained_ = true;
     }

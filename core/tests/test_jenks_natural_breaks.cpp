@@ -2,7 +2,7 @@
 //
 // Transcribes all three [TestMethod]s of
 // upstream/Numerics/Test_Numerics/Machine Learning/Unsupervised/Test_JenksNaturalBreaks.cs
-// @ 2a0357a. The expected breaks are R BAMMtools output (upstream's stated reference), so these
+// @ 7e8e8d1. The expected breaks are R BAMMtools output (upstream's stated reference), so these
 // are correctness oracles against the literature, not merely C#-reproduction pins.
 //
 // The 7,889-value dataset lives in tests/data/jenks_dataset.hpp -- see that header for why it is
@@ -138,16 +138,12 @@ void test_jenks_cluster_statistics() {
 }
 
 void test_degenerate_all_identical() {
-    // UPSTREAM DEFECT, mirrored and pinned. With every value identical, the dynamic program's
-    // `>=` update leaves the class limits at their smallest start index, the walk-back computes
-    // kclass[0] = -1, and the first cluster is constructed over [0, -1]. MEASURED against the
-    // real library: `new JenksNaturalBreaks(20 copies of 3.5, 3)` throws
-    // IndexOutOfRangeException (C# reads data[-1]); the four constructor guards all pass first,
-    // so the failure comes from inside the fit. The port range-checks in JenksCluster and throws
-    // std::out_of_range instead of reading out of bounds -- same failure, defined behavior.
-    // See docs/upstream-csharp-issues.md.
+    // A single distinct value cannot form multiple classes and is rejected before the dynamic
+    // program. A one-class fit remains valid.
     std::vector<double> flat(20, 3.5);
-    CHECK_THROWS_MSG(ml::JenksNaturalBreaks(flat, 3), "index range out of bounds");
+    CHECK_THROWS_MSG(ml::JenksNaturalBreaks(flat, 3), "distinct value");
+    ml::JenksNaturalBreaks flat_single(flat, 1);
+    CHECK_EQ(flat_single.breaks()[0], 3.5);
     // Heavily tied data is NOT affected -- only the fully degenerate case is. The 7,889-value
     // dataset above contains long runs of exact zeros and fits at k = 5, 7 and 9.
     ml::JenksNaturalBreaks tied(std::vector<double>{0, 0, 0, 0, 0, 1, 1, 1, 9, 9}, 3);

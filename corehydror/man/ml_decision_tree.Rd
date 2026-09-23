@@ -42,10 +42,8 @@ threshold that most reduce variance (regression) or most increase information ga
 (classification), then predicts by walking a new observation down the tree.
 }
 \details{
-At the library's defaults a REGRESSION tree recurses until every leaf holds a single training
-observation, so it memorizes the training data and generalizes poorly. That is upstream's
-behaviour, not a port artifact, and it is why \code{\link[=ml_random_forest]{ml_random_forest()}} exists. Set
-\code{minimum_split_size} or \code{max_depth} to regularize it.
+Pure nodes stop in both regression and classification. \code{minimum_split_size} and \code{max_depth}
+provide additional controls over tree size.
 }
 \examples{
 x <- c(1, 2, 3, 4, 5, 6, 100, 101, 102, 103, 104, 105)

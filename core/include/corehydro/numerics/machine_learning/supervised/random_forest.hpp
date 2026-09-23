@@ -1,4 +1,4 @@
-// ported from: Numerics/Machine Learning/Supervised/RandomForest.cs @ 2a0357a
+// ported from: Numerics/Machine Learning/Supervised/RandomForest.cs @ 7e8e8d1
 //
 // Random forest for regression and classification: an ensemble of bootstrapped decision trees
 // whose per-row spread becomes a prediction interval.
@@ -11,24 +11,15 @@
 //    front with `Random.NextIntegers(NumberOfTrees)` and only then builds each tree from its own
 //    generator, so the parallel loop is order-independent and a serial one reproduces it bit for
 //    bit. The same holds for both `Parallel.For`s in `Predict`, which write only their own index.
-// 2. `BootstrapDecisionTree` passes the SAME `seed` twice: once to its local resampling generator
-//    and once to the `DecisionTree` constructor. Those are TWO SEPARATE generator instances, so
-//    the tree's feature draws start from a fresh stream while the resampling stream has already
-//    consumed `X.NumberOfRows` draws. Sharing one generator between them -- the obvious
-//    "cleanup" -- changes every seeded oracle.
+// 2. Each tree shares the forest's training matrix and response and owns only a bootstrap row-index
+//    multiset. The bootstrap generator and tree feature generator are separate instances seeded
+//    with the same value, preserving the prior stream contract.
 // 3. `Predict`'s classification branch applies `Math.Floor` to each percentile AND to the mean,
 //    so all four columns come back integral.
 // 4. `Predict` computes the three percentile columns with `Statistics.Percentile(values, p,
 //    true)` over an already-sorted row, but the mean column with `Statistics.ParallelMean`. That
-//    method's PLINQ partitioned sum makes its last bits depend on the machine's core count -- see
-//    `numerics/data/statistics.hpp`'s `parallel_mean` note and
-//    docs/upstream-csharp-issues.md. The port sums serially, so the mean column is the one value
-//    here that is not bit-reproducible against C#.
-// 4b. `Predict` does NOT guard `X.NumberOfColumns != Dimensions` the way `DecisionTree::Predict`
-//    does; it only checks `IsTrained`. A too-narrow query matrix therefore reaches the trees,
-//    each of which returns null from its own guard, and C# dereferences that null. The port keeps
-//    the missing guard (so the shapes it DOES accept behave identically) but returns the empty
-//    optional instead of dereferencing null -- see the note at the call site.
+//    method now uses a sequential mean so all four columns are deterministic.
+// 4b. `Predict` rejects a query whose column count differs from `Dimensions`.
 // 5. `MinimumSplitSize`, `MaxDepth`, `Features` and `IsRegression` are copied onto each tree at
 //    construction, so changing them after `Train()` affects nothing until the next `Train()`.
 //
@@ -37,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -59,15 +51,15 @@ class RandomForest {
 
     // Creates a new random forest.
     RandomForest(const math::linalg::Matrix& x, const math::linalg::Vector& y, int seed = -1)
-        : y_(y),
-          x_(x),
+        : y_(std::make_shared<const math::linalg::Vector>(y)),
+          x_(std::make_shared<const math::linalg::Matrix>(x)),
           dimensions_(x.number_of_columns()),
           features_(std::max(1, x.number_of_columns() - 1)),
           random_(seed > 0 ? sampling::MersenneTwister(static_cast<std::uint32_t>(seed))
                            : sampling::MersenneTwister()) {
-        if (y_.length() != x_.number_of_rows())
+        if (y_->length() != x_->number_of_rows())
             throw std::invalid_argument("The y vector must be the same length as the x matrix.");
-        if (y_.length() < 10)
+        if (y_->length() < 10)
             throw std::invalid_argument("There must be at least ten training data points.");
     }
 
@@ -94,10 +86,10 @@ class RandomForest {
     sampling::MersenneTwister& random() { return random_; }
 
     // The training vector of response values.
-    const math::linalg::Vector& y() const { return y_; }
+    const math::linalg::Vector& y() const { return *y_; }
 
     // The training matrix of predictor values.
-    const math::linalg::Matrix& x() const { return x_; }
+    const math::linalg::Matrix& x() const { return *x_; }
 
     // The fitted decision trees.
     const std::vector<DecisionTree>& decision_trees() const { return decision_trees_; }
@@ -120,7 +112,16 @@ class RandomForest {
         std::vector<int> seeds = utilities::next_integers(random_, number_of_trees_);
 
         for (int idx = 0; idx < number_of_trees_; idx++) {
-            decision_trees_.push_back(bootstrap_decision_tree(seeds[static_cast<std::size_t>(idx)]));
+            int seed = seeds[static_cast<std::size_t>(idx)];
+            sampling::MersenneTwister rnd(static_cast<std::uint32_t>(seed));
+            std::vector<int> sample_indices =
+                utilities::next_integers(rnd, 0, x_->number_of_rows(), x_->number_of_rows());
+            decision_trees_.emplace_back(x_, y_, std::move(sample_indices), seed);
+            auto& tree = decision_trees_.back();
+            tree.set_minimum_split_size(minimum_split_size_);
+            tree.set_max_depth(max_depth_);
+            tree.set_features(features_);
+            tree.set_is_regression(is_regression_);
             decision_trees_[static_cast<std::size_t>(idx)].train();
         }
 
@@ -133,46 +134,43 @@ class RandomForest {
     std::optional<math::linalg::Matrix> predict(const math::linalg::Matrix& x,
                                                  double alpha = 0.1) const {
         if (!is_trained_) return std::nullopt;
-        // Transcription note 4b: upstream has NO column-count guard here (unlike DecisionTree),
-        // and would dereference the null each tree returns. Returning the empty optional keeps
-        // every accepted shape identical while giving the rejected one defined behavior.
         if (x.number_of_columns() != dimensions_) return std::nullopt;
 
         double percentiles[3] = {alpha / 2.0, 0.5, 1.0 - alpha / 2.0};
         math::linalg::Matrix output(x.number_of_rows(), 4);  // lower, median, upper, mean
 
-        // Bootstrap the predictions: boot_results[i][t] is tree t's prediction for row i.
+        std::vector<std::vector<double>> rows(static_cast<std::size_t>(x.number_of_rows()));
+        for (int i = 0; i < x.number_of_rows(); ++i)
+            rows[static_cast<std::size_t>(i)] = x.row(i);
+
+        // boot_results[t][i] is tree t's prediction for row i.
         std::vector<std::vector<double>> boot_results(
-            static_cast<std::size_t>(x.number_of_rows()),
-            std::vector<double>(static_cast<std::size_t>(number_of_trees_), 0.0));
+            static_cast<std::size_t>(number_of_trees_),
+            std::vector<double>(static_cast<std::size_t>(x.number_of_rows()), 0.0));
         for (int idx = 0; idx < number_of_trees_; idx++) {
-            std::optional<std::vector<double>> column =
-                decision_trees_[static_cast<std::size_t>(idx)].predict(x);
-            // Unreachable given the guard above (every tree carries the same `dimensions_` and is
-            // trained), but C# dereferences this null with `!` and would throw
-            // NullReferenceException; throwing beats undefined behavior if the invariant ever
-            // changes.
-            if (!column.has_value())
-                throw std::runtime_error("RandomForest::predict: a tree returned no prediction");
             for (int i = 0; i < x.number_of_rows(); i++)
-                boot_results[static_cast<std::size_t>(i)][static_cast<std::size_t>(idx)] =
-                    (*column)[static_cast<std::size_t>(i)];
+                boot_results[static_cast<std::size_t>(idx)][static_cast<std::size_t>(i)] =
+                    decision_trees_[static_cast<std::size_t>(idx)].predict_row(
+                        rows[static_cast<std::size_t>(i)]);
         }
 
         // Process the results.
         for (int idx = 0; idx < x.number_of_rows(); idx++) {
-            std::vector<double> values = boot_results[static_cast<std::size_t>(idx)];
+            std::vector<double> values(static_cast<std::size_t>(number_of_trees_));
+            for (int tree = 0; tree < number_of_trees_; ++tree)
+                values[static_cast<std::size_t>(tree)] =
+                    boot_results[static_cast<std::size_t>(tree)][static_cast<std::size_t>(idx)];
             std::sort(values.begin(), values.end());
 
             if (is_regression_) {
                 for (int j = 0; j < 3; j++)
                     output(idx, j) = data::percentile(values, percentiles[j], true);
-                output(idx, 3) = data::parallel_mean(values);
+                output(idx, 3) = data::mean(values);
             } else {
                 // Transcription note 3: the classification branch floors all four columns.
                 for (int j = 0; j < 3; j++)
                     output(idx, j) = std::floor(data::percentile(values, percentiles[j], true));
-                output(idx, 3) = std::floor(data::parallel_mean(values));
+                output(idx, 3) = std::floor(data::mean(values));
             }
         }
 
@@ -186,30 +184,8 @@ class RandomForest {
     }
 
    private:
-    // Returns a bootstrapped decision tree. See transcription note 2 on the two generators.
-    DecisionTree bootstrap_decision_tree(int seed = -1) const {
-        sampling::MersenneTwister rnd =
-            seed > 0 ? sampling::MersenneTwister(static_cast<std::uint32_t>(seed))
-                     : sampling::MersenneTwister();
-        std::vector<int> idxs =
-            utilities::next_integers(rnd, 0, x_.number_of_rows(), x_.number_of_rows());
-        math::linalg::Matrix boot_x(x_.number_of_rows(), x_.number_of_columns());
-        math::linalg::Vector boot_y(y_.length());
-        for (int i = 0; i < x_.number_of_rows(); i++) {
-            for (int j = 0; j < x_.number_of_columns(); j++)
-                boot_x(i, j) = x_(idxs[static_cast<std::size_t>(i)], j);
-            boot_y[i] = y_[idxs[static_cast<std::size_t>(i)]];
-        }
-        DecisionTree tree(boot_x, boot_y, seed);
-        tree.set_minimum_split_size(minimum_split_size_);
-        tree.set_max_depth(max_depth_);
-        tree.set_features(features_);
-        tree.set_is_regression(is_regression_);
-        return tree;
-    }
-
-    math::linalg::Vector y_;
-    math::linalg::Matrix x_;
+    std::shared_ptr<const math::linalg::Vector> y_;
+    std::shared_ptr<const math::linalg::Matrix> x_;
     int dimensions_;
     int features_;
     sampling::MersenneTwister random_;

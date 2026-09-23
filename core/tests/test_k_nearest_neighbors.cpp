@@ -1,19 +1,14 @@
 // P5 Task 9 -- KNearestNeighbors.
 //
 // Transcribes all four [TestMethod]s of
-// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_kNN.cs @ 2a0357a.
+// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_kNN.cs @ 7e8e8d1.
 //
 // Unlike the DecisionTree and RandomForest suites, this one has a REAL oracle:
 // Test_kNN_Iris asserts the full 60-value classification prediction vector against R's `class`
 // package, and Test_kNN_Classification asserts an exact label.
 //
 // Test_GetNeighbors_MultiRow queries the exact center of a symmetric cluster where four training
-// points tie on distance, so which neighbors come back depends on the sort's tie permutation --
-// but its C# assertions are index-RANGE inequalities that any ordering satisfies. The COREHYDRO
-// SUPPLEMENT pins the exact indices, measured against the real library. Note the honest limit
-// recorded at that call site: at 12 training points the .NET introsort takes its stable
-// insertion-sort path, so that case alone does not pin the introsort -- a separate 24-point case
-// below the threshold does, and `std::sort` was verified to give a different answer there.
+// points tie on distance. v2.2 makes the original training index the explicit secondary key.
 #include <cmath>
 #include <optional>
 #include <vector>
@@ -157,9 +152,7 @@ void test_get_neighbors_multi_row() {
     for (int i = 0; i < 4; i++) CHECK_EQ((*four)[static_cast<std::size_t>(i)], expected_four[i]);
 }
 
-// COREHYDRO SUPPLEMENT -- the tie permutation ABOVE the introsort's 16-element insertion-sort
-// threshold, which is where the .NET sort stops being stable and where a `std::sort` port would
-// silently return different neighbors.
+// COREHYDRO SUPPLEMENT -- ties remain index ordered above the old introsort threshold.
 //
 // 24 training points at x = -3, -2, -1, 1, 2, 3 repeated four times, queried at 0: distances 1,
 // 2 and 3 each occur eight times. The full 24-index order below was MEASURED against the real
@@ -175,8 +168,8 @@ void test_tie_permutation_above_the_insertion_sort_threshold() {
     ml::KNearestNeighbors knn(xs, ys, 24);
     std::optional<std::vector<int>> order = knn.get_neighbors(std::vector<double>{0.0});
     CHECK_TRUE(order.has_value());
-    const int expected[24] = {8, 2,  3,  21, 20, 9,  14, 15, 1,  4,  7,  16,
-                              10, 22, 19, 13, 0,  18, 11, 12, 6,  5,  17, 23};
+    const int expected[24] = {2,  3,  8,  9,  14, 15, 20, 21, 1,  4,  7,  10,
+                              13, 16, 19, 22, 0,  5,  6,  11, 12, 17, 18, 23};
     for (int i = 0; i < 24; i++) CHECK_EQ((*order)[static_cast<std::size_t>(i)], expected[i]);
 
     // The first eight are the k = 8 answer, as they must be.
@@ -184,6 +177,34 @@ void test_tie_permutation_above_the_insertion_sort_threshold() {
     std::optional<std::vector<int>> eight = knn8.get_neighbors(std::vector<double>{0.0});
     CHECK_TRUE(eight.has_value());
     for (int i = 0; i < 8; i++) CHECK_EQ((*eight)[static_cast<std::size_t>(i)], expected[i]);
+}
+
+void test_tied_prediction_uses_lowest_indices() {
+    std::vector<double> x1(24, 10.0);
+    std::vector<double> x2(24, 0.0);
+    std::vector<double> y(24, 999.0);
+    for (int i = 0; i < 20; ++i) {
+        x1[static_cast<std::size_t>(i)] = 1.0;
+        y[static_cast<std::size_t>(i)] = static_cast<double>(i);
+    }
+    x1[20] = 0.5;
+    y[20] = 100.0;
+    ml::KNearestNeighbors reg(la::Matrix::from_columns({x1, x2}), la::Vector(y), 3);
+    auto neighbors = reg.get_neighbors(la::Matrix(1, 2, {0.0, 0.0}));
+    CHECK_TRUE(neighbors.has_value());
+    CHECK_EQ((*neighbors)[0], 20);
+    CHECK_EQ((*neighbors)[1], 0);
+    CHECK_EQ((*neighbors)[2], 1);
+    auto prediction = reg.predict(la::Matrix(1, 2, {0.0, 0.0}));
+    CHECK_TRUE(prediction.has_value());
+    CHECK_NEAR((*prediction)[0], 401.0 / 6.0, 1e-12);
+
+    for (int i = 0; i < 20; ++i) y[static_cast<std::size_t>(i)] = i < 3 ? 1.0 : 2.0;
+    ml::KNearestNeighbors cls(la::Matrix::from_columns({x1, x2}), la::Vector(y), 5);
+    cls.set_is_regression(false);
+    auto class_prediction = cls.predict(la::Matrix(1, 2, {0.0, 0.0}));
+    CHECK_TRUE(class_prediction.has_value());
+    CHECK_EQ((*class_prediction)[0], 1.0);
 }
 
 // --- COREHYDRO SUPPLEMENT (no C# counterpart) ---------------------------------------------
@@ -224,15 +245,10 @@ void test_guards_and_null_returns() {
     CHECK_TRUE(!knn.predict(std::vector<double>{1.0}).has_value());
     CHECK_TRUE(knn.predict(iris_test()).has_value());
 
-    // get_neighbors() does NOT reject it -- upstream's guard there is a tautology (transcription
-    // note 2), and `Tools.Distance` loops over the QUERY row, so a NARROWER query computes a
-    // partial-dimension distance and returns neighbors rather than erroring. Mirrored.
+    // v2.2 gives get_neighbors() the same query-shape contract as predict().
     std::optional<std::vector<int>> narrow = knn.get_neighbors(std::vector<double>{5.0});
-    CHECK_TRUE(narrow.has_value());
-    CHECK_EQ(static_cast<int>(narrow->size()), 5);
-    // A WIDER query would read past the end of each training row in C++ (C# throws
-    // IndexOutOfRangeException); the port throws instead of reading out of bounds.
-    CHECK_THROWS(knn.get_neighbors(la::Matrix(1, 5, {1.0, 2.0, 3.0, 4.0, 5.0})));
+    CHECK_TRUE(!narrow.has_value());
+    CHECK_TRUE(!knn.get_neighbors(la::Matrix(1, 5, {1.0, 2.0, 3.0, 4.0, 5.0})).has_value());
 }
 
 void test_bootstrap_and_prediction_intervals() {
@@ -292,6 +308,7 @@ int main() {
     test_knn_regression();
     test_get_neighbors_multi_row();
     test_tie_permutation_above_the_insertion_sort_threshold();
+    test_tied_prediction_uses_lowest_indices();
     test_zero_distance_weight_branch();
     test_guards_and_null_returns();
     test_bootstrap_and_prediction_intervals();
