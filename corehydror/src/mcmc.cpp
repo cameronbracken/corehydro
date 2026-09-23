@@ -65,6 +65,7 @@ mcmc::MCMCRunSettings read_settings(list settings) {
     read_int(settings, "steps", s.steps);
     read_int(settings, "max_tree_depth", s.max_tree_depth);
     read_bool(settings, "adapt_mass_matrix", s.adapt_mass_matrix);
+    read_double(settings, "target_acceptance_rate", s.target_acceptance_rate);
     read_double(settings, "scale", s.scale);
     read_double(settings, "beta", s.beta);
     read_double(settings, "jump", s.jump);

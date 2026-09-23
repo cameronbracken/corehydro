@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Special Functions/Factorial.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Special Functions/Factorial.cs @ 7e8e8d1
 #pragma once
 #include <cmath>
 #include <cstddef>
@@ -142,6 +142,54 @@ inline std::vector<std::vector<int>> all_combinations(int n) {
             for (int col : combo) output[static_cast<std::size_t>(t)][static_cast<std::size_t>(col)] = 1;
             ++t;
         }
+    }
+    return output;
+}
+
+namespace detail {
+
+inline bool next_combination_unchecked(std::vector<int>& combination, int n) {
+    const int k = static_cast<int>(combination.size());
+    int i = k - 1;
+    while (i >= 0 && combination[static_cast<std::size_t>(i)] == n - k + i) --i;
+    if (i < 0) return false;
+    ++combination[static_cast<std::size_t>(i)];
+    for (int j = i + 1; j < k; ++j) {
+        combination[static_cast<std::size_t>(j)] =
+            combination[static_cast<std::size_t>(j - 1)] + 1;
+    }
+    return true;
+}
+
+}  // namespace detail
+
+inline bool next_combination(std::vector<int>& combination, int n) {
+    if (n < 0) throw std::out_of_range("factorial::next_combination: n must be non-negative");
+    if (combination.empty() || combination.size() > static_cast<std::size_t>(n)) {
+        throw std::invalid_argument(
+            "factorial::next_combination: combination length must be between one and n");
+    }
+    int previous = -1;
+    for (int index : combination) {
+        if (index <= previous || index >= n) {
+            throw std::invalid_argument(
+                "factorial::next_combination: indexes must be strictly increasing and within [0, n)");
+        }
+        previous = index;
+    }
+    return detail::next_combination_unchecked(combination, n);
+}
+
+// Materializes the lazy C# enumeration while preserving its subset-size then lexicographic order.
+inline std::vector<std::vector<int>> all_combinations_lazy(int n) {
+    if (n < 0) throw std::out_of_range("factorial::all_combinations_lazy: n must be non-negative");
+    std::vector<std::vector<int>> output;
+    for (int k = 1; k <= n; ++k) {
+        std::vector<int> combination(static_cast<std::size_t>(k));
+        for (int j = 0; j < k; ++j) combination[static_cast<std::size_t>(j)] = j;
+        do {
+            output.push_back(combination);
+        } while (detail::next_combination_unchecked(combination, n));
     }
     return output;
 }

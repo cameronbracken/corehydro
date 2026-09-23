@@ -247,6 +247,12 @@ inline ToolboxResult run_timeseries(const std::string& method,
         int differences = static_cast<int>(options.value_or("differences", 1.0));
         return timeseries_result(ts.difference(lag, differences));
     }
+    if (method == "smoothed_series") {
+        ts_data::SmoothingFunctionType smoothing =
+            parse_smoothing_function_token(options.value_or("smoothing", "none"));
+        int period = static_cast<int>(options.value_or("period", 1.0));
+        return timeseries_result(ts.smoothed_series(smoothing, period));
+    }
     if (method == "standardize") {
         ts.standardize();
         return timeseries_result(ts);

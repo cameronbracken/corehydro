@@ -1,8 +1,8 @@
 {
   "kind": "toolbox",
   "group": "network",
-  "source": "Numerics/Mathematics/Optimization/Dynamic/Dijkstra.cs, Network.cs, BinaryHeap.cs; every graph and every expected value scraped verbatim from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs (SimpleEdgeGraphCost, SimpleNetworkRouting, BidirectionalRouting, DisconnectedNodesTest, MultipleDestSharedPath, DisconnectedComponent, DisconnectedComponent2, TrianglePath).",
-  "reference": "Numerics @ 2a0357a. Costs are C# `float`, and every weight in DijkstraTesting.cs is a small integer, so all of these values are exact in both float and double: they are asserted at mode \"equal\" (tolerance 0), exactly as the C# tests assert them (Assert.AreEqual(3f, result[2, 2]) with no delta). Unreachable nodes are the C# float.IsPositiveInfinity checks, spelled \"inf\" here. The three method names map to the three C# entry points: \"dijkstra\" is the free Dijkstra.Solve (its single-destination overload when one destination is given, its int[] overload otherwise, matching which one each transcribed test calls); \"network_solve\" is Network.Solve, which caches the incoming-edge lists in its constructor and forwards to the same free solver; \"network_solve_weights\" is Network.Solve(float[] edgeWeights). The oracle emitter drives the free Dijkstra.Solve for ALL THREE, because the shipped C# Network CANNOT BE CONSTRUCTED -- its constructor sizes both edge caches at max node index instead of max + 1 and indexes one past the end, so every construction throws IndexOutOfRangeException (measured; see docs/upstream-csharp-issues.md and numerics/math/optimization/dynamic/network.hpp note 1, which documents the port's one intentional divergence, `max + 1`). Routing the emitter through the free solver is exact rather than approximate: with the ported constructor fixed, Network.Solve forwards its cached edge lists to that very function, and a patched C# Network was measured returning the free solver's table element for element. The \"triangle_path_network_solve_weights_are_ignored\" case pins a SECOND upstream defect on purpose: Network.Solve(float[] edgeWeights) builds a re-weighted edge array and then passes the STALE cached incoming-edge lists alongside it, and the solver reads its weights out of that cache, so the custom weights have no effect whatever. The case supplies all-ones weights on a graph whose real weights are 1/4/1/10 and pins the ORIGINAL-weight answer; if anyone ever \"fixes\" the port to honor the weights, this case fails loudly. That is also why the user-facing shortest_path() verb in both packages never calls this method.",
+  "source": "Numerics v2.2.0 Dynamic shortest-path implementation and Test_BinaryHeap.cs, Test_IndexedMinHeap.cs, Test_Network.cs, and Test_ShortestPath.cs.",
+  "reference": "Numerics @ 7e8e8d1. Costs remain C# float values and exact integer-weight results use mode equal. v2.2.0 replaces per-node traversal with stable compact adjacency and an indexed heap, validates nodes and nonnegative edge indices, adds path reconstruction and the single-pass nearest-destination solve, repairs Network construction, and applies positional custom weights. The Network cases now drive the real shipped C# Network through oracle_emitter rather than a patched or free-solver stand-in.",
   "cases": [
     {
       "name": "simple_edge_graph_cost",
@@ -919,7 +919,7 @@
       ]
     },
     {
-      "name": "triangle_path_network_solve_weights_are_ignored",
+      "name": "triangle_path_network_solve_custom_weights",
       "data": [
         [
           0,
@@ -964,36 +964,66 @@
           "index": 0,
           "expected": 0,
           "mode": "equal",
-          "source": "TrianglePath (upstream no-op; see the case source)"
+          "source": "Numerics v2.2.0 positional custom-weight solve"
         },
         {
           "method": "network_solve_weights",
           "index": 2,
           "expected": 0,
           "mode": "equal",
-          "source": "TrianglePath (upstream no-op; see the case source)"
+          "source": "Numerics v2.2.0 positional custom-weight solve"
         },
         {
           "method": "network_solve_weights",
           "index": 3,
-          "expected": 2,
+          "expected": 0,
           "mode": "equal",
-          "source": "TrianglePath (upstream no-op; see the case source)"
+          "source": "Numerics v2.2.0 positional custom-weight solve"
         },
         {
           "method": "network_solve_weights",
           "index": 5,
           "expected": 1,
           "mode": "equal",
-          "source": "TrianglePath (upstream no-op; see the case source)"
+          "source": "Numerics v2.2.0 positional custom-weight solve"
         },
         {
           "method": "network_solve_weights",
           "index": 6,
           "expected": 2,
           "mode": "equal",
-          "source": "TrianglePath (upstream no-op; see the case source)"
+          "source": "Numerics v2.2.0 positional custom-weight solve"
         }
+      ]
+    },
+    {
+      "name": "path_reconstruction",
+      "data": [[0, 1], [1, 2], [1, 2], [7, 8]],
+      "options": {"destinations": [2], "node_count": 3, "start_node": 0},
+      "assertions": [
+        {"method": "dijkstra_path", "select": "length", "expected": 2, "mode": "equal", "source": "Dijkstra.GetPath"},
+        {"method": "dijkstra_path", "index": 0, "expected": 7, "mode": "equal", "source": "Dijkstra.GetPath"},
+        {"method": "dijkstra_path", "index": 1, "expected": 8, "mode": "equal", "source": "Dijkstra.GetPath"}
+      ]
+    },
+    {
+      "name": "single_pass_nearest_repeated_destination",
+      "data": [[0, 1, 1, 2], [1, 0, 2, 0], [1, 4, 1, 10], [0, 1, 2, 3]],
+      "options": {"destinations": [0, 0, 2], "node_count": 3},
+      "assertions": [
+        {"method": "dijkstra_nearest", "index": 3, "expected": 2, "mode": "equal", "source": "Dijkstra.SolveNearest"},
+        {"method": "dijkstra_nearest", "index": 5, "expected": 1, "mode": "equal", "source": "Dijkstra.SolveNearest"},
+        {"method": "dijkstra_nearest", "index": 6, "expected": 2, "mode": "equal", "source": "Dijkstra.SolveNearest"}
+      ]
+    },
+    {
+      "name": "network_detour_removed_edge",
+      "data": [[0, 1, 0, 2], [1, 3, 2, 3], [1, 1, 2, 2], [5, 6, 7, 8], [5]],
+      "options": {"destinations": [3], "start_node": 0},
+      "assertions": [
+        {"method": "network_path", "select": "length", "expected": 2, "mode": "equal", "source": "Network.GetPath detour"},
+        {"method": "network_path", "index": 0, "expected": 7, "mode": "equal", "source": "Network.GetPath detour"},
+        {"method": "network_path", "index": 1, "expected": 8, "mode": "equal", "source": "Network.GetPath detour"}
       ]
     }
   ]

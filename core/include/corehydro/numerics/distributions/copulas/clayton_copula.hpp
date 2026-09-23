@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/ClaytonCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/ClaytonCopula.cs @ 7e8e8d1
 //
 // The Clayton copula. theta in [-1, +inf); closed-form CDF/InverseCDF (overriding
 // ArchimedeanCopula's generic Genest-1986 forms, which PDF still uses via virtual CDF
@@ -81,12 +81,15 @@ class ClaytonCopula : public ArchimedeanCopula {
                          -1.0 / theta());
     }
 
-    std::array<double, 2> inverse_cdf(double u, double v) const override {
+    double inverse_conditional_cdf(double u, double t) const override {
         if (!parameters_valid()) validate_parameter(theta(), true);
-        double vv = std::pow(
-            std::pow(u, -theta()) * (std::pow(v, -theta() / (theta() + 1.0)) - 1.0) + 1.0,
+        return std::pow(
+            std::pow(u, -theta()) * (std::pow(t, -theta() / (theta() + 1.0)) - 1.0) + 1.0,
             -1.0 / theta());
-        return {u, vv};
+    }
+
+    std::array<double, 2> inverse_cdf(double u, double v) const override {
+        return {u, inverse_conditional_cdf(u, v)};
     }
 
     // Gets the upper tail dependence coefficient lambda_U = 0. The Clayton copula has no

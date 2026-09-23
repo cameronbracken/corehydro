@@ -18,14 +18,14 @@
         { "method": "max_log_likelihood", "args": [], "expected": -134.00568236169357, "mode": "rel", "tol": 1e-9 },
         { "method": "aic", "args": [], "expected": 272.01136472338715, "mode": "rel", "tol": 1e-9 },
         { "method": "bic", "args": [10], "expected": 272.6165349093752, "mode": "rel", "tol": 1e-9 },
-        { "method": "covariance", "args": [0, 0], "expected": 2325471.445921774, "mode": "rel", "tol": 1e-5 },
-        { "method": "covariance", "args": [1, 1], "expected": 1054055.811260643, "mode": "rel", "tol": 1e-5 },
-        { "method": "covariance", "args": [0, 1], "expected": -870.832626480227, "mode": "abs", "tol": 1e-2 },
-        { "method": "standard_error", "args": [0], "expected": 1524.9496535695118, "mode": "rel", "tol": 1e-5 },
-        { "method": "standard_error", "args": [1], "expected": 1026.6722024388519, "mode": "rel", "tol": 1e-5 },
+        { "method": "covariance", "args": [0, 0], "expected": 2323935.466349808, "mode": "rel", "tol": 1e-5 },
+        { "method": "covariance", "args": [1, 1], "expected": 1053424.6395370087, "mode": "rel", "tol": 1e-5 },
+        { "method": "covariance", "args": [0, 1], "expected": -869.73632722672448, "mode": "abs", "tol": 1e-2 },
+        { "method": "standard_error", "args": [0], "expected": 1524.4459538959745, "mode": "rel", "tol": 1e-5 },
+        { "method": "standard_error", "args": [1], "expected": 1026.3647692399661, "mode": "rel", "tol": 1e-5 },
         { "method": "correlation", "args": [0, 0], "expected": 1.0, "mode": "rel", "tol": 1e-9 },
         { "method": "correlation", "args": [1, 1], "expected": 1.0, "mode": "rel", "tol": 1e-9 },
-        { "method": "correlation", "args": [0, 1], "expected": -0.0005562210015946896, "mode": "abs", "tol": 1e-8 }
+        { "method": "correlation", "args": [0, 1], "expected": -0.00055587077562372928, "mode": "abs", "tol": 1e-8 }
       ]
     }
   ]

@@ -110,7 +110,7 @@
         { "method": "mean",     "args": [],      "expected": "nan",  "mode": "equal" },
         { "method": "sd",       "args": [],      "expected": "nan",  "mode": "equal" },
         { "method": "skewness", "args": [],      "expected": "nan",  "mode": "equal" },
-        { "method": "mode",     "args": [],      "expected": 95.0,   "mode": "abs",  "tol": 1e-9 },
+        { "method": "mode",     "args": [],      "expected": 110.0,  "mode": "abs",  "tol": 1e-9 },
         { "method": "minimum",  "args": [],      "expected": "-inf", "mode": "equal" },
         { "method": "maximum",  "args": [],      "expected": 110.0,  "mode": "equal" },
         { "method": "pdf",      "args": [100.0], "expected": 0.025,  "mode": "abs",  "tol": 1e-12 },

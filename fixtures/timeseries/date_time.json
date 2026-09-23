@@ -1,7 +1,7 @@
 {
   "kind": "toolbox",
   "group": "timeseries",
-  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a (AddTimeInterval / SubtractTimeInterval / TimeIntervalInHours) over the System.DateTime calendar arithmetic underneath it. The interval-in-hours values are Test_TimeSeries.cs's Test_TimeIntervalInHours literals; every calendar value is the real BCL's, and the two marked CURATE were harvested with verify_oracles.py --dump.",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 7e8e8d1 (AddTimeInterval / SubtractTimeInterval / TimeIntervalInHours) over the System.DateTime calendar arithmetic underneath it. The interval-in-hours values are Test_TimeSeries.cs's Test_TimeIntervalInHours literals; every calendar value is the real BCL's, and the two marked CURATE were harvested with verify_oracles.py --dump.",
   "reference": "Dates cross this surface as SECONDS since 1970-01-01, never .NET ticks (a tick count near 6.3e17 is not exactly representable in a double). This file is what puts the ported DateTime value type -- a corehydro addition with no upstream source file, standing in for System.DateTime -- permanently behind the oracle gate: AddMonths day-clamping, the leap-year cases, the fractional-AddDays whole/fraction split, DayOfYear across a leap boundary, DayOfWeek with Sunday == 0, and ToOADate. core/tests/test_date_time.cpp carries the same measurements as ctest assertions.",
   "cases": [
     {

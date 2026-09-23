@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Statistics/Statistics.cs @ 2a0357a
+// ported from: Numerics/Data/Statistics/Statistics.cs @ 7e8e8d1
 //
 // Sample statistics needed by distribution estimation: product moments
 // (mean, stdev, bias-corrected skew & excess kurtosis), linear (L-)moments, and
@@ -48,9 +48,8 @@
 // (Statistics.cs:218) and `population_standard_deviation` (:253) for DecisionTree's variance
 // reduction, `parallel_mean` (:143) for RandomForest's and kNN's prediction-interval mean
 // column, `five_number_summary` (:590) for GeneralizedLinearModel's residual report, and
-// `entropy` (:736) for DecisionTree's classification information gain. `parallel_mean` is the
-// one that is NOT a literal transcription -- see its own note for why summing serially is the
-// faithful choice against an upstream method whose result depends on the machine's core count.
+// `entropy` (:736) for DecisionTree's classification information gain. v2.2.0 makes
+// `parallel_mean` deterministic with a fixed chunk reduction, mirrored below without threads.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -61,6 +60,7 @@
 #include <vector>
 
 #include "corehydro/numerics/tools.hpp"
+#include "corehydro/numerics/data/weight_type.hpp"
 
 namespace corehydro::numerics::data {
 
@@ -83,8 +83,11 @@ inline double variance(const std::vector<double>& data) {
     for (std::size_t i = 1; i < data.size(); ++i) {
         double di = static_cast<double>(i);
         t += data[i];
-        double diff = (di + 1.0) * data[i] - t;
-        variance_ += diff * diff / ((di + 1.0) * di);
+        volatile double product = (di + 1.0) * data[i];
+        double diff = product - t;
+        volatile double square = diff * diff;
+        volatile double increment = square / ((di + 1.0) * di);
+        variance_ += increment;
     }
     return variance_ / (static_cast<double>(data.size()) - 1.0);
 }
@@ -102,8 +105,11 @@ inline double population_variance(const std::vector<double>& data) {
     for (std::size_t i = 1; i < data.size(); ++i) {
         double di = static_cast<double>(i);
         t += data[i];
-        double diff = (di + 1.0) * data[i] - t;
-        variance_ += diff * diff / ((di + 1.0) * di);
+        volatile double product = (di + 1.0) * data[i];
+        double diff = product - t;
+        volatile double square = diff * diff;
+        volatile double increment = square / ((di + 1.0) * di);
+        variance_ += increment;
     }
     return variance_ / static_cast<double>(data.size());
 }
@@ -113,21 +119,24 @@ inline double population_standard_deviation(const std::vector<double>& data) {
     return std::sqrt(population_variance(data));
 }
 
-// Arithmetic mean computed with a SERIAL sum (Statistics.cs:143).
-//
-// UPSTREAM DIVERGENCE, deliberate: C# `ParallelMean` is `data.AsParallel().Sum() / data.Count`,
-// which splits the sum across `Environment.ProcessorCount` partitions and adds the partial sums.
-// That makes its last bits depend on the machine's core count -- upstream is not reproducible
-// against ITSELF across machines here, so there is no fixed value to be faithful to. This port
-// sums serially, making `parallel_mean` exactly `mean`. Two ported call sites reach it, both the
-// "mean" column of a prediction-interval table: RandomForest::predict and
-// KNearestNeighbors::prediction_intervals. See docs/upstream-csharp-issues.md for the
-// measurement.
+// Deterministic fixed-chunk reduction used by v2.2.0 ParallelMean. C++ executes the chunks
+// serially, but preserves the shipped association order: 64 balanced chunk sums followed by a
+// chunk-order reduction. Small samples use the ordinary sequential mean.
 inline double parallel_mean(const std::vector<double>& data) {
     if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
-    double sum = 0.0;
-    for (double x : data) sum += x;
-    return sum / static_cast<double>(data.size());
+    constexpr std::size_t kChunks = 64;
+    constexpr std::size_t kSequentialThreshold = 8192;
+    if (data.size() < kSequentialThreshold) return mean(data);
+    const std::size_t chunks = std::min(kChunks, data.size());
+    std::vector<double> chunk_sums(chunks, 0.0);
+    for (std::size_t chunk = 0; chunk < chunks; ++chunk) {
+        const std::size_t start = chunk * data.size() / chunks;
+        const std::size_t end = (chunk + 1) * data.size() / chunks;
+        for (std::size_t i = start; i < end; ++i) chunk_sums[chunk] += data[i];
+    }
+    double total = 0.0;
+    for (double chunk_sum : chunk_sums) total += chunk_sum;
+    return total / static_cast<double>(data.size());
 }
 
 // Estimates the arithmetic sample mean and the unbiased (N-1) sample variance in one call.
@@ -135,6 +144,49 @@ inline double parallel_mean(const std::vector<double>& data) {
 // is an identity over `mean()`/`variance()` above, not an independent computation.
 inline std::pair<double, double> mean_variance(const std::vector<double>& data) {
     return {mean(data), variance(data)};
+}
+
+inline double jackknife_standard_error(
+    const std::vector<double>& data,
+    const std::function<double(const std::vector<double>&)>& statistic) {
+    if (!statistic) throw std::invalid_argument("statistic callback must be provided");
+    if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
+    if (data.size() == 1) return 0.0;
+    const double theta = statistic(data);
+    constexpr std::size_t kChunks = 64;
+    const std::size_t chunks = std::min(kChunks, data.size());
+    std::vector<double> chunk_sums(chunks, 0.0);
+    for (std::size_t chunk = 0; chunk < chunks; ++chunk) {
+        const std::size_t start = chunk * data.size() / chunks;
+        const std::size_t end = (chunk + 1) * data.size() / chunks;
+        for (std::size_t i = start; i < end; ++i) {
+            std::vector<double> sample;
+            sample.reserve(data.size() - 1);
+            sample.insert(sample.end(), data.begin(), data.begin() + static_cast<std::ptrdiff_t>(i));
+            sample.insert(sample.end(), data.begin() + static_cast<std::ptrdiff_t>(i + 1), data.end());
+            const double difference = statistic(sample) - theta;
+            chunk_sums[chunk] += difference * difference;
+        }
+    }
+    double sum_squares = 0.0;
+    for (double chunk_sum : chunk_sums) sum_squares += chunk_sum;
+    return std::sqrt((static_cast<double>(data.size()) - 1.0) /
+                     static_cast<double>(data.size()) * sum_squares);
+}
+
+inline std::vector<double> jackknife_sample(
+    const std::vector<double>& data,
+    const std::function<double(const std::vector<double>&)>& statistic) {
+    if (!statistic) throw std::invalid_argument("statistic callback must be provided");
+    std::vector<double> result(data.size());
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        std::vector<double> sample;
+        sample.reserve(data.size() - 1);
+        sample.insert(sample.end(), data.begin(), data.begin() + static_cast<std::ptrdiff_t>(i));
+        sample.insert(sample.end(), data.begin() + static_cast<std::ptrdiff_t>(i + 1), data.end());
+        result[i] = statistic(sample);
+    }
+    return result;
 }
 
 // Returns the smallest value of the unsorted data array (mirrors Statistics.Minimum's
@@ -172,13 +224,15 @@ inline std::vector<double> product_moments(const std::vector<double>& data) {
     double N = static_cast<double>(data.size());
     if (N < 4) return {kNaN, kNaN, kNaN, kNaN};
 
+    const double shift = data[0];
     double X1 = 0, X2 = 0, X3 = 0, X4 = 0;
     for (double x : data) {
-        double x2 = x * x;
-        X1 += x;
-        X2 += x2;
-        X3 += x2 * x;
-        X4 += x2 * x2;
+        const double y = x - shift;
+        const double y2 = y * y;
+        X1 += y;
+        X2 += y2;
+        X3 += y2 * y;
+        X4 += y2 * y2;
     }
     double U1 = X1 / N, U2 = X2 / N, U3 = X3 / N, U4 = X4 / N;
     double m2 = (U2 - U1 * U1) * (N / (N - 1));  // sample variance
@@ -190,7 +244,7 @@ inline std::vector<double> product_moments(const std::vector<double>& data) {
     double G = (N * N) / ((N - 1) * (N - 2)) * (c3 / S3);
     double K = ((N * N) * (N + 1)) / ((N - 1) * (N - 2) * (N - 3)) * (c4 / S4) -
                3.0 * (N - 1) * (N - 1) / ((N - 2) * (N - 3));
-    return {U1, S, G, K};
+    return {shift + U1, S, G, K};
 }
 
 // Returns {L1 (L-mean), L2 (L-scale), T3 (L-skewness), T4 (L-kurtosis)}.
@@ -204,15 +258,9 @@ inline std::vector<double> linear_moments(const std::vector<double>& data) {
 
     double B0 = 0, B1 = 0, B2 = 0, B3 = 0;
     for (int i = 1; i <= static_cast<int>(N); ++i) {
-        // DELIBERATE DIVERGENCE (docs/upstream-csharp-issues.md): C# forms the weight
-        // numerators `(i-2)*(i-1)` and `(i-3)*(i-2)*(i-1)` in `int`. The triple product
-        // exceeds int32 at i = 1293, and C#'s default unchecked context WRAPS silently --
-        // the real Numerics library returns T4 = -0.185 for a 1293-point arithmetic
-        // sequence whose L-kurtosis is 0. In C++ that same overflow is undefined
-        // behaviour, which CRAN's UBSan run reports. Forming the products in `double`
-        // removes the UB and is bit-identical to the C# for every sample below the
-        // overflow (the products are exact integers far under 2^53); above it the port
-        // returns the mathematically correct weight where C# returns a wrapped one.
+        // v2.2.0 forms the b2 and b3 numerators in double. This avoids the int32 overflow
+        // at i = 46,343 and i = 1,293 while preserving exact integer products below those
+        // thresholds.
         const double di = static_cast<double>(i);
         B0 += sorted[i - 1];
         if (i > 1) B1 += (di - 1) / (N - 1) * sorted[i - 1];
@@ -334,9 +382,8 @@ inline std::vector<double> ranks_in_place(const std::vector<double>& data, std::
         }
         previous_index = i;
     }
-    // Fidelity point 3: this closing call never writes `ties` -- a trailing tie run's length is
-    // never recorded, reproducing the upstream defect.
     ranks_ties(previous_index, n);
+    if (t > 0) ties[static_cast<std::size_t>(n - 1)] = static_cast<double>(t);
 
     return ranks;
 }
@@ -347,23 +394,7 @@ inline std::vector<double> ranks_in_place(const std::vector<double>& data, std::
 inline double percentile(const std::vector<double>& data, double k, bool data_is_sorted = false) {
     int n = static_cast<int>(data.size());
     if (n == 0) throw std::invalid_argument("Sequence contains no elements.");
-    if (k < 0.0 || k > 1.0) throw std::out_of_range("k must be in [0,1].");
-
-    // A NaN `k` slips through the range check above -- every comparison against NaN is false --
-    // and would reach `static_cast<int>(std::floor(h))` below. Converting a NaN double to `int`
-    // is UNDEFINED BEHAVIOUR in C++, and the platforms disagree about it in the worst possible
-    // way: AArch64's `fcvtzs` saturates to 0, so the expression falls out as NaN and nothing
-    // appears wrong, while x86-64's `cvttsd2si` yields INT_MIN, which then indexes `sorted`
-    // roughly 17 GB below its base and segfaults. Not hypothetical -- Bootstrap's BCa
-    // acceleration constant is `0 / 0` whenever every jackknife sample fails, and that NaN
-    // arrives here through `Normal::standard_cdf` as `k`.
-    //
-    // The C# this is ported from has exactly the same hole in its range check, but .NET's
-    // float-to-int conversion is DEFINED to saturate NaN to 0 (.NET Core 3.0 onward), so C#
-    // evaluates `sortedData[0] + NaN * (sortedData[0] - sortedData[0])` and hands the caller a
-    // NaN. Returning NaN here reproduces the C# result exactly while removing the UB; it is a
-    // fidelity fix, not a behaviour change (macOS already produced NaN by accident of ISA).
-    if (std::isnan(k)) return std::numeric_limits<double>::quiet_NaN();
+    if (std::isnan(k) || k < 0.0 || k > 1.0) throw std::out_of_range("k must be in [0,1].");
 
     std::vector<double> sorted_copy;
     const std::vector<double>* sorted = &data;
@@ -382,8 +413,11 @@ inline double percentile(const std::vector<double>& data, double k, bool data_is
     int lower = static_cast<int>(std::floor(h));
     int upper = static_cast<int>(std::ceil(h));
     double w = h - lower;
-    return (*sorted)[static_cast<std::size_t>(lower)] +
-           w * ((*sorted)[static_cast<std::size_t>(upper)] - (*sorted)[static_cast<std::size_t>(lower)]);
+    double lower_value = (*sorted)[static_cast<std::size_t>(lower)];
+    // Preserve the separate multiply and add used by the C# expression.
+    volatile double interpolation =
+        w * ((*sorted)[static_cast<std::size_t>(upper)] - lower_value);
+    return lower_value + interpolation;
 }
 
 // Returns the k-th percentile of `data` for every k in `k`, sorting `data` ONCE and calling the
@@ -415,6 +449,211 @@ inline std::vector<double> five_number_summary(const std::vector<double>& data) 
     std::sort(sorted.begin(), sorted.end());
     return {sorted.front(), percentile(sorted, 0.25, true), percentile(sorted, 0.50, true),
             percentile(sorted, 0.75, true), sorted.back()};
+}
+
+namespace detail {
+
+inline double validate_weights(const std::vector<double>& data,
+                               const std::vector<double>& weights) {
+    if (data.size() != weights.size()) {
+        throw std::invalid_argument("data and weights must have the same length");
+    }
+    double total = 0.0;
+    for (double weight : weights) {
+        if (!corehydro::numerics::is_finite(weight) || weight < 0.0) {
+            throw std::out_of_range("weights must be finite and non-negative");
+        }
+        total += weight;
+    }
+    return total;
+}
+
+struct WeightedCentralSums {
+    double mean;
+    double s2;
+    double s3;
+    double s4;
+};
+
+inline WeightedCentralSums weighted_central_sums(const std::vector<double>& data,
+                                                 const std::vector<double>& weights,
+                                                 double total) {
+    double sum = 0.0;
+    for (std::size_t i = 0; i < data.size(); ++i) sum += weights[i] * data[i];
+    const double weighted_mean = sum / total;
+    double s2 = 0.0;
+    double s3 = 0.0;
+    double s4 = 0.0;
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        const double centered = data[i] - weighted_mean;
+        const double centered2 = centered * centered;
+        s2 += weights[i] * centered2;
+        s3 += weights[i] * centered2 * centered;
+        s4 += weights[i] * centered2 * centered2;
+    }
+    return {weighted_mean, s2, s3, s4};
+}
+
+inline double effective_sample_size(const std::vector<double>& weights, double total,
+                                    WeightType weight_type) {
+    if (weight_type == WeightType::Frequency) return total;
+    double sum_squares = 0.0;
+    for (double weight : weights) sum_squares += weight * weight;
+    return total * total / sum_squares;
+}
+
+struct WeightedSample {
+    std::vector<double> values;
+    std::vector<double> weights;
+    std::vector<double> prefix;
+    double total;
+};
+
+inline WeightedSample prepare_weighted_sample(const std::vector<double>& data,
+                                              const std::vector<double>& weights,
+                                              bool data_is_sorted) {
+    std::vector<std::pair<double, double>> pairs;
+    pairs.reserve(data.size());
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        if (weights[i] > 0.0) pairs.emplace_back(data[i], weights[i]);
+    }
+    if (!data_is_sorted) {
+        std::sort(pairs.begin(), pairs.end(),
+                  [](const auto& left, const auto& right) { return left.first < right.first; });
+    }
+    WeightedSample sample;
+    sample.values.reserve(pairs.size());
+    sample.weights.reserve(pairs.size());
+    sample.prefix.reserve(pairs.size());
+    double running = 0.0;
+    for (const auto& [value, weight] : pairs) {
+        sample.values.push_back(value);
+        sample.weights.push_back(weight);
+        sample.prefix.push_back(running);
+        running += weight;
+    }
+    sample.total = running;
+    return sample;
+}
+
+inline double weighted_percentile(const WeightedSample& sample, double k) {
+    const std::size_t n = sample.values.size();
+    if (n == 1 || k == 0.0) return sample.values.front();
+    if (k == 1.0) return sample.values.back();
+    auto position = [&sample](std::size_t i) {
+        const double denominator = sample.total - sample.weights[i];
+        return denominator > 0.0 ? sample.prefix[i] / denominator : (i == 0 ? 0.0 : 1.0);
+    };
+    std::size_t low = 0;
+    std::size_t high = n - 1;
+    while (high - low > 1) {
+        const std::size_t middle = (low + high) >> 1;
+        if (position(middle) <= k)
+            low = middle;
+        else
+            high = middle;
+    }
+    const double p_low = position(low);
+    const double p_high = position(high);
+    if (k <= p_low) return sample.values[low];
+    if (k >= p_high) return sample.values[high];
+    const double fraction = (k - p_low) / (p_high - p_low);
+    return sample.values[low] + fraction * (sample.values[high] - sample.values[low]);
+}
+
+}  // namespace detail
+
+inline double mean(const std::vector<double>& data, const std::vector<double>& weights) {
+    const double total = detail::validate_weights(data, weights);
+    if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
+    if (total <= 0.0) throw std::invalid_argument("weights must not all be zero");
+    double sum = 0.0;
+    for (std::size_t i = 0; i < data.size(); ++i) sum += weights[i] * data[i];
+    return sum / total;
+}
+
+inline double variance(const std::vector<double>& data, const std::vector<double>& weights,
+                       WeightType weight_type = WeightType::Frequency) {
+    const double total = detail::validate_weights(data, weights);
+    if (data.size() <= 1) return std::numeric_limits<double>::quiet_NaN();
+    if (total <= 0.0) throw std::invalid_argument("weights must not all be zero");
+    const auto sums = detail::weighted_central_sums(data, weights, total);
+    double denominator;
+    if (weight_type == WeightType::Frequency) {
+        denominator = total - 1.0;
+    } else {
+        double sum_squares = 0.0;
+        for (double weight : weights) sum_squares += weight * weight;
+        denominator = total - sum_squares / total;
+    }
+    if (denominator <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+    return sums.s2 / denominator;
+}
+
+inline double standard_deviation(const std::vector<double>& data,
+                                 const std::vector<double>& weights,
+                                 WeightType weight_type = WeightType::Frequency) {
+    return std::sqrt(variance(data, weights, weight_type));
+}
+
+inline double skewness(const std::vector<double>& data, const std::vector<double>& weights,
+                       WeightType weight_type = WeightType::Frequency) {
+    const double total = detail::validate_weights(data, weights);
+    if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
+    if (total <= 0.0) throw std::invalid_argument("weights must not all be zero");
+    const auto sums = detail::weighted_central_sums(data, weights, total);
+    const double n = detail::effective_sample_size(weights, total, weight_type);
+    if (n <= 2.0) return std::numeric_limits<double>::quiet_NaN();
+    const double m2 = sums.s2 / total;
+    const double m3 = sums.s3 / total;
+    const double g = m3 / std::pow(m2, 1.5);
+    return std::sqrt(n * (n - 1.0)) / (n - 2.0) * g;
+}
+
+inline double kurtosis(const std::vector<double>& data, const std::vector<double>& weights,
+                       WeightType weight_type = WeightType::Frequency) {
+    const double total = detail::validate_weights(data, weights);
+    if (data.empty()) return std::numeric_limits<double>::quiet_NaN();
+    if (total <= 0.0) throw std::invalid_argument("weights must not all be zero");
+    const auto sums = detail::weighted_central_sums(data, weights, total);
+    const double n = detail::effective_sample_size(weights, total, weight_type);
+    if (n <= 3.0) return std::numeric_limits<double>::quiet_NaN();
+    const double m2 = sums.s2 / total;
+    const double m4 = sums.s4 / total;
+    const double a = n * (n + 1.0) / ((n - 1.0) * (n - 2.0) * (n - 3.0));
+    const double b = m4 / (m2 * m2) * ((n - 1.0) * (n - 1.0) / n);
+    const double c = (n - 1.0) * (n - 1.0) / ((n - 2.0) * (n - 3.0));
+    return a * b - 3.0 * c;
+}
+
+inline double percentile(const std::vector<double>& data, double k,
+                         const std::vector<double>& weights, bool data_is_sorted = false) {
+    const double total = detail::validate_weights(data, weights);
+    if (data.empty()) throw std::invalid_argument("Sequence contains no elements.");
+    if (std::isnan(k) || k < 0.0 || k > 1.0) throw std::out_of_range("k must be in [0,1].");
+    if (total <= 0.0) throw std::invalid_argument("weights must not all be zero");
+    return detail::weighted_percentile(
+        detail::prepare_weighted_sample(data, weights, data_is_sorted), k);
+}
+
+inline std::vector<double> percentile(const std::vector<double>& data,
+                                      const std::vector<double>& k,
+                                      const std::vector<double>& weights,
+                                      bool data_is_sorted = false) {
+    const double total = detail::validate_weights(data, weights);
+    if (k.empty()) return {};
+    if (data.empty()) throw std::invalid_argument("Sequence contains no elements.");
+    if (total <= 0.0) throw std::invalid_argument("weights must not all be zero");
+    const auto sample = detail::prepare_weighted_sample(data, weights, data_is_sorted);
+    std::vector<double> result;
+    result.reserve(k.size());
+    for (double probability : k) {
+        if (std::isnan(probability) || probability < 0.0 || probability > 1.0) {
+            throw std::out_of_range("k must be in [0,1].");
+        }
+        result.push_back(detail::weighted_percentile(sample, probability));
+    }
+    return result;
 }
 
 // Returns the standardized values (x - mean) / sd.

@@ -13,17 +13,18 @@
 // `std::out_of_range` convention the sibling link-function headers already use for
 // `ArgumentOutOfRangeException`.
 //
-// THREE implementations: `LinearFunction` and `PowerFunction` below, plus `TabularFunction`
-// (`numerics/functions/tabular_function.hpp`, ported P4 Task 9), built entirely on
+// Implementations include LinearFunction, PowerFunction, TabularFunction, SegmentedPowerFunction,
+// and CompositeFunction. TabularFunction (`numerics/functions/tabular_function.hpp`) is built on
 // `UncertainOrderedPairedData`/`OrderedPairedData`/`Ordinate`/`UncertainOrdinate` (the
 // `Numerics.Data` "Paired Data" subsystem, `Numerics/Data/Paired Data/`, ported across P4 Tasks
 // 7-9: Ordinate/LineSimplification, OrderedPairedData, then UncertainOrdinate/
 // UncertainOrderedPairedData/TabularFunction). `Test_Tabular_Function`
 // (`Test_Numerics/Functions/Test_Functions.cs`) is transcribed in
 // `core/tests/test_uncertain_paired_data.cpp` alongside the Paired Data subsystem's own tests,
-// not in `test_univariate_functions.cpp` (which still only carries LinearFunction/PowerFunction).
+// not in `test_univariate_functions.cpp`; the v2.2 function families are tested there.
 #pragma once
 
+#include <memory>
 #include <vector>
 
 namespace corehydro::numerics::functions {
@@ -31,6 +32,10 @@ namespace corehydro::numerics::functions {
 class IUnivariateFunction {
    public:
     virtual ~IUnivariateFunction() = default;
+
+    // Corehydro extension used by ensemble sampling. Existing external implementations remain
+    // source compatible: returning null marks a function as non-cloneable.
+    virtual std::unique_ptr<IUnivariateFunction> clone() const { return nullptr; }
 
     // The number of function parameters.
     virtual int number_of_parameters() const = 0;

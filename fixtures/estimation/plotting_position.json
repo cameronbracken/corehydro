@@ -1,40 +1,32 @@
 {
-  "target": "Simulation",
-  "kind": "model_estimation",
-  "source": "RMC-BestFit/src/RMC.BestFit.Tests/DataFrame/PlottingPositionTests.cs (v2.0.0, ARRANGE2/PPLOT2/PLPOS rewrite, T12). Each case wraps the C# test's bare DataFrame scenario in a minimal Normal model (the model_estimation `data_frame` surface has no bare-DataFrame construct shape). The `Simulation` target is used (rather than MaximumLikelihood/MaximumAPosteriori) because these 1-2 observation scenarios are deliberately too small for the real C# NelderMead optimizer to reliably converge (`MaximumLikelihood.Estimate()` returns false for them against the real library) -- the `plotting_position`/`number_of_low_outliers`/`low_outlier_threshold` DataFrame surface is reachable under ANY file-level target (see fixtures/README.md's model_estimation section), so `Simulation` (which builds the model and takes one harmless seeded draw, with no fit requirement) is the right vehicle here; the `sample_size`/seed draw itself is not asserted.",
+  "target": "DataFrame",
+  "kind": "data_frame",
+  "source": "RMC-BestFit/src/RMC.BestFit.Tests/DataFrame/PlottingPositionTests.cs (v2.0.0, ARRANGE2/PPLOT2/PLPOS rewrite, T12). Each case now drives a bare DataFrame through the shared data_frame runner. The former Simulation wrapper used a minimal Normal model, but Numerics v2.2.0 parameter validation rejects its dummy draw for these deliberately small 1-2 observation scenarios. No estimator or distribution behavior is needed to test plotting positions.",
   "datasets": {},
   "cases": [
     {
       "name": "value_below_own_threshold",
-      "construct": {
-        "model": {
-          "type": "univariate_distribution",
-          "family": "Normal",
-          "data_frame": {
-            "exact": [
-              { "index": 0, "value": 50 },
-              { "index": 1, "value": 200 }
-            ],
-            "threshold": [
-              { "start_index": 0, "end_index": 1, "value": 100, "number_above": 0 }
-            ]
-          }
-        },
-        "sample_size": 1,
-        "seed": 1
+      "data_frame": {
+        "exact": [
+          { "index": 0, "value": 50 },
+          { "index": 1, "value": 200 }
+        ],
+        "threshold": [
+          { "start_index": 0, "end_index": 1, "value": 100, "number_above": 0 }
+        ]
       },
       "assertions": [
         {
           "method": "plotting_position",
-          "args": ["exact", 0],
+          "index": 0,
           "expected": 0.75,
           "mode": "rel",
           "tol": 1e-12,
-          "note": "C# Test_PlottingPositions_ValueBelowOwnThreshold_UsesCensoredBranch: explicit value below its OWN covering threshold is classified censored (ARRANGE2), not by a globally-sorted band."
+          "note": "C# Test_PlottingPositions_ValueBelowOwnThreshold_UsesCensoredBranch: an explicit value below its own covering threshold is classified as censored, not by a globally sorted band."
         },
         {
           "method": "plotting_position",
-          "args": ["exact", 1],
+          "index": 1,
           "expected": 0.25,
           "mode": "rel",
           "tol": 1e-12
@@ -43,34 +35,25 @@
     },
     {
       "name": "aggregate_threshold_counts_affect_ranks",
-      "construct": {
-        "model": {
-          "type": "univariate_distribution",
-          "family": "Normal",
-          "data_frame": {
-            "exact": [
-              { "index": 2, "value": 150 }
-            ],
-            "threshold": [
-              { "start_index": 0, "end_index": 4, "value": 100, "number_above": 1 }
-            ]
-          }
-        },
-        "sample_size": 1,
-        "seed": 1
+      "data_frame": {
+        "exact": [
+          { "index": 2, "value": 150 }
+        ],
+        "threshold": [
+          { "start_index": 0, "end_index": 4, "value": 100, "number_above": 1 }
+        ]
       },
       "assertions": [
         {
           "method": "plotting_position",
-          "args": ["exact", 0],
+          "index": 0,
           "expected": 0.26666666666666666,
           "mode": "rel",
           "tol": 1e-12,
-          "note": "C# Test_PlottingPositions_AggregateThresholdCounts_AffectRanks (4d/15d): three left-censored placeholders, one finite detection, one right-censored placeholder -- detection probability 2/(2+3); the finite detection ranks before the right-censored placeholder."
+          "note": "C# Test_PlottingPositions_AggregateThresholdCounts_AffectRanks: three left censored placeholders, one finite detection, and one right censored placeholder give detection probability 2/(2+3). The finite detection ranks before the right censored placeholder."
         },
         {
           "method": "number_of_low_outliers",
-          "args": [],
           "expected": 0,
           "mode": "equal"
         }
@@ -78,30 +61,22 @@
     },
     {
       "name": "outside_threshold_window_is_detected",
-      "construct": {
-        "model": {
-          "type": "univariate_distribution",
-          "family": "Normal",
-          "data_frame": {
-            "exact": [
-              { "index": 10, "value": 50 }
-            ],
-            "threshold": [
-              { "start_index": 0, "end_index": 1, "value": 100, "number_above": 0 }
-            ]
-          }
-        },
-        "sample_size": 1,
-        "seed": 1
+      "data_frame": {
+        "exact": [
+          { "index": 10, "value": 50 }
+        ],
+        "threshold": [
+          { "start_index": 0, "end_index": 1, "value": 100, "number_above": 0 }
+        ]
       },
       "assertions": [
         {
           "method": "plotting_position",
-          "args": ["exact", 0],
+          "index": 0,
           "expected": 0.5,
           "mode": "rel",
           "tol": 1e-12,
-          "note": "C# Test_PlottingPositions_OutsideThresholdWindow_IsDetected: an observation outside every threshold window is detected regardless of magnitude vs. an unrelated finite threshold (synthetic negative-infinity threshold, ARRANGE2)."
+          "note": "C# Test_PlottingPositions_OutsideThresholdWindow_IsDetected: an observation outside every threshold window is detected regardless of magnitude relative to an unrelated finite threshold."
         }
       ]
     }

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "corehydro/numerics/data/running_covariance_matrix.hpp"
+#include "corehydro/numerics/data/global_sensitivity.hpp"
 #include "corehydro/numerics/data/running_statistics.hpp"
 #include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
@@ -81,6 +82,25 @@ inline ToolboxResult run_statistics(const std::string& method,
         for (double p : data_at(data, 1, "statistics", method))
             r.values.push_back(nd::percentile(x, p, sorted));
         return r;
+    }
+    if (method == "first_order_sobol" || method == "pawn" || method == "pawn_median" ||
+        method == "borgonovo_delta") {
+        const std::vector<double>& y = data_at(data, 1, "statistics", method);
+        if (method == "first_order_sobol") {
+            return scalar(nd::global_sensitivity::first_order_sobol(
+                x, y, options.value_or("bins", 20)));
+        }
+        if (method == "pawn") {
+            ToolboxResult r;
+            r.values = nd::global_sensitivity::pawn(x, y, options.value_or("bins", 20));
+            return r;
+        }
+        if (method == "pawn_median") {
+            return scalar(nd::global_sensitivity::pawn_median(
+                x, y, options.value_or("bins", 20)));
+        }
+        return scalar(nd::global_sensitivity::borgonovo_delta(
+            x, y, options.value_or("x_bins", 20), options.value_or("y_bins", 20)));
     }
     if (method == "running_covariance") {
         // data holds one vector per variable (column), all the same length (the number of new

@@ -1,7 +1,7 @@
 {
   "kind": "toolbox",
   "group": "timeseries",
-  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a. Every value is curated with verify_oracles.py --dump against the real library; this file's job is the GUARANTEE rather than the accuracy, so it is asserted at ZERO tolerance throughout.",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 7e8e8d1. Every value is curated with verify_oracles.py --dump against the real library; this file's job is the GUARANTEE rather than the accuracy, so it is asserted at ZERO tolerance throughout.",
   "reference": "The time-series layer's counterpart of fixtures/estimation/fit_cross_language.json, fixtures/toolbox/toolbox_cross_language.json, fixtures/callback/callback_cross_language.json and fixtures/ml/ml_cross_language.json: one case, three verbs, every assertion exact. Unlike the CALLBACK layer, whose limit is that a user's own R or Python arithmetic drives the run, everything here happens inside the shared C++ core -- the Mersenne Twister the two resamplers draw from, the kNN neighbour search under resample_knn (whose distance sort is the ported .NET introsort, so a tie resolves identically), and the calendar arithmetic under the clustering. So R-to-Python bit-identity is a real guarantee for this surface, not a best effort, and these assertions are what would catch it lapsing. The peaks-over-threshold block is deliberate: it asserts each event's DATE as well as its value, because a value-only assertion would pass even if a date conversion drifted, while the clustering itself depends on the calendar through the minimum-steps criterion.",
   "cases": [
     {
@@ -119,63 +119,63 @@
         {
           "method": "resample_knn",
           "index": 3,
-          "expected": 114.361,
+          "expected": 134.361,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 5,
-          "expected": 103,
+          "expected": 141.042,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 7,
-          "expected": 91.639,
+          "expected": 144,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 9,
-          "expected": 113.361,
+          "expected": 144.042,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 11,
-          "expected": 125.511,
+          "expected": 132.361,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 13,
-          "expected": 114.361,
+          "expected": 142.042,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 15,
-          "expected": 124.511,
+          "expected": 143.042,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 17,
-          "expected": 114.361,
+          "expected": 143.042,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },
         {
           "method": "resample_knn",
           "index": 19,
-          "expected": 124.511,
+          "expected": 132.361,
           "mode": "equal",
           "source": "the seeded Lall-Sharma draw sequence, curated with verify_oracles.py --dump"
         },

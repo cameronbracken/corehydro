@@ -32,8 +32,8 @@
         { "method": "correlation", "args": [1, 2], "expected": 0.20642009492809482, "mode": "rel", "tol": 1e-7 },
         { "method": "j_stat", "args": [], "expected": 0.0, "mode": "abs", "tol": 1e-3 },
         { "method": "j_stat_pval", "args": [], "expected": "nan", "mode": "equal" },
-        { "method": "quantile_variance", "args": [0.01], "expected": 0.019425122454493456, "mode": "rel", "tol": 1e-7 },
-        { "method": "quantile_variance", "args": [0.5], "expected": 0.002800106084176205, "mode": "rel", "tol": 1e-7 },
+        { "method": "quantile_variance", "args": [0.01], "expected": 0.019424215336133047, "mode": "rel", "tol": 1e-7 },
+        { "method": "quantile_variance", "args": [0.5], "expected": 0.0028001055461872072, "mode": "rel", "tol": 1e-7 },
         { "method": "simulated_value", "args": [0], "expected": 36075.83409349789, "mode": "rel", "tol": 1e-7 },
         { "method": "simulated_value", "args": [1], "expected": 16970.48658831459, "mode": "rel", "tol": 1e-7 },
         { "method": "simulated_value", "args": [2], "expected": 12580.851600084345, "mode": "rel", "tol": 1e-7 },
@@ -104,7 +104,7 @@
         { "method": "parameter", "args": [0], "expected": 4.183556191120392, "mode": "rel", "tol": 1e-8 },
         { "method": "parameter", "args": [1], "expected": 0.1406904327704847, "mode": "rel", "tol": 1e-8 },
         { "method": "parameter", "args": [2], "expected": 0.40317398047114367, "mode": "rel", "tol": 1e-8 },
-        { "method": "gmm_iterations", "args": [], "expected": 2, "mode": "equal" },
+        { "method": "gmm_iterations", "args": [], "expected": 3, "mode": "equal" },
         { "method": "converged_within_tolerance", "args": [], "expected": 1, "mode": "equal" }
       ]
     }

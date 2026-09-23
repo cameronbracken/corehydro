@@ -5,10 +5,54 @@ the `corehydropy` Python package) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/). The three components are versioned together.
 
-## [Unreleased]
+## [0.14.0] - 2026-09-22
 
 ### Changed
 
+- Updated the shared numerical core from USACE-RMC Numerics v2.1.4 to v2.2.0. Calls that may now
+  return different values include tied-rank hypothesis tests, weighted statistics, RMSE,
+  distribution tails and uncertainty estimates, bounded optimization, shortest paths, Lang curve
+  simplification, bootstrap intervals, MCMC diagnostics, and machine learning fits. The changes
+  follow the shipped C# implementations and are pinned against the real v2.2.0 assembly.
+- Distribution evaluation is more stable in extreme tails and near parameter boundaries. Gamma,
+  Pearson, Kappa, generalized extreme-value, log-space, Normal, Logistic, Gumbel, Weibull,
+  empirical, kernel, mixture, and competing-risk paths received upstream fixes.
+- BFGS now uses the v2.2.0 projected-gradient and safeguarded line-search implementation. Powell,
+  MLSL, MultiStart, Differential Evolution, and augmented Lagrange also carry the upstream bound,
+  ownership, and maximization fixes.
+- MCMC diagnostics use rank-normalized R-hat and effective sample size. The adaptive, NUTS, HMC,
+  RWMH, and SNIS samplers carry the v2.2.0 covariance, validation, caching, tie, and transition
+  fixes.
+- Decision trees, random forests, k-nearest neighbours, naive Bayes, k-means, Jenks natural
+  breaks, and Gaussian mixture models now follow the corrected v2.2.0 training and validation
+  behavior.
+- Lang curve simplification now preserves the final point. Worked example 28 and its stored R and
+  Python results have been refreshed for the corrected behavior.
+
+### Added
+
+- Global sensitivity functions in both packages: first-order Sobol, PAWN, median PAWN, and
+  Borgonovo delta, plus single-factor union and conditional probability calculations.
+- Two-dimensional adaptive Gauss-Kronrod integration, seeded Sobol scrambling, and separate Sobol
+  control for Vegas integration.
+- Singular multivariate Normal support with selectable decomposition and status reporting, plus
+  an exposed lattice seed for multivariate Normal and Student-t probabilities.
+- Sided extrapolation for paired-data, tabular-function, and empirical-distribution calls;
+  nearest-node shortest paths; and `ts_smoothed_series()` / `TimeSeries.smoothed_series()`.
+- Recursive specifications for segmented, composite, and ensemble univariate functions.
+- The Independence copula, forward conditional copula CDFs, and scalar inverse conditional CDFs.
+
+### Fixed
+
+- Shortest-path custom weights, multi-destination routing, detours, duplicate edges, and path
+  reconstruction now use the v2.2.0 compact adjacency solver.
+- Bootstrap and uncertainty analysis now preserve deterministic reductions, failed-replication
+  counts, log bases, processed parameters, and ensemble filtering.
+- Exact cross-language results now preserve C# arithmetic order in matrix products and variance
+  calculations. Pearson Type III moment gradients and bare DataFrame fixture dispatch are also
+  corrected.
+- R's fixture harness now uses exact list lookup, preventing `data` from partially matching
+  `data_frame`. The inverse conditional copula CDF's `t` argument is now documented.
 - Split the upstream C# issues log: `docs/upstream-csharp-issues.md` now carries only open
   findings, and the confirmed-resolved entries (37, including the July 2026 reconciliation-pass
   summary) moved verbatim to `docs/upstream-csharp-issues-resolved.md`. Two entries were newly
@@ -19,6 +63,25 @@ the `corehydropy` Python package) are documented here. The format follows
   container). Every remaining open entry was re-verified against the vendored upstream source at
   the pins and the v0.13.0 packages; the two issues filed with RMC (Numerics#146, RMC-BestFit#18)
   are still open upstream, and upstream `main` has no code commits beyond the pins.
+
+### Notes
+
+- All 25 new Numerics production files have a port or an explicit internal disposition. The 290
+  added public C# API records are exposed, internalized, or deliberately severed. .NET XML
+  persistence, `TimeSeriesDownload`, and caller-owned rectangular-output overloads remain outside
+  the package boundary.
+- Release checks pass for the C++ core, R package, Python package, and real C#
+  oracle. `R CMD check --as-cran` reports three existing notes and no warning: new submission and
+  file license, vendored header paths longer than 100 bytes, and unavailable local HTML validation
+  tools. The remote Linux, macOS, and Windows C++, R, Python 3.10/3.12, and documentation jobs pass.
+
+### Validation
+
+- Clean C++ build: 123 of 123 tests passed, including 6,823 fixture checks.
+- Real C# oracle: 6,812 values reproduced, 0 failed, and 11 documented skips unchanged.
+- Clean R install and testthat: 8,099 assertions passed. CRAN-style check: 0 errors, 0 warnings,
+  and 3 notes.
+- Forced Python reinstall and pytest: 1,921 tests passed.
 
 ## [0.13.0] - 2026-08-27
 
@@ -1172,7 +1235,8 @@ First tagged release. Everything below is new.
   (`corehydror`/`corehydropy`), reflecting the goal of carrying code from both
   USACE-RMC and HEC libraries in one package family.
 
-[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/cameronbracken/corehydro/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/cameronbracken/corehydro/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/cameronbracken/corehydro/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/cameronbracken/corehydro/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cameronbracken/corehydro/compare/v0.10.0...v0.11.0

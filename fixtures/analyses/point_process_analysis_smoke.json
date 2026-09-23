@@ -27,7 +27,7 @@
         { "method": "aic", "expected": 303.7425402437069, "mode": "rel", "tol": 1e-5 },
         { "method": "bic", "expected": 305.86669084701356, "mode": "rel", "tol": 1e-5 },
         { "method": "dic", "expected": 232.59088641192858, "mode": "rel", "tol": 1e-5 },
-        { "method": "rmse", "expected": 2307.2692845522197, "mode": "rel", "tol": 1e-5 }
+        { "method": "rmse", "expected": 2555.9505317301901, "mode": "rel", "tol": 1e-5 }
       ]
     }
   ]

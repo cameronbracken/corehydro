@@ -10,7 +10,8 @@ shortest_path(
   weight,
   destinations,
   edge_index = NULL,
-  node_count = NULL
+  node_count = NULL,
+  nearest = FALSE
 )
 }
 \arguments{
@@ -29,6 +30,10 @@ reports, and they need not be distinct.}
 \item{node_count}{an optional node count. Defaults to \code{max(from, to) + 1}; supply a larger
 value to include isolated nodes carrying no edge, which then report \code{cost = Inf}. A value
 below \code{max(from, to) + 1} is an error: the graph would not fit the routing table it asks for.}
+
+\item{nearest}{if \code{TRUE}, use the v2.2 single-pass multi-source solver. Costs match the regular
+multi-destination solve, but exact-cost ties use deterministic heap order instead of
+destination order.}
 }
 \value{
 a data frame with one row per node, in node-index order, and columns \code{next_node},

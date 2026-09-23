@@ -16,17 +16,9 @@
 //     `mixture()` returns the raw pointer (IUnivariateModel's `distribution()` convention).
 //   - C# `DataFrame = null` maps to the base's never-set optional (see the base header).
 //
-// C# `SetParameters(ref double[] parameters)` side effect: the C# likelihood methods
-// normalize the caller's parameter array IN PLACE (weights rewritten to sum to 1). The
-// C++ ModelBase surface takes `const std::vector<double>&`, so each method normalizes a
-// private copy instead; the caller's vector is never mutated (deviation, observably
-// equivalent inside each method because normalization is idempotent and every method
-// re-normalizes its own copy before use -- C# LogLikelihood relies on exactly that when it
-// chains DataLogLikelihood then PriorLogLikelihood over the same array).
-//   - PriorLogLikelihood evaluates the parameter priors at the NORMALIZED weights (the C#
-//     reads the mutated array); PointwisePriorLogLikelihood evaluates them at the RAW
-//     proposal (the C# normalizes a separate copy and reads the original array). Both
-//     asymmetries are faithful to the C#.
+// Numerics v2.2 retains `SetParameters(ref double[] parameters)` for binary compatibility but
+// normalizes a private copy. The caller's optimizer coordinates therefore remain unchanged.
+// The C++ port preserves that behavior in `Mixture::set_parameters_normalized`.
 //
 // EM covariance: the C# `out double[,] covariance` maps to an output-reference
 // `numerics::math::linalg::Matrix&` (the type NumericalDiff::compute_hessian already
@@ -771,11 +763,9 @@ class MixtureModel : public UnivariateDistributionModelBase,
                                            : -std::numeric_limits<double>::infinity();
     }
 
-    // C# `DataLogLikelihood` override (line 930): the full censored likelihood over a
-    // working copy of the mixture. The weight entries are normalized IN THE CALLER'S vector
-    // (C# `model.SetParameters(ref parameters)`, line 940 -- the write-back that steers the
-    // optimizer's/numerical differentiator's own working arrays; see model_base.hpp's
-    // MUTABLE-PARAMETER note, M14).
+    // C# `DataLogLikelihood` override: the full censored likelihood over a working copy of
+    // the mixture. Numerics v2.2 normalizes weights inside the mixture without modifying the
+    // caller's optimizer coordinates.
     double data_log_likelihood(std::vector<double>& parameters) const override {
         if (mixture_ == nullptr || !has_data_frame())
             return -std::numeric_limits<double>::infinity();

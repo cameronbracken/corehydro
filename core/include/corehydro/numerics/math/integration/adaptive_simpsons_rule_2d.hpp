@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Integration/AdaptiveSimpsonsRule2D.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Integration/AdaptiveSimpsonsRule2D.cs @ 7e8e8d1
 //
 // Adaptive Simpson's rule extended to two dimensions: the rectangular domain is evaluated with
 // the tensor-product 3x3-point Simpson's rule (nine function evaluations: four corners, four

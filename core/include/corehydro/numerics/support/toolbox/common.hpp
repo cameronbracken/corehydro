@@ -13,6 +13,7 @@
 #include "corehydro/models/json_lite.hpp"
 #include "corehydro/numerics/data/interpolation/sort_order.hpp"
 #include "corehydro/numerics/data/interpolation/transform.hpp"
+#include "corehydro/numerics/data/paired_data/extrapolation_sides.hpp"
 #include "corehydro/numerics/distributions/support/dist_spec.hpp"
 
 namespace corehydro::numerics::support {
@@ -77,6 +78,17 @@ inline corehydro::numerics::data::SortOrder parse_sort_order_token(const std::st
     throw std::runtime_error("unknown sort order '" + s + "'; expected " +
                              (allow_none ? "ascending, descending, or none"
                                          : "ascending or descending"));
+}
+
+inline corehydro::numerics::data::paired_data::ExtrapolationSides
+parse_extrapolation_token(const std::string& s) {
+    using corehydro::numerics::data::paired_data::ExtrapolationSides;
+    if (s == "none") return ExtrapolationSides::None;
+    if (s == "below") return ExtrapolationSides::Below;
+    if (s == "above") return ExtrapolationSides::Above;
+    if (s == "both") return ExtrapolationSides::Both;
+    throw std::runtime_error("unknown extrapolation policy '" + s +
+                             "'; expected none, below, above, or both");
 }
 
 // Result of build_distributions_for_x(): one built distribution (owning) per element of

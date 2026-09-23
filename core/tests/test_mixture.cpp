@@ -23,11 +23,14 @@
 
 #include "corehydro/numerics/distributions/mixture.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
+#include "corehydro/numerics/distributions/uniform.hpp"
 #include "check.hpp"
 
 using corehydro::numerics::distributions::Mixture;
 using corehydro::numerics::distributions::Normal;
+using corehydro::numerics::distributions::ParameterEstimationMethod;
 using corehydro::numerics::distributions::UnivariateDistributionBase;
+using corehydro::numerics::distributions::Uniform;
 
 namespace {
 
@@ -84,10 +87,46 @@ void test_clone_preserves_zero_inflation() {
     CHECK_TRUE(&mix.component(0) != &clone->component(0));
 }
 
+void test_v220_simplex_normalization_does_not_modify_caller() {
+    Mixture mix(std::vector<double>{0.5, 0.5}, two_normals());
+    mix.set_is_zero_inflated(true);
+    mix.set_zero_weight(0.2);
+    std::vector<double> parameters{2.0, 1.0, 0.0, 1.0, 5.0, 2.0};
+    const auto original = parameters;
+
+    mix.set_parameters_normalized(parameters);
+
+    CHECK_TRUE(parameters == original);
+    CHECK_NEAR(mix.weights()[0], 0.8 * 2.0 / 3.0, 1e-15);
+    CHECK_NEAR(mix.weights()[1], 0.8 / 3.0, 1e-15);
+}
+
+void test_v220_support_ignores_zero_weight_components() {
+    std::vector<std::unique_ptr<UnivariateDistributionBase>> components;
+    components.push_back(std::make_unique<Uniform>(0.0, 1.0));
+    components.push_back(std::make_unique<Uniform>(-100.0, 100.0));
+    Mixture mix(std::vector<double>{1.0, 0.0}, std::move(components));
+
+    CHECK_NEAR(mix.minimum(), 0.0, 0.0);
+    CHECK_NEAR(mix.maximum(), 1.0, 0.0);
+}
+
+void test_v220_impossible_zero_inflated_em_row_throws() {
+    Mixture mix(std::vector<double>{0.5, 0.5}, two_normals());
+    mix.set_is_zero_inflated(true);
+    mix.set_zero_weight(0.2);
+
+    CHECK_THROWS(mix.estimate({-1.0, 1.0, 2.0, 3.0},
+                              ParameterEstimationMethod::MaximumLikelihood));
+}
+
 }  // namespace
 
 int main() {
     test_zero_inflation_rescales_component_weights();
     test_clone_preserves_zero_inflation();
+    test_v220_simplex_normalization_does_not_modify_caller();
+    test_v220_support_ignores_zero_weight_components();
+    test_v220_impossible_zero_inflated_em_row_throws();
     return chtest::summary("test_mixture");
 }

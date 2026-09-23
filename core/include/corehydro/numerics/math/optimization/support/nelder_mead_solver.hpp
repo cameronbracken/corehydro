@@ -36,6 +36,9 @@ class NelderMeadSolver final : public Optimizer {
           upper_bounds_(std::move(upper_bounds)) {}
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         bool cancel = false;
         NelderMead solver(

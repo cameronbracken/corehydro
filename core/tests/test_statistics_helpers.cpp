@@ -38,9 +38,7 @@ void test_mean_variance() {
     CHECK_EQ(v, bfdata::variance(data));
 }
 
-// ranks_in_place(data, ties) -- the tolerance-based tie overload. `data` carries a tie run in
-// the middle (three 20s) AND a tie run at the very end (two 50s), so both the recorded-tie and
-// the never-recorded-trailing-tie fidelity points (statistics.hpp's numbered note) get exercised.
+// ranks_in_place(data, ties) records both interior and trailing tie runs.
 void test_ranks_in_place_with_ties() {
     std::vector<double> data{10.0, 20.0, 20.0, 20.0, 30.0, 40.0, 50.0, 50.0};
     std::vector<double> ties;
@@ -55,13 +53,65 @@ void test_ranks_in_place_with_ties() {
     // The middle run [1,4) (three 20s -> 2 ties) closes inside the loop and IS recorded at
     // index i-1 = 3.
     CHECK_NEAR(ties[3], 2.0, 0.0);
-    // The trailing run [6,8) (two 50s -> 1 tie) closes ONLY via the post-loop RanksTies call,
-    // which upstream never routes through the `ties[i - 1] = t` write. Reproduce the defect:
-    // ties[7] (and every other untouched slot) stays 0, not 1.
+    CHECK_NEAR(ties[7], 1.0, 0.0);
     for (std::size_t i = 0; i < ties.size(); ++i) {
-        if (i == 3) continue;
+        if (i == 3 || i == 7) continue;
         CHECK_NEAR(ties[i], 0.0, 0.0);
     }
+}
+
+void test_v220_statistics_corrections() {
+    const std::vector<double> shifted{1e12 + 1.0, 1e12 + 2.0, 1e12 + 3.0, 1e12 + 4.0};
+    const auto moments = bfdata::product_moments(shifted);
+    CHECK_NEAR(moments[0], 1e12 + 2.5, 0.0);
+    CHECK_NEAR(moments[1], std::sqrt(5.0 / 3.0), 1e-15);
+    CHECK_THROWS(bfdata::percentile({1.0, 2.0}, std::numeric_limits<double>::quiet_NaN()));
+
+    const std::vector<double> data{1.0, 2.0, 4.0};
+    const std::vector<double> weights{0.2, 0.3, 0.5};
+    CHECK_NEAR(bfdata::mean(data, weights), 2.8, 1e-15);
+    CHECK_NEAR(bfdata::variance(data, weights, bfdata::WeightType::Reliability), 1.56 / 0.62,
+               1e-14 * (1.56 / 0.62));
+
+    const std::vector<double> percentile_data{2.0, 5.0, 7.0};
+    const std::vector<double> percentile_weights{1.0, 3.0, 2.0};
+    CHECK_NEAR(bfdata::percentile(percentile_data, 1.0 / 3.0, percentile_weights), 5.0, 0.0);
+    CHECK_NEAR(bfdata::percentile(percentile_data, 0.5, percentile_weights), 5.5, 1e-14);
+    CHECK_NEAR(corehydro::numerics::expm1(1e-8), 1.0000000050000000167e-8, 1e-24);
+    CHECK_EQ(corehydro::numerics::expm1(-745.0), -1.0);
+
+    for (int n : {1292, 1293, 1300}) {
+        std::vector<double> linear_data(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            linear_data[static_cast<std::size_t>(i)] = 1.0 + 0.5 * i;
+        }
+        const auto linear = bfdata::linear_moments(linear_data);
+        CHECK_NEAR(linear[2], 0.0, 1e-12);
+        CHECK_NEAR(linear[3], 0.0, 1e-12);
+    }
+
+    std::vector<double> large(8192);
+    for (std::size_t i = 0; i < large.size(); ++i) {
+        large[i] = i % 3 == 0 ? 1e16 : (i % 3 == 1 ? 1.0 : -1e16);
+    }
+    std::vector<double> chunks(64, 0.0);
+    for (std::size_t chunk = 0; chunk < chunks.size(); ++chunk) {
+        const std::size_t start = chunk * large.size() / chunks.size();
+        const std::size_t end = (chunk + 1) * large.size() / chunks.size();
+        for (std::size_t i = start; i < end; ++i) chunks[chunk] += large[i];
+    }
+    double expected_parallel_mean = 0.0;
+    for (double chunk : chunks) expected_parallel_mean += chunk;
+    expected_parallel_mean /= static_cast<double>(large.size());
+    CHECK_EQ(bfdata::parallel_mean(large), expected_parallel_mean);
+
+    const std::vector<double> jack_data{1.0, 2.0, 3.0, 4.0};
+    const auto mean_callback = [](const std::vector<double>& values) { return bfdata::mean(values); };
+    const auto jack_sample = bfdata::jackknife_sample(jack_data, mean_callback);
+    CHECK_EQ(jack_sample, std::vector<double>({3.0, 8.0 / 3.0, 7.0 / 3.0, 2.0}));
+    CHECK_NEAR(bfdata::jackknife_standard_error(jack_data, mean_callback),
+               std::sqrt(5.0 / 12.0), 1e-15);
+    CHECK_EQ(bfdata::jackknife_standard_error({42.0}, mean_callback), 0.0);
 }
 
 // The vector percentile(data, k) overload agrees element-for-element with seven scalar
@@ -214,6 +264,7 @@ int main() {
     test_ranks_in_place_with_ties();
     test_ranks_in_place_ties_tolerance_discriminates();
     test_percentile_vector();
+    test_v220_statistics_corrections();
     test_pearson_matrix_big();
     test_spearman_matrix_big();
     test_pearson_matrix_three_column();

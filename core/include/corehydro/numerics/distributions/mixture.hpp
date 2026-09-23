@@ -1,26 +1,21 @@
-// ported from: Numerics/Distributions/Univariate/Mixture.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Mixture.cs @ 7e8e8d1
 //
-// Mixture distribution: PDF = Σ wᵢ fᵢ(x); CDF = Σ wᵢ Fᵢ(x).
+// Mixture distribution, including positive-hurdle semantics when zero inflation is enabled.
 // log_pdf: log-sum-exp stability (mirrors C# LogPDF).
-// InverseCDF: Brent root-finding on CDF(y) - p. Falls back to coarse bisection on
-//   bracket failure (the C# falls back to EmpiricalDistribution; we skip that
-//   dependency and bisect instead — divergence noted here).
-// Moments: central_moments(1000), the fixed-step trapezoidal overload the C# integer
-//   literal in `CentralMoments(1000)` binds to (Mixture.cs line 312). This file used to
-//   call adaptive Gauss-Kronrod instead, which agreed with the C# only to about six digits.
+// InverseCDF: scale-aware Brent root finding on log CDF or log survival, with the same
+//   empirical fallback used by C# when a finite bracket cannot be solved.
+// Moments: exact component-moment aggregation, with numerical positive-conditional moments
+//   for hurdle components.
 // Mode: BrentSearch maximizing the PDF over [InverseCDF(0.001), InverseCDF(0.999)]
 //   (Mixture.cs line 337), replacing an earlier ternary search.
 // IEstimation: MLE via EM algorithm (mirrors C# MLE/Estimate exactly):
 //   E-step: log-sum-exp normalized component responsibilities.
-//   M-step: update weights (Σ resp / N), optimize component params via NelderMead.
-//   Parameter constraints for NelderMead: call component estimate() to get initial
-//   values; bounds set to ±10x of sample statistics (C# calls GetParameterConstraints
-//   via IMaximumLikelihoodEstimation which is not ported; functional divergence for MLE
-//   only — PDF/CDF/moments are exact).
+//   M-step: normalize component responsibility mass onto the configured simplex, then
+//   optimize component parameters with NelderMead and each component's shipped constraints.
 //   Only ParameterEstimationMethod::MaximumLikelihood is supported; others throw.
 // Zero-inflation: is_zero_inflated()/set_is_zero_inflated() and zero_weight()/set_zero_weight()
 //   (mirrors C# IsZeroInflated/ZeroWeight -- see the v2.1.4 note below for the setter semantics).
-// Not in the factory — Mixture is composite-only (requires weights + components).
+// Mixture is composite-only and requires weights plus components.
 // type() returns UnivariateDistributionType::Mixture (mirrors C#).
 //
 // v2.1.4 (313d7ba "Harden distribution parameter validation" + 7f8c652 "Preserve valid
@@ -47,14 +42,13 @@
 // M10 additions (completing the C# Mixture surface the MixtureModel port consumes):
 //   - IMaximumLikelihoodEstimation base + get_parameter_constraints (C# line 595):
 //     weight rows first (equal initials, [0,1] bounds), then each component's own
-//     IMaximumLikelihoodEstimation constraints. The internal mle() below still uses its
-//     Phase 2 heuristic bounds (documented divergence, unchanged in M10).
+//     IMaximumLikelihoodEstimation constraints.
 //   - set_parameters(weights, parameters) (C# SetParameters(double[], double[]), line 411):
 //     weights + component-parameter slices (v2.1.4 added the validity recompute -- see the
 //     v2.1.4 note above).
 //   - set_parameters_normalized(parameters&) (C# SetParameters(ref double[]), line 476):
-//     weights normalized to sum to 1 (or 1 - ZeroWeight) and written BACK into the passed
-//     vector, single-component special case, then validity update.
+//     weights normalized to sum to 1 (or 1 - ZeroWeight) through a private copy, leaving
+//     the caller's coordinates unchanged, followed by the validity update.
 //   - generate_random_values override (C# line 984): component-selection sampling from a
 //     seeded MersenneTwister (u picks the component through the cumulative weights, a second
 //     draw feeds the component's InverseCDF); zero inflation prepends a Deterministic(0)
@@ -65,8 +59,8 @@
 // CompositeAnalysis aggregation builds a Mixture per posterior realisation, sets XTransform =
 // Logarithmic / ProbabilityTransform = NormalZ, and calls CreateEmpiricalCDF() so the InverseCDF
 // the UncertaintyAnalysisResults reads is the fast piecewise empirical curve. NEW methods/fields
-// only -- existing behaviour and all existing fixtures stay byte-green (empirical_cdf_created_
-// defaults false; the pre-existing root-find/bisection path is unchanged until CreateEmpiricalCDF()
+// only -- existing behavior and all existing fixtures stay byte-green (empirical_cdf_created_
+// defaults false; the pre-existing root-find path is unchanged until CreateEmpiricalCDF()
 // is explicitly called).
 #pragma once
 #include <string>
@@ -88,6 +82,8 @@
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
 #include "corehydro/numerics/distributions/deterministic.hpp"
 #include "corehydro/numerics/distributions/empirical_distribution.hpp"
+#include "corehydro/numerics/distributions/base/distribution_moment_integration.hpp"
+#include "corehydro/numerics/distributions/base/distribution_snapshot.hpp"
 #include "corehydro/numerics/math/optimization/brent_search.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
 #include "corehydro/numerics/math/rootfinding/brent.hpp"
@@ -224,13 +220,9 @@ class Mixture : public UnivariateDistributionBase,
         moments_computed_ = false;
     }
 
-    // Mirrors C# SetParameters(ref double[] parameters) (Mixture.cs line 476): weights are
-    // normalized to sum to 1 (or to 1 - ZeroWeight when zero-inflated) and written BACK into
-    // the passed vector -- the C# `ref` side effect the MixtureModel likelihood surface
-    // depends on. Single-component special case: `parameters` carries only the component's
-    // parameters and the weight is derived. Guard deviation (documented): the C# indexes an
-    // undersized array and throws IndexOutOfRangeException; C++ makes that an explicit
-    // std::invalid_argument instead of UB.
+    // Mirrors C# SetParameters(ref double[] parameters): normalize a private copy of the
+    // weights onto the configured simplex. Numerics v2.2 deliberately stopped modifying the
+    // caller's array, despite retaining the restored ref signature for compatibility.
     void set_parameters_normalized(std::vector<double>& parameters) {
         if (weights_.empty()) return;
         if (components_.empty()) return;
@@ -258,14 +250,12 @@ class Mixture : public UnivariateDistributionBase,
                 double w = is_zero_inflated_ ? (1.0 - zero_weight_) / K : 1.0 / K;
                 for (int i = 0; i < K; ++i) {
                     weights_[static_cast<std::size_t>(i)] = w;
-                    parameters[static_cast<std::size_t>(i)] = w;
                 }
             } else {
                 // Normalize weights to sum to 1.
                 double c = is_zero_inflated_ ? (1.0 - zero_weight_) / sum : 1.0 / sum;
                 for (int i = 0; i < K; ++i) {
                     weights_[static_cast<std::size_t>(i)] *= c;
-                    parameters[static_cast<std::size_t>(i)] = weights_[static_cast<std::size_t>(i)];
                 }
             }
 
@@ -361,6 +351,7 @@ class Mixture : public UnivariateDistributionBase,
 
     // --- Moments / support ---
     double mean() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[0];
     }
@@ -377,76 +368,98 @@ class Mixture : public UnivariateDistributionBase,
         return brent.best_parameter();
     }
     double standard_deviation() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[1];
     }
     double skewness() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[2];
     }
     double kurtosis() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[3];
     }
     // Minimum = min over components (mirrors C# Distributions.Min(p => p.Minimum)).
     double minimum() const override {
+        validate_evaluation();
         double m = kInf;
-        for (const auto& c : components_) m = std::min(m, c->minimum());
+        if (is_zero_inflated_ && zero_weight_ > 0.0) m = 0.0;
+        for (std::size_t i = 0; i < components_.size(); ++i)
+            if (weights_[i] > 0.0) m = std::min(m, components_[i]->minimum());
+        if (is_zero_inflated_) m = std::max(0.0, m);
         return m;
     }
     // Maximum = max over components (mirrors C# Distributions.Max(p => p.Maximum)).
     double maximum() const override {
+        validate_evaluation();
         double m = -kInf;
-        for (const auto& c : components_) m = std::max(m, c->maximum());
+        for (std::size_t i = 0; i < components_.size(); ++i)
+            if (weights_[i] > 0.0) m = std::max(m, components_[i]->maximum());
         return m;
     }
 
     // --- Distribution functions ---
     // Mirrors C# PDF: f = Σ wᵢ fᵢ(x); clamp to [0, ∞).
-    double pdf(double x) const override {
-        double f = 0.0;
-        if (is_zero_inflated_ && x <= 0.0) {
-            f = zero_weight_;
-        } else {
-            for (int i = 0; i < static_cast<int>(components_.size()); ++i)
-                f += weights_[i] * components_[i]->pdf(x);
-        }
-        return f < 0.0 ? 0.0 : f;
-    }
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
 
     // Mirrors C# LogPDF: log-sum-exp over log(wᵢ) + log fᵢ(x).
     double log_pdf(double x) const override {
+        validate_evaluation();
+        if (is_zero_inflated_ && x <= 0.0)
+            return x == 0.0 ? std::log(zero_weight_) : -kInf;
         std::vector<double> lnf;
-        if (is_zero_inflated_ && x <= 0.0) {
-            lnf.push_back(std::log(zero_weight_));
-        } else {
-            for (int i = 0; i < static_cast<int>(components_.size()); ++i)
-                lnf.push_back(std::log(weights_[i]) + components_[i]->log_pdf(x));
-        }
+        for (std::size_t i = 0; i < components_.size(); ++i)
+            if (weights_[i] > 0.0)
+                lnf.push_back(std::log(weights_[i]) +
+                              (is_zero_inflated_ ? positive_conditional_log_pdf(i, x)
+                                                 : components_[i]->log_pdf(x)));
         return log_sum_exp(lnf);
     }
 
     // Mirrors C# CDF: F = Σ wᵢ Fᵢ(x); clamped to [0,1].
-    double cdf(double x) const override {
-        double F = 0.0;
-        if (is_zero_inflated_) {
-            F = zero_weight_;
-            if (x > 0.0) {
-                for (int i = 0; i < static_cast<int>(components_.size()); ++i)
-                    F += weights_[i] * components_[i]->cdf(x);
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        validate_evaluation();
+        if (is_zero_inflated_ && x < 0.0) return -kInf;
+        double total = is_zero_inflated_ ? std::log(zero_weight_) : -kInf;
+        for (std::size_t i = 0; i < components_.size(); ++i)
+            if (weights_[i] > 0.0) {
+                const double value = is_zero_inflated_
+                                         ? positive_conditional_log_cdf(i, x)
+                                         : components_[i]->log_cdf(x);
+                total = distribution_numerics::log_sum(
+                    total, std::log(weights_[i]) + value);
             }
-        } else {
-            for (int i = 0; i < static_cast<int>(components_.size()); ++i)
-                F += weights_[i] * components_[i]->cdf(x);
-        }
-        return F < 0.0 ? 0.0 : F > 1.0 ? 1.0 : F;
+        return std::min(0.0, total);
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        validate_evaluation();
+        if (is_zero_inflated_ && x < 0.0) return 0.0;
+        double total = -kInf;
+        for (std::size_t i = 0; i < components_.size(); ++i)
+            if (weights_[i] > 0.0) {
+                const double value = is_zero_inflated_
+                                         ? positive_conditional_log_ccdf(i, x)
+                                         : components_[i]->log_ccdf(x);
+                total = distribution_numerics::log_sum(
+                    total, std::log(weights_[i]) + value);
+            }
+        return std::min(0.0, total);
     }
 
     // Mirrors C# InverseCDF: Brent solve on CDF(y) - probability = 0.
     // Bracket is derived from per-component InverseCDF values.
-    // On bracket / solve failure, falls back to bisection on [min, max] (C# falls back
-    // to EmpiricalDistribution; we skip that dependency — noted in header comment).
+    // On bracket or solve failure, falls back to the empirical approximation.
     double inverse_cdf(double probability) const override {
+        refresh_cached_configuration();
+        validate_evaluation();
         if (probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
@@ -466,37 +479,42 @@ class Mixture : public UnivariateDistributionBase,
             return xe < mn0 ? mn0 : xe > mx0 ? mx0 : xe;
         }
 
-        // Derive bracket from component InverseCDF values (mirrors C# logic).
-        double adj_prob = is_zero_inflated_
+        // Derive the bracket from each active component at the same probability.
+        const double component_probability = is_zero_inflated_
             ? (probability - zero_weight_) / (1.0 - zero_weight_)
             : probability;
         double minX = kInf, maxX = -kInf;
-        for (const auto& c : components_) {
-            minX = std::min(minX, c->inverse_cdf(std::max(adj_prob, 1e-15)));
-            maxX = std::max(maxX, c->inverse_cdf(std::min(probability, 1.0 - 1e-15)));
+        for (std::size_t i = 0; i < components_.size(); ++i) {
+            if (weights_[i] == 0.0) continue;
+            const double quantile = is_zero_inflated_
+                                        ? positive_conditional_quantile(i, component_probability)
+                                        : components_[i]->inverse_cdf(component_probability);
+            minX = std::min(minX, quantile);
+            maxX = std::max(maxX, quantile);
         }
-        // Expand bracket if needed (mirrors Brent.Bracket behavior for zero-inflated).
-        if (is_zero_inflated_) {
-            // Expand bracket until CDF(lo) < probability < CDF(hi)
-            int attempts = 0;
-            while (cdf(minX) >= probability && attempts++ < 100) minX -= 1.0;
-            attempts = 0;
-            while (cdf(maxX) <= probability && attempts++ < 100) maxX += 1.0;
-        }
+        if (minX == maxX) return std::clamp(minX, minimum(), maximum());
+
         double x = 0.0;
         try {
-            auto fn = [this, probability](double y) { return probability - cdf(y); };
-            x = math::rootfinding::solve(fn, minX, maxX, 1E-6, 100, true);
+            const double width = maxX - minX;
+            const auto argument = [minX, maxX, width](double t) {
+                return std::isfinite(width) ? minX + width * t
+                                            : (1.0 - t) * minX + t * maxX;
+            };
+            const auto residual = [this, probability, &argument](double t) {
+                const double value = argument(t);
+                return probability <= 0.5
+                           ? log_cdf(value) - std::log(probability)
+                           : log_ccdf(value) - std::log1p(-probability);
+            };
+            const double scale = std::isfinite(width)
+                                     ? width
+                                     : std::max(std::fabs(minX), std::fabs(maxX));
+            x = argument(math::rootfinding::solve(
+                residual, 0.0, 1.0, 1E-6 / std::max(1.0, scale), 100, true));
         } catch (...) {
-            // Bisection fallback over [minimum, maximum].
-            double lo = minimum(), hi = maximum();
-            if (std::isinf(lo)) lo = minX - 50.0;
-            if (std::isinf(hi)) hi = maxX + 50.0;
-            for (int i = 0; i < 200; ++i) {
-                double mid = 0.5 * (lo + hi);
-                if (cdf(mid) < probability) lo = mid; else hi = mid;
-            }
-            x = 0.5 * (lo + hi);
+            if (!empirical_cdf_created_) const_cast<Mixture*>(this)->create_empirical_cdf();
+            x = empirical_cdf_->inverse_cdf(probability);
         }
         double mn = minimum(), mx = maximum();
         return x < mn ? mn : x > mx ? mx : x;
@@ -544,10 +562,15 @@ class Mixture : public UnivariateDistributionBase,
     void create_empirical_cdf() {
         double min_p = 1E-16;
         double max_p = 1.0 - 1E-16;
-        double minX = kInf, maxX = -kInf;
-        for (const auto& c : components_) {
-            minX = std::min(minX, c->inverse_cdf(min_p));
-            maxX = std::max(maxX, c->inverse_cdf(max_p));
+        double minX = is_zero_inflated_ ? 0.0 : kInf;
+        double maxX = -kInf;
+        for (std::size_t i = 0; i < components_.size(); ++i) {
+            if (weights_[i] <= 0.0) continue;
+            if (!is_zero_inflated_)
+                minX = std::min(minX, components_[i]->inverse_cdf(min_p));
+            maxX = std::max(
+                maxX, is_zero_inflated_ ? positive_conditional_quantile(i, max_p)
+                                        : components_[i]->inverse_cdf(max_p));
         }
         double shift = 0.0;
         if (minX <= 0.0) shift = std::fabs(minX) + 1.0;
@@ -558,7 +581,7 @@ class Mixture : public UnivariateDistributionBase,
 
         auto bins = sampling::Stratify::XValues(
             sampling::StratificationOptions(minX, maxX, binN, false),
-            x_transform == data::Transform::Logarithmic);
+            true);
         std::vector<double> x_values, p_values;
         double x = bins.front().lower_bound();
         double p = cdf(bins.front().lower_bound());
@@ -621,6 +644,76 @@ class Mixture : public UnivariateDistributionBase,
     // Lazy moment cache.
     mutable bool moments_computed_ = false;
     mutable double u_[4] = {kNaN, kNaN, kNaN, kNaN};  // [mean, sd, skewness, kurtosis]
+    mutable std::optional<DistributionSnapshot> configuration_snapshot_;
+
+    void refresh_cached_configuration() const {
+        if (configuration_snapshot_ && configuration_snapshot_->matches(this)) return;
+        moments_computed_ = false;
+        const_cast<Mixture*>(this)->empirical_cdf_created_ = false;
+        configuration_snapshot_ = DistributionSnapshot::try_capture(this);
+    }
+
+    double positive_log_mass(std::size_t index) const {
+        const double value = components_[index]->log_ccdf(0.0);
+        if (!std::isfinite(value) || value > 0.0)
+            throw std::runtime_error("active mixture component has no positive mass");
+        return value;
+    }
+
+    double positive_conditional_log_pdf(std::size_t index, double x) const {
+        return x > 0.0 ? components_[index]->log_pdf(x) - positive_log_mass(index) : -kInf;
+    }
+
+    double positive_conditional_log_cdf(std::size_t index, double x) const {
+        return x <= 0.0
+                   ? -kInf
+                   : components_[index]->log_likelihood_intervals(0.0, x) -
+                         positive_log_mass(index);
+    }
+
+    double positive_conditional_log_ccdf(std::size_t index, double x) const {
+        return x <= 0.0
+                   ? 0.0
+                   : std::min(0.0, components_[index]->log_ccdf(x) -
+                                       positive_log_mass(index));
+    }
+
+    double positive_conditional_quantile(std::size_t index, double probability) const {
+        const auto& distribution = *components_[index];
+        const double lower = std::max(0.0, distribution.minimum());
+        if (probability == 0.0) return lower;
+        if (probability == 1.0) return distribution.maximum();
+        const double target = positive_log_mass(index) + std::log1p(-probability);
+        double scale = distribution.inverse_cdf(0.75) - distribution.inverse_cdf(0.25);
+        if (!(scale > 0.0) || !std::isfinite(scale)) scale = std::max(1.0, std::fabs(lower));
+        double upper = std::min(distribution.maximum(), lower + scale);
+        for (int i = 0; distribution.log_ccdf(upper) > target && i < 1024; ++i) {
+            scale *= 2.0;
+            const double next = lower + scale;
+            upper = std::min(distribution.maximum(),
+                             std::isfinite(next) ? next
+                                                 : std::numeric_limits<double>::max());
+        }
+        if (!(upper > lower) || distribution.log_ccdf(upper) > target)
+            throw std::runtime_error("positive mixture quantile could not be bracketed");
+        const double width = upper - lower;
+        return lower + width * math::rootfinding::solve(
+                                   [&](double t) {
+                                       return distribution.log_ccdf(lower + width * t) - target;
+                                   },
+                                   0.0, 1.0, 1e-6 / std::max(1.0, width), 100, true);
+    }
+
+    void validate_evaluation() const {
+        if (!validate_weights() || !validate_components())
+            throw std::out_of_range("Mixture: invalid weights or component parameters");
+        if (is_zero_inflated_) {
+            if (!std::isfinite(zero_weight_) || zero_weight_ < 0.0 || zero_weight_ >= 1.0)
+                throw std::out_of_range("Mixture: zero weight must be in [0, 1)");
+            for (std::size_t i = 0; i < components_.size(); ++i)
+                if (weights_[i] > 0.0) (void)positive_log_mass(i);
+        }
+    }
 
     // Mirrors C# NormalizeComponentWeights (Mixture.cs, v2.1.4): rescales finite, nonnegative
     // component weights so they sum to 1 - zero_weight_. Bails out (leaving weights_
@@ -665,7 +758,9 @@ class Mixture : public UnivariateDistributionBase,
     }
 
     bool validate_weights() const {
-        if (is_zero_inflated_ && (zero_weight_ < 0.0 || zero_weight_ > 1.0)) return false;
+        if (is_zero_inflated_ && (!std::isfinite(zero_weight_) || zero_weight_ < 0.0 ||
+                                  zero_weight_ >= 1.0))
+            return false;
         double sum = is_zero_inflated_ ? zero_weight_ : 0.0;
         for (double w : weights_) {
             if (w < 0.0 || w > 1.0) return false;
@@ -697,57 +792,109 @@ class Mixture : public UnivariateDistributionBase,
     // file used to call adaptive Gauss-Kronrod here, which agreed with C# only to about six
     // digits; the 1000-step trapezoid reproduces it to ~1e-14 relative.
     void compute_moments() const {
-        auto mom = central_moments(1000);
-        u_[0] = mom[0];
-        u_[1] = mom[1];
-        u_[2] = mom[2];
-        u_[3] = mom[3];
+        validate_evaluation();
+        struct Moments {
+            double weight;
+            double mean;
+            double sd;
+            double skew;
+            double kurt;
+        };
+        std::vector<Moments> values;
+        if (is_zero_inflated_ && zero_weight_ > 0.0)
+            values.push_back({zero_weight_, 0.0, 0.0, 0.0, 0.0});
+        for (std::size_t i = 0; i < components_.size(); ++i) {
+            if (weights_[i] == 0.0) continue;
+            const auto& distribution = *components_[i];
+            if (is_zero_inflated_ && distribution.log_cdf(0.0) != -kInf) {
+                const double center = positive_conditional_quantile(i, 0.5);
+                const double scale = positive_conditional_quantile(i, 0.75) -
+                                     positive_conditional_quantile(i, 0.25);
+                const auto moments = distribution_moment_integration::compute(
+                    [&](double x) { return positive_conditional_log_pdf(i, x); },
+                    std::max(0.0, distribution.minimum()), distribution.maximum(),
+                    center, scale);
+                values.push_back(
+                    {weights_[i], moments[0], moments[1], moments[2], moments[3]});
+            } else {
+                values.push_back({weights_[i], distribution.mean(),
+                                  distribution.standard_deviation(), distribution.skewness(),
+                                  distribution.kurtosis()});
+            }
+        }
+        const double reference = values.front().mean;
+        double offset = 0.0;
+        double total_weight = 0.0;
+        for (const auto& value : values) {
+            offset += value.weight * (value.mean - reference);
+            total_weight += value.weight;
+        }
+        u_[0] = reference * total_weight + offset;
+        double scale = 0.0;
+        for (const auto& value : values)
+            scale = std::max(scale, std::max(value.sd, std::fabs(value.mean - u_[0])));
+        if (!std::isfinite(scale)) {
+            u_[1] = scale;
+            u_[2] = u_[3] = kNaN;
+            moments_computed_ = true;
+            return;
+        }
+        if (scale == 0.0) {
+            u_[1] = 0.0;
+            u_[2] = u_[3] = kNaN;
+            moments_computed_ = true;
+            return;
+        }
+        double m2 = 0.0, m3 = 0.0, m4 = 0.0;
+        for (const auto& value : values) {
+            const double d = distribution_numerics::standardize(value.mean, u_[0], scale);
+            const double sd = value.sd / scale;
+            const double variance = sd * sd;
+            const double d2 = d * d;
+            const double third = sd == 0.0 ? 0.0 : value.skew * variance * sd;
+            const double fourth = sd == 0.0 ? 0.0 : value.kurt * variance * variance;
+            m2 += value.weight * (variance + d2);
+            m3 += value.weight * (third + 3.0 * d * variance + d * d2);
+            m4 += value.weight *
+                  (fourth + 4.0 * d * third + 6.0 * d2 * variance + d2 * d2);
+        }
+        u_[1] = scale * std::sqrt(m2);
+        u_[2] = m3 / m2 / std::sqrt(m2);
+        u_[3] = m4 / m2 / m2;
         moments_computed_ = true;
     }
 
     // EM-based MLE. Mirrors C# MLE() method.
     std::vector<double> mle(const std::vector<double>& sample) const {
+        validate_evaluation();
         int N = static_cast<int>(sample.size());
         int K = static_cast<int>(components_.size());
+        if (is_zero_inflated_)
+            for (std::size_t i = 0; i < sample.size(); ++i) {
+                if (sample[i] < 0.0)
+                    throw std::runtime_error(
+                        "Mixture EM cannot fit negative values in a zero-inflated model");
+                if (sample[i] == 0.0 && zero_weight_ == 0.0)
+                    throw std::runtime_error("Mixture EM row has zero total probability");
+            }
         // Total component parameters (excluding weights).
         int Np = 0;
         for (const auto& c : components_) Np += c->number_of_parameters();
 
-        // Get parameter constraints for each component: call estimate to get initials,
-        // use wide bounds (C# calls IMaximumLikelihoodEstimation.GetParameterConstraints;
-        // that interface is not ported -- functional divergence for bounds only).
+        // Get each component's shipped maximum-likelihood initials and bounds.
         std::vector<double> initials, lowers, uppers;
-        {
-            auto tmp_stats = data::product_moments(sample);
-            double sample_mean = tmp_stats[0];
-            double sample_sd = std::max(tmp_stats[1], 1e-10);
-            for (int i = 0; i < K; ++i) {
-                auto comp_clone = components_[i]->clone();
-                // Try to get initial values via estimate.
-                auto* est = dynamic_cast<IEstimation*>(comp_clone.get());
-                if (est) {
-                    try { est->estimate(sample, ParameterEstimationMethod::MaximumLikelihood); }
-                    catch (...) { comp_clone = components_[i]->clone(); }
-                }
-                auto p = comp_clone->get_parameters();
-                int n = static_cast<int>(p.size());
-                for (int j = 0; j < n; ++j) {
-                    double v = std::isfinite(p[j]) && std::fabs(p[j]) > 1e-10 ? p[j] : sample_mean;
-                    initials.push_back(v);
-                    // Wide bounds: ±max(100*|v|, 1000*sample_sd)
-                    double range = std::max(100.0 * std::fabs(v), 100.0 * sample_sd);
-                    // LIMITATION: coarse lower-bound heuristic. Only the first parameter of
-                    // each component gets a symmetric bound; params j>0 are floored at 1e-15,
-                    // which wrongly forbids legitimately-negative non-first parameters (e.g. a
-                    // GEV/GeneralizedLogistic shape kappa). The correct per-parameter bounds
-                    // need IMaximumLikelihoodEstimation.GetParameterConstraints, which is not
-                    // ported. The composite MLE path is not oracle-covered (C# fits seeded-RNG
-                    // samples that cannot be transcribed), so this is a documented, untested
-                    // deferral; all current mixture fixtures use Normal-only components.
-                    lowers.push_back(j == 0 ? v - range : 1e-15);
-                    uppers.push_back(v + range);
-                }
-            }
+        for (int i = 0; i < K; ++i) {
+            const auto* mle_component =
+                dynamic_cast<const IMaximumLikelihoodEstimation*>(components_[i].get());
+            if (mle_component == nullptr)
+                throw std::runtime_error(
+                    "Mixture component does not provide maximum-likelihood constraints");
+            std::vector<double> component_initials, component_lowers, component_uppers;
+            mle_component->get_parameter_constraints(
+                sample, component_initials, component_lowers, component_uppers);
+            initials.insert(initials.end(), component_initials.begin(), component_initials.end());
+            lowers.insert(lowers.end(), component_lowers.begin(), component_lowers.end());
+            uppers.insert(uppers.end(), component_uppers.begin(), component_uppers.end());
         }
 
         // EM weights (start uniform, not zero-inflated adjusted for now).
@@ -775,25 +922,35 @@ class Mixture : public UnivariateDistributionBase,
                 t += n;
             }
             // Compute log-likelihoods.
-            for (int k = 0; k < K; ++k) {
-                for (int i = 0; i < N; ++i) {
-                    if (is_zero_inflated_ && sample[i] <= 0.0) {
-                        likelihood[i][k] = std::log(zero_weight_);
-                    } else {
-                        likelihood[i][k] = std::log(mle_weights[k])
-                            + dist_ptr->components_[k]->log_pdf(sample[i]);
-                    }
+            for (int i = 0; i < N; ++i) {
+                if (is_zero_inflated_ && sample[i] == 0.0) {
+                    if (!(zero_weight_ > 0.0) || !std::isfinite(zero_weight_))
+                        throw std::runtime_error("Mixture EM row has zero total probability");
+                    for (int k = 0; k < K; ++k) likelihood[i][k] = 0.0;
+                    continue;
                 }
+                for (int k = 0; k < K; ++k)
+                    likelihood[i][k] =
+                        mle_weights[k] == 0.0
+                            ? -kInf
+                            : std::log(mle_weights[k]) +
+                                  (is_zero_inflated_
+                                       ? dist_ptr->positive_conditional_log_pdf(
+                                             static_cast<std::size_t>(k), sample[i])
+                                       : dist_ptr->components_[k]->log_pdf(sample[i]));
             }
             // Log-sum-exp normalization per sample point.
             double logLH = 0.0;
             for (int i = 0; i < N; ++i) {
+                if (is_zero_inflated_ && sample[i] == 0.0) {
+                    logLH += std::log(zero_weight_);
+                    continue;
+                }
                 double max_val = -std::numeric_limits<double>::infinity();
                 for (int k = 0; k < K; ++k)
                     if (likelihood[i][k] > max_val) max_val = likelihood[i][k];
                 if (std::isinf(max_val)) {
-                    for (int k = 0; k < K; ++k) likelihood[i][k] = 0.0;
-                    return -std::numeric_limits<double>::infinity();
+                    throw std::runtime_error("Mixture EM row has zero total probability");
                 }
                 double sum = 0.0;
                 for (int k = 0; k < K; ++k) sum += std::exp(likelihood[i][k] - max_val);
@@ -814,8 +971,15 @@ class Mixture : public UnivariateDistributionBase,
                     if (!is_zero_inflated_ || sample[i] > 0.0)
                         wgt += likelihood[i][k];
                 }
-                mle_weights[k] = wgt / N;
+                mle_weights[k] = wgt;
             }
+            const double weight_sum =
+                std::accumulate(mle_weights.begin(), mle_weights.end(), 0.0);
+            if (!(weight_sum > 0.0) || !std::isfinite(weight_sum))
+                throw std::runtime_error(
+                    "Mixture EM has no finite positive responsibility mass");
+            const double target = is_zero_inflated_ ? 1.0 - zero_weight_ : 1.0;
+            for (double& weight : mle_weights) weight *= target / weight_sum;
             // NelderMead on component parameters only (weights held fixed).
             auto log_lh_fn = [&](const std::vector<double>& p) -> double {
                 auto dist_clone = static_cast<Mixture*>(this->clone().release());

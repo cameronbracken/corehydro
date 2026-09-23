@@ -147,10 +147,18 @@ test_that("quadrature_2d integrates a user-written R function over a 2D rectangl
   expect_gt(attr(q, "function_evaluations"), 0L)
   expect_gte(attr(q, "standard_error"), 0)
 
+  gk <- quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1,
+                      method = "adaptive_gauss_kronrod")
+  expect_equal(as.numeric(gk), 1, tolerance = 1e-12)
+  expect_equal(attr(gk, "status"), "Success")
+  expect_equal(attr(gk, "function_evaluations"), 441L)
+
   boom <- function(x, y) stop("my own error")
   expect_error(quadrature_2d(boom, min_x = 0, max_x = 1, min_y = 0, max_y = 1), "my own error")
   expect_error(quadrature_2d(function(x, y) x + y, min_x = 1, max_x = 0, min_y = 0, max_y = 1),
                "must be below")
+  expect_error(quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1,
+                             method = "nope"), "arg")
 })
 
 test_that("an unsupplied option leaves the ported routine's own default in force", {

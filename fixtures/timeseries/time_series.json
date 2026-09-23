@@ -1,7 +1,7 @@
 {
   "kind": "toolbox",
   "group": "timeseries",
-  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a. Every value is a Test_TimeSeries.cs literal (Test_MovingAverage, Test_MovingSum, Test_Difference, Test_Cumulative, Test_Missing, Test_ConvertTimeInterval_1hr_to_6hr, Test_SummaryStats, Test_Stats, Test_MonthlyStats, Test_MonthlyFrequency) except the SummaryHypothesisTest case, whose upstream literals are R's own outputs compared at 1E-1; those seven were harvested with verify_oracles.py --dump so the gate pins the C# values rather than the looser R reference. core/tests/test_time_series_container.cpp asserts the R literals separately at the C# tolerance.",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 7e8e8d1. Every value is a Test_TimeSeries.cs literal (Test_MovingAverage, Test_MovingSum, Test_Difference, Test_Cumulative, Test_Missing, Test_ConvertTimeInterval_1hr_to_6hr, Test_SummaryStats, Test_Stats, Test_MonthlyStats, Test_MonthlyFrequency) except the SummaryHypothesisTest case, whose upstream literals are R's own outputs compared at 1E-1; those seven were harvested with verify_oracles.py --dump so the gate pins the C# values rather than the looser R reference. core/tests/test_time_series_container.cpp asserts the R literals separately at the C# tolerance.",
   "reference": "Dates travel as seconds since 1970-01-01; a series result is a row-major {date, value} matrix, so an even index selects a date and an odd index the value beside it.",
   "cases": [
     {
@@ -1977,7 +1977,7 @@
         {
           "method": "summary_hypothesis_test",
           "label": "Mann-Whitney test for homogeneity and stationarity (jump)",
-          "expected": 0.60158433966534,
+          "expected": 0.60152455593597187,
           "mode": "abs",
           "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
           "tol": 1e-09
@@ -1985,7 +1985,7 @@
         {
           "method": "summary_hypothesis_test",
           "label": "Mann-Kendall test for homogeneity and stationarity (trend)",
-          "expected": 0.775729412824826,
+          "expected": 0.77568059517809895,
           "mode": "abs",
           "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
           "tol": 1e-09
@@ -2006,6 +2006,21 @@
           "source": "curated with verify_oracles.py --dump against the real library: Test_SummaryHypothesisTest asserts these against R at 1E-1; the exact C# values are harvested here so the gate pins the port rather than the R reference",
           "tol": 1e-09
         }
+      ]
+    },
+    {
+      "name": "v220_smoothed_series_difference",
+      "data": [[0, 86400, 172800, 259200], [1, 2, 4, 8]],
+      "options": {"time_interval": "one_day", "smoothing": "difference", "period": 1},
+      "assertions": [
+        {"method": "smoothed_series", "select": "rows", "expected": 3, "mode": "equal",
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"},
+        {"method": "smoothed_series", "index": 1, "expected": 1, "mode": "abs", "tol": 1e-12,
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"},
+        {"method": "smoothed_series", "index": 3, "expected": 2, "mode": "abs", "tol": 1e-12,
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"},
+        {"method": "smoothed_series", "index": 5, "expected": 4, "mode": "abs", "tol": 1e-12,
+         "source": "Numerics v2.2.0 TimeSeries.SmoothedSeries"}
       ]
     }
   ]

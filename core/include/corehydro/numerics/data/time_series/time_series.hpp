@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a
+// ported from: Numerics/Data/Time Series/TimeSeries.cs @ 7e8e8d1
 //
 // The Numerics `TimeSeries : Series<DateTime, double>` container.
 //
@@ -209,8 +209,7 @@ class TimeSeries : public Series<DateTime, double> {
         }
     }
 
-    // C# `Divide(double)` / `Divide(double, IList<int>)`. Only the whole-series overload guards
-    // against a zero divisor; the indexed one divides by zero and stores the infinity.
+    // C# `Divide(double)` / `Divide(double, IList<int>)`.
     void divide(double constant) {
         if (constant == 0) throw std::invalid_argument("Cannot divide by zero.");
         for (int i = 0; i <= count() - 1; ++i)
@@ -218,6 +217,7 @@ class TimeSeries : public Series<DateTime, double> {
                 (*this)[i].set_value((*this)[i].value() / constant);
     }
     void divide(double constant, const std::vector<int>& indexes) {
+        if (constant == 0) throw std::invalid_argument("Cannot divide by zero.");
         for (std::size_t i = 0; i < indexes.size(); ++i) {
             int k = indexes[i];
             if (in_range(k) && !std::isnan((*this)[k].value()))
@@ -267,18 +267,14 @@ class TimeSeries : public Series<DateTime, double> {
         }
     }
 
-    // C# `LogTransform(IList<int>, double baseValue = 10)`. UPSTREAM ASYMMETRY, mirrored: the
-    // `else` branch writes NaN through `this[indexes[i]]` WITHOUT re-checking the bounds its
-    // `if` checked, so an out-of-range index raises from the indexer instead of being skipped
-    // the way every sibling indexed overload skips it. C++ would read out of bounds, so the
-    // bounds check is explicit here and throws at the same point C# does.
+    // C# `LogTransform(IList<int>, double baseValue = 10)`. Out-of-range indexes are skipped.
     void log_transform(const std::vector<int>& indexes, double base_value = 10) {
         for (std::size_t i = 0; i < indexes.size(); ++i) {
             int k = indexes[i];
+            if (!in_range(k)) continue;
             if (in_range(k) && (*this)[k].value() > 0 && !std::isnan((*this)[k].value())) {
                 (*this)[k].set_value(std::log((*this)[k].value()) / std::log(base_value));
             } else {
-                throw_if_out_of_range(k);
                 (*this)[k].set_value(std::numeric_limits<double>::quiet_NaN());
             }
         }
@@ -297,7 +293,7 @@ class TimeSeries : public Series<DateTime, double> {
     }
 
     // C# `Inverse()` / `Inverse(IList<int>)`: 1/x, with zero and NaN both becoming NaN. The
-    // indexed overload carries the same out-of-range asymmetry as `log_transform` above.
+    // indexed overload skips out-of-range indexes.
     void inverse() {
         for (int i = 0; i < count(); ++i) {
             double v = (*this)[i].value();
@@ -310,10 +306,10 @@ class TimeSeries : public Series<DateTime, double> {
     void inverse(const std::vector<int>& indexes) {
         for (std::size_t i = 0; i < indexes.size(); ++i) {
             int k = indexes[i];
+            if (!in_range(k)) continue;
             if (in_range(k) && (*this)[k].value() != 0 && !std::isnan((*this)[k].value())) {
                 (*this)[k].set_value(1.0 / (*this)[k].value());
             } else {
-                throw_if_out_of_range(k);
                 if ((*this)[k].value() == 0 || std::isnan((*this)[k].value()))
                     (*this)[k].set_value(std::numeric_limits<double>::quiet_NaN());
             }
@@ -321,11 +317,8 @@ class TimeSeries : public Series<DateTime, double> {
     }
 
     // Returns the cumulative sum, treating missing values as zero while accumulating (C# 476).
-    // UPSTREAM ODDITY, mirrored: the result is `new TimeSeries()`, so it carries the DEFAULT
-    // OneDay interval rather than this series' interval -- the only method in the class that
-    // drops it.
     TimeSeries cumulative_sum() const {
-        TimeSeries time_series;
+        TimeSeries time_series(time_interval_);
         double sum = 0.0;
         for (int i = 0; i < count(); ++i) {
             if (!std::isnan((*this)[i].value())) sum += (*this)[i].value();
@@ -409,8 +402,7 @@ class TimeSeries : public Series<DateTime, double> {
                         (*this)[idx].set_value(y1 + (x - x1) / (x2 - x1) * (y2 - y1));
                         break;
                     }
-                    if (j == count() - 1) {
-                        throw_if_out_of_range(idx - 2);
+                    if (j == count() - 1 && idx >= 2) {
                         x1 = (*this)[idx - 2].index().to_oa_date();
                         double x2 = (*this)[idx - 1].index().to_oa_date();
                         y1 = (*this)[idx - 2].value();
@@ -806,10 +798,10 @@ class TimeSeries : public Series<DateTime, double> {
         for (int i = start_idx; i < count(); ++i) {
             double v = (*this)[i].value();
             if (!std::isnan(v)) {
-                t += v;
-                double diff = (i + 1) * v - t;
-                variance += diff * diff / ((i + 1.0) * i);
                 n += 1;
+                t += v;
+                double diff = n * v - t;
+                variance += diff * diff / (n * (n - 1.0));
             }
         }
         return std::sqrt(variance / (n - 1));
@@ -906,7 +898,7 @@ class TimeSeries : public Series<DateTime, double> {
             summary[row][4] = percentile(monthly_data, 0.75, true);
             summary[row][5] = percentile(monthly_data, 0.95, true);
             summary[row][6] = monthly_data.back();
-            summary[row][7] = parallel_mean(monthly_data);
+            summary[row][7] = mean(monthly_data);
         }
         return summary;
     }
@@ -1002,7 +994,7 @@ class TimeSeries : public Series<DateTime, double> {
                                         SmoothingFunctionType::None,
                                     int period = 1) {
         TimeSeries result(TimeInterval::Irregular);
-        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        TimeSeries smoothed = smoothed_series(smoothing_function, period);
         for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
             std::vector<Ordinate> block_data;
             for (const auto& o : smoothed)
@@ -1026,7 +1018,7 @@ class TimeSeries : public Series<DateTime, double> {
             throw std::out_of_range("The start month be between 1 and 12.");
 
         TimeSeries result(TimeInterval::Irregular);
-        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        TimeSeries smoothed = smoothed_series(smoothing_function, period);
 
         int shift = start_month != 1 ? 12 - start_month + 1 : 0;
         if (start_month != 1) smoothed = smoothed.shift_dates_by_month(shift);
@@ -1057,7 +1049,7 @@ class TimeSeries : public Series<DateTime, double> {
             throw std::out_of_range("The start month be between 1 and 12.");
 
         TimeSeries result(TimeInterval::Irregular);
-        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        TimeSeries smoothed = smoothed_series(smoothing_function, period);
 
         for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
             std::vector<Ordinate> block_data;
@@ -1088,7 +1080,7 @@ class TimeSeries : public Series<DateTime, double> {
                                   SmoothingFunctionType::None,
                               int period = 1) {
         TimeSeries result(TimeInterval::Irregular);
-        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        TimeSeries smoothed = smoothed_series(smoothing_function, period);
         for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
             for (int k = 1; k <= 12; ++k) {
                 std::vector<Ordinate> block_data;
@@ -1111,7 +1103,7 @@ class TimeSeries : public Series<DateTime, double> {
         const int q_end[4] = {3, 6, 9, 12};
 
         TimeSeries result(TimeInterval::Irregular);
-        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        TimeSeries smoothed = smoothed_series(smoothing_function, period);
 
         for (int i = smoothed.start_date().year(); i <= smoothed.end_date().year(); ++i) {
             for (int q = 0; q < 4; ++q) {
@@ -1138,11 +1130,20 @@ class TimeSeries : public Series<DateTime, double> {
     // peak: the inner loop only exits when the value at `idx` is at or below the threshold (its
     // continue condition is "above threshold OR minimum steps not yet elapsed"), so the skipped
     // observation is never an exceedance.
+    TimeSeries smoothed_series(SmoothingFunctionType smoothing_function, int period = 1) {
+        if (smoothing_function == SmoothingFunctionType::MovingAverage)
+            return period == 1 ? clone() : moving_average(period);
+        if (smoothing_function == SmoothingFunctionType::MovingSum)
+            return period == 1 ? clone() : moving_sum(period);
+        if (smoothing_function == SmoothingFunctionType::Difference) return difference(period);
+        return clone();
+    }
+
     TimeSeries peaks_over_threshold_series(double threshold, int min_steps_between_events = 1,
                                            SmoothingFunctionType smoothing_function =
                                                SmoothingFunctionType::None,
                                            int period = 1) {
-        TimeSeries smoothed = smooth_for_block(smoothing_function, period);
+        TimeSeries smoothed = smoothed_series(smoothing_function, period);
 
         int i = 0, idx = 0, idx_max = 0;
         std::vector<std::array<int, 2>> clusters;
@@ -1277,18 +1278,6 @@ class TimeSeries : public Series<DateTime, double> {
     }
 
    protected:
-    // The smoothing step every block-series method opens with (C# copies these seven lines into
-    // each of the five). `period == 1` short-circuits the two moving windows to a plain clone,
-    // and the Difference arm passes `period` as the LAG, not as a window length.
-    TimeSeries smooth_for_block(SmoothingFunctionType smoothing_function, int period) {
-        if (smoothing_function == SmoothingFunctionType::MovingAverage)
-            return period == 1 ? clone() : moving_average(period);
-        if (smoothing_function == SmoothingFunctionType::MovingSum)
-            return period == 1 ? clone() : moving_sum(period);
-        if (smoothing_function == SmoothingFunctionType::Difference) return difference(period);
-        return clone();
-    }
-
     // The block function every block-series method applies (C# copies this body four times per
     // method, five methods over). Extracted because the five copies are byte-for-byte the same
     // computation, and the details ARE the contract:

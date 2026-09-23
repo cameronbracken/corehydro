@@ -9,7 +9,7 @@
       "target": "DifferentialEvolution.best_value",
       "args": [0, 0, 2, 0.0, 0.0, 5.0, 5.0, 0],
       "assertions": [
-        { "method": "value", "expected": 0, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump" }
+        { "method": "value", "expected": 1.9725982188490176e-06, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump against Numerics v2.2.0" }
       ]
     },
     {
@@ -17,7 +17,7 @@
       "target": "DifferentialEvolution.best_value",
       "args": [0, 0, 2, 0.0, 0.0, 5.0, 5.0, 1],
       "assertions": [
-        { "method": "value", "expected": 1.0000025339504959, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump" }
+        { "method": "value", "expected": 1.0000099178159416, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump against Numerics v2.2.0" }
       ]
     },
     {
@@ -33,7 +33,7 @@
       "target": "DifferentialEvolution.best_value",
       "args": [1, 1, 2, 5.0, 0.1, 15.0, 10.0, 0],
       "assertions": [
-        { "method": "value", "expected": 10.999948675222582, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump" }
+        { "method": "value", "expected": 11.000015354318489, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump against Numerics v2.2.0" }
       ]
     },
     {
@@ -41,7 +41,7 @@
       "target": "DifferentialEvolution.best_value",
       "args": [1, 1, 2, 5.0, 0.1, 15.0, 10.0, 1],
       "assertions": [
-        { "method": "value", "expected": 1.414193531800757, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump" }
+        { "method": "value", "expected": 1.4142346416067233, "mode": "abs", "tol": 1e-06, "source": "curated via oracle_emitter --dump against Numerics v2.2.0" }
       ]
     },
     {

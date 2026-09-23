@@ -1253,6 +1253,22 @@
           "source": "curated via oracle_emitter --dump"
         }
       ]
+    },
+    {
+      "name": "singular_value_rank_one_support",
+      "note": "v2.2.0 singular covariance path. The density uses rank one, the pseudo determinant, and the pseudo inverse. Off-support points have zero density.",
+      "construct": {
+        "mean": [0.0, 0.0],
+        "covariance": [[1.0, 1.0], [1.0, 1.0]],
+        "decomposition": "SingularValue"
+      },
+      "assertions": [
+        { "method": "decomposition", "args": [], "expected": 1, "mode": "equal" },
+        { "method": "pdf", "args": [[0.0, 0.0]], "expected": 0.28209479177387814, "mode": "abs", "tol": 1e-14 },
+        { "method": "log_pdf", "args": [[0.0, 0.0]], "expected": -1.2655121234846454, "mode": "abs", "tol": 1e-14 },
+        { "method": "mahalanobis", "args": [[1.0, 1.0]], "expected": 1.0, "mode": "abs", "tol": 1e-13 },
+        { "method": "pdf", "args": [[1.0, -1.0]], "expected": 0.0, "mode": "equal" }
+      ]
     }
   ]
 }

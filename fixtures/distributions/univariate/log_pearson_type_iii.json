@@ -20,7 +20,7 @@
         { "method": "quantile", "args": [0.5],  "expected": 1000.0,                 "mode": "abs", "tol": 1e-6 },
         { "method": "mean",     "args": [],     "expected": 1940.0956263817814,     "mode": "abs", "tol": 1e-6 },
         { "method": "median",   "args": [],     "expected": 1000.0,                 "mode": "abs", "tol": 1e-6 },
-        { "method": "mode",     "args": [],     "expected": 1000.0,                 "mode": "abs", "tol": 1e-6 },
+        { "method": "mode",     "args": [],     "expected": 265.67685816501944,     "mode": "abs", "tol": 1e-6 },
         { "method": "sd",       "args": [],     "expected": 3225.4467824988237,     "mode": "abs", "tol": 1e-3 },
         { "method": "skewness", "args": [],     "expected": 9.582714166756007,      "mode": "abs", "tol": 1e-6 },
         { "method": "kurtosis", "args": [],     "expected": 346.87182013531077,     "mode": "abs", "tol": 1e-4 },
@@ -38,7 +38,7 @@
         { "method": "quantile", "args": [0.99],  "expected": 326.26820872543476,    "mode": "abs", "tol": 1e-5 },
         { "method": "mean",     "args": [],      "expected": 191.30941556784222,    "mode": "abs", "tol": 1e-5 },
         { "method": "median",   "args": [],      "expected": 185.90786662959604,    "mode": "abs", "tol": 1e-6 },
-        { "method": "mode",     "args": [],      "expected": 186.35168381265865,    "mode": "abs", "tol": 1e-6 },
+        { "method": "mode",     "args": [],      "expected": 175.49760861776522,    "mode": "abs", "tol": 1e-6 },
         { "method": "sd",       "args": [],      "expected": 47.32031525856569,     "mode": "abs", "tol": 1e-5 },
         { "method": "skewness", "args": [],      "expected": 0.723943049818284,     "mode": "abs", "tol": 1e-7 },
         { "method": "kurtosis", "args": [],      "expected": 3.9337309368216244,    "mode": "abs", "tol": 1e-7 },
@@ -49,7 +49,7 @@
       "name": "positive_skew_1_1_1",
       "construct": { "params": [1.0, 1.0, 1.0] },
       "assertions": [
-        { "method": "mode",    "args": [], "expected": 3.1622776601683795,  "mode": "abs", "tol": 1e-10 },
+        { "method": "mode",    "args": [], "expected": 0.4980296964878923,  "mode": "abs", "tol": 1e-10 },
         { "method": "minimum", "args": [], "expected": 0.09999999999999998, "mode": "abs", "tol": 1e-13 },
         { "method": "maximum", "args": [], "expected": "inf",               "mode": "equal" },
         { "method": "parameters_valid", "args": [], "expected": true,       "mode": "bool" }
@@ -59,7 +59,7 @@
       "name": "negative_skew_1_1_neg1",
       "construct": { "params": [1.0, 1.0, -1.0] },
       "assertions": [
-        { "method": "mode",    "args": [], "expected": 31.622776601683803,        "mode": "abs", "tol": 1e-8 },
+        { "method": "mode",    "args": [], "expected": 0.0,                       "mode": "abs", "tol": 0.0 },
         { "method": "minimum", "args": [], "expected": 0.0,                       "mode": "abs", "tol": 0.0 },
         { "method": "maximum", "args": [], "expected": 1000.0000000000007,        "mode": "abs", "tol": 1e-6 },
         { "method": "parameters_valid", "args": [], "expected": true,             "mode": "bool" }

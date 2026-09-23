@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/NUTS.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/NUTS.cs @ 7e8e8d1
 //
 // No-U-Turn Sampler (NUTS): an adaptive extension of HMC that eliminates hand-tuning the
 // leapfrog step size/step count. Each ChainIteration recursively doubles a binary tree of
@@ -50,6 +50,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -140,11 +141,56 @@ class NUTS : public MCMCSampler {
     // The function for evaluating the gradient of the log-likelihood.
     const Gradient& gradient_function() const { return gradient_function_; }
 
-    // The target Metropolis acceptance probability for dual averaging adaptation.
-    static constexpr double target_acceptance_rate() { return kDeltaTarget; }
+    // Target Metropolis acceptance probability for dual averaging adaptation.
+    double target_acceptance_rate() const { return target_acceptance_rate_; }
+    void set_target_acceptance_rate(double value) { target_acceptance_rate_ = value; }
 
-    // Whether to adapt the diagonal mass matrix during warmup. Default = false.
-    bool adapt_mass_matrix = false;
+    std::vector<double> hamiltonian_acceptance_rates() const {
+        if (diagnostic_sample_counts_.size() != static_cast<std::size_t>(number_of_chains_) ||
+            hamiltonian_acceptance_sums_.size() != static_cast<std::size_t>(number_of_chains_))
+            return {};
+        std::vector<double> result(static_cast<std::size_t>(number_of_chains_), 0.0);
+        for (int i = 0; i < number_of_chains_; ++i) {
+            const std::size_t chain = static_cast<std::size_t>(i);
+            if (diagnostic_sample_counts_[chain] > 0)
+                result[chain] = hamiltonian_acceptance_sums_[chain] /
+                                diagnostic_sample_counts_[chain];
+        }
+        return result;
+    }
+
+    std::vector<double> reported_acceptance_rates() const override {
+        return hamiltonian_acceptance_rates();
+    }
+
+    const std::vector<int>& diagnostic_sample_counts() const { return diagnostic_sample_counts_; }
+    const std::vector<int>& divergence_counts() const { return divergence_counts_; }
+    const std::vector<int>& max_tree_depth_hit_counts() const { return max_tree_depth_hit_counts_; }
+    const std::vector<double>& step_sizes() const { return chain_step_sizes_; }
+
+    std::vector<double> mean_tree_depths() const { return diagnostic_means(tree_depth_sums_); }
+    std::vector<double> mean_leapfrog_steps() const { return diagnostic_means(leapfrog_step_sums_); }
+    std::vector<double> energy_bfmi() const {
+        if (diagnostic_sample_counts_.size() != static_cast<std::size_t>(number_of_chains_)) return {};
+        std::vector<double> result(static_cast<std::size_t>(number_of_chains_));
+        for (int i = 0; i < number_of_chains_; ++i) {
+            const std::size_t chain = static_cast<std::size_t>(i);
+            result[chain] = compute_energy_bfmi(diagnostic_sample_counts_[chain], energy_m2_[chain],
+                                                energy_squared_difference_sums_[chain]);
+        }
+        return result;
+    }
+
+    static double compute_energy_bfmi(int sample_count, double energy_m2,
+                                      double squared_difference_sum) {
+        if (sample_count < 2 || !(energy_m2 > 0.0))
+            return std::numeric_limits<double>::quiet_NaN();
+        return (squared_difference_sum / sample_count) /
+               (energy_m2 / (sample_count - 1.0));
+    }
+
+    // Whether to adapt the diagonal mass matrix during warmup. Default = true.
+    bool adapt_mass_matrix = true;
 
    protected:
     void validate_custom_settings() override {
@@ -152,6 +198,10 @@ class NUTS : public MCMCSampler {
             throw std::invalid_argument("The mass vector must be the same length as the number of parameters.");
         if (initial_step_size_ <= 0.0) throw std::invalid_argument("The leapfrog step size must be positive.");
         if (max_tree_depth_ < 1) throw std::invalid_argument("The maximum tree depth must be at least 1.");
+        if (!std::isfinite(target_acceptance_rate_) || target_acceptance_rate_ <= 0.0 ||
+            target_acceptance_rate_ >= 1.0)
+            throw std::invalid_argument(
+                "The target acceptance rate must be greater than 0 and less than 1.");
     }
 
     void initialize_custom_settings() override {
@@ -165,12 +215,33 @@ class NUTS : public MCMCSampler {
         chain_mu_.assign(static_cast<std::size_t>(n), 0.0);
         chain_adapt_step_.assign(static_cast<std::size_t>(n), 0);
 
+        hamiltonian_acceptance_sums_.assign(static_cast<std::size_t>(n), 0.0);
+        diagnostic_sample_counts_.assign(static_cast<std::size_t>(n), 0);
+        divergence_counts_.assign(static_cast<std::size_t>(n), 0);
+        max_tree_depth_hit_counts_.assign(static_cast<std::size_t>(n), 0);
+        tree_depth_sums_.assign(static_cast<std::size_t>(n), 0.0);
+        leapfrog_step_sums_.assign(static_cast<std::size_t>(n), 0.0);
+        energy_means_.assign(static_cast<std::size_t>(n), 0.0);
+        energy_m2_.assign(static_cast<std::size_t>(n), 0.0);
+        energy_squared_difference_sums_.assign(static_cast<std::size_t>(n), 0.0);
+        previous_energy_.assign(static_cast<std::size_t>(n), 0.0);
+        has_previous_energy_.assign(static_cast<std::size_t>(n), false);
+
         // Initialize diagonal mass matrix and Welford accumulators.
         welford_mean_.assign(static_cast<std::size_t>(n), std::vector<double>());
         welford_m2_.assign(static_cast<std::size_t>(n), std::vector<double>());
         welford_count_.assign(static_cast<std::size_t>(n), 0);
         mass_matrix_.assign(static_cast<std::size_t>(n), std::vector<double>());
         inverse_mass_matrix_.assign(static_cast<std::size_t>(n), std::vector<double>());
+
+        gradient_cache_positions_.assign(
+            static_cast<std::size_t>(n),
+            std::vector<std::vector<double>>(kGradientCacheSize,
+                                             std::vector<double>(static_cast<std::size_t>(d))));
+        gradient_cache_values_ = gradient_cache_positions_;
+        gradient_cache_occupied_.assign(
+            static_cast<std::size_t>(n), std::vector<bool>(kGradientCacheSize, false));
+        gradient_cache_next_slot_.assign(static_cast<std::size_t>(n), 0);
 
         for (int i = 0; i < n; ++i) {
             // Start with identity mass matrix (or user-provided mass).
@@ -257,6 +328,8 @@ class NUTS : public MCMCSampler {
     ParameterSet chain_iteration(int index, ParameterSet state) override {
         // Update the sample count.
         sample_count_[static_cast<std::size_t>(index)] += 1;
+        const int sample_num = sample_count_[static_cast<std::size_t>(index)];
+        const int warmup_steps = warmup_iterations_ * thinning_interval_;
 
         double eps = chain_step_sizes_[static_cast<std::size_t>(index)];
         int d = number_of_parameters();
@@ -285,6 +358,9 @@ class NUTS : public MCMCSampler {
         int depth = 0;
         double sum_alpha = 0.0;
         int num_alpha = 0;
+        int leapfrog_steps = 0;
+        int trajectory_depth = 0;
+        bool trajectory_divergent = false;
 
         // Step 3: Build tree by doubling until U-turn or max depth.
         while (depth < max_tree_depth_) {
@@ -313,6 +389,10 @@ class NUTS : public MCMCSampler {
                 log_sum_weight = log_sum_weight_new;
             }
 
+            leapfrog_steps += subtree.leaf_count;
+            trajectory_depth = depth + 1;
+            trajectory_divergent = trajectory_divergent || subtree.divergent;
+
             // Accumulate adaptation statistics.
             sum_alpha += subtree.sum_alpha;
             num_alpha += subtree.num_alpha;
@@ -327,13 +407,10 @@ class NUTS : public MCMCSampler {
             ++depth;
         }
 
-        // Step 4: Warmup adaptation (step size + mass matrix).
-        int warmup_steps = warmup_iterations_ * thinning_interval_;
-        int sample_num = sample_count_[static_cast<std::size_t>(index)];
-
+        const double average_acceptance = num_alpha > 0 ? sum_alpha / num_alpha : 0.0;
         if (sample_num <= warmup_steps) {
             // Always do dual averaging step size adaptation during warmup.
-            double avg_alpha = num_alpha > 0 ? sum_alpha / num_alpha : kDeltaTarget;
+            double avg_alpha = num_alpha > 0 ? average_acceptance : target_acceptance_rate_;
             dual_averaging_update(index, avg_alpha);
 
             // Accumulate Welford statistics during mass matrix adaptation windows (Phase 2).
@@ -351,12 +428,52 @@ class NUTS : public MCMCSampler {
             chain_step_sizes_[static_cast<std::size_t>(index)] = std::exp(chain_log_eps_bar_[static_cast<std::size_t>(index)]);
         }
 
+        if (sample_num > warmup_steps) {
+            record_diagnostics(index, average_acceptance, trajectory_divergent,
+                               depth >= max_tree_depth_, trajectory_depth,
+                               leapfrog_steps, h0);
+        }
+
         // NUTS always accepts.
         accept_count_[static_cast<std::size_t>(index)] += 1;
         return ParameterSet(candidate.to_array(), candidate_log_lh);
     }
 
    private:
+    std::vector<double> diagnostic_means(const std::vector<double>& sums) const {
+        if (sums.size() != static_cast<std::size_t>(number_of_chains_) ||
+            diagnostic_sample_counts_.size() != static_cast<std::size_t>(number_of_chains_))
+            return {};
+        std::vector<double> result(static_cast<std::size_t>(number_of_chains_), 0.0);
+        for (int i = 0; i < number_of_chains_; ++i) {
+            const std::size_t chain = static_cast<std::size_t>(i);
+            if (diagnostic_sample_counts_[chain] > 0)
+                result[chain] = sums[chain] / diagnostic_sample_counts_[chain];
+        }
+        return result;
+    }
+
+    void record_diagnostics(int chain_index, double acceptance_probability, bool divergent,
+                            bool hit_maximum_depth, int tree_depth, int leapfrog_steps,
+                            double energy) {
+        const std::size_t chain = static_cast<std::size_t>(chain_index);
+        const int count = ++diagnostic_sample_counts_[chain];
+        hamiltonian_acceptance_sums_[chain] += acceptance_probability;
+        if (divergent) ++divergence_counts_[chain];
+        if (hit_maximum_depth) ++max_tree_depth_hit_counts_[chain];
+        tree_depth_sums_[chain] += tree_depth;
+        leapfrog_step_sums_[chain] += leapfrog_steps;
+        if (has_previous_energy_[chain]) {
+            const double difference = energy - previous_energy_[chain];
+            energy_squared_difference_sums_[chain] += difference * difference;
+        }
+        previous_energy_[chain] = energy;
+        has_previous_energy_[chain] = true;
+        const double delta = energy - energy_means_[chain];
+        energy_means_[chain] += delta / count;
+        energy_m2_[chain] += delta * (energy - energy_means_[chain]);
+    }
+
     // Finds a reasonable initial step size using the heuristic from Hoffman and Gelman
     // (2014), Algorithm 4. Searches for a step size that gives roughly 50% acceptance
     // probability for a single leapfrog step.
@@ -420,6 +537,32 @@ class NUTS : public MCMCSampler {
         }
     }
 
+    const std::vector<double>& evaluate_gradient(const std::vector<double>& position,
+                                                 int chain_index) {
+        const std::size_t chain = static_cast<std::size_t>(chain_index);
+        for (std::size_t slot = 0; slot < kGradientCacheSize; ++slot) {
+            if (!gradient_cache_occupied_[chain][slot]) continue;
+            const auto& stored = gradient_cache_positions_[chain][slot];
+            if (stored.size() == position.size() &&
+                std::memcmp(stored.data(), position.data(),
+                            position.size() * sizeof(double)) == 0)
+                return gradient_cache_values_[chain][slot];
+        }
+
+        const std::size_t slot = gradient_cache_next_slot_[chain];
+        gradient_cache_occupied_[chain][slot] = false;
+        gradient_cache_positions_[chain][slot] = position;
+        const std::vector<double> gradient = gradient_function_(position).to_array();
+        if (gradient.size() != static_cast<std::size_t>(number_of_parameters())) {
+            malformed_gradient_ = std::move(gradient);
+            return malformed_gradient_;
+        }
+        gradient_cache_values_[chain][slot] = gradient;
+        gradient_cache_occupied_[chain][slot] = true;
+        gradient_cache_next_slot_[chain] = (slot + 1) % kGradientCacheSize;
+        return gradient_cache_values_[chain][slot];
+    }
+
     // Performs a single leapfrog step in-place on raw arrays, using the per-chain mass
     // matrix. Used by find_reasonable_epsilon to avoid Vector allocations. Calls
     // gradient_function_ (v2.1.4 fix, formerly called diff::gradient directly) -- see file
@@ -430,8 +573,9 @@ class NUTS : public MCMCSampler {
         const std::vector<double>& inv_mass = inverse_mass_matrix_[static_cast<std::size_t>(chain_index)];
 
         // Half-step momentum update.
-        std::vector<double> grad = gradient_function_(theta).to_array();
-        for (int j = 0; j < d; ++j) momentum[static_cast<std::size_t>(j)] += grad[static_cast<std::size_t>(j)] * half_eps;
+        const std::vector<double>* grad = &evaluate_gradient(theta, chain_index);
+        for (int j = 0; j < d; ++j)
+            momentum[static_cast<std::size_t>(j)] += (*grad)[static_cast<std::size_t>(j)] * half_eps;
 
         // Full-step position update.
         for (int j = 0; j < d; ++j) {
@@ -444,8 +588,9 @@ class NUTS : public MCMCSampler {
         }
 
         // Half-step momentum update.
-        grad = gradient_function_(theta).to_array();
-        for (int j = 0; j < d; ++j) momentum[static_cast<std::size_t>(j)] += grad[static_cast<std::size_t>(j)] * half_eps;
+        grad = &evaluate_gradient(theta, chain_index);
+        for (int j = 0; j < d; ++j)
+            momentum[static_cast<std::size_t>(j)] += (*grad)[static_cast<std::size_t>(j)] * half_eps;
     }
 
     // Computes the diagonal quadratic form phi^T M^-1 phi using raw arrays.
@@ -475,19 +620,25 @@ class NUTS : public MCMCSampler {
         int n = welford_count_[static_cast<std::size_t>(chain_index)];
         if (n < 2) return;
 
+        std::vector<double> estimated_variance(
+            static_cast<std::size_t>(number_of_parameters()));
+        double largest_window_variance = 0.0;
         for (int j = 0; j < number_of_parameters(); ++j) {
             double variance = welford_m2_[static_cast<std::size_t>(chain_index)][static_cast<std::size_t>(j)] / (n - 1);
-            // Stan regularization: (n/(n+5)) * var + 1e-3 * (5/(n+5)). Stan operates in
-            // unconstrained space where variance ~ O(1), so 1e-3 is fine. We operate in
-            // natural scale, so use a scale-aware fallback instead. Fallback:
-            // (prior_range / 6)^2 as a conservative variance estimate.
             double prior_range = upper_bounds_[static_cast<std::size_t>(j)] - lower_bounds_[static_cast<std::size_t>(j)];
             double fallback_variance = (prior_range * prior_range) / 36.0;
             if (!corehydro::numerics::is_finite(fallback_variance) || fallback_variance <= 0) fallback_variance = 1.0;
-            double shrinkage = 5.0;
-            double regularized = (n / (n + shrinkage)) * variance + (shrinkage / (n + shrinkage)) * fallback_variance;
-            mass_matrix_[static_cast<std::size_t>(chain_index)][static_cast<std::size_t>(j)] = regularized;
-            inverse_mass_matrix_[static_cast<std::size_t>(chain_index)][static_cast<std::size_t>(j)] = 1.0 / regularized;
+            const bool usable = n >= kMinAdaptWindowCount && std::isfinite(variance) && variance > 0.0;
+            estimated_variance[static_cast<std::size_t>(j)] =
+                usable ? variance : fallback_variance;
+            if (usable) largest_window_variance = std::max(largest_window_variance, variance);
+        }
+        const double variance_floor = largest_window_variance * kRelativeVarianceFloor;
+        for (int j = 0; j < number_of_parameters(); ++j) {
+            const double inverse_mass =
+                std::max(estimated_variance[static_cast<std::size_t>(j)], variance_floor);
+            inverse_mass_matrix_[static_cast<std::size_t>(chain_index)][static_cast<std::size_t>(j)] = inverse_mass;
+            mass_matrix_[static_cast<std::size_t>(chain_index)][static_cast<std::size_t>(j)] = 1.0 / inverse_mass;
         }
 
         // Reset Welford accumulators for next window.
@@ -540,6 +691,8 @@ class NUTS : public MCMCSampler {
         int leaf_count = 0;
         // Whether the subtree is valid (no divergence, no U-turn).
         bool valid = false;
+        // Whether the subtree contains a divergent or non-finite trajectory.
+        bool divergent = false;
         // Sum of per-leaf Metropolis acceptance probabilities (for dual averaging).
         double sum_alpha = 0.0;
         // Number of leaves contributing to sum_alpha.
@@ -559,6 +712,7 @@ class NUTS : public MCMCSampler {
         s.log_likelihood_prime = -std::numeric_limits<double>::infinity();
         s.leaf_count = 1;
         s.valid = false;
+        s.divergent = true;
         s.sum_alpha = 0.0;
         s.num_alpha = 1;
         return s;
@@ -572,7 +726,7 @@ class NUTS : public MCMCSampler {
         const std::vector<double>& inv_mass = inverse_mass_matrix_[static_cast<std::size_t>(chain_index)];
 
         // Half-step momentum update.
-        linalg::Vector grad = gradient_function_(theta.to_array());
+        linalg::Vector grad(evaluate_gradient(theta.to_array(), chain_index));
         linalg::Vector r = momentum + grad * (epsilon * 0.5);
 
         // Full-step position update using the per-chain inverse mass matrix.
@@ -588,7 +742,7 @@ class NUTS : public MCMCSampler {
         }
 
         // Half-step momentum update.
-        grad = gradient_function_(q.to_array());
+        grad = linalg::Vector(evaluate_gradient(q.to_array(), chain_index));
         r = r + grad * (epsilon * 0.5);
 
         return {q, r};
@@ -637,6 +791,7 @@ class NUTS : public MCMCSampler {
             s.log_likelihood_prime = log_lh;
             s.leaf_count = 1;
             s.valid = !divergent;
+            s.divergent = divergent;
             s.sum_alpha = alpha;
             s.num_alpha = 1;
             return s;
@@ -669,6 +824,7 @@ class NUTS : public MCMCSampler {
 
             tree.log_sum_weight = log_sum_weight_new;
             tree.leaf_count += tree2.leaf_count;
+            tree.divergent = tree.divergent || tree2.divergent;
             tree.sum_alpha += tree2.sum_alpha;
             tree.num_alpha += tree2.num_alpha;
 
@@ -691,7 +847,7 @@ class NUTS : public MCMCSampler {
         // Update running average of the acceptance statistic.
         chain_h_bar_[static_cast<std::size_t>(chain_index)] =
             (1.0 - 1.0 / (m + kT0)) * chain_h_bar_[static_cast<std::size_t>(chain_index)] +
-            (kDeltaTarget - avg_accept_prob) / (m + kT0);
+            (target_acceptance_rate_ - avg_accept_prob) / (m + kT0);
 
         // Compute new log step size.
         double log_eps = chain_mu_[static_cast<std::size_t>(chain_index)] -
@@ -739,11 +895,15 @@ class NUTS : public MCMCSampler {
 
     // Divergence threshold: if H - H0 exceeds this, the trajectory is considered divergent.
     static constexpr double kMaxDeltaH = 1000.0;
+    static constexpr std::size_t kGradientCacheSize = 4;
+    static constexpr int kMinAdaptWindowCount = 10;
+    static constexpr double kRelativeVarianceFloor = 1e-12;
 
     linalg::Vector mass_;
     linalg::Vector inverse_mass_;
     double initial_step_size_ = 0.1;
     int max_tree_depth_ = 10;
+    double target_acceptance_rate_ = kDeltaTarget;
     std::vector<double> lower_bounds_;
     std::vector<double> upper_bounds_;
     Gradient gradient_function_;
@@ -755,12 +915,30 @@ class NUTS : public MCMCSampler {
     std::vector<double> chain_mu_;
     std::vector<int> chain_adapt_step_;
 
+    std::vector<double> hamiltonian_acceptance_sums_;
+    std::vector<int> diagnostic_sample_counts_;
+    std::vector<int> divergence_counts_;
+    std::vector<int> max_tree_depth_hit_counts_;
+    std::vector<double> tree_depth_sums_;
+    std::vector<double> leapfrog_step_sums_;
+    std::vector<double> energy_means_;
+    std::vector<double> energy_m2_;
+    std::vector<double> energy_squared_difference_sums_;
+    std::vector<double> previous_energy_;
+    std::vector<bool> has_previous_energy_;
+
     // Per-chain diagonal mass matrix adaptation (Welford's online algorithm).
     std::vector<std::vector<double>> welford_mean_;
     std::vector<std::vector<double>> welford_m2_;
     std::vector<int> welford_count_;
     std::vector<std::vector<double>> mass_matrix_;
     std::vector<std::vector<double>> inverse_mass_matrix_;
+
+    std::vector<std::vector<std::vector<double>>> gradient_cache_positions_;
+    std::vector<std::vector<std::vector<double>>> gradient_cache_values_;
+    std::vector<std::vector<bool>> gradient_cache_occupied_;
+    std::vector<std::size_t> gradient_cache_next_slot_;
+    std::vector<double> malformed_gradient_;
 
     // Adaptation window boundaries (computed per chain in initialize_custom_settings()).
     int init_buffer_ = 0;

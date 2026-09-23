@@ -40,12 +40,16 @@
 
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/distributions/uniform.hpp"
+#include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/sampling/mcmc/hmc.hpp"
+#include "corehydro/numerics/sampling/mcmc/nuts.hpp"
+#include "corehydro/numerics/sampling/mcmc/rwmh.hpp"
 #include "corehydro/numerics/sampling/mcmc/snis.hpp"
 #include "corehydro/numerics/sampling/mcmc/support/mcmc_diagnostics.hpp"
 #include "corehydro/numerics/sampling/mcmc/support/mcmc_results.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/tools.hpp"
+#include "corehydro/numerics/utilities/extension_methods.hpp"
 #include "check.hpp"
 
 namespace mcmc = corehydro::numerics::sampling::mcmc;
@@ -101,6 +105,38 @@ void test_mixed_finite_and_invalid_weights_normalizes() {
     CHECK_TRUE(found_zero_weight);
     CHECK_TRUE(found_positive_weight);
     CHECK_NEAR(sum, 1.0, 1e-12);
+}
+
+void test_snis_tied_fitness_is_stable() {
+    std::vector<std::shared_ptr<UnivariateDistributionBase>> priors{
+        std::make_shared<Uniform>(0.0, 1.0)};
+    auto log_likelihood = [](const std::vector<double>& x) {
+        return x[0] < 0.5 ? 0.0 : -std::numeric_limits<double>::infinity();
+    };
+    mcmc::SNIS first(priors, log_likelihood);
+    mcmc::SNIS second(priors, log_likelihood);
+    for (auto* sampler : {&first, &second}) {
+        sampler->set_iterations(100);
+        sampler->output_length = 100;
+        sampler->set_prng_seed(12345);
+        sampler->sample();
+    }
+
+    MersenneTwister master(12345);
+    auto uniforms = corehydro::numerics::utilities::next_doubles(master, 100, 1);
+    std::vector<double> expected;
+    expected.reserve(100);
+    for (const auto& u : uniforms)
+        if (!(u[0] < 0.5)) expected.push_back(u[0]);
+    for (const auto& u : uniforms)
+        if (u[0] < 0.5) expected.push_back(u[0]);
+
+    CHECK_EQ(first.markov_chains()[0].size(), expected.size());
+    CHECK_EQ(first.output()[0].size(), second.output()[0].size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        CHECK_NEAR(first.markov_chains()[0][i].values[0], expected[i], 0.0);
+        CHECK_NEAR(first.output()[0][i].values[0], second.output()[0][i].values[0], 0.0);
+    }
 }
 
 // Test_HMC_NonFiniteGradient_DoesNotCrash: narrow priors (mu in [-100, 100], sigma in [0.01,
@@ -190,6 +226,192 @@ void test_gelman_rubin_edge_cases() {
 
     auto result = mcmc::gelman_rubin(single_chain);
     CHECK_TRUE(std::isnan(result[0]));
+}
+
+std::vector<std::vector<mcmc::ParameterSet>> modulo_diagnostic_fixture() {
+    std::vector<std::vector<mcmc::ParameterSet>> chains(4);
+    for (int chain = 0; chain < 4; ++chain) {
+        for (int iteration = 1; iteration <= 64; ++iteration) {
+            // Preserve the two separate operations in the C# reference fixture. Contracting
+            // chain * 0.05 into the addition changes exact ties and therefore pooled ranks.
+            volatile double base = ((iteration * 17 + chain * 11) % 31) / 10.0;
+            volatile double offset = chain * 0.05;
+            double value = base + offset;
+            chains[static_cast<std::size_t>(chain)].emplace_back(
+                std::vector<double>{value}, 0.0);
+        }
+    }
+    return chains;
+}
+
+void test_modern_diagnostics_match_reference() {
+    auto chains = modulo_diagnostic_fixture();
+    auto rhat = mcmc::gelman_rubin(chains);
+    auto ess = mcmc::effective_sample_size(chains);
+    CHECK_NEAR(rhat[0], 0.98937039497892809, 1e-10);
+    CHECK_NEAR(ess.ess[0], 306.3117099147583, 1e-8);
+    CHECK_EQ(ess.average_acf[0].size(), static_cast<std::size_t>(51));
+    CHECK_NEAR(ess.average_acf[0][0][1], 1.0, 1e-12);
+
+    for (auto& chain : chains)
+        for (auto& draw : chain) draw.values[0] = 1.0;
+    CHECK_TRUE(std::isnan(mcmc::gelman_rubin(chains)[0]));
+    CHECK_TRUE(std::isnan(mcmc::effective_sample_size(chains).ess[0]));
+    CHECK_TRUE(std::isnan(mcmc::effective_sample_size({1.0, 2.0, 3.0})));
+}
+
+void test_transition_counts_and_invalid_hmc_step() {
+    std::vector<std::shared_ptr<UnivariateDistributionBase>> priors{
+        std::make_shared<Uniform>(-10.0, 10.0),
+        std::make_shared<Uniform>(0.1, 10.0)};
+    auto log_likelihood = [](const std::vector<double>& x) {
+        return Normal(x[0], x[1]).log_pdf(0.0);
+    };
+    mcmc::RWMH sampler(priors, log_likelihood,
+                       corehydro::numerics::math::linalg::Matrix::identity(2));
+    CHECK_EQ(sampler.transition_count(), std::int64_t{120000});
+    CHECK_EQ(sampler.total_transition_count(), std::int64_t{480000});
+    sampler.set_iterations(1000);
+    sampler.output_length = 10001;
+    sampler.set_number_of_chains(3);
+    sampler.set_thinning_interval(7);
+    CHECK_EQ(sampler.transition_count(), std::int64_t{30338});
+    CHECK_EQ(sampler.total_transition_count(), std::int64_t{91014});
+
+    mcmc::HMC hmc(priors, log_likelihood, std::nullopt, 0.0, 2);
+    hmc.set_iterations(100);
+    hmc.set_warmup_iterations(10);
+    hmc.output_length = 100;
+    hmc.set_initial_iterations(4);
+    CHECK_THROWS(hmc.sample());
+}
+
+void test_nuts_target_and_energy_diagnostics() {
+    CHECK_TRUE(std::isnan(mcmc::NUTS::compute_energy_bfmi(1, 1.0, 1.0)));
+    CHECK_NEAR(mcmc::NUTS::compute_energy_bfmi(3, 8.0, 6.0), 0.5, 1e-15);
+
+    std::vector<std::shared_ptr<UnivariateDistributionBase>> priors{
+        std::make_shared<Uniform>(-50.0, 50.0),
+        std::make_shared<Uniform>(-50.0, 50.0)};
+    auto log_likelihood = [](const std::vector<double>& x) {
+        return -0.5 * (x[0] * x[0] + x[1] * x[1]);
+    };
+    mcmc::NUTS sampler(priors, log_likelihood, std::nullopt, 0.1, 6);
+    CHECK_NEAR(sampler.target_acceptance_rate(), 0.8, 0.0);
+    CHECK_TRUE(sampler.adapt_mass_matrix);
+    sampler.set_target_acceptance_rate(1.0);
+    sampler.set_number_of_chains(1);
+    sampler.set_initial_iterations(1);
+    sampler.set_thinning_interval(1);
+    sampler.set_warmup_iterations(50);
+    sampler.set_iterations(100);
+    sampler.output_length = 100;
+    CHECK_THROWS(sampler.sample());
+}
+
+void test_hmc_gradient_reuse_count() {
+    constexpr std::array<double, 4> sd{0.25, 1.0, 2.0, 8.0};
+    std::vector<std::shared_ptr<UnivariateDistributionBase>> priors;
+    for (std::size_t j = 0; j < sd.size(); ++j)
+        priors.push_back(std::make_shared<Uniform>(-50.0, 50.0));
+    auto log_likelihood = [&sd](const std::vector<double>& x) {
+        double sum = 0.0;
+        for (std::size_t j = 0; j < sd.size(); ++j) {
+            double z = x[j] / sd[j];
+            sum += -0.5 * z * z;
+        }
+        return sum;
+    };
+    int gradient_calls = 0;
+    auto gradient = [&gradient_calls, &sd](const std::vector<double>& x) {
+        ++gradient_calls;
+        corehydro::numerics::math::linalg::Vector g(static_cast<int>(sd.size()));
+        for (std::size_t j = 0; j < sd.size(); ++j) g[static_cast<int>(j)] = -x[j] / (sd[j] * sd[j]);
+        return g;
+    };
+    mcmc::HMC sampler(priors, log_likelihood, std::nullopt, 0.25, 12, gradient);
+    sampler.set_number_of_chains(2);
+    sampler.set_initial_iterations(8);
+    sampler.set_thinning_interval(1);
+    sampler.set_warmup_iterations(60);
+    sampler.set_iterations(150);
+    sampler.output_length = 100;
+    sampler.set_prng_seed(12345);
+    sampler.sample();
+    CHECK_EQ(gradient_calls, 5143);
+}
+
+void test_nuts_gradient_reuse_counts() {
+    constexpr std::array<double, 4> sd{0.25, 1.0, 2.0, 8.0};
+    std::vector<std::shared_ptr<UnivariateDistributionBase>> priors;
+    for (std::size_t j = 0; j < sd.size(); ++j)
+        priors.push_back(std::make_shared<Uniform>(-50.0, 50.0));
+    auto log_likelihood = [&sd](const std::vector<double>& x) {
+        double sum = 0.0;
+        for (std::size_t j = 0; j < sd.size(); ++j) {
+            double z = x[j] / sd[j];
+            sum += -0.5 * z * z;
+        }
+        return sum;
+    };
+    auto count_calls = [&](bool adapt) {
+        int calls = 0;
+        auto gradient = [&calls, &sd](const std::vector<double>& x) {
+            ++calls;
+            corehydro::numerics::math::linalg::Vector g(static_cast<int>(sd.size()));
+            for (std::size_t j = 0; j < sd.size(); ++j)
+                g[static_cast<int>(j)] = -x[j] / (sd[j] * sd[j]);
+            return g;
+        };
+        mcmc::NUTS sampler(priors, log_likelihood, std::nullopt, 0.1, 6, gradient);
+        sampler.adapt_mass_matrix = adapt;
+        sampler.set_number_of_chains(2);
+        sampler.set_initial_iterations(8);
+        sampler.set_thinning_interval(1);
+        sampler.set_warmup_iterations(60);
+        sampler.set_iterations(150);
+        sampler.output_length = 100;
+        sampler.set_prng_seed(12345);
+        sampler.sample();
+        return calls;
+    };
+    CHECK_EQ(count_calls(true), 4611);
+    CHECK_EQ(count_calls(false), 11809);
+}
+
+void test_nuts_target_controls_step_size_and_reports_diagnostics() {
+    std::vector<std::shared_ptr<UnivariateDistributionBase>> priors{
+        std::make_shared<Uniform>(-50.0, 50.0),
+        std::make_shared<Uniform>(-50.0, 50.0)};
+    auto log_likelihood = [](const std::vector<double>& x) {
+        return -0.5 * (x[0] * x[0] + x[1] * x[1]);
+    };
+    auto gradient = [](const std::vector<double>& x) {
+        return corehydro::numerics::math::linalg::Vector(std::vector<double>{-x[0], -x[1]});
+    };
+    auto run = [&](double target) {
+        mcmc::NUTS sampler(priors, log_likelihood, std::nullopt, 0.1, 6, gradient);
+        sampler.set_target_acceptance_rate(target);
+        sampler.set_number_of_chains(1);
+        sampler.set_initial_iterations(1);
+        sampler.set_thinning_interval(1);
+        sampler.set_warmup_iterations(60);
+        sampler.set_iterations(150);
+        sampler.output_length = 100;
+        sampler.set_prng_seed(12345);
+        sampler.sample();
+        return sampler;
+    };
+    auto baseline = run(0.8);
+    auto raised = run(0.99);
+    CHECK_TRUE(raised.step_sizes()[0] < baseline.step_sizes()[0]);
+    CHECK_EQ(baseline.diagnostic_sample_counts()[0],
+             static_cast<int>(baseline.transition_count()) - baseline.warmup_iterations());
+    CHECK_TRUE(baseline.step_sizes()[0] > 0.0);
+    CHECK_TRUE(baseline.mean_leapfrog_steps()[0] > 0.0);
+    CHECK_TRUE(std::isfinite(baseline.energy_bfmi()[0]));
+    CHECK_NEAR(mcmc::MCMCResults(baseline).acceptance_rates[0],
+               baseline.hamiltonian_acceptance_rates()[0], 0.0);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -416,9 +638,16 @@ void test_recompute_on_empty_results_does_not_throw() {
 int main() {
     test_all_invalid_weights_throws();
     test_mixed_finite_and_invalid_weights_normalizes();
+    test_snis_tied_fitness_is_stable();
     test_hmc_non_finite_gradient_does_not_crash();
     test_gelman_rubin_with_warmup();
     test_gelman_rubin_edge_cases();
+    test_modern_diagnostics_match_reference();
+    test_transition_counts_and_invalid_hmc_step();
+    test_nuts_target_and_energy_diagnostics();
+    test_hmc_gradient_reuse_count();
+    test_nuts_gradient_reuse_counts();
+    test_nuts_target_controls_step_size_and_reports_diagnostics();
     test_recompute_preserves_output_reference();
     test_recompute_preserves_map();
     test_recompute_preserves_rhat();

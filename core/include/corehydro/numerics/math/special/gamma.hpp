@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Special Functions/Gamma.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Special Functions/Gamma.cs @ 7e8e8d1
 //             + Numerics/Mathematics/Special Functions/Evaluate.cs (PolynomialRev)
 //
 // Gamma function (Cephes), Lanczos approximation, and digamma. Algorithms and
@@ -238,6 +238,90 @@ inline double log_gamma(double z) {
         return std::log(s) + kLogTwoSqrtEOverPi
                + (z - 0.5) * std::log((z - 0.5 + kGammaR) / corehydro::numerics::kE);
     }
+}
+
+// Regularized incomplete gamma integral. This is the AS239 surface retained separately from the
+// Cephes lower_incomplete implementation below because upstream exposes both algorithms.
+inline double incomplete(double x, double alpha) {
+    constexpr double eps = 1e-12;
+    constexpr int max_iterations = 100000;
+    constexpr double overflow = 1e30;
+    constexpr double underflow_log = -180.0;
+    constexpr double hill_threshold = 10000.0;
+
+    if (alpha <= 0.0) throw std::out_of_range("incomplete: alpha must be positive");
+    if (x < 0.0) throw std::out_of_range("incomplete: x must be non-negative");
+    if (x == 0.0) return 0.0;
+
+    if (alpha > hill_threshold) {
+        const double r = 1.0 / std::sqrt(alpha);
+        double z = (x - alpha) * r;
+        double term = z * z;
+        double sum = 0.5 * term;
+        for (int i = 1; i <= 12; ++i) {
+            term = -term * z * r;
+            sum += term / (static_cast<double>(i) + 2.0);
+            if (term <= eps) break;
+        }
+        const double ww = 2.0 * sum;
+        double w = std::sqrt(ww);
+        if (x < alpha) w = -w;
+        const double h1 = 1.0 / 3.0;
+        const double h2 = -w / 36.0;
+        const double h3 = (-ww + 13.0) / 1620.0;
+        const double h4 = (42.0 * ww + 119.0) * w / 38880.0;
+        z = (((h4 * r + h3) * r + h2) * r + h1) * r + w;
+        return 0.5 + 0.5 * std::erf(z * 0.70710678118654757);
+    }
+
+    if (x > 1.0 && x >= alpha) {
+        double a = 1.0 - alpha;
+        double b = a + x + 1.0;
+        double term = 0.0;
+        double pn1 = 1.0;
+        double pn2 = x;
+        double pn3 = x + 1.0;
+        double pn4 = x * b;
+        double ratio = pn3 / pn4;
+        for (int i = 1; i <= max_iterations; ++i) {
+            a += 1.0;
+            b += 2.0;
+            term += 1.0;
+            const double an = a * term;
+            const double pn5 = b * pn3 - an * pn1;
+            const double pn6 = b * pn4 - an * pn2;
+            if (pn6 != 0.0) {
+                const double rn = pn5 / pn6;
+                const double difference = std::fabs(ratio - rn);
+                if (difference <= eps && difference <= eps * rn) break;
+                ratio = rn;
+            }
+            pn1 = pn3;
+            pn2 = pn4;
+            pn3 = pn5;
+            pn4 = pn6;
+            if (std::fabs(pn5) >= overflow) {
+                pn1 /= overflow;
+                pn2 /= overflow;
+                pn3 /= overflow;
+                pn4 /= overflow;
+            }
+        }
+        const double argument = alpha * std::log(x) - x - log_gamma(alpha) + std::log(ratio);
+        return argument >= underflow_log ? 1.0 - std::exp(argument) : 1.0;
+    }
+
+    double sum = 1.0;
+    double term = 1.0;
+    double a = alpha;
+    for (int i = 1; i <= max_iterations; ++i) {
+        a += 1.0;
+        term = term * x / a;
+        sum += term;
+        if (term <= eps) break;
+    }
+    const double argument = alpha * std::log(x) - x - log_gamma(alpha) + std::log(sum / alpha);
+    return argument >= underflow_log ? std::exp(argument) : 0.0;
 }
 
 // trigamma: ψ'(x), second derivative of log-gamma.

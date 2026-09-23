@@ -1,4 +1,4 @@
-// ported from: Numerics/Functions/LinearFunction.cs @ 2a0357a
+// ported from: Numerics/Functions/LinearFunction.cs @ 7e8e8d1
 //
 // A simple linear function with a single predictor, slope and intercept, and (optionally)
 // normally distributed noise: Y = alpha + beta*X + epsilon, epsilon ~ Normal(0, sigma). Three
@@ -29,6 +29,10 @@ namespace corehydro::numerics::functions {
 
 class LinearFunction : public IUnivariateFunction {
    public:
+    std::unique_ptr<IUnivariateFunction> clone() const override {
+        return std::make_unique<LinearFunction>(*this);
+    }
+
     // Deterministic default: intercept 0, slope 1.
     LinearFunction() {
         set_alpha(0.0);

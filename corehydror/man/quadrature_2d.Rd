@@ -13,7 +13,9 @@ quadrature_2d(
   absolute_tolerance = NULL,
   relative_tolerance = NULL,
   min_depth = NULL,
-  max_depth = NULL
+  max_depth = NULL,
+  max_function_evaluations = NULL,
+  method = c("adaptive_simpson", "adaptive_gauss_kronrod")
 )
 }
 \arguments{
@@ -28,16 +30,19 @@ between the whole-domain and quadrant-subdivided estimates, each between 1e-15 a
 
 \item{min_depth, max_depth}{the recursion-depth bounds. \code{NULL}, the default, leaves the ported
 class's own defaults (0 and 100) in force.}
+
+\item{max_function_evaluations}{maximum evaluations of \code{f}. \code{NULL} leaves the selected
+integrator's default in force.}
+
+\item{method}{\code{"adaptive_simpson"} (the default) or \code{"adaptive_gauss_kronrod"}.}
 }
 \value{
 the integral, a single number, carrying the same three attributes \code{\link[=quadrature]{quadrature()}}
 returns: \code{status}, \code{function_evaluations}, and \code{standard_error}.
 }
 \description{
-Computes the definite integral of \code{f(x, y)} over the rectangle \verb{[min_x, max_x] x [min_y, max_y]} with the ported Numerics adaptive Simpson's rule in two dimensions
-(P2 "math extras"): the tensor-product 3x3-point Simpson estimate over the whole domain is
-compared against the sum of the four quadrant sub-estimates, and the domain is subdivided into
-quadrants until the two agree to the requested tolerance.
+Computes the definite integral of \code{f(x, y)} over the rectangle \verb{[min_x, max_x] x [min_y, max_y]} with either the ported adaptive Simpson rule or the globally adaptive
+Gauss-Kronrod rule added in Numerics 2.2.
 }
 \examples{
 quadrature_2d(function(x, y) x + y, min_x = 0, max_x = 1, min_y = 0, max_y = 1)

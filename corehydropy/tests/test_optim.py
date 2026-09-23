@@ -263,7 +263,7 @@ def test_max_function_evaluations_caps_the_reported_count():
     assert capped.function_evaluations < uncapped.function_evaluations
 
 
-# --- the two gradient-taking methods ------------------------------------------------------
+# --- the gradient-taking methods ----------------------------------------------------------
 #
 # f(p) = (p1 - 3)^2 + (p2 + 1)^2, minimum 0 at (3, -1), with the analytic gradient written out
 # term by term so the R twin in corehydror/tests/testthat/test-optim.R evaluates the identical
@@ -293,6 +293,17 @@ def test_adam_and_gradient_descent_fall_back_to_numerical_differentiation(method
     assert fit.parameters == pytest.approx([3.0, -1.0], abs=1e-3)
 
 
+def test_bfgs_takes_an_analytic_gradient_and_can_maximize_with_it():
+    fit = optim_minimize(_quad_shifted, initial=[0, 0], lower=[-10, -10], upper=[10, 10],
+                         method="bfgs", gradient=_quad_shifted_gradient)
+    assert fit.parameters == pytest.approx([3.0, -1.0], abs=1e-8)
+    peak = lambda p: -((p[0] - 2) ** 2)
+    grad = lambda p: [-2 * (p[0] - 2)]
+    maximum = optim_maximize(peak, initial=[0], lower=[-10], upper=[10],
+                             method="bfgs", gradient=grad)
+    assert maximum.parameters[0] == pytest.approx(2.0, abs=1e-8)
+
+
 def test_the_analytic_gradient_is_actually_used():
     # A run driven by the supplied gradient never pays for the 2*D finite-difference probes, so it
     # costs strictly fewer objective evaluations than the same run without one. Without this, a
@@ -305,7 +316,7 @@ def test_the_analytic_gradient_is_actually_used():
     assert with_g.function_evaluations < without_g.function_evaluations
 
 
-@pytest.mark.parametrize("method", ["gradient_descent", "adam"])
+@pytest.mark.parametrize("method", ["bfgs", "gradient_descent", "adam"])
 def test_an_error_inside_the_gradient_reaches_the_caller(method):
     def boom(p):
         raise RuntimeError("boom in the gradient")
@@ -321,7 +332,7 @@ def test_a_gradient_returning_the_wrong_length_is_rejected():
                        method="adam", gradient=lambda p: [1.0])
 
 
-@pytest.mark.parametrize("method,initial,seed", [("de", None, 1), ("bfgs", [0, 0], None)])
+@pytest.mark.parametrize("method,initial,seed", [("de", None, 1)])
 def test_gradient_is_rejected_for_methods_that_cannot_take_one(method, initial, seed):
     with pytest.raises(ValueError, match="gradient"):
         optim_minimize(_quad_shifted, initial=initial, lower=[-10, -10], upper=[10, 10],
@@ -434,26 +445,15 @@ def test_augmented_lagrange_requires_at_least_one_constraint(constraints):
                        method="augmented_lagrange", constraints=constraints)
 
 
-# optim_maximize() used to accept this method and return the constrained MINIMUM labelled
-# "Success": upstream AugmentedLagrange.Optimize() always calls the inner optimizer's Minimize()
-# over an augmented Lagrangian built from the RAW objective, so the outer sign flip never reaches
-# the search. The port still mirrors that; the public verb refuses the request.
-def test_optim_maximize_rejects_augmented_lagrange():
+def test_optim_maximize_supports_augmented_lagrange():
     def peak(p):                                    # true constrained max at x = 1: -4
         return -((p[0] - 3) ** 2)
 
     con = [Constraint(lambda p: p[0], value=1.0, type="le")]
-    with pytest.raises(ValueError, match="cannot maximize"):
-        optim_maximize(peak, initial=[0.0], lower=[-10.0], upper=[10.0],
-                       method="augmented_lagrange", constraints=con)
-    # Every other method still maximizes.
-    assert optim_maximize(peak, lower=[-10.0], upper=[10.0], method="de",
-                          seed=1).status == "Success"
-    # The workaround the error names: minimize -f under the same constraint.
-    fit = optim_minimize(lambda p: (p[0] - 3) ** 2, initial=[0.0], lower=[-10.0], upper=[10.0],
+    fit = optim_maximize(peak, initial=[0.0], lower=[-10.0], upper=[10.0],
                          method="augmented_lagrange", constraints=con)
     assert fit.parameters[0] == pytest.approx(1.0, abs=1e-3)
-    assert -fit.value == pytest.approx(-4.0, abs=1e-3)
+    assert fit.value == pytest.approx(-4.0, abs=1e-3)
 
 
 def test_constraint_validates_its_own_arguments():

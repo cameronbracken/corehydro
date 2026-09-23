@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/GammaDistribution.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/GammaDistribution.cs @ 7e8e8d1
 //
 // Gamma distribution with scale θ (theta) and shape κ (kappa). Logic mirrors the C#
 // source method-for-method. The WPF helpers, IBootstrappable, the rest of
@@ -18,6 +18,7 @@
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
+#include "corehydro/numerics/distributions/base/gamma_distribution_numerics.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
@@ -71,7 +72,7 @@ class GammaDistribution : public UnivariateDistributionBase,
     }
 
     double standard_deviation() const override {
-        return std::sqrt(kappa_ * theta_ * theta_);
+        return theta_ * std::sqrt(kappa_);
     }
 
     double skewness() const override { return 2.0 / std::sqrt(kappa_); }
@@ -82,18 +83,43 @@ class GammaDistribution : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
         if (!parameters_valid_) throw std::invalid_argument("GammaDistribution: invalid parameters");
-        if (x < minimum() || x > maximum()) return 0.0;
-        return std::exp(-x / theta_ + (kappa_ - 1.0) * std::log(x)
-                        - kappa_ * std::log(theta_) - sf::log_gamma(kappa_));
+        if (x < 0.0 || x == kInf) return -kInf;
+        if (x == 0.0)
+            return kappa_ == 1.0 ? -std::log(theta_)
+                                 : kappa_ < 1.0 ? kInf : -kInf;
+        const double unit = x / theta_;
+        const double value = unit == 0.0 && x > 0.0
+                                 ? (kappa_ - 1.0) * (std::log(x) - std::log(theta_)) -
+                                       sf::log_gamma(kappa_) - std::log(theta_)
+                                 : distribution_numerics::gamma_log_density(kappa_, unit) -
+                                       std::log(theta_);
+        return std::isnan(value) ? -kInf : value;
     }
 
-    double cdf(double x) const override {
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
         if (!parameters_valid_) throw std::invalid_argument("GammaDistribution: invalid parameters");
-        if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        return sf::lower_incomplete(kappa_, x / theta_);
+        if (x <= 0.0) return -kInf;
+        const double unit = x / theta_;
+        return unit == 0.0
+                   ? kappa_ * (std::log(x) - std::log(theta_)) -
+                         distribution_numerics::log_gamma_one_plus(kappa_)
+                   : distribution_numerics::gamma_log_cdf(kappa_, unit);
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::invalid_argument("GammaDistribution: invalid parameters");
+        if (x <= 0.0) return 0.0;
+        const double unit = x / theta_;
+        return unit == 0.0 ? distribution_numerics::log1m_exp(log_cdf(x))
+                           : distribution_numerics::gamma_log_survival(kappa_, unit);
     }
 
     double inverse_cdf(double probability) const override {
@@ -102,7 +128,15 @@ class GammaDistribution : public UnivariateDistributionBase,
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
         if (!parameters_valid_) throw std::invalid_argument("GammaDistribution: invalid parameters");
-        return sf::inverse_lower_incomplete(kappa_, probability) * theta_;
+        if (kappa_ == 1.0) return -theta_ * std::log1p(-probability);
+        const double unit_quantile =
+            distribution_numerics::gamma_inverse_cdf(kappa_, probability);
+        return unit_quantile < 1e-200
+                   ? std::exp(std::log(theta_) +
+                              (std::log(probability) +
+                               distribution_numerics::log_gamma_one_plus(kappa_)) /
+                                  kappa_)
+                   : unit_quantile * theta_;
     }
 
     // --- Parameter display names (X1; C# GammaDistribution.cs ParametersToString col0 +
@@ -120,6 +154,7 @@ class GammaDistribution : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4, true);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(parameters_from_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -135,8 +170,9 @@ class GammaDistribution : public UnivariateDistributionBase,
     std::vector<double> parameters_from_moments(const std::vector<double>& moments) const {
         double mean = moments[0];
         double sd   = moments[1];
-        double theta = 1.0 / (mean / (sd * sd));
-        double kappa = (mean * mean) / (sd * sd);
+        double theta = sd * (sd / mean);
+        double ratio = mean / sd;
+        double kappa = ratio * ratio;
         return {theta, kappa};
     }
 
@@ -196,15 +232,45 @@ class GammaDistribution : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = parameters_from_moments(data::product_moments(sample));
-        lowers.resize(2);
-        uppers.resize(2);
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto initials = parameters_from_moments(data::product_moments(sample));
+        std::vector<double> lowers(2), uppers(2);
         lowers[0] = kDoubleMachineEpsilon;
         uppers[0] = std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 4, true);
+        const double normalization = distribution_numerics::initialization_scale(sample);
+        std::vector<double> normalized(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            normalized[i] = sample[i] / normalization;
+        auto initials = parameters_from_moments(data::product_moments(normalized));
+        initials[0] *= normalization;
+        std::vector<double> lowers(2), uppers(2);
+        distribution_numerics::positive_parameter_bounds(
+            initials[0], lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        return {initials, lowers, uppers};
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);

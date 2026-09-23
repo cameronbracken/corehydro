@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/PearsonTypeIII.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/PearsonTypeIII.cs @ 7e8e8d1
 //
 // Pearson Type III distribution parameterized by mean µ, standard deviation σ,
 // and skew γ. Reparameterizes to a shifted Gamma distribution. Mirrors the C# source
@@ -20,6 +20,7 @@
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
+#include "corehydro/numerics/distributions/base/gamma_distribution_numerics.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/gamma_distribution.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
@@ -77,7 +78,7 @@ class PearsonTypeIII : public UnivariateDistributionBase,
     double median() const override { return inverse_cdf(0.5); }
 
     double mode() const override {
-        if (std::fabs(gamma_) <= kNearZero) {
+        if (gamma_ == 0.0) {
             return mu_;  // Normal branch
         }
         return xi() + (alpha() - 1.0) * beta();
@@ -90,79 +91,93 @@ class PearsonTypeIII : public UnivariateDistributionBase,
     double kurtosis() const override { return 3.0 + 6.0 / alpha(); }
 
     double minimum() const override {
-        if (std::fabs(gamma_) <= kNearZero) {
-            return -kInf;
-        } else if (beta() > 0.0) {
-            return xi();
-        } else {
-            return -kInf;
-        }
+        return gamma_ > 0.0 ? xi() : -kInf;
     }
 
     double maximum() const override {
-        if (std::fabs(gamma_) <= kNearZero) {
-            return kInf;
-        } else if (beta() > 0.0) {
-            return kInf;
-        } else {
-            return xi();
-        }
+        return gamma_ < 0.0 ? xi() : kInf;
     }
 
     // --- Distribution functions ---
     double pdf(double x) const override {
+        return std::exp(log_pdf(x));
+    }
+
+    double log_pdf(double x) const override {
         if (!parameters_valid_) throw std::invalid_argument("PearsonTypeIII: invalid parameters");
-        if (x < minimum() || x > maximum()) return 0.0;
-        if (std::fabs(gamma_) <= kNearZero) {
-            // Normal branch
-            double z = (x - mu_) / sigma_;
-            return std::exp(-0.5 * z * z) / (kSqrt2PI * sigma_);
+        if (x < minimum() || x > maximum() || std::isinf(x)) return -kInf;
+        const double z = distribution_numerics::standardize(x, mu_, sigma_);
+        if (gamma_ == 0.0) return -0.5 * z * z - std::log(sigma_) - kLogSqrt2PI;
+        if (use_local_tail_expansion(gamma_, z)) {
+            const double z2 = z * z;
+            const double g2 = gamma_ * gamma_;
+            const double correction =
+                gamma_ * z * (z2 / 6.0 - 0.5) +
+                g2 * (-z2 * z2 / 16.0 + z2 / 8.0 - 1.0 / 48.0) +
+                g2 * gamma_ * z * z2 * (z2 / 40.0 - 1.0 / 24.0) +
+                g2 * g2 * z2 * z2 * (1.0 / 64.0 - z2 / 96.0);
+            return -0.5 * z2 - std::log(sigma_) - kLogSqrt2PI + correction;
         }
-        // Gamma branch
-        double abs_beta = std::fabs(beta());
-        if (beta() > 0.0) {
-            double shifted_x = x - xi();
-            return std::exp(-shifted_x / abs_beta
-                            + (alpha() - 1.0) * std::log(shifted_x)
-                            - alpha() * std::log(abs_beta)
-                            - sf::log_gamma(alpha()));
-        } else {
-            double shifted_x = xi() - x;
-            return std::exp(-shifted_x / abs_beta
-                            + (alpha() - 1.0) * std::log(shifted_x)
-                            - alpha() * std::log(abs_beta)
-                            - sf::log_gamma(alpha()));
-        }
+        const double unit = unit_gamma_value(mu_, sigma_, gamma_, x, z);
+        return distribution_numerics::gamma_log_density(alpha(), unit) - std::log(sigma_) -
+               std::log(std::fabs(gamma_) / 2.0);
     }
 
     double cdf(double x) const override {
+        return std::exp(log_cdf(x));
+    }
+
+    double log_cdf(double x) const override { return log_tail(x, false); }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override { return log_tail(x, true); }
+
+    double log_tail(double x, bool upper) const {
         if (!parameters_valid_) throw std::invalid_argument("PearsonTypeIII: invalid parameters");
-        if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        if (std::fabs(gamma_) <= kNearZero) {
-            return 0.5 * (1.0 + std::erf((x - mu_) / (sigma_ * kSqrt2)));
-        } else if (beta() > 0.0) {
-            double shifted_x = x - xi();
-            return sf::lower_incomplete(alpha(), shifted_x / std::fabs(beta()));
-        } else {
-            double shifted_x = xi() - x;
-            return 1.0 - sf::lower_incomplete(alpha(), shifted_x / std::fabs(beta()));
+        if (x <= minimum()) return upper ? 0.0 : -kInf;
+        if (x >= maximum()) return upper ? -kInf : 0.0;
+        const double z = distribution_numerics::standardize(x, mu_, sigma_);
+        const double normal = upper ? distribution_numerics::normal_log_survival(z)
+                                    : distribution_numerics::normal_log_cdf(z);
+        if (gamma_ == 0.0) return normal;
+        if (use_local_tail_expansion(gamma_, z)) {
+            const double z2 = z * z;
+            const double g2 = gamma_ * gamma_;
+            const double h2 = z2 - 1.0;
+            const double h3 = z * (z2 - 3.0);
+            const double h4 = z2 * z2 - 6.0 * z2 + 3.0;
+            const double h5 = z * (z2 * z2 - 10.0 * z2 + 15.0);
+            const double h6 = z2 * z2 * z2 - 15.0 * z2 * z2 + 45.0 * z2 - 15.0;
+            const double h8 = z2 * z2 * z2 * z2 - 28.0 * z2 * z2 * z2 +
+                              210.0 * z2 * z2 - 420.0 * z2 + 105.0;
+            const double correction = gamma_ * h2 / 6.0 +
+                                      g2 * (h3 / 16.0 + h5 / 72.0) +
+                                      g2 * gamma_ *
+                                          (h4 / 40.0 + h6 / 96.0 + h8 / 1296.0);
+            const double relative =
+                std::exp(-0.5 * z2 - kLogSqrt2PI - normal) * correction;
+            return normal + std::log1p(upper ? relative : -relative);
         }
+        const double unit = unit_gamma_value(mu_, sigma_, gamma_, x, z);
+        return upper == (gamma_ > 0.0)
+                   ? distribution_numerics::gamma_log_survival(alpha(), unit)
+                   : distribution_numerics::gamma_log_cdf(alpha(), unit);
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (std::isnan(probability) || probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
+        if (!parameters_valid_) throw std::invalid_argument("PearsonTypeIII: invalid parameters");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        if (!parameters_valid_) throw std::invalid_argument("PearsonTypeIII: invalid parameters");
-        if (std::fabs(gamma_) <= kNearZero) {
-            return mu_ + sigma_ * Normal::standard_z(probability);
-        } else if (beta() > 0.0) {
-            return xi() + sf::inverse_lower_incomplete(alpha(), probability) * std::fabs(beta());
-        } else {
-            return xi() - sf::inverse_lower_incomplete(alpha(), 1.0 - probability) * std::fabs(beta());
-        }
+        const double z = Normal::standard_z(probability);
+        if (gamma_ == 0.0) return mu_ + sigma_ * z;
+        if (use_local_quantile_expansion(gamma_, z))
+            return mu_ + sigma_ * local_standard_quantile(gamma_, z);
+        const double unit =
+            distribution_numerics::gamma_inverse_cdf(alpha(), probability, gamma_ < 0.0);
+        return mu_ + sigma_ * ((gamma_ / 2.0) * (unit - alpha()));
     }
 
     // --- Parameter display names (X1; C# PearsonTypeIII.cs ParametersToString col0 +
@@ -180,6 +195,7 @@ class PearsonTypeIII : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             auto moments = data::product_moments(sample);
             set_parameters(moments[0], moments[1], moments[2]);
@@ -312,10 +328,38 @@ class PearsonTypeIII : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&] { return legacy_parameter_constraints(sample); },
+            [&] { return robust_parameter_constraints(sample); });
+        initials = std::get<0>(constraints);
+        lowers = std::get<1>(constraints);
+        uppers = std::get<2>(constraints);
+    }
+
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 4);
+        const auto normal = Normal().robust_parameter_constraints(sample);
+        const auto& normal_initials = std::get<0>(normal);
+        std::vector<double> scaled(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            scaled[i] = distribution_numerics::standardize(
+                sample[i], normal_initials[0], normal_initials[1]);
+        double skew = data::product_moments(scaled)[2];
+        if (!std::isfinite(skew) || skew <= -6.0 || skew >= 6.0) skew = 0.01;
+        return {{normal_initials[0], normal_initials[1], skew},
+                {std::get<1>(normal)[0], std::get<1>(normal)[1], -6.0},
+                {std::get<2>(normal)[0], std::get<2>(normal)[1], 6.0}};
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
         auto moments = data::product_moments(sample);
-        initials = {moments[0], moments[1], moments[2]};
-        lowers.resize(3);
-        uppers.resize(3);
+        std::vector<double> initials = {moments[0], moments[1], moments[2]};
+        std::vector<double> lowers(3);
+        std::vector<double> uppers(3);
         // Bounds of mean
         lowers[0] = -std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
         uppers[0] =  std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
@@ -329,7 +373,10 @@ class PearsonTypeIII : public UnivariateDistributionBase,
         if (initials[2] <= lowers[2] || initials[2] >= uppers[2]) {
             initials[2] = 0.01;
         }
+        return {initials, lowers, uppers};
     }
+
+   public:
 
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
@@ -344,18 +391,26 @@ class PearsonTypeIII : public UnivariateDistributionBase,
         return solver.best_parameters();
     }
 
-    // Returns a list of partial derivatives of X given probability with respect to each
-    // moment (C# PearsonTypeIII.QuantileGradientForMoments, line 774). Q(p) = mu +
-    // sigma*Kp(skew, p), so the gradient is {1, Kp, sigma*dKp/dskew}. C#
-    // ValidateParameters(..., true) throw -> std::invalid_argument.
+    // Returns the quantile gradient in public mean, standard deviation, and skew coordinates.
+    // The signed-Gamma derivative and the smooth zero-skew expansion mirror v2.2.0.
     std::vector<double> quantile_gradient_for_moments(double probability) const {
-        // Validate parameters
+        distribution_numerics::validate_probability(probability);
         if (!parameters_valid_) throw std::invalid_argument("PearsonTypeIII: invalid parameters");
-        return {
-            1.0,
-            GammaDistribution::frequency_factor_kp(gamma_, probability),
-            sigma_ * GammaDistribution::partial_kp(gamma_, probability)
-        };
+        double z = Normal::standard_z(probability);
+        if (gamma_ == 0.0)
+            return {1.0, z, sigma_ * (z * z - 1.0) / 6.0};
+        if (use_local_quantile_expansion(gamma_, z)) {
+            double derivative = 0.0;
+            double quantile = local_standard_quantile(gamma_, z, &derivative);
+            return {1.0, quantile, sigma_ * derivative};
+        }
+        double unit = distribution_numerics::gamma_inverse_cdf(
+            alpha(), probability, gamma_ < 0.0);
+        double shape_derivative =
+            distribution_numerics::gamma_quantile_shape_derivative(alpha(), unit);
+        double standardized = gamma_ / 2.0 * (unit - alpha());
+        double skew_derivative = (unit + alpha()) / 2.0 - alpha() * shape_derivative;
+        return {1.0, standardized, sigma_ * skew_derivative};
     }
 
     // ConditionalMoments override (C# PearsonTypeIII.cs:820): delegates to the smooth
@@ -654,6 +709,35 @@ class PearsonTypeIII : public UnivariateDistributionBase,
         if (std::isnan(skew) || std::isinf(skew)) return false;
         if (skew > 6.0 || skew < -6.0) return false;
         return true;
+    }
+
+    static double unit_gamma_value(double mean, double sd, double skew, double x, double z) {
+        if (x == mean - sd * (2.0 / skew)) return 0.0;
+        return std::fabs(skew) < 1.0
+                   ? std::pow(2.0 / skew, 2.0) * (1.0 + (skew / 2.0) * z)
+                   : distribution_numerics::standardize(
+                         x, mean - sd * (2.0 / skew), 0.5 * sd * skew);
+    }
+
+    static bool use_local_tail_expansion(double skew, double z) {
+        return std::fabs(skew) <= 1e-3 &&
+               std::fabs(skew) * std::pow(1.0 + std::fabs(z), 3.0) <= 1e-3;
+    }
+
+    static bool use_local_quantile_expansion(double skew, double z) {
+        return std::fabs(skew) <= 1e-3 &&
+               std::fabs(skew) * std::pow(1.0 + std::fabs(z), 3.0) <= 0.02;
+    }
+
+    static double local_standard_quantile(double skew, double z,
+                                          double* derivative = nullptr) {
+        const double z2 = z * z;
+        const double first = (z2 - 1.0) / 6.0;
+        const double second = z * (z2 - 7.0) / 144.0;
+        const double third = -(3.0 * z2 * z2 + 7.0 * z2 - 16.0) / 6480.0;
+        if (derivative != nullptr)
+            *derivative = first + skew * (2.0 * second + 3.0 * skew * third);
+        return z + skew * (first + skew * (second + skew * third));
     }
 
     double mu_    = 100.0;

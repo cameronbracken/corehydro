@@ -22,6 +22,8 @@ from corehydropy import (
     interpolate,
     interpolate_2d,
     joint_probability,
+    union_single_factor,
+    single_factor_conditional_probabilities,
     l_moments,
     link,
     link_derivative,
@@ -30,6 +32,10 @@ from corehydropy import (
     link_names,
     linear_regression,
     percentile,
+    first_order_sobol,
+    pawn,
+    pawn_median,
+    borgonovo_delta,
     polynomial_eval,
     product_moments,
     qr_decomposition,
@@ -106,6 +112,27 @@ def test_percentile_accepts_a_vector_of_probabilities():
 def test_percentile_rejects_a_non_numeric_probs_argument():
     with pytest.raises(ValueError, match="probs"):
         percentile([1, 2, 3], probs="half")
+
+
+def test_global_sensitivity_uses_deterministic_tie_order():
+    x = np.ones(32)
+    y = np.r_[np.zeros(16), np.ones(16)]
+    assert first_order_sobol(x, y, bins=2) == 1.0
+    np.testing.assert_array_equal(pawn(x, y, bins=2), [0.5, 0.5])
+    assert pawn_median(x, y, bins=2) == 0.5
+    assert borgonovo_delta(x, y, x_bins=2, y_bins=2) == 0.5
+
+
+def test_single_factor_probability_surface():
+    p = np.array([0.01, 0.05, 0.2, 0.001])
+    assert union_single_factor(p, 0.0) == pytest.approx(1 - np.prod(1 - p), rel=1e-12)
+    thresholds = np.array([-2.3263478740408408, -0.8416212335729142, 0.5244005127080407])
+    np.testing.assert_allclose(
+        single_factor_conditional_probabilities(thresholds, 0.0, 1.7),
+        [0.01, 0.2, 0.7],
+        rtol=0,
+        atol=1e-14,
+    )
 
 
 def test_correlation_with_a_matrix_returns_the_p_by_p_matrix():
@@ -412,6 +439,19 @@ def test_sobol_sequence_skip_moves_the_stream():
     seq5 = sobol_sequence(5, dimension=2)
     skipped = sobol_sequence(1, dimension=2, skip=4)
     np.testing.assert_array_equal(skipped[0], seq5[4])
+
+
+def test_sobol_sequence_seed_reproduces_the_scrambled_stream():
+    expected = np.array(
+        [
+            [0.659847889995655, 0.5825658737429362],
+            [0.8092207866147765, 0.15954710391098081],
+            [0.48233205686128877, 0.7857143836043143],
+        ]
+    )
+    first = sobol_sequence(3, dimension=2, seed=12345)
+    np.testing.assert_array_equal(first, expected)
+    np.testing.assert_array_equal(first, sobol_sequence(3, dimension=2, seed=12345))
 
 
 def test_sobol_sequence_rejects_a_non_positive_n_or_dimension():
@@ -846,6 +886,54 @@ def test_univariate_function_rejects_an_unknown_type():
         univariate_function("quadratic", [1, 1], 1)
 
 
+def test_univariate_function_v220_segmented_composite_and_ensemble_specs():
+    segmented = {"type": "segmented_power", "parameters": [1, 1.5, 2, 0.1]}
+    assert univariate_function(segmented, [0.5, 5]) == pytest.approx(
+        [0, 505.9644256269407]
+    )
+
+    composite = {
+        "type": "composite",
+        "mode": "weighted_average",
+        "weights": [0.25, 0.75],
+        "functions": [
+            {"type": "linear", "parameters": [0, 2, 0]},
+            {"type": "linear", "parameters": [10, 4, 0]},
+        ],
+    }
+    assert univariate_function(composite, 4) == pytest.approx([21.5])
+
+    mixture = dict(composite)
+    mixture["mode"] = "mixture"
+    mixture["confidence_level"] = 0.75
+    mixture["functions"] = [
+        {"type": "linear", "parameters": [0, 1, 0]},
+        {"type": "linear", "parameters": [100, 1, 0]},
+    ]
+    assert univariate_function(mixture, 5) == pytest.approx([105])
+
+    ensemble = {
+        "type": "ensemble",
+        "template": segmented,
+        "parameter_sets": [
+            [1, 1.5, 2, 0.1],
+            [0.9, 1.6, 1.9, 0.12],
+            [1.1, 1.4, 2.1, 0.08],
+        ],
+        "sample_percentile": 1,
+    }
+    expected = 10**1.4 * (5 - 1.1) ** 2.1
+    assert univariate_function(ensemble, 5) == pytest.approx([expected])
+    ensemble.pop("sample_percentile")
+    ensemble["sample_index"] = 0
+    assert univariate_function(ensemble, 5) == pytest.approx([505.9644256269407])
+
+    invalid = dict(composite)
+    invalid["weights"] = [0.3, 0.3]
+    with pytest.raises(IndexError, match="weights"):
+        univariate_function(invalid, 4)
+
+
 # The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
 # list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
 # same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs
@@ -892,6 +980,18 @@ def test_shortest_path_takes_several_destinations():
     assert table[2, 2] == 5
 
 
+def test_shortest_path_exposes_the_single_pass_nearest_solve():
+    args = ([0, 1, 1, 2, 1], [1, 0, 2, 1, 3], [1, 3, 1, 2, 3])
+    kwargs = {
+        "destinations": [0, 3, 3],
+        "edge_index": [0, 1, 2, 3, 4],
+        "node_count": 4,
+    }
+    merged = shortest_path(*args, **kwargs)
+    nearest = shortest_path(*args, **kwargs, nearest=True)
+    np.testing.assert_array_equal(nearest[:, 2], merged[:, 2])
+
+
 def test_shortest_path_marks_an_unreachable_node():
     table = shortest_path(
         [0, 1, 2], [1, 0, 3], [1, 3, 1], destinations=0, edge_index=[0, 1, 2], node_count=4
@@ -918,6 +1018,10 @@ def test_shortest_path_validates_its_arguments():
         shortest_path([0, 1], [1, 2], [1, 1], destinations=0.5)
     with pytest.raises(ValueError, match="same length"):
         shortest_path([0, 1], [1, 2], [1, 1], destinations=0, edge_index=[0, 1, 2])
+    with pytest.raises(ValueError, match="whole, non-negative"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0, edge_index=[0, -1])
+    with pytest.raises(ValueError, match="True or False"):
+        shortest_path([0, 1], [1, 2], [1, 1], destinations=0, nearest=1)
     with pytest.raises(ValueError, match="at least one"):
         shortest_path([], [], [], destinations=0)
     with pytest.raises(ValueError, match="out of range"):
@@ -1066,15 +1170,12 @@ def test_curve_simplify_reproduces_the_three_algorithms_on_the_sin_curve():
     assert rdp[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
     assert vis[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
 
-    # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
-    # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here
-    # is THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test
-    # claims.
+    # Numerics v2.2.0 fixes LangSimplify so it retains the trailing point.
     lang = curve_simplify(x, y, method="lang", tolerance=0.01, look_ahead=2, strict_y=False,
                           order_y="none")
-    assert lang.shape == (3, 2)
-    assert lang[:, 0] == pytest.approx([0, 1.57, 4.71], abs=1e-6)
-    assert lang[:, 1] == pytest.approx([0, 1, -1], abs=1e-6)
+    assert lang.shape == (4, 2)
+    assert lang[:, 0] == pytest.approx([0, 1.57, 4.71, 6.28], abs=1e-6)
+    assert lang[:, 1] == pytest.approx([0, 1, -1, 0], abs=1e-6)
 
 
 def test_uncertain_curve_sample_reproduces_test_curve_sample_probability():
@@ -1164,3 +1265,18 @@ def test_log_and_logarithmic_are_equivalent_everywhere_a_transform_argument_appe
     ia = interpolate(x, y, [2.5], x_transform="log")
     ib = interpolate(x, y, [2.5], x_transform="logarithmic")
     assert ia == pytest.approx(ib)
+
+
+def test_paired_data_v220_extrapolation_reaches_both_public_wrappers():
+    assert curve_interpolate([1, 2], [10, 20], xout=[0, 3], extrapolation="both") == pytest.approx(
+        [0, 30]
+    )
+    assert curve_interpolate(
+        [100, 10], [2, 1], xout=[1000, 1], x_transform="logarithmic",
+        order_x="descending", order_y="descending", extrapolation="both",
+    ) == pytest.approx([3, 0])
+    d = [Distribution("Deterministic", [v]) for v in [100, 200, 300, 400, 500]]
+    assert tabular_function(
+        [50, 100, 150, 200, 250], d, at=600, inverse=True,
+        x_transform="logarithmic", extrapolation="both",
+    )[0] == pytest.approx(312.5, abs=1e-12)

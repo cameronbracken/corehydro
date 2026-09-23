@@ -3,8 +3,10 @@
   "kind": "bivariate_copula",
   "source": "Numerics/Test_Numerics/Distributions/Bivariate Copulas/Test_JoeCopula.cs",
   "reference": "PDF/CDF/fit literals compared against the R 'copula' package (per the C# test class remarks). Tail dependence is the closed form lambda_U = 2 - 2^(1/theta), lambda_L = 0.",
-  "note": "Skipped: the theta->infinity (theta=100) IsGreaterThan(0.99) qualitative assert on UpperTailDependence (no fixed tolerance/expected literal to transcribe, mirroring clayton_copula.json/gumbel_copula.json's identical skip). data1_pp/data2_pp are the plotting positions (rank/(n+1), via Statistics.RanksInPlace) of data1/data2, precomputed here to keep the mpl fit runner thin -- see fixtures/README.md. JoeCopula does NOT override ValidateParameter (unlike AMH/Frank) so it inherits ArchimedeanCopula's always-false-ParametersValid bug verbatim, same as Clayton/Gumbel -- see joe_copula.hpp / docs/upstream-csharp-issues.md. DEVIATION FROM THE PHASE 2 PLAN TEXT: JoeCopula.cs has NO SetThetaFromTau method (confirmed by grep across the whole 'Bivariate Copulas' directory) and Test_JoeCopula.cs correspondingly has no Test_MOM_Fit -- so, unlike amh_copula.json/clayton_copula.json/gumbel_copula.json, this fixture has no 'tau'-method case (the task brief and an earlier draft of fixtures/README.md incorrectly listed Joe as tau-capable; see joe_copula.hpp's file header and .superpowers/sdd/task-8-report.md).",
+  "note": "Numerics v2.2.0 adds the tau fit and a saturated conditional inverse at the upper probability boundary. data1_pp/data2_pp are plotting positions used by the likelihood cases.",
   "datasets": {
+    "tau_x": [1, 2, 3, 4, 5, 6],
+    "tau_y": [1, 3, 2, 5, 4, 6],
     "data1": [
       105.080527801019,
       115.026257454374,
@@ -415,6 +417,13 @@
     ]
   },
   "cases": [
+    {
+      "name": "method_of_moments_v220",
+      "construct": {"fit": {"x": "tau_x", "y": "tau_y", "method": "tau"}},
+      "assertions": [
+        {"method": "theta", "args": [], "expected": 6.2872670423220205, "mode": "abs", "tol": 1e-12}
+      ]
+    },
     {
       "name": "pdf_theta10",
       "construct": {

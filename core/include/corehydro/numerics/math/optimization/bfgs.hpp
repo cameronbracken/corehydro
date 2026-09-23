@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Local/BFGS.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Local/BFGS.cs @ 7e8e8d1
 //
 // The Broyden-Fletcher-Goldfarb-Shanno (BFGS) local optimizer: an iterative method for
 // unconstrained nonlinear optimization that gradually improves an approximation to the
@@ -107,102 +107,80 @@ class BFGS : public Optimizer {
     GradientFunction gradient;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
-        int D = number_of_parameters_;
-        double EPS = kDoubleMachineEpsilon;
-        double TOLX = 4 * EPS, STPMX = 100.0;
-        (void)TOLX;  // declared-and-unused in the C# as well (see class header note 4)
-        bool cancel = false, check = false;
+        const int n = number_of_parameters_;
+        bool cancel = false;
+        auto x = initial_values_;
+        double f = evaluate_objective(x, cancel);
+        if (cancel) return;
+        if (!is_finite(f)) throw ArgumentException("The initial objective value must be finite.");
+        auto g = evaluate_gradient(x, cancel);
+        if (cancel) return;
 
-        auto p = initial_values_;
-        std::vector<double> pnew(static_cast<std::size_t>(D));
+        auto inverse_hessian = linalg::Matrix::identity(n);
+        std::vector<double> projected(static_cast<std::size_t>(n));
+        std::vector<double> direction(static_cast<std::size_t>(n));
+        double stpmax = 100.0 * std::max(std::sqrt(sum_product(x, x)), static_cast<double>(n));
 
-        // Calculate the starting function value and gradient, and initialize the inverse
-        // Hessian to the unit matrix.
-        double fp = evaluate(p, cancel);
-        auto g = gradient ? gradient(p) : numerical_gradient(p, cancel);
-        std::vector<double> dg(static_cast<std::size_t>(D));
-        std::vector<double> hdg(static_cast<std::size_t>(D));
-        std::vector<double> xi(static_cast<std::size_t>(D));
-        auto hessin = linalg::Matrix(D, D);
-
-        double sum = 0.0;
-        for (int i = 0; i < D; i++) {
-            for (int j = 0; j < D; j++) hessin(i, j) = 0.0;
-            hessin(i, i) = 1.0;
-            xi[i] = -g[i];
-            sum += p[i] * p[i];
-        }
-
-        double fret = 0.0;
-        double stpmax = STPMX * std::max(std::sqrt(sum), static_cast<double>(D));
-
-        while (iterations_ < max_iterations) {
-            // Perform line search.
-            line_search(p, fp, g, xi, pnew, fret, stpmax, check, cancel);
-            if (cancel) return;
-
-            // Check convergence.
-            if (check_convergence(fp, fret)) {
+        while (true) {
+            if (projected_gradient(x, g, projected) <= absolute_tolerance) {
+                best_parameter_set_ = ParameterSet(x, f);
                 update_status(OptimizationStatus::Success);
                 return;
             }
-
-            // The new function evaluation occurs in line search; save the function value in
-            // fp for the next line search. It is usually safe to ignore the value of check.
-            fp = fret;
-            for (int i = 0; i < D; i++) {
-                xi[i] = pnew[i] - p[i];
-                p[i] = pnew[i];
+            if (iterations_ >= max_iterations) {
+                update_status(OptimizationStatus::MaximumIterationsReached);
+                return;
             }
 
-            // Save the old gradient, and get the new gradient.
-            for (int i = 0; i < D; i++) dg[i] = g[i];
-            g = gradient ? gradient(p) : numerical_gradient(p, cancel);
+            for (int i = 0; i < n; ++i) {
+                direction[static_cast<std::size_t>(i)] = 0.0;
+                for (int j = 0; j < n; ++j)
+                    direction[static_cast<std::size_t>(i)] -=
+                        inverse_hessian(i, j) * projected[static_cast<std::size_t>(j)];
+            }
+            make_feasible(x, direction);
+            double slope = sum_product(g, direction);
+            if (!is_finite(slope) || slope >= 0.0) {
+                inverse_hessian = linalg::Matrix::identity(n);
+                for (int i = 0; i < n; ++i)
+                    direction[static_cast<std::size_t>(i)] = -projected[static_cast<std::size_t>(i)];
+            }
+
+            bool can_restart = false;
+            for (int i = 0; i < n; ++i)
+                can_restart = can_restart ||
+                              direction[static_cast<std::size_t>(i)] != -projected[static_cast<std::size_t>(i)];
+            std::vector<double> next_x, next_g;
+            double next_f = f;
+            bool accepted = line_search(x, f, g, direction, stpmax, next_x, next_f, next_g, cancel);
+            if (!accepted && !cancel && can_restart) {
+                inverse_hessian = linalg::Matrix::identity(n);
+                for (int i = 0; i < n; ++i)
+                    direction[static_cast<std::size_t>(i)] = -projected[static_cast<std::size_t>(i)];
+                accepted = line_search(x, f, g, direction, stpmax, next_x, next_f, next_g, cancel);
+            }
             if (cancel) return;
-
-            // Compute difference of gradients.
-            for (int i = 0; i < D; i++) dg[i] = g[i] - dg[i];
-
-            // And difference times current matrix.
-            for (int i = 0; i < D; i++) {
-                hdg[i] = 0.0;
-                for (int j = 0; j < D; j++) hdg[i] += hessin(i, j) * dg[j];
+            if (!accepted) {
+                update_status(OptimizationStatus::LineSearchFailed);
+                return;
             }
+            ++iterations_;
 
-            // Calculate dot products for the denominators.
-            double fac = 0.0, fae = 0.0, sumdg = 0.0, sumxi = 0.0;
-            for (int i = 0; i < D; i++) {
-                fac += dg[i] * xi[i];
-                fae += dg[i] * hdg[i];
-                sumdg += sqr(dg[i]);
-                sumxi += sqr(xi[i]);
+            std::vector<double> step(static_cast<std::size_t>(n));
+            std::vector<double> change(static_cast<std::size_t>(n));
+            for (int i = 0; i < n; ++i) {
+                step[static_cast<std::size_t>(i)] = next_x[static_cast<std::size_t>(i)] - x[static_cast<std::size_t>(i)];
+                change[static_cast<std::size_t>(i)] = next_g[static_cast<std::size_t>(i)] - g[static_cast<std::size_t>(i)];
             }
-
-            // Skip update if fac not sufficiently positive.
-            if (fac > std::sqrt(EPS * sumdg * sumxi)) {
-                fac = 1.0 / fac;
-                double fad = 1.0 / fae;
-                for (int i = 0; i < D; i++) dg[i] = fac * xi[i] - fad * hdg[i];
-                for (int i = 0; i < D; i++) {
-                    for (int j = i; j < D; j++) {
-                        hessin(i, j) +=
-                            fac * xi[i] * xi[j] - fad * hdg[i] * hdg[j] + fae * dg[i] * dg[j];
-                        hessin(j, i) = hessin(i, j);
-                    }
-                }
-            }
-
-            for (int i = 0; i < D; i++) {
-                xi[i] = 0.0;
-                for (int j = 0; j < D; j++) xi[i] -= hessin(i, j) * g[j];
-            }
-
-            iterations_ += 1;
+            update_inverse_hessian(inverse_hessian, step, change);
+            x = std::move(next_x);
+            f = next_f;
+            g = std::move(next_g);
         }
-
-        // If we made it to here, the maximum iterations were reached.
-        update_status(OptimizationStatus::MaximumIterationsReached);
     }
 
    private:
@@ -210,231 +188,224 @@ class BFGS : public Optimizer {
     std::vector<double> lower_bounds_;
     std::vector<double> upper_bounds_;
 
-    // Finite-difference fallback for the gradient: the C#'s
-    // `NumericalDerivative.Gradient(x => Evaluate(x, ref cancel), p)` (see class header
-    // note 1).
-    std::vector<double> numerical_gradient(const std::vector<double>& p, bool& cancel) {
-        return differentiation::gradient(
-            [this, &cancel](const std::vector<double>& x) {
-                auto values = x;  // Objective/evaluate take a mutable reference
-                return evaluate(values, cancel);
-            },
-            p);
+    double evaluate_objective(std::vector<double>& x, bool& cancel) {
+        auto incumbent = best_parameter_set_;
+        double f = evaluate(x, cancel);
+        if (!is_finite(f)) best_parameter_set_ = std::move(incumbent);
+        return f;
     }
 
-    // Auxiliary function for searching a line (Numerical-Recipes backtracking Armijo
-    // search). Ported for structural fidelity; NOT called by optimize(), exactly as in the
-    // C# (see class header note 3).
-    //   xold:   n-dimensional point [0..n-1].
-    //   fold:   value of the function at xold.
-    //   g:      gradient of function at xold.
-    //   p:      a direction to search (C# `ref`; may be rescaled in place).
-    //   x:      a new point x[0..n-1] (C# `ref`).
-    //   f:      the new function value.
-    //   stpmax: limits the length of steps.
-    //   check:  false on a normal exit, true when x is too close to xold.
-    //   cancel: determines if the solver should be canceled.
-    void line_search_armijo(const std::vector<double>& xold, double fold,
-                            const std::vector<double>& g, std::vector<double>& p,
-                            std::vector<double>& x, double& f, double stpmax, bool& check,
-                            bool& cancel) {
-        double ALF = 1.0e-4, TOLX = kDoubleMachineEpsilon;
-        double a, alam, alam2 = 0.0, alamin, b, disc, f2 = 0.0;
-        double rhs1, rhs2, slope = 0.0, sum = 0.0, temp, test, tmplam;
-        std::size_t i, n = xold.size();
-        check = false;
-        for (i = 0; i < n; i++) sum += p[i] * p[i];
-        sum = std::sqrt(sum);
-        if (sum > stpmax)
-            for (i = 0; i < n; i++) p[i] *= stpmax / sum;
-        for (i = 0; i < n; i++) slope += g[i] * p[i];
-        if (slope == 0.0) return;  // If the slope is zero, it is on a flat spot. Exit the routine.
-        if (slope > 0.0) throw std::runtime_error("Roundoff problem in line search.");
-        test = 0.0;
-        for (i = 0; i < n; i++) {
-            temp = std::fabs(p[i]) / std::max(std::fabs(xold[i]), 1.0);
-            if (temp > test) test = temp;
+    std::vector<double> evaluate_gradient(const std::vector<double>& x, bool& cancel) {
+        std::vector<double> g;
+        if (gradient) {
+            g = gradient(x);
+            if (static_cast<int>(g.size()) != number_of_parameters_)
+                throw ArgumentException("The gradient must contain one value per parameter.");
+            for (double& value : g) value *= static_cast<double>(function_scale_);
+        } else {
+            bool stopped = cancel;
+            g = differentiation::gradient(
+                [this, &stopped](const std::vector<double>& point) {
+                    if (stopped) return std::numeric_limits<double>::quiet_NaN();
+                    auto trial = point;
+                    return evaluate_objective(trial, stopped);
+                },
+                x, lower_bounds_, upper_bounds_);
+            cancel = stopped;
+            if (cancel) return g;
         }
-        alamin = TOLX / test;
-        alam = 1.0;
-        for (;;) {
-            for (i = 0; i < n; i++) {
-                x[i] = xold[i] + alam * p[i];
-                // Make sure the parameters are within the bounds.
-                x[i] = repair_parameter(x[i], lower_bounds_[i], upper_bounds_[i]);
-            }
-            f = evaluate(x, cancel);
-            if (cancel) return;
-            if (alam < alamin) {
-                for (i = 0; i < n; i++) x[i] = xold[i];
-                check = true;
-                return;
-            } else if (f <= fold + ALF * alam * slope) {
-                return;
-            } else {
-                if (alam == 1.0) {
-                    tmplam = -slope / (2.0 * (f - fold - slope));
-                } else {
-                    rhs1 = f - fold - alam * slope;
-                    rhs2 = f2 - fold - alam2 * slope;
-                    a = (rhs1 / (alam * alam) - rhs2 / (alam2 * alam2)) / (alam - alam2);
-                    b = (-alam2 * rhs1 / (alam * alam) + alam * rhs2 / (alam2 * alam2)) /
-                        (alam - alam2);
-                    if (a == 0.0) {
-                        tmplam = -slope / (2.0 * b);
-                    } else {
-                        disc = b * b - 3.0 * a * slope;
-                        if (disc < 0.0)
-                            tmplam = 0.5 * alam;
-                        else if (b <= 0.0)
-                            tmplam = (-b + std::sqrt(disc)) / (3.0 * a);
-                        else
-                            tmplam = -slope / (b + std::sqrt(disc));
-                    }
-                    if (tmplam > 0.5 * alam) tmplam = 0.5 * alam;
-                }
-            }
-            alam2 = alam;
-            f2 = f;
-            alam = std::max(tmplam, 0.1 * alam);
-        }
+        for (double value : g)
+            if (!is_finite(value))
+                throw ArgumentException("The gradient must contain only finite values.");
+        return g;
     }
 
-    // Performs a strong Wolfe line search to find a step size that satisfies both the
-    // sufficient decrease (Armijo) and curvature conditions.
-    //   x0:     the current parameter vector.
-    //   f0:     the objective function value at x0.
-    //   g0:     the gradient at x0.
-    //   p:      the search direction (C# `double[]`, a reference type mutated in place
-    //           when rescaled to stpmax -- so a mutable reference here too).
-    //   x:      the output parameter vector at the accepted step size.
-    //   f:      the objective function value at x.
-    //   stpmax: the maximum allowable step length.
-    //   check:  returns true if the search failed to find an acceptable step.
-    //   cancel: set to true if cancellation is requested during evaluation.
-    void line_search(const std::vector<double>& x0, double f0, const std::vector<double>& g0,
-                     std::vector<double>& p, std::vector<double>& x, double& f, double stpmax,
-                     bool& check, bool& cancel) {
-        const double c1 = 1e-4, c2 = 0.9;
-        double alpha = 1.0, alpha_prev = 0.0;
-        double f_prev = f0;
-        double slope0 = sum_product(g0, p);
-        std::vector<double> g(p.size());
-        std::vector<double> x_temp(p.size());
-
-        // C#: double normP = Math.Sqrt(p.Sum(pi => pi * pi));
-        double sum_sq = 0.0;
-        for (std::size_t i = 0; i < p.size(); i++) sum_sq += p[i] * p[i];
-        double norm_p = std::sqrt(sum_sq);
-        if (norm_p > stpmax) {
-            double scale = stpmax / norm_p;
-            for (std::size_t i = 0; i < p.size(); i++) p[i] *= scale;
+    double projected_gradient(const std::vector<double>& x, const std::vector<double>& g,
+                              std::vector<double>& projected) const {
+        double norm = 0.0;
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            projected[i] = ((x[i] <= lower_bounds_[i] && g[i] > 0.0) ||
+                            (x[i] >= upper_bounds_[i] && g[i] < 0.0) ||
+                            lower_bounds_[i] == upper_bounds_[i])
+                               ? 0.0
+                               : g[i];
+            norm = std::max(norm, std::fabs(projected[i]));
         }
-
-        for (int iter = 0; iter < 20; iter++) {
-            for (std::size_t i = 0; i < x0.size(); i++) {
-                x_temp[i] = x0[i] + alpha * p[i];
-                x_temp[i] = repair_parameter(x_temp[i], lower_bounds_[i], upper_bounds_[i]);
-            }
-
-            f = evaluate(x_temp, cancel);
-            if (cancel) return;
-
-            if (f > f0 + c1 * alpha * slope0 || (iter > 0 && f >= f_prev)) {
-                zoom(x0, f0, slope0, p, alpha_prev, alpha, f, x, cancel);
-                return;
-            }
-
-            // C# local-copy round-trip transcribed as-is (see class header note 2).
-            bool cancel_flag = cancel;
-            g = gradient ? gradient(x_temp)
-                         : differentiation::gradient(
-                               [this, &cancel_flag](const std::vector<double>& xg) {
-                                   auto values = xg;
-                                   return evaluate(values, cancel_flag);
-                               },
-                               x_temp);
-            cancel = cancel_flag;
-            if (cancel) return;
-
-            double slope = sum_product(g, p);
-
-            if (std::fabs(slope) <= -c2 * slope0) {
-                std::copy(x_temp.begin(), x_temp.end(), x.begin());
-                return;
-            }
-
-            if (slope >= 0) {
-                zoom(x0, f0, slope0, p, alpha, alpha_prev, f, x, cancel);
-                return;
-            }
-
-            alpha_prev = alpha;
-            f_prev = f;
-            alpha *= 2.0;
-        }
-
-        std::copy(x0.begin(), x0.end(), x.begin());
-        check = true;
+        return norm;
     }
 
-    // Zoom phase of the strong Wolfe line search: bisection between two step sizes to find
-    // an acceptable step satisfying the Wolfe conditions.
-    //   x0:        the initial parameter vector.
-    //   f0:        the objective function value at x0.
-    //   slope0:    the directional derivative at x0 along the search direction.
-    //   p:         the search direction vector.
-    //   alphaLow:  the lower bound of the step size interval (by value, as in the C#).
-    //   alphaHigh: the upper bound of the step size interval (by value, as in the C#).
-    //   f:         the objective function value at the final accepted point.
-    //   x:         the parameter vector at the final accepted step size.
-    //   cancel:    set to true if cancellation is requested during evaluation.
-    void zoom(const std::vector<double>& x0, double f0, double slope0,
-              const std::vector<double>& p, double alpha_low, double alpha_high, double& f,
-              std::vector<double>& x, bool& cancel) {
-        const double c1 = 1e-4, c2 = 0.9;
-        std::vector<double> g(p.size());
-        std::vector<double> x_temp(p.size());
+    void make_feasible(const std::vector<double>& x, std::vector<double>& direction) const {
+        for (std::size_t i = 0; i < x.size(); ++i)
+            if ((x[i] <= lower_bounds_[i] && direction[i] < 0.0) ||
+                (x[i] >= upper_bounds_[i] && direction[i] > 0.0))
+                direction[i] = 0.0;
+    }
 
-        for (int iter = 0; iter < 20; iter++) {
-            double alpha = 0.5 * (alpha_low + alpha_high);
-            for (std::size_t i = 0; i < x0.size(); i++) {
-                x_temp[i] = x0[i] + alpha * p[i];
-                x_temp[i] = repair_parameter(x_temp[i], lower_bounds_[i], upper_bounds_[i]);
-            }
-
-            f = evaluate(x_temp, cancel);
-            if (cancel) return;
-
-            if (f > f0 + c1 * alpha * slope0) {
-                alpha_high = alpha;
-            } else {
-                // C# local-copy round-trip transcribed as-is (see class header note 2).
-                bool cancel_flag = cancel;
-                g = gradient ? gradient(x_temp)
-                             : differentiation::gradient(
-                                   [this, &cancel_flag](const std::vector<double>& xg) {
-                                       auto values = xg;
-                                       return evaluate(values, cancel_flag);
-                                   },
-                                   x_temp);
-                cancel = cancel_flag;
-                if (cancel) return;
-
-                double slope = sum_product(g, p);
-
-                if (std::fabs(slope) <= -c2 * slope0) {
-                    std::copy(x_temp.begin(), x_temp.end(), x.begin());
+    static void update_inverse_hessian(linalg::Matrix& h, const std::vector<double>& s,
+                                       const std::vector<double>& y) {
+        const int n = static_cast<int>(s.size());
+        std::vector<double> hy(static_cast<std::size_t>(n), 0.0);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j)
+                hy[static_cast<std::size_t>(i)] += h(i, j) * y[static_cast<std::size_t>(j)];
+        double ys = sum_product(y, s);
+        double yhy = sum_product(y, hy);
+        double floor = std::sqrt(kDoubleMachineEpsilon) * std::sqrt(sum_product(y, y)) *
+                       std::sqrt(sum_product(s, s));
+        if (!is_finite(ys) || !is_finite(yhy) || yhy <= 0.0 || ys <= floor) return;
+        std::vector<double> v(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i)
+            v[static_cast<std::size_t>(i)] = s[static_cast<std::size_t>(i)] / ys -
+                                             hy[static_cast<std::size_t>(i)] / yhy;
+        for (int i = 0; i < n; ++i) {
+            for (int j = i; j < n; ++j) {
+                double value = h(i, j) + s[static_cast<std::size_t>(i)] * s[static_cast<std::size_t>(j)] / ys -
+                               hy[static_cast<std::size_t>(i)] * hy[static_cast<std::size_t>(j)] / yhy +
+                               yhy * v[static_cast<std::size_t>(i)] * v[static_cast<std::size_t>(j)];
+                if (!is_finite(value)) {
+                    h = linalg::Matrix::identity(n);
                     return;
                 }
-
-                if (slope * (alpha_high - alpha_low) >= 0) alpha_high = alpha_low;
-
-                alpha_low = alpha;
+                h(i, j) = h(j, i) = value;
             }
         }
+    }
 
-        std::copy(x0.begin(), x0.end(), x.begin());
+    std::vector<double> trial_point(const std::vector<double>& x0, const std::vector<double>& p,
+                                    double alpha) const {
+        std::vector<double> x(x0.size());
+        for (std::size_t i = 0; i < x.size(); ++i)
+            x[i] = repair_parameter(x0[i] + alpha * p[i], lower_bounds_[i], upper_bounds_[i]);
+        return x;
+    }
+
+    bool try_roundoff_convergence(const std::vector<double>& trial, double value,
+                                  double initial_value, std::vector<double>& result_gradient,
+                                  bool& cancel) {
+        double roundoff = 8.0 * kDoubleMachineEpsilon * std::fabs(initial_value);
+        if (!gradient || !is_finite(value) || std::fabs(value - initial_value) > roundoff) return false;
+        auto candidate = evaluate_gradient(trial, cancel);
+        std::vector<double> projected(static_cast<std::size_t>(number_of_parameters_));
+        if (cancel || projected_gradient(trial, candidate, projected) > absolute_tolerance) return false;
+        result_gradient = std::move(candidate);
+        return true;
+    }
+
+    bool line_search(const std::vector<double>& x0, double f0, const std::vector<double>& g0,
+                     std::vector<double>& p, double stpmax, std::vector<double>& x, double& f,
+                     std::vector<double>& g, bool& cancel) {
+        x = x0;
+        f = f0;
+        g = g0;
+        double norm = std::sqrt(sum_product(p, p));
+        if (norm > stpmax)
+            for (double& value : p) value *= stpmax / norm;
+        double slope0 = sum_product(g0, p);
+        if (!is_finite(slope0) || slope0 >= 0.0) return false;
+
+        double limit = std::numeric_limits<double>::infinity();
+        for (std::size_t i = 0; i < p.size(); ++i) {
+            if (p[i] > 0.0) limit = std::min(limit, (upper_bounds_[i] - x0[i]) / p[i]);
+            else if (p[i] < 0.0) limit = std::min(limit, (lower_bounds_[i] - x0[i]) / p[i]);
+        }
+        double alpha = std::min(1.0, limit);
+        double previous = 0.0, f_previous = f0, slope_previous = slope0;
+        for (int iteration = 0; iteration < 20; ++iteration) {
+            auto trial = trial_point(x0, p, alpha);
+            if (alpha <= 0.0 || trial == x0) return false;
+            double value = evaluate_objective(trial, cancel);
+            if (cancel) return false;
+            if (!is_finite(value) || value > f0 + 1e-4 * alpha * slope0) {
+                std::vector<double> stationary;
+                if (try_roundoff_convergence(trial, value, f0, stationary, cancel)) {
+                    x = std::move(trial); f = value; g = std::move(stationary); return true;
+                }
+                if (cancel) return false;
+                return zoom(x0, f0, g0, p, slope0, previous, f_previous, slope_previous,
+                            alpha, value, std::numeric_limits<double>::quiet_NaN(), x, f, g, cancel);
+            }
+
+            auto trial_gradient = evaluate_gradient(trial, cancel);
+            if (cancel) return false;
+            double slope = sum_product(trial_gradient, p);
+            if (std::fabs(slope) <= -0.9 * slope0 || (alpha == limit && slope < 0.0)) {
+                x = std::move(trial); f = value; g = std::move(trial_gradient); return true;
+            }
+            if (!is_finite(slope)) return false;
+            if (iteration > 0 && value >= f_previous)
+                return zoom(x0, f0, g0, p, slope0, previous, f_previous, slope_previous,
+                            alpha, value, slope, x, f, g, cancel);
+            if (slope >= 0.0)
+                return zoom(x0, f0, g0, p, slope0, alpha, value, slope,
+                            previous, f_previous, slope_previous, x, f, g, cancel);
+            previous = alpha;
+            f_previous = value;
+            slope_previous = slope;
+            alpha = std::min(2.0 * alpha, limit);
+            if (alpha == previous) return false;
+        }
+        return false;
+    }
+
+    bool zoom(const std::vector<double>& x0, double f0, const std::vector<double>& g0,
+              const std::vector<double>& p, double slope0, double low, double f_low,
+              double slope_low, double high, double f_high, double slope_high,
+              std::vector<double>& x, double& f, std::vector<double>& g, bool& cancel) {
+        x = x0; f = f0; g = g0;
+        std::vector<double> previous_trial;
+        for (int iteration = 0; iteration < 20; ++iteration) {
+            double alpha = interpolate(low, f_low, slope_low, high, f_high, slope_high);
+            if (alpha == low || alpha == high) return false;
+            auto trial = trial_point(x0, p, alpha);
+            if (trial == x0 || (!previous_trial.empty() && trial == previous_trial)) return false;
+            previous_trial = trial;
+            double value = evaluate_objective(trial, cancel);
+            if (cancel) return false;
+            if (!is_finite(value) || value > f0 + 1e-4 * alpha * slope0) {
+                std::vector<double> stationary;
+                if (try_roundoff_convergence(trial, value, f0, stationary, cancel)) {
+                    x = std::move(trial); f = value; g = std::move(stationary); return true;
+                }
+                if (cancel) return false;
+                high = alpha; f_high = value; slope_high = std::numeric_limits<double>::quiet_NaN();
+            } else {
+                auto trial_gradient = evaluate_gradient(trial, cancel);
+                if (cancel) return false;
+                double slope = sum_product(trial_gradient, p);
+                if (std::fabs(slope) <= -0.9 * slope0) {
+                    x = std::move(trial); f = value; g = std::move(trial_gradient); return true;
+                }
+                if (!is_finite(slope)) return false;
+                if (value >= f_low) {
+                    high = alpha; f_high = value; slope_high = slope; continue;
+                }
+                if (slope * (high - low) >= 0.0) {
+                    high = low; f_high = f_low; slope_high = slope_low;
+                }
+                low = alpha; f_low = value; slope_low = slope;
+            }
+        }
+        return false;
+    }
+
+    static double interpolate(double a, double fa, double ga, double b, double fb, double gb) {
+        double width = b - a;
+        double left = std::min(a, b) + 0.1 * std::fabs(width);
+        double right = std::max(a, b) - 0.1 * std::fabs(width);
+        double candidate = std::numeric_limits<double>::quiet_NaN();
+        if (is_finite(gb) && is_finite(fb)) {
+            double d1 = ga + gb - 3.0 * (fb - fa) / width;
+            double radicand = d1 * d1 - ga * gb;
+            if (radicand >= 0.0) {
+                double d2 = std::copysign(std::sqrt(radicand), width);
+                candidate = b - width * (gb + d2 - d1) / (gb - ga + 2.0 * d2);
+            }
+        }
+        if (!is_finite(candidate) || candidate <= left || candidate >= right)
+            candidate = a - ga * width * width / (2.0 * (fb - fa - ga * width));
+        if (!is_finite(candidate) || candidate <= std::min(a, b) || candidate >= std::max(a, b))
+            return a + 0.5 * width;
+        return std::max(left, std::min(right, candidate));
     }
 };
 

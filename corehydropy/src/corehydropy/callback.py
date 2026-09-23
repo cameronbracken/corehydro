@@ -499,14 +499,14 @@ def quadrature_2d(
     relative_tolerance: float | None = None,
     min_depth: int | None = None,
     max_depth: int | None = None,
+    max_function_evaluations: int | None = None,
+    method: str = "adaptive_simpson",
 ) -> QuadratureResult:
     """Integrate a user-written function of two variables over a rectangle.
 
     Computes the definite integral of ``f(x, y)`` over the rectangle ``[min_x, max_x] x
-    [min_y, max_y]`` with the ported Numerics adaptive Simpson's rule in two dimensions
-    (P2 "math extras"): the tensor-product 3x3-point Simpson estimate over the whole domain is
-    compared against the sum of the four quadrant sub-estimates, and the domain is subdivided
-    into quadrants until the two agree to the requested tolerance.
+    [min_y, max_y]`` with either the ported adaptive Simpson rule or the globally adaptive
+    Gauss-Kronrod rule added in Numerics 2.2.
 
     Parameters
     ----------
@@ -522,6 +522,10 @@ def quadrature_2d(
     min_depth, max_depth : int, optional
         The recursion-depth bounds. Left unset, the ported class's own defaults (0 and 100)
         apply.
+    max_function_evaluations : int, optional
+        Maximum evaluations of ``f``. Left unset, the selected integrator's default applies.
+    method : str
+        ``"adaptive_simpson"`` (the default) or ``"adaptive_gauss_kronrod"``.
 
     Returns
     -------
@@ -536,6 +540,10 @@ def quadrature_2d(
     1.0
     """
     _check_fn(f)
+    if method not in ("adaptive_simpson", "adaptive_gauss_kronrod"):
+        raise ValueError(
+            '`method` must be "adaptive_simpson" or "adaptive_gauss_kronrod"'
+        )
 
     def _check_bound(x: object, name: str) -> float:
         x = float(x)
@@ -551,11 +559,12 @@ def quadrature_2d(
         raise ValueError("`min_x` must be below `max_x`")
     if min_y >= max_y:
         raise ValueError("`min_y` must be below `max_y`")
-    options: dict[str, float | int] = {
+    options: dict[str, float | int | str] = {
         "min_x": min_x,
         "max_x": max_x,
         "min_y": min_y,
         "max_y": max_y,
+        "method": method,
     }
     if absolute_tolerance is not None:
         if not 1e-15 <= float(absolute_tolerance) <= 1:
@@ -573,6 +582,10 @@ def quadrature_2d(
         if int(max_depth) < 0:
             raise ValueError("`max_depth` must be a single non-negative integer")
         options["max_depth"] = int(max_depth)
+    if max_function_evaluations is not None:
+        if int(max_function_evaluations) < 1:
+            raise ValueError("`max_function_evaluations` must be a single positive integer")
+        options["max_function_evaluations"] = int(max_function_evaluations)
     res = _core.callback_math_xy("quadrature_2d", json.dumps(options), f)
     return QuadratureResult(res["values"][0], res["status"], res["values"][1], res["values"][2])
 
@@ -727,6 +740,7 @@ def quadrature_nd(
     alpha: float | None = None,
     number_of_bins: int | None = None,
     tail_focus_parameter: float | None = None,
+    sobol_seed: int | None = None,
     initialize: int | None = None,
     check_convergence: bool | None = None,
     target_probability: float | None = None,
@@ -817,14 +831,16 @@ def quadrature_nd(
         falls on a subdivision boundary. Left unset, the ported class's own defaults apply.
         Supplying any for another ``method`` raises ``ValueError``.
     independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter,
-    initialize, check_convergence, target_probability : optional
+    initialize, check_convergence, sobol_seed, target_probability : optional
         ``method="vegas"`` alone. ``independent_evaluations`` and ``function_calls`` bound the run
         (their product is the maximum total evaluations); ``alpha`` is the grid-refinement damping
         exponent; ``number_of_bins`` the stratification bin count; ``tail_focus_parameter`` the
         Power Transform exponent (1.0, the default, is standard uniform sampling); ``initialize``
         selects a cold start (0, the default), inheriting the grid alone (1), or inheriting the
         grid and its answers (2); ``check_convergence`` whether to exit early on convergence.
-        ``target_probability``, if supplied, calls the ported ``configure_for_rare_events()``
+        ``sobol_seed`` controls the linear-matrix scramble and digital shift used by Vegas when
+        Sobol sampling is enabled. ``target_probability``, if supplied, calls the ported
+        ``configure_for_rare_events()``
         helper -- applied AFTER every other option, so it may override
         ``number_of_bins``/``alpha``/``tail_focus_parameter``, exactly as the C# helper does. Left
         unset, the ported class's own defaults apply. Supplying any for another ``method`` raises
@@ -891,7 +907,8 @@ def quadrature_nd(
     _scope(
         {"independent_evaluations": independent_evaluations, "function_calls": function_calls,
          "alpha": alpha, "number_of_bins": number_of_bins,
-         "tail_focus_parameter": tail_focus_parameter, "initialize": initialize,
+         "tail_focus_parameter": tail_focus_parameter, "sobol_seed": sobol_seed,
+         "initialize": initialize,
          "check_convergence": check_convergence, "target_probability": target_probability},
         "vegas", "vegas",
     )
@@ -927,6 +944,8 @@ def quadrature_nd(
         options["number_of_bins"] = int(number_of_bins)
     if tail_focus_parameter is not None:
         options["tail_focus_parameter"] = float(tail_focus_parameter)
+    if sobol_seed is not None:
+        options["sobol_seed"] = int(sobol_seed)
     if initialize is not None:
         options["initialize"] = int(initialize)
     if check_convergence is not None:

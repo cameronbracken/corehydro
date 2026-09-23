@@ -28,6 +28,7 @@ set(BF_TESTS
   test_autocorrelation
   test_mixture
   test_mixture_em_seeding
+  test_competing_risks
   test_empirical_distribution
   test_univariate_distribution_factory
   test_kernel_density
@@ -100,6 +101,8 @@ set(BF_TESTS
   test_bootstrap_analysis
   test_pivotal_bootstrap
   test_copula_clone
+  test_copulas_v220
+  test_distribution_numerics_v220
   test_multivariate_normal_api
   test_brent_search
   test_adaptive_gauss_kronrod
@@ -121,6 +124,7 @@ set(BF_TESTS
   test_augmented_lagrange
   test_network_optimization
   test_statistics_helpers
+  test_numerics_v220_foundations
   test_hypothesis_tests
   test_data_frame_facades
   test_ordinate

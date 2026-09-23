@@ -99,6 +99,7 @@
 #include "corehydro/numerics/math/special/erf.hpp"
 #include "corehydro/numerics/math/special/factorial.hpp"
 #include "corehydro/numerics/math/special/gamma.hpp"
+#include "corehydro/numerics/math/special/debye.hpp"
 #include "corehydro/numerics/sampling/bootstrap/bootstrap.hpp"
 #include "corehydro/numerics/sampling/bootstrap/ci_method_names.hpp"
 #include "corehydro/numerics/sampling/bootstrap/model_registry.hpp"
@@ -640,6 +641,7 @@ special_function_table() {
         {"Erf.erfc",          [](const std::vector<double>& a) { return sf::erf::erfc(a[0]); }},
         {"Erf.inverse_erf",   [](const std::vector<double>& a) { return sf::erf::inverse_erf(a[0]); }},
         {"Erf.inverse_erfc",  [](const std::vector<double>& a) { return sf::erf::inverse_erfc(a[0]); }},
+        {"Debye.function_order_one", [](const std::vector<double>& a) { return sf::debye_function_order_one(a[0]); }},
         // Gamma family
         {"Gamma.function",               [](const std::vector<double>& a) { return sf::function(a[0]); }},
         {"Gamma.log_gamma",              [](const std::vector<double>& a) { return sf::log_gamma(a[0]); }},
@@ -649,6 +651,7 @@ special_function_table() {
         {"Gamma.upper_incomplete",       [](const std::vector<double>& a) { return sf::upper_incomplete(a[0], a[1]); }},
         {"Gamma.inverse_lower_incomplete", [](const std::vector<double>& a) { return sf::inverse_lower_incomplete(a[0], a[1]); }},
         {"Gamma.inverse_upper_incomplete", [](const std::vector<double>& a) { return sf::inverse_upper_incomplete(a[0], a[1]); }},
+        {"Gamma.incomplete",             [](const std::vector<double>& a) { return sf::incomplete(a[0], a[1]); }},
         // Beta family
         {"Beta.function",           [](const std::vector<double>& a) { return sf::beta::function(a[0], a[1]); }},
         {"Beta.incomplete",         [](const std::vector<double>& a) { return sf::beta::incomplete(a[0], a[1], a[2]); }},
@@ -1071,6 +1074,7 @@ special_function_table() {
         {"Probability.hpcm_conditional_at", probability_hpcm_conditional_at},
         // Tools.log10 (args: [x] -- see fixtures/special_functions/tools.json)
         {"Tools.log10", [](const std::vector<double>& a) { return corehydro::numerics::clamped_log10(a[0]); }},
+        {"Tools.expm1", [](const std::vector<double>& a) { return corehydro::numerics::expm1(a[0]); }},
     };
     return t;
 }
@@ -2164,7 +2168,7 @@ static bool mv_delegated(const std::string& target, const std::string& m,
     if (m == "mvndst" || m == "mvndst_inform" || m == "mvndst_error") return false;
     if (target == "MultivariateNormal" && (m == "cdf" || m == "interval") && !mvn_stream_isolated)
         return false;
-    return m == "dimension" || m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis" ||
+    return m == "dimension" || m == "decomposition" || m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis" ||
            m == "mean" || m == "variance" || m == "sd" || m == "covariance" ||
            m == "median" || m == "mode" || m == "inverse_cdf" || m == "interval" ||
            m == "degrees_of_freedom" || m == "alpha" || m == "alpha_sum" ||
@@ -2194,7 +2198,7 @@ static double dispatch_multivariate_delegated(const std::string& spec, const std
     auto run = [&](const std::string& s, const std::string& method, const json& args) {
         return supp::run_mvdist(s, method, args.dump());
     };
-    if (m == "dimension" || m == "alpha_sum" || m == "degrees_of_freedom" ||
+    if (m == "dimension" || m == "decomposition" || m == "alpha_sum" || m == "degrees_of_freedom" ||
         m == "number_of_trials")
         return run(spec, m, json::array()).values.at(0);
     if (m == "pdf" || m == "log_pdf" || m == "cdf" || m == "mahalanobis")
@@ -2500,6 +2504,7 @@ static mcmc::MCMCRunSettings read_settings(const json& settings) {
     read_int("steps", s.steps);
     read_int("max_tree_depth", s.max_tree_depth);
     if (settings.contains("adapt_mass_matrix")) s.adapt_mass_matrix = settings["adapt_mass_matrix"].get<bool>();
+    read_double("target_acceptance_rate", s.target_acceptance_rate);
     read_double("scale", s.scale);
     read_double("beta", s.beta);
     read_double("jump", s.jump);
@@ -2540,7 +2545,7 @@ static double dispatch_mcmc(const mcmc::MCMCSampler& sampler, const mcmc::MCMCRe
     if (m == "chain_fitness") return sampler.markov_chains()[idx(0)][idx(1)].fitness;
     if (m == "map_value") return results.map.values[idx(0)];
     if (m == "map_fitness") return results.map.fitness;
-    if (m == "acceptance_rate") return sampler.acceptance_rates()[idx(0)];
+    if (m == "acceptance_rate") return results.acceptance_rates[idx(0)];
     if (m == "mean_log_likelihood") return sampler.mean_log_likelihood()[idx(0)];
     if (m == "rhat") return results.parameter_results[idx(0)].summary_statistics.rhat;
     if (m == "ess") return results.parameter_results[idx(0)].summary_statistics.ess;

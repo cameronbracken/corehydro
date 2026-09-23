@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Logistic.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Logistic.cs @ 7e8e8d1
 //
 // The Logistic distribution with location ξ and scale α. Logic mirrors the C# source
 // method-for-method. IStandardError, IBootstrappable, and the WPF helpers are not ported
@@ -61,22 +61,43 @@ class Logistic : public UnivariateDistributionBase,
 
     // --- Distribution functions ---
     double pdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        double ez = std::exp(-z);
-        return 1.0 / alpha_ * ez * std::pow(1.0 + ez, -2.0);
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double magnitude =
+            std::fabs(distribution_numerics::standardize(x, xi_, alpha_));
+        if (magnitude > 36.0) return std::exp(log_pdf(x));
+        const double tail = std::exp(-magnitude);
+        return (tail / (1.0 + tail)) / (1.0 + tail) / alpha_;
     }
 
-    double cdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        return 1.0 / (1.0 + std::exp(-z));
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double magnitude =
+            std::fabs(distribution_numerics::standardize(x, xi_, alpha_));
+        return -std::log(alpha_) - magnitude - 2.0 * std::log1p(std::exp(-magnitude));
+    }
+
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        return z >= 0.0 ? -std::log1p(std::exp(-z)) : z - std::log1p(std::exp(z));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Logistic: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        return z >= 0.0 ? -z - std::log1p(std::exp(-z)) : -std::log1p(std::exp(z));
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (std::isnan(probability) || probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        return xi_ + alpha_ * std::log(probability / (1.0 - probability));
+        return xi_ + alpha_ * (std::log(probability) - std::log1p(-probability));
     }
 
     // --- Parameter display names (X1; C# Logistic.cs ParametersToString col0 +
@@ -94,6 +115,7 @@ class Logistic : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(parameters_from_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MaximumLikelihood) {
@@ -112,9 +134,20 @@ class Logistic : public UnivariateDistributionBase,
     void get_parameter_constraints(const std::vector<double>& sample, std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = parameters_from_moments(data::product_moments(sample));
-        lowers.resize(2);
-        uppers.resize(2);
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto initials = parameters_from_moments(data::product_moments(sample));
+        std::vector<double> lowers(2), uppers(2);
         // bounds for location
         double xi0 = initials[0] != 0.0 ? initials[0] : kDoubleMachineEpsilon;
         lowers[0] = -std::pow(10.0, std::ceil(std::log10(std::fabs(xi0)) + 1.0));
@@ -122,8 +155,21 @@ class Logistic : public UnivariateDistributionBase,
         // bounds for scale
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        Normal normal;
+        auto constraints = normal.robust_parameter_constraints(sample);
+        const double correction = std::sqrt(3.0) / kPi;
+        std::get<0>(constraints)[1] *= correction;
+        std::get<1>(constraints)[1] *= correction;
+        std::get<2>(constraints)[1] *= correction;
+        return constraints;
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);

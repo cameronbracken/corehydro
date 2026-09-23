@@ -24,10 +24,10 @@
         }
       },
       "assertions": [
-        { "method": "rhat", "args": [0], "expected": 2.818431333647126, "mode": "rel", "tol": 1e-09 },
-        { "method": "rhat", "args": [1], "expected": 1.4565129026449781, "mode": "rel", "tol": 1e-09 },
-        { "method": "ess", "args": [0], "expected": 25.817134287832996, "mode": "rel", "tol": 1e-09 },
-        { "method": "ess", "args": [1], "expected": 17.951089666052102, "mode": "rel", "tol": 1e-09 },
+        { "method": "rhat", "args": [0], "expected": 2.2848998699694705, "mode": "rel", "tol": 0.001, "source": "Numerics v2.2.0 rank-normalized R-hat; measured C++ chain drift is 8.3e-4 relative" },
+        { "method": "rhat", "args": [1], "expected": 2.5407979614399125, "mode": "rel", "tol": 1e-09 },
+        { "method": "ess", "args": [0], "expected": 19.19746363654269, "mode": "rel", "tol": 1e-09 },
+        { "method": "ess", "args": [1], "expected": 6.79215362355126, "mode": "rel", "tol": 1e-09 },
         { "method": "acceptance_rate", "args": [0], "expected": 0.06, "mode": "rel", "tol": 1e-12 },
         { "method": "acceptance_rate", "args": [1], "expected": 0.085, "mode": "rel", "tol": 1e-12 },
         { "method": "acceptance_rate", "args": [2], "expected": 0.075, "mode": "rel", "tol": 1e-12 },

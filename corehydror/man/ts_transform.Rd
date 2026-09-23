@@ -33,9 +33,8 @@ Every transformation LEAVES A MISSING VALUE MISSING except two, which follow the
 \code{"logarithm"} writes a missing value for any non-positive input, and \code{ts_standardize()}
 propagates missing values through the subtraction.
 
-\code{indexes} restricts the transformation to the given 1-based ordinate positions. Two
-transformations behave differently from their siblings when an index is out of range, because
-the library does: \code{"logarithm"} and \code{"inverse"} raise, while the others skip it.
+\code{indexes} restricts the transformation to the given 1-based ordinate positions. Out-of-range
+indexes are skipped for every transformation.
 }
 \examples{
 ts <- time_series(as.Date("2000-01-01") + 0:4, c(3, 1, 4, 1, 5))

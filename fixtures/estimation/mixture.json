@@ -1,7 +1,7 @@
 {
   "target": "MaximumLikelihood",
   "kind": "model_estimation",
-  "source": "Exact oracle values dumped from the REAL RMC.BestFit MaximumLikelihood via tools/oracle_emitter --dump (M14) and reproduced by tools/verify_oracles.py. Exercises the `mixture` model type: EM-seeded defaults + NelderMead; the second case sets zero_inflated: true on data with zeros (the zero weight is pinned to the data's zero-value relative frequency, not estimated). Parameter layout: [w_1, w_2, mu_1, sigma_1, mu_2, sigma_2]. These fits exercise the C# SetParameters(ref) weight-normalization WRITE-BACK into the optimizer's own working vectors (ported in M14 -- see model_base.hpp's MUTABLE-PARAMETER note); the M13 self-computed values predate that fix and differed in the raw weight coordinates (scale-equivalent optimum). NelderMead point values rel 1e-9. Covariance/standard errors are deliberately NOT asserted: the real C# covariance at this optimum is INDEFINITE (negative diagonal entries; GetStandardErrors clamps to 0) with off-diagonals at finite-difference noise scale (~1e-10) -- the M10 near-singular-Hessian ledger finding, confirmed against the real library; asserting noise is meaningless. T14 (BestFit v2.0.0, commit 1abe795 'Guard composite Jeffreys scale priors' + commit b43943c 'Fix BestFit port review findings') is NOT expressible declaratively in this file: the single-parameter-family Jeffreys-guard scenario needs a component distribution (e.g. Poisson) outside the model's own 15-family whitelist, and the shared spec builder's MixtureModel(DataFrame, families, zero_inflated) construction path always runs SetDefaultParameters -> dynamic_cast<IMaximumLikelihoodEstimation&> on every component, which throws std::bad_cast for such a component before a fixture case could ever reach the prior-likelihood surface being guarded; the zero-inflation Clone-propagation regression likewise needs to nudge the wrapped Mixture's own IsZeroInflated out of sync with the model-level flag, which only the mutable mixture() accessor (not the declarative model spec) can do. Both are covered by C++-only ctest instead (the GMM sticky-fallback precedent in this file's neighbor): core/tests/test_mixture_model.cpp's test_jeffreys_prior_one_parameter_component_omits_scale_contribution / test_jeffreys_prior_mixed_components_applies_only_available_scale_contribution / test_jeffreys_prior_nonpositive_scale_returns_negative_infinity / test_clone_zero_inflation_resync_uses_model_flag_not_mixture_flag.",
+  "source": "Exact oracle values dumped from the real RMC.BestFit MaximumLikelihood against Numerics v2.2.0 via tools/oracle_emitter --dump and reproduced by tools/verify_oracles.py. Exercises the mixture model type: EM-seeded defaults plus NelderMead; the second case sets zero_inflated: true on data with zeros. Parameter layout: [w_1, w_2, mu_1, sigma_1, mu_2, sigma_2]. Numerics v2.2 normalizes a private parameter copy in SetParameters(ref), so the optimizer's raw weight coordinates are preserved rather than overwritten. NelderMead point values use relative tolerance 1e-9. Covariance and standard errors are not asserted because the near-singular Hessian makes individual entries noise sensitive. The Jeffreys and clone regressions remain in core/tests/test_mixture_model.cpp because the declarative model builder cannot construct those stateful cases.",
   "datasets": {
     "bimodal_series": [
       520,
@@ -63,7 +63,7 @@
           "args": [
             0
           ],
-          "expected": 0.7499898648904965,
+          "expected": 1.0,
           "mode": "rel",
           "tol": 1e-09
         },
@@ -72,7 +72,7 @@
           "args": [
             1
           ],
-          "expected": 0.2500101351095036,
+          "expected": 0.3334646179975355,
           "mode": "rel",
           "tol": 1e-09
         },
@@ -81,7 +81,7 @@
           "args": [
             2
           ],
-          "expected": 802.6471570503224,
+          "expected": 802.6801382287679,
           "mode": "rel",
           "tol": 1e-09
         },
@@ -90,7 +90,7 @@
           "args": [
             3
           ],
-          "expected": 165.8525571930645,
+          "expected": 165.85869159189076,
           "mode": "rel",
           "tol": 1e-09
         },
@@ -99,14 +99,14 @@
           "args": [
             4
           ],
-          "expected": 5860.051762331863,
+          "expected": 5860.0429650882115,
           "mode": "rel",
           "tol": 1e-09
         },
         {
           "method": "max_log_likelihood",
           "args": [],
-          "expected": -148.58128125344734,
+          "expected": -148.58128103193022,
           "mode": "rel",
           "tol": 1e-09
         }
@@ -132,14 +132,14 @@
           "args": [
             0
           ],
-          "expected": 0.28620053592973327,
+          "expected": 0.45585630068256106,
           "mode": "rel",
           "tol": 1e-09
         },
         {
           "method": "max_log_likelihood",
           "args": [],
-          "expected": -83.66069869697367,
+          "expected": -83.58898296481541,
           "mode": "rel",
           "tol": 1e-09
         }

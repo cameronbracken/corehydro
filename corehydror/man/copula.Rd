@@ -4,7 +4,7 @@
 \alias{copula}
 \title{Construct a bivariate copula}
 \usage{
-copula(family, theta, df = NULL, margin_x = NULL, margin_y = NULL)
+copula(family, theta = NULL, df = NULL, margin_x = NULL, margin_y = NULL)
 }
 \arguments{
 \item{family}{one of \code{\link[=copula_names]{copula_names()}}.}

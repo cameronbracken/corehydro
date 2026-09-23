@@ -43,8 +43,22 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    cmd = ["dotnet", "run", "--project", str(EMITTER), "-c", "Release", "--",
-           str(Path(args.fixtures).resolve())]
+    # Build in one MSBuild process. Multi-node builds can wait indefinitely on the local node IPC
+    # connection in restricted runners even though the same compile finishes in a few seconds
+    # in-process. Disable NuGet auditing because this dev-only project has no package dependencies
+    # and oracle verification must not depend on vulnerability-service availability.
+    restore = ["dotnet", "restore", str(EMITTER), "--ignore-failed-sources",
+               "-p:NuGetAudit=false", "--disable-parallel"]
+    if subprocess.run(restore, cwd=ROOT).returncode != 0:
+        return 1
+    build = ["dotnet", "build", str(EMITTER), "-c", "Release", "--no-restore", "--nologo",
+             "-m:1", "-nodeReuse:false", "-p:UseSharedCompilation=false",
+             "-p:NuGetAudit=false"]
+    if subprocess.run(build, cwd=ROOT).returncode != 0:
+        return 1
+
+    emitter_dll = EMITTER / "bin" / "Release" / "net10.0" / "oracle_emitter.dll"
+    cmd = ["dotnet", str(emitter_dll), str(Path(args.fixtures).resolve())]
     if args.dump:
         cmd.append("--dump")
     proc = subprocess.run(cmd, cwd=ROOT)

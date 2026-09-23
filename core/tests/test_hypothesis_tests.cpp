@@ -279,6 +279,20 @@ void test_unimodality_test() {
     CHECK_EQ(ht::unimodality_test(unimodal_data), ht::unimodality_test(unimodal_data));
 }
 
+void test_heavy_tie_corrections() {
+    const std::vector<double> kendall{
+        8.017, 8.219, 8.759, 9.016, 9.091, 9.452, 10.002, 10.12, 10.597, 10.714,
+        10.98, 12.68, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0,
+        20.0, 20.0};
+    CHECK_NEAR(ht::mann_kendall_test(kendall), 2.687544409241127e-08,
+               2.687544409241127e-14);
+
+    const std::vector<double> sample1{1, 1, 2, 2, 2, 3, 3, 4, 5, 5};
+    const std::vector<double> sample2{2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 8};
+    CHECK_NEAR(ht::mann_whitney_test(sample1, sample2), 0.03509475123312452,
+               0.03509475123312452e-6);
+}
+
 }  // namespace
 
 int main() {
@@ -295,6 +309,7 @@ int main() {
     test_mann_kendall_test();
     test_linear_trend_test();
     test_unimodality_test();
+    test_heavy_tie_corrections();
     test_guards();
     return chtest::summary("test_hypothesis_tests");
 }

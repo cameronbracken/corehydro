@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Global/ParticleSwarm.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Global/ParticleSwarm.cs @ 7e8e8d1
 //
 // The Particle Swarm (PSO) global optimizer (Kochenderfer & Wheeler, "Algorithms for
 // Optimization", 2019): a population of particles moves through the search space, each pulled
@@ -84,6 +84,9 @@ class ParticleSwarm : public Optimizer {
     int prng_seed = 12345;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         if (population_size < 1) throw ArgumentException("The population size must be greater than 0.");
 

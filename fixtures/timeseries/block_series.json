@@ -1,7 +1,7 @@
 {
   "kind": "toolbox",
   "group": "timeseries",
-  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a, the Frequency Analysis region. Every expected value is a Test_TimeSeries.cs literal: Test_CalendarYearSeries, Test_WaterYearSeries, Test_CustomYearSeries, Test_MonthlySeries, Test_QuarterlySeries, Test_PeaksOverThreshold, Test_PeaksOverThreshold_MovingSum_NaN and Test_CalendarYearSeries_NaN.",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 7e8e8d1, the Frequency Analysis region. Every expected value is a Test_TimeSeries.cs literal: Test_CalendarYearSeries, Test_WaterYearSeries, Test_CustomYearSeries, Test_MonthlySeries, Test_QuarterlySeries, Test_PeaksOverThreshold, Test_PeaksOverThreshold_MovingSum_NaN and Test_CalendarYearSeries_NaN.",
   "reference": "A block series is irregular: each ordinate carries the date of the observation the block function selected (the extremum's own date for minimum/maximum, the last ordinate's for sum/average), so an even index selects that date and the odd index beside it the value. `missing_indexes` marks ordinates as missing by position, since JSON has no NaN literal.",
   "cases": [
     {

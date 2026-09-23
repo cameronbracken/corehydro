@@ -20,6 +20,10 @@ __all__ = [
     "l_moments",
     "ranks",
     "percentile",
+    "first_order_sobol",
+    "pawn",
+    "pawn_median",
+    "borgonovo_delta",
     "RunningStatistics",
     "running_statistics",
     "RunningCovariance",
@@ -36,6 +40,8 @@ __all__ = [
     "sobol_sequence",
     "stratify",
     "joint_probability",
+    "union_single_factor",
+    "single_factor_conditional_probabilities",
     "Link",
     "link_function",
     "link",
@@ -217,6 +223,43 @@ def l_moments(x) -> dict:
     xa = np.asarray(x, dtype=float).ravel()
     r = _toolbox_run("statistics", "l_moments", [xa])
     return dict(zip(r["names"], r["values"]))
+
+
+def first_order_sobol(x, y, bins: int = 20) -> float:
+    """Estimate a first order Sobol index from paired stored samples."""
+    xa, ya = _check_pair(x, y)
+    return float(
+        _toolbox_run("statistics", "first_order_sobol", [xa, ya], {"bins": int(bins)})[
+            "values"
+        ][0]
+    )
+
+
+def pawn(x, y, bins: int = 20) -> np.ndarray:
+    """Return PAWN conditional distribution statistics for each input rank bin."""
+    xa, ya = _check_pair(x, y)
+    return np.asarray(
+        _toolbox_run("statistics", "pawn", [xa, ya], {"bins": int(bins)})["values"]
+    )
+
+
+def pawn_median(x, y, bins: int = 20) -> float:
+    """Estimate the customary median PAWN sensitivity index."""
+    xa, ya = _check_pair(x, y)
+    return float(
+        _toolbox_run("statistics", "pawn_median", [xa, ya], {"bins": int(bins)})[
+            "values"
+        ][0]
+    )
+
+
+def borgonovo_delta(x, y, x_bins: int = 20, y_bins: int = 20) -> float:
+    """Estimate Borgonovo delta from paired stored samples."""
+    xa, ya = _check_pair(x, y)
+    options = {"x_bins": int(x_bins), "y_bins": int(y_bins)}
+    return float(
+        _toolbox_run("statistics", "borgonovo_delta", [xa, ya], options)["values"][0]
+    )
 
 
 def ranks(x) -> np.ndarray:
@@ -935,7 +978,8 @@ def linear_regression(x, y, intercept: bool = True) -> LinearRegressionResult:
 # indicator + correlation-matrix HPCM form). Mirrors corehydror's R/toolbox.R verb for verb.
 
 
-def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
+def sobol_sequence(n: int, dimension: int = 1, skip: int = 0,
+                   seed: int | None = None) -> np.ndarray:
     """Sobol quasi-random low-discrepancy sequence.
 
     Mirrors the C# ``SobolSequence`` class. ``dimension > 1`` needs the new-joe-kuo-6 direction
@@ -956,6 +1000,9 @@ def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
         Number of points to skip before the first returned point: ``skip=k`` returns the same
         first point as the C# ``SkipTo(k)`` call, i.e. the sequence's ``(k + 1)``-th point.
         Default 0 (no skip).
+    seed : int, optional
+        Apply the v2.2.0 linear matrix scramble and digital shift with this seed. ``None``
+        returns the original unscrambled sequence.
 
     Returns
     -------
@@ -976,6 +1023,8 @@ def sobol_sequence(n: int, dimension: int = 1, skip: int = 0) -> np.ndarray:
     if dimension > 1:
         path = str(files("corehydropy") / "data" / "new-joe-kuo-6.21201")
     options = {"dimension": int(dimension), "n": int(n), "skip": int(skip), "path": path}
+    if seed is not None:
+        options["seed"] = int(seed)
     r = _toolbox_run("sampling", "sobol", [], options)
     return np.asarray(r["values"], dtype=float).reshape(r["dims"][0], r["dims"][1])
 
@@ -1100,6 +1149,21 @@ def joint_probability(p, dependency: str = "independent", indicators=None, corre
             data.append(corr.ravel())
     r = _toolbox_run("probability", "joint", data, {"dependency": dependency})
     return float(r["values"][0])
+
+
+def union_single_factor(p, rho: float, relative_tolerance: float = 1e-8) -> float:
+    """Probability of a union under equicorrelated single factor Gaussian dependence."""
+    options = {"rho": float(rho), "relative_tolerance": float(relative_tolerance)}
+    return float(_toolbox_run("probability", "union_single_factor", [p], options)["values"][0])
+
+
+def single_factor_conditional_probabilities(normal_thresholds, rho: float, z: float):
+    """Conditional event probabilities at one shared Gaussian factor value."""
+    options = {"rho": float(rho), "z": float(z)}
+    result = _toolbox_run(
+        "probability", "single_factor_conditional", [normal_thresholds], options
+    )
+    return np.asarray(result["values"])
 
 
 # The "link" and "trend" toolbox groups (Task 7). "link" mirrors the seven Numerics link
@@ -1636,25 +1700,28 @@ def polynomial_eval(coefficients, x, variant: str = "standard", n: int | None = 
     return np.asarray(r["values"], dtype=float)
 
 
-# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
-# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
-# The severed third implementation, TabularFunction, depends on the unported Paired Data
-# subsystem (see upstream/CLAUDE.md) and is not exposed.
+# The "functions" toolbox group: all serializable IUnivariateFunction implementations plus the
+# posterior ensemble sampler. Nested objects use the shared JSON spec grammar.
 
 
 def univariate_function(
-    type: str,
+    type: str | dict,
     parameters,
-    x,
+    x=None,
     inverse: bool = False,
     is_inverse: bool = False,
     confidence_level: float | None = None,
 ) -> np.ndarray:
     """Evaluate a univariate function.
 
-    Mirrors the Numerics ``LinearFunction`` (``Y = alpha + beta*X + epsilon``) and
-    ``PowerFunction`` (``Y = alpha * (X - xi)**beta * epsilon``), both over optional normally
-    distributed noise (``epsilon ~ Normal(0, sigma)``) via ``confidence_level``. ``is_inverse``
+    Mirrors the Numerics linear, power, segmented power, composite, and ensemble function
+    surfaces. A string ``type`` keeps the compact linear/power interface. A dictionary ``type``
+    is a function spec and ``parameters`` is then the evaluation vector. Composite specs contain
+    nested ``functions`` and optional ``weights``/``mode``. Ensemble specs contain a ``template``,
+    ``parameter_sets``, and one of ``sample_index`` or ``sample_percentile``.
+
+    Linear and power functions support optional normally distributed noise through
+    ``confidence_level``. ``is_inverse``
     (``PowerFunction``'s own ``IsInverse`` switch) selects which of the forward power law or its
     algebraic inverse ``Function()``/``inverse=True`` evaluates -- an independent axis from
     ``inverse`` itself, which picks ``Function()`` vs. ``InverseFunction()`` on whichever of the
@@ -1662,13 +1729,14 @@ def univariate_function(
 
     Parameters
     ----------
-    type : {"linear", "power"}
-        Matched case-insensitively.
+    type : {"linear", "power", "segmented_power"} or dict
+        String names are matched case-insensitively. A dictionary follows the shared function
+        spec grammar described above.
     parameters : array_like
-        ``[alpha, beta, sigma]`` for ``"linear"``; ``[alpha, beta, xi, sigma]`` for ``"power"``.
-        ``sigma`` is still required (e.g. 0) when ``confidence_level`` is ``None`` -- it only
-        enters the calculation on the non-deterministic path.
-    x : array_like
+        ``[alpha, beta, sigma]`` for ``"linear"``; ``[alpha, beta, xi, sigma]`` for ``"power"``;
+        ``[h1, log10_alpha1, beta1, ..., sigma]`` for ``"segmented_power"``. When ``type`` is a
+        dictionary, this argument supplies the values to evaluate.
+    x : array_like, optional
         The values to evaluate the function at, or (when ``inverse=True``) the values to
         evaluate the inverse function at.
     inverse : bool, default False
@@ -1695,7 +1763,20 @@ def univariate_function(
     >>> univariate_function("power", [5, 2, 0, 3], 6, confidence_level=0.75)
     array([1361.614084])
     """
-    known = ("linear", "power")
+    if isinstance(type, dict):
+        spec = dict(type)
+        values = parameters if x is None else x
+        xa = np.atleast_1d(np.asarray(values, dtype=float))
+        if xa.size == 0:
+            raise ValueError("`x` must be a non-empty array")
+        options: dict = {"spec": spec}
+        if confidence_level is not None:
+            options["confidence_level"] = float(confidence_level)
+        method = "inverse" if inverse else "evaluate"
+        r = _toolbox_run("functions", method, [xa], options)
+        return np.asarray(r["values"], dtype=float)
+
+    known = ("linear", "power", "segmented_power")
     match = [t for t in known if t == str(type).lower()]
     if not match:
         raise ValueError(f"unknown function type '{type}'; expected one of {', '.join(known)}")
@@ -1743,6 +1824,7 @@ def shortest_path(
     destinations,
     edge_index=None,
     node_count: int | None = None,
+    nearest: bool = False,
 ) -> np.ndarray:
     """Solve the shortest paths through a network.
 
@@ -1779,6 +1861,9 @@ def shortest_path(
         Defaults to ``max(frm, to) + 1``; supply a larger value to include isolated nodes
         carrying no edge, which then report ``cost = inf``. A value below ``max(frm, to) + 1``
         is an error: the graph would not fit the routing table it asks for.
+    nearest : bool, default False
+        Use the v2.2 single-pass multi-source solver. Costs match the regular multi-destination
+        solve, but exact-cost ties use deterministic heap order instead of destination order.
 
     Returns
     -------
@@ -1814,6 +1899,7 @@ def shortest_path(
                 "`edge_index` must be an array the same length as `frm`; "
                 f"got {idx.size} for {n}"
             )
+    _check_node_indices(idx, "edge_index")
     dest = np.atleast_1d(np.asarray(destinations, dtype=float)).ravel()
     if dest.size == 0:
         raise ValueError("`destinations` must name at least one destination node")
@@ -1843,7 +1929,10 @@ def shortest_path(
         raise ValueError(
             f"`destinations` is out of range for a network of {int(n_nodes)} nodes"
         )
-    r = _toolbox_run("network", "dijkstra", [f, t, w, idx], options)
+    if not isinstance(nearest, (bool, np.bool_)):
+        raise ValueError("`nearest` must be True or False")
+    method = "dijkstra_nearest" if nearest else "dijkstra"
+    r = _toolbox_run("network", method, [f, t, w, idx], options)
     values = np.asarray(r["values"], dtype=float)
     return values.reshape(int(r["dims"][0]), int(r["dims"][1]))
 
@@ -2015,6 +2104,7 @@ _SORT_ORDERS = ("ascending", "descending", "none")
 # core-side) so a value valid for interpolate()/interpolate_2d() is also valid here -- see the P4
 # whole-branch-review finding M2.
 _PAIRED_TRANSFORMS = ("none", "logarithmic", "log", "normal_z")
+_EXTRAPOLATION_SIDES = ("none", "below", "above", "both")
 
 
 def _check_sort_order(value: str, what: str) -> None:
@@ -2030,6 +2120,15 @@ def _check_paired_transform(value: str, what: str) -> None:
         raise ValueError(
             f"unknown {what} '{value}'; expected one of {', '.join(_PAIRED_TRANSFORMS)}"
         )
+
+
+def _check_extrapolation(value: str) -> str:
+    if value not in _EXTRAPOLATION_SIDES:
+        raise ValueError(
+            "unknown extrapolation "
+            f"'{value}'; expected one of {', '.join(_EXTRAPOLATION_SIDES)}"
+        )
+    return value
 
 
 def _paired_data_shape_opts(strict_x: bool, strict_y: bool, order_x: str, order_y: str) -> dict:
@@ -2074,6 +2173,7 @@ def curve_interpolate(
     yout=None,
     x_transform: str = "none",
     y_transform: str = "none",
+    extrapolation: str = "none",
     order_x: str = "ascending",
     order_y: str = "ascending",
     strict_x: bool = True,
@@ -2097,6 +2197,8 @@ def curve_interpolate(
     x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
         "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
         is the spelling used in this package's own examples.
+    extrapolation : {"none", "below", "above", "both"}
+        Sides on which to extend the boundary segment in transformed space.
     order_x, order_y : {"ascending", "descending", "none"}
     strict_x, strict_y : bool
         Require x/y to strictly increase/decrease (per ``order_x``/``order_y``) between
@@ -2118,9 +2220,11 @@ def curve_interpolate(
         raise ValueError("exactly one of `xout` or `yout` must be supplied")
     _check_paired_transform(x_transform, "x_transform")
     _check_paired_transform(y_transform, "y_transform")
+    extrapolation = _check_extrapolation(extrapolation)
     options = _paired_data_shape_opts(strict_x, strict_y, order_x, order_y)
     options["x_transform"] = x_transform
     options["y_transform"] = y_transform
+    options["extrapolation"] = extrapolation
     if xout is not None:
         xouta = np.atleast_1d(np.asarray(xout, dtype=float))
         r = _toolbox_run("paired_data", "interpolate_y", [xa, ya, xouta], options)
@@ -2333,6 +2437,7 @@ def tabular_function(
     inverse: bool = False,
     x_transform: str = "none",
     y_transform: str = "none",
+    extrapolation: str = "none",
     confidence_level: float | None = None,
     allow_negative_y_values: bool = False,
 ) -> np.ndarray:
@@ -2360,6 +2465,8 @@ def tabular_function(
     x_transform, y_transform : {"none", "logarithmic", "log", "normal_z"}
         "log" is an accepted alias for "logarithmic" (both parse to the same value); "logarithmic"
         is the spelling used in this package's own examples.
+    extrapolation : {"none", "below", "above", "both"}
+        Sides on which to extend the boundary segment in transformed space.
     confidence_level : float, optional
         Quantile in ``[0, 1]`` to sample the curve at; ``None`` (default) samples the mean.
     allow_negative_y_values : bool, default False
@@ -2389,11 +2496,13 @@ def tabular_function(
         raise ValueError("`at` must be a non-empty array")
     _check_paired_transform(x_transform, "x_transform")
     _check_paired_transform(y_transform, "y_transform")
+    extrapolation = _check_extrapolation(extrapolation)
     options: dict = {
         "x": xa.tolist(),
         "distributions": [_as_spec(d) for d in dists],
         "x_transform": x_transform,
         "y_transform": y_transform,
+        "extrapolation": extrapolation,
         "allow_negative_y_values": bool(allow_negative_y_values),
     }
     if confidence_level is not None:

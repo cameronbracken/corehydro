@@ -1,7 +1,7 @@
 // P5 Task 3 -- KMeans.
 //
 // Transcribes Test_KMeans_Iris from
-// upstream/Numerics/Test_Numerics/Machine Learning/Unsupervised/Test_KMeans.cs @ 2a0357a.
+// upstream/Numerics/Test_Numerics/Machine Learning/Unsupervised/Test_KMeans.cs @ 7e8e8d1.
 // Upstream's expected cluster means are R's `kmeans` output on the iris measurements, asserted at
 // 1e-6 -- so reproducing them at that tolerance from a seeded run pins the whole k-means++
 // initialization stream, not just the arithmetic.
@@ -126,16 +126,11 @@ void test_means_are_the_cluster_averages_of_the_previous_step() {
             CHECK_NEAR(k_means.means()[c][j], recomputed[c][j], 1e-12);
 }
 
-void test_k_equals_one_never_runs_an_m_step() {
-    // UPSTREAM DEFECT, mirrored and pinned. With k = 1 the first E-step labels every point 0,
-    // which already matches the zero-initialized `Labels` array, so `Train` breaks before the
-    // first M-step and the reported "cluster mean" is the k-means++ starting point -- a randomly
-    // chosen OBSERVATION, not the sample mean. MEASURED against the real library: this input at
-    // seed 7 gives mean = 10 and Iterations = 1 in C# too. See docs/upstream-csharp-issues.md.
+void test_k_equals_one_reports_the_sample_mean() {
     std::vector<double> x = {1.0, 2.0, 3.0, 10.0, 11.0, 12.0};
     ml::KMeans one(x, 1);
     one.train(7);
-    CHECK_EQ(one.means()[0][0], 10.0);  // the sample mean would be 6.5
+    CHECK_EQ(one.means()[0][0], 6.5);
     CHECK_EQ(one.iterations(), 1);
     for (int l : one.labels()) CHECK_EQ(l, 0);
 
@@ -148,6 +143,30 @@ void test_k_equals_one_never_runs_an_m_step() {
     CHECK_EQ(two.iterations(), 2);
 }
 
+void test_empty_cluster_relocation_and_k_validation() {
+    std::vector<double> flat(24, 0.0);
+    for (int i = 6; i < 12; ++i) {
+        flat[static_cast<std::size_t>(2 * i)] = 10.0;
+        flat[static_cast<std::size_t>(2 * i + 1)] = 10.0;
+    }
+    ml::KMeans relocated(la::Matrix(12, 2, flat), 3);
+    relocated.train(12345);
+    double inertia = 0.0;
+    for (int i = 0; i < 12; ++i) {
+        int label = relocated.labels()[static_cast<std::size_t>(i)];
+        for (int j = 0; j < 2; ++j) {
+            double d = flat[static_cast<std::size_t>(2 * i + j)] -
+                       relocated.means()[static_cast<std::size_t>(label)][static_cast<std::size_t>(j)];
+            CHECK_TRUE(std::isfinite(relocated.means()[static_cast<std::size_t>(label)]
+                                                       [static_cast<std::size_t>(j)]));
+            inertia += d * d;
+        }
+    }
+    CHECK_EQ(inertia, 0.0);
+    CHECK_THROWS_MSG(ml::KMeans(la::Matrix(12, 2), 0), "between 1");
+    CHECK_THROWS_MSG(ml::KMeans(la::Matrix(12, 2), 13), "between 1");
+}
+
 }  // namespace
 
 int main() {
@@ -156,6 +175,7 @@ int main() {
     test_random_initialization_branch();
     test_single_column_and_shape();
     test_means_are_the_cluster_averages_of_the_previous_step();
-    test_k_equals_one_never_runs_an_m_step();
+    test_k_equals_one_reports_the_sample_mean();
+    test_empty_cluster_relocation_and_k_validation();
     return chtest::summary("test_k_means");
 }

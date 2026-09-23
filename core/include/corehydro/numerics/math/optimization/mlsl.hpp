@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Global/MLSL.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Global/MLSL.cs @ 7e8e8d1
 //
 // The Multi-Level Single Linkage (MLSL) global optimization method (Kan, Boender &
 // Timmer 1985). Each iteration draws N uniform sample points over the bounded search
@@ -18,19 +18,12 @@
 //    Ported as vectors of `std::shared_ptr<SamplePoint>`; shared_ptr copies preserve
 //    identity-sharing and pointer equality mirrors C# reference equality.
 //
-// 2. Sort. C# `List.Sort((x, y) => x.Fitness.CompareTo(y.Fitness))`. `double.CompareTo`
-//    is a total order with NaN below every number and equal to itself; the comparator
-//    below reproduces that (std::sort with a bare `<` would be UB if a NaN fitness ever
-//    appeared). Both List.Sort and std::sort are unstable, but not the same algorithm,
-//    so exactly-tied fitness values could order differently -- unobservable in practice
-//    (fitness ties across continuous random draws) and untestable upstream for the same
-//    reason.
+// 2. Sort. v2.2.0 uses stable ordering by fitness so tied sample points retain insertion order.
+//    `double.CompareTo` is a total order with NaN below every number and equal to itself; the
+//    comparator below reproduces that behavior.
 //
-// 3. In-place repair. C#'s GetLocalOptimizer takes `IList<double> initialValues` and
-//    repairs it IN PLACE -- mutating the caller's array (a stored SamplePoint's values,
-//    or BestParameterSet.Values in the Polish step). get_local_optimizer therefore takes
-//    `std::vector<double>&` and repairs in place too, and its call sites pass the same
-//    owned vectors the C# passes (the child ctor then copies, as C# `ToArray()` does).
+// 3. Local repair. v2.2.0 copies the supplied initial values before repairing them, preserving
+//    the caller's stored sample and best-parameter values.
 //
 // 4. localCancel closure. C# captures `localCancel` in the child-objective lambda and
 //    computes `cancel = cancel || localCancel` BEFORE the child ever runs (so a child-
@@ -191,6 +184,9 @@ class MLSL : public Optimizer {
     int max_no_improvement = 10;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         if (sample_size < 4)
             throw ArgumentException("The sample size must be greater than or equal to 4.");
@@ -241,12 +237,13 @@ class MLSL : public Optimizer {
             if (iterations_ == 0) {
                 // On the first iteration, add the user-defined initial starting points
                 // This can often be very close to the true minimum
-                double init_fitness = evaluate(initial_values_, cancel);
+                auto initial = initial_values_;
+                double init_fitness = evaluate(initial, cancel);
                 sampled_points_.push_back(std::make_shared<SamplePoint>(
-                    ParameterSet(initial_values_, init_fitness), true));
+                    ParameterSet(initial, init_fitness), true));
 
                 // Perform local minimizations from initial values
-                solver = get_local_optimizer(initial_values_, local_relative_tolerance,
+                solver = get_local_optimizer(initial, local_relative_tolerance,
                                              local_absolute_tolerance, cancel);
                 solver->minimize();
                 if (cancel) return;
@@ -272,7 +269,7 @@ class MLSL : public Optimizer {
             // values. Select the gamma*kN points with the lowest objective function
             // values. This resultant set, Rk, is called the reduced sample.
 
-            std::sort(sampled_points_.begin(), sampled_points_.end(),
+            std::stable_sort(sampled_points_.begin(), sampled_points_.end(),
                       [](const std::shared_ptr<SamplePoint>& x,
                          const std::shared_ptr<SamplePoint>& y) {
                           return compare_to(x->parameter_set.fitness,
@@ -414,36 +411,34 @@ class MLSL : public Optimizer {
     using NelderMeadLocalSolver = NelderMeadSolver;
 
     // Returns an optimizer for the local search.
-    //   initial_values:     an array of initial values to evaluate (repaired IN PLACE,
-    //                       mutating the caller's vector exactly as the C# repairs the
-    //                       caller's IList -- see note 3).
+    //   initial_values:     initial values copied before bound repair (see note 3).
     //   relative_tolerance: the desired relative tolerance for the solution.
     //   absolute_tolerance: the desired absolute tolerance for the solution.
     //   cancel:             by ref. Determines if the solver should be canceled.
-    std::unique_ptr<Optimizer> get_local_optimizer(std::vector<double>& initial_values,
+    std::unique_ptr<Optimizer> get_local_optimizer(const std::vector<double>& initial_values,
                                                    double relative_tolerance,
                                                    double absolute_tolerance, bool& cancel) {
         // Heap closure standing in for the C# captured local `localCancel` (see note 4).
         auto local_cancel = std::make_shared<bool>(false);
         std::unique_ptr<Optimizer> solver;
 
-        // Make sure the parameters are within the bounds.
+        std::vector<double> repaired(static_cast<std::size_t>(number_of_parameters_));
         for (int i = 0; i < number_of_parameters_; i++)
-            initial_values[i] =
+            repaired[static_cast<std::size_t>(i)] =
                 repair_parameter(initial_values[i], lower_bounds_[i], upper_bounds_[i]);
 
         if (method == LocalMethod::BFGS) {
             solver = std::make_unique<BFGS>(
                 [this, local_cancel](std::vector<double>& x) { return evaluate(x, *local_cancel); },
-                number_of_parameters_, initial_values, lower_bounds_, upper_bounds_);
+                number_of_parameters_, repaired, lower_bounds_, upper_bounds_);
         } else if (method == LocalMethod::NelderMead) {
             solver = std::make_unique<NelderMeadLocalSolver>(
                 [this, local_cancel](std::vector<double>& x) { return evaluate(x, *local_cancel); },
-                number_of_parameters_, initial_values, lower_bounds_, upper_bounds_);
+                number_of_parameters_, repaired, lower_bounds_, upper_bounds_);
         } else if (method == LocalMethod::Powell) {
             solver = std::make_unique<Powell>(
                 [this, local_cancel](std::vector<double>& x) { return evaluate(x, *local_cancel); },
-                number_of_parameters_, initial_values, lower_bounds_, upper_bounds_);
+                number_of_parameters_, repaired, lower_bounds_, upper_bounds_);
         } else {
             // C# NotSupportedException; a plain std::runtime_error routes through the
             // base minimize()/maximize() catch-all to Failure, exactly like the C#

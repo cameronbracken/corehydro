@@ -1,5 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/Base/IArchimedeanCopula.cs @ 2a0357a
-//           +  Numerics/Distributions/Bivariate Copulas/Base/ArchimedeanCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/Base/ArchimedeanCopula.cs @ 7e8e8d1
 //
 // Abstract base for every Archimedean copula (Clayton, AMH, Frank, Gumbel, Joe). Folds
 // IArchimedeanCopula's members directly into the base, matching the IBivariateCopula/
@@ -97,16 +96,26 @@ class ArchimedeanCopula : public BivariateCopula {
         return generator_inverse(generator(u) + generator(v));
     }
 
-    // Genest et al. 1986 conditional-sampling InverseCDF:
+    double conditional_cdf(double u, double v) const override {
+        if (!parameters_valid()) validate_parameter(theta(), true);
+        if (v == 0.0) return 0.0;
+        if (v == 1.0) return 1.0;
+        return generator_prime(u) / generator_prime(cdf(u, v));
+    }
+
+    // Genest et al. 1986 conditional-sampling inverse:
     // 1) s = psi'(u) / v; w = (psi')^-1(s).
     // 2) v' = psi^-1(psi(w) - psi(u)).
     // 3) (u, v') is the simulated pair, preserving the dependence structure.
-    std::array<double, 2> inverse_cdf(double u, double v) const override {
+    double inverse_conditional_cdf(double u, double t) const override {
         if (!parameters_valid()) validate_parameter(theta(), true);
-        double s = generator_prime(u) / v;
+        double s = generator_prime(u) / t;
         double w = generator_prime_inverse(s);
-        double vv = generator_inverse(generator(w) - generator(u));
-        return {u, vv};
+        return generator_inverse(generator(w) - generator(u));
+    }
+
+    std::array<double, 2> inverse_cdf(double u, double v) const override {
+        return {u, inverse_conditional_cdf(u, v)};
     }
 };
 

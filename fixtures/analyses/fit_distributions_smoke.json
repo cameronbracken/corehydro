@@ -16,11 +16,11 @@
         { "method": "candidate_converged", "args": [5], "expected": 1, "mode": "equal" },
         { "method": "candidate_aic", "args": [5], "expected": 423.311917015197, "mode": "rel", "tol": 1e-9 },
         { "method": "candidate_bic", "args": [5], "expected": 426.299113835859, "mode": "rel", "tol": 1e-9 },
-        { "method": "candidate_rmse", "args": [5], "expected": 1278.642551017543, "mode": "rel", "tol": 1e-8 },
+        { "method": "candidate_rmse", "args": [5], "expected": 1319.1372029495262, "mode": "rel", "tol": 1e-8 },
         { "method": "candidate_converged", "args": [12], "expected": 1, "mode": "equal" },
         { "method": "candidate_aic", "args": [12], "expected": 424.51926984004484, "mode": "rel", "tol": 1e-9 },
         { "method": "candidate_bic", "args": [12], "expected": 426.5107343871528, "mode": "rel", "tol": 1e-9 },
-        { "method": "candidate_rmse", "args": [12], "expected": 1436.0968615640775, "mode": "rel", "tol": 1e-8 }
+        { "method": "candidate_rmse", "args": [12], "expected": 1463.9235841664652, "mode": "rel", "tol": 1e-8 }
       ]
     }
   ]

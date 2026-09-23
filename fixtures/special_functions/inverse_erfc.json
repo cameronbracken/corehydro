@@ -2,7 +2,7 @@
   "kind": "special_function",
   "target": "Erf.inverse_erfc",
   "source": "Numerics/Mathematics/Special Functions/Erf.cs",
-  "reference": "Numerics @ 2a0357a; Normal.StandardZ(-0.5*y + 1.0) * sqrt(2) / 2",
+  "reference": "Numerics @ 7e8e8d1; -Normal.StandardZ(0.5*y) / sqrt(2)",
   "cases": [
     {
       "name": "inv_erfc_one",
@@ -18,6 +18,11 @@
       "name": "inv_erfc_one_half",
       "args": [1.5],
       "assertions": [ { "method": "value", "expected": -0.47693627620446988, "mode": "abs", "tol": 1e-12 } ]
+    },
+    {
+      "name": "inv_erfc_far_tail",
+      "args": [1e-100],
+      "assertions": [ { "method": "value", "expected": 15.065574702592645, "mode": "rel", "tol": 1e-9 } ]
     }
   ]
 }

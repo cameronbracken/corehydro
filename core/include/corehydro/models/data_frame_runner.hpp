@@ -297,6 +297,24 @@ inline numerics::support::ToolboxResult run_data_frame(const std::string& method
 
     if (matched) return numerics::support::detail::scalar(p);
 
+    if (method == "plotting_position") {
+        df.calculate_plotting_positions();
+        ToolboxResult r;
+        const ExactSeries& exact = df.exact_series();
+        r.values.reserve(exact.count());
+        for (std::size_t i = 0; i < exact.count(); ++i)
+            r.values.push_back(exact[i].plotting_position());
+        return r;
+    }
+
+    if (method == "number_of_low_outliers" || method == "low_outlier_threshold") {
+        df.calculate_plotting_positions();
+        return numerics::support::detail::scalar(
+            method == "number_of_low_outliers"
+                ? static_cast<double>(df.number_of_low_outliers())
+                : df.low_outlier_threshold());
+    }
+
     if (method == "summary_hypothesis") {
         // The ten-key facade over the other ten members. Its `index` option is OPTIONAL (unlike
         // the two-sample facades' above) because the method clamps an out-of-range value itself,

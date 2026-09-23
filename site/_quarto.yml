@@ -75,7 +75,7 @@ quartodoc:
         - dist_kde
     - title: Copulas
       desc: >-
-        The seven bivariate copula families (`copula_names()`), constructed directly or fitted
+        The eight bivariate copula families (`copula_names()`), constructed directly or fitted
         to paired data.
       contents:
         - Copula
@@ -228,6 +228,10 @@ quartodoc:
         - l_moments
         - ranks
         - percentile
+        - first_order_sobol
+        - pawn
+        - pawn_median
+        - borgonovo_delta
         - RunningStatistics
         - running_statistics
         - RunningCovariance
@@ -261,6 +265,8 @@ quartodoc:
         - sobol_sequence
         - stratify
         - joint_probability
+        - union_single_factor
+        - single_factor_conditional_probabilities
     - title: Links and trends
       desc: >-
         The Numerics link-function layer (identity, log, logit, and friends) and the trend

@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MersenneTwister.cs @ 2a0357a
+// ported from: Numerics/Sampling/MersenneTwister.cs @ 7e8e8d1
 //
 // MT19937 PRNG (Matsumoto & Nishimura). Verbatim port of the C# MersenneTwister,
 // itself a faithful port of the reference mt19937ar.c. The uint32 state machine is
@@ -32,6 +32,7 @@
 // `NextDoubles(this Random random, int length, int dimension)`, spins up one side PRNG per
 // dimension and is not needed by anything ported so far -- not added here).
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <limits>
@@ -47,7 +48,8 @@ class MersenneTwister {
         auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
-        initialize(static_cast<std::uint32_t>(ticks));
+        std::uint32_t counter = static_cast<std::uint32_t>(++instance_counter_);
+        initialize(static_cast<std::uint32_t>(ticks) + counter * 2654435761U);
     }
 
     explicit MersenneTwister(std::uint32_t seed) { initialize(seed); }
@@ -156,6 +158,7 @@ class MersenneTwister {
     }
 
    private:
+    inline static std::atomic<int> instance_counter_{0};
     static constexpr int N = 624;
     static constexpr int M = 397;
     static constexpr std::uint32_t kMatrixA = 0x9908b0dfU;

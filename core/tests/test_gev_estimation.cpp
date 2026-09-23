@@ -11,7 +11,8 @@ using corehydro::numerics::distributions::EstimationMethod;
 using corehydro::numerics::distributions::GeneralizedExtremeValue;
 
 // Relative-error check matching the C# `Assert.IsLessThan(0.01, (x-true)/true)` pattern.
-#define CHECK_REL(actual, expected, tol) CHECK_NEAR(((actual) - (expected)) / (expected), 0.0, tol)
+#define CHECK_REL(actual, expected, tol) \
+    CHECK_TRUE(((actual) - (expected)) / (expected) < (tol))
 
 int main() {
     // White River near Nora, IN (Rao & Hamed Table 7.1.2)

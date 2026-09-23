@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/Base/MCMCSampler.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/Base/MCMCSampler.cs @ 7e8e8d1
 //
 // Abstract base class for every Bayesian MCMC sampler (RWMH, and later ARWMH/DEMCz/DEMCzs/
 // HMC/NUTS/Gibbs/SNIS): inputs (PRNG seed, chain/iteration/thinning counts, initialization
@@ -155,6 +155,21 @@ class MCMCSampler {
     // The number of parameters to evaluate.
     int number_of_parameters() const { return static_cast<int>(prior_distributions_.size()); }
 
+    // Number of transitions performed by one chain in sample(). Warmup is already a
+    // subset of iterations and is not added separately. Invalid zero-chain settings
+    // report zero rather than dividing by zero before validate_settings() runs.
+    std::int64_t transition_count() const {
+        if (number_of_chains_ < 1) return 0;
+        return (static_cast<std::int64_t>(iterations_) + output_iterations()) *
+               static_cast<std::int64_t>(thinning_interval_);
+    }
+
+    // Total transition work across all chains. This is not a likelihood evaluation
+    // count for gradient samplers, which perform multiple evaluations per transition.
+    std::int64_t total_transition_count() const {
+        return transition_count() * static_cast<std::int64_t>(number_of_chains_);
+    }
+
     // Whether to update the population matrix when chain states are recorded.
     bool is_population_sampler() const { return is_population_sampler_; }
 
@@ -240,6 +255,12 @@ class MCMCSampler {
         return ar;
     }
 
+    // Acceptance statistic reported in MCMCResults. NUTS overrides this with its mean
+    // Hamiltonian acceptance probability because every NUTS transition retains a state.
+    virtual std::vector<double> reported_acceptance_rates() const {
+        return acceptance_rates();
+    }
+
     // The average log-likelihood across each chain for each iteration.
     const std::vector<double>& mean_log_likelihood() const { return mean_log_likelihood_; }
 
@@ -290,9 +311,7 @@ class MCMCSampler {
             initialize_custom_settings();
         }
 
-        int output_iterations =
-            static_cast<int>(std::ceil(static_cast<double>(output_length) / static_cast<double>(number_of_chains_)));
-        int total_iterations = iterations_ + output_iterations;
+        int total_iterations = iterations_ + output_iterations();
         int output_count = 0;
         output_.assign(static_cast<std::size_t>(number_of_chains_), std::vector<ParameterSet>());
 
@@ -411,6 +430,11 @@ class MCMCSampler {
     // samplers (e.g. RWMH checks its proposal covariance matrix).
     virtual void validate_custom_settings() {}
 
+    int output_iterations() const {
+        return static_cast<int>(
+            std::ceil(static_cast<double>(output_length) / static_cast<double>(number_of_chains_)));
+    }
+
     // Initialize any custom MCMC sampler settings. No-op here; overridden by concrete
     // samplers.
     virtual void initialize_custom_settings() {}
@@ -527,14 +551,9 @@ class MCMCSampler {
             temp_population.emplace_back(parameters, log_lh);
         }
 
-        // Sort temp population by log-likelihood in descending order. C#:
-        // `tempPopulation.Sort((x, y) => -1 * x.Fitness.CompareTo(y.Fitness))` --
-        // `List<T>.Sort` is an UNSTABLE introspective sort in .NET, so ties are not
-        // guaranteed to preserve source order there. `std::stable_sort` here is the natural,
-        // deterministic C++ choice for the comparator itself, not a claim of matching C#'s
-        // tie-breaking: a tie is a live (if unlikely) hazard whenever the log-likelihood
-        // function returns identical fitness for two distinct draws (e.g. a degenerate
-        // proposal or a flat likelihood region).
+        // Preserve draw order when likelihoods tie. Upstream now uses stable
+        // OrderByDescending because tied negative-infinity prior draws otherwise make
+        // chain initialization implementation dependent.
         std::stable_sort(temp_population.begin(), temp_population.end(),
                           [](const ParameterSet& a, const ParameterSet& b) { return a.fitness > b.fitness; });
 

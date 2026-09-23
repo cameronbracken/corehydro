@@ -229,3 +229,9 @@ def test_distribution_names_reports_both_kinds():
         "TruncatedDistribution", "Mixture", "CompetingRisks", "Empirical", "KernelDensity",
     }
     assert set(distribution_names()) <= set(distribution_names("all"))
+
+
+def test_dist_empirical_carries_v220_extrapolation_policy():
+    d = dist_empirical([1, 2], [0.25, 0.75], p_transform="None", extrapolation="both")
+    assert d.cdf([0, 3]).tolist() == pytest.approx([0, 1])
+    assert d.quantile([1e-16, 1 - 1e-16]).tolist() == pytest.approx([0.5, 2.5], abs=1e-12)

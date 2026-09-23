@@ -122,8 +122,10 @@ inline ToolboxResult run_paired_data(const std::string& method,
             parse_transform_token(options.value_or("x_transform", "none"));
         corehydro::numerics::data::Transform yt =
             parse_transform_token(options.value_or("y_transform", "none"));
+        pd::ExtrapolationSides extrapolation =
+            parse_extrapolation_token(options.value_or("extrapolation", "none"));
         ToolboxResult r;
-        for (double v : xout) r.values.push_back(opd.get_y_from_x(v, xt, yt));
+        for (double v : xout) r.values.push_back(opd.get_y_from_x(v, xt, yt, extrapolation));
         return r;
     }
 
@@ -134,8 +136,10 @@ inline ToolboxResult run_paired_data(const std::string& method,
             parse_transform_token(options.value_or("x_transform", "none"));
         corehydro::numerics::data::Transform yt =
             parse_transform_token(options.value_or("y_transform", "none"));
+        pd::ExtrapolationSides extrapolation =
+            parse_extrapolation_token(options.value_or("extrapolation", "none"));
         ToolboxResult r;
-        for (double v : yout) r.values.push_back(opd.get_x_from_y(v, xt, yt));
+        for (double v : yout) r.values.push_back(opd.get_x_from_y(v, xt, yt, extrapolation));
         return r;
     }
 

@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/HMC.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/HMC.cs @ 7e8e8d1
 //
 // Hamiltonian Monte Carlo (HMC): a gradient-based sampler. Each ChainIteration jitters the
 // leapfrog step size/step count, draws a momentum vector phi ~ N(0, Mass), simulates
@@ -44,6 +44,7 @@
 // loop) desyncs the stream.
 #pragma once
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -143,8 +144,14 @@ class HMC : public MCMCSampler {
     void validate_custom_settings() override {
         if (mass_.length() != number_of_parameters())
             throw std::invalid_argument("The mass vector must be the same length as the number of parameters.");
-        if (step_size_ < 0.0) throw std::invalid_argument("The leapfrog step size must be positive.");
+        if (step_size_ <= 0.0) throw std::invalid_argument("The leapfrog step size must be positive.");
         if (steps_ < 1) throw std::invalid_argument("The number of leapfrog steps must be at least one.");
+    }
+
+    void initialize_custom_settings() override {
+        start_gradient_positions_.assign(static_cast<std::size_t>(number_of_chains()), {});
+        start_gradient_values_.assign(static_cast<std::size_t>(number_of_chains()), {});
+        start_gradient_occupied_.assign(static_cast<std::size_t>(number_of_chains()), false);
     }
 
     ParameterSet chain_iteration(int index, ParameterSet state) override {
@@ -168,8 +175,10 @@ class HMC : public MCMCSampler {
             double log_ki = -0.5 * quadratic_form(phi, inverse_mass_);
 
             // Step 2. Perform leapfrog steps to get proposal vector.
-            linalg::Vector xp(state.values);
-            phi = phi + gradient_function_(xp.to_array()) * leapfrog_step_size * 0.5;
+            linalg::Vector xp(std::vector<double>(state.values));
+            phi = phi + start_gradient(index, xp.to_array()) * leapfrog_step_size * 0.5;
+            std::vector<double> proposal_position;
+            linalg::Vector proposal_gradient(number_of_parameters());
             for (int i = 0; i < leapfrog_steps; ++i) {
                 xp = xp + inverse_mass_ * phi * leapfrog_step_size;
 
@@ -186,8 +195,13 @@ class HMC : public MCMCSampler {
                     }
                 }
 
-                phi = phi + gradient_function_(xp.to_array()) * leapfrog_step_size *
-                                (i == leapfrog_steps - 1 ? 0.5 : 1.0);
+                if (i == leapfrog_steps - 1) {
+                    proposal_position = xp.to_array();
+                    proposal_gradient = gradient_function_(xp.to_array());
+                    phi = phi + proposal_gradient * leapfrog_step_size * 0.5;
+                } else {
+                    phi = phi + gradient_function_(xp.to_array()) * leapfrog_step_size;
+                }
             }
             phi = phi * -1.0;
 
@@ -206,6 +220,7 @@ class HMC : public MCMCSampler {
             if (log_u <= log_ratio) {
                 // The proposal is accepted.
                 accept_count_[static_cast<std::size_t>(index)] += 1;
+                store_start_gradient(index, std::move(proposal_position), proposal_gradient);
                 return ParameterSet(xp.to_array(), log_lh_p);
             }
             return state;
@@ -220,6 +235,36 @@ class HMC : public MCMCSampler {
     }
 
    private:
+    linalg::Vector start_gradient(int index, const std::vector<double>& position) {
+        const std::size_t chain = static_cast<std::size_t>(index);
+        if (start_gradient_occupied_[chain] &&
+            matches_bitwise(start_gradient_positions_[chain], position))
+            return linalg::Vector(start_gradient_values_[chain]);
+        const std::vector<double> recorded = position;
+        linalg::Vector gradient = gradient_function_(position);
+        store_start_gradient(index, recorded, gradient);
+        return gradient;
+    }
+
+    void store_start_gradient(int index, std::vector<double> position,
+                              const linalg::Vector& gradient) {
+        const std::size_t chain = static_cast<std::size_t>(index);
+        if (gradient.length() != number_of_parameters()) {
+            start_gradient_occupied_[chain] = false;
+            return;
+        }
+        start_gradient_positions_[chain] = std::move(position);
+        start_gradient_values_[chain] = gradient.to_array();
+        start_gradient_occupied_[chain] = true;
+    }
+
+    static bool matches_bitwise(const std::vector<double>& stored,
+                                const std::vector<double>& position) {
+        return stored.size() == position.size() &&
+               std::memcmp(stored.data(), position.data(),
+                           stored.size() * sizeof(double)) == 0;
+    }
+
     // Evaluates the log-likelihood, returning negative infinity if the parameters are out of
     // range. This prevents an out-of-range exception from propagating during leapfrog
     // integration when the sampler explores parameter values that violate distribution
@@ -241,6 +286,9 @@ class HMC : public MCMCSampler {
     std::vector<double> lower_bounds_;
     std::vector<double> upper_bounds_;
     Gradient gradient_function_;
+    std::vector<std::vector<double>> start_gradient_positions_;
+    std::vector<std::vector<double>> start_gradient_values_;
+    std::vector<bool> start_gradient_occupied_;
 };
 
 }  // namespace corehydro::numerics::sampling::mcmc

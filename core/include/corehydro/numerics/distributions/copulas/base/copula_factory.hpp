@@ -1,4 +1,4 @@
-// corehydro ADDITION -- no upstream C# counterpart. The C# BivariateCopula hierarchy has no
+// ported from: Numerics/Distributions/Bivariate Copulas/Base/CopulaFactory.cs @ 7e8e8d1
 // factory: copulas are always constructed directly by concrete type (e.g. `new
 // ClaytonCopula(...)`), the same situation univariate_distribution_factory.hpp's header
 // comment describes for UnivariateDistributionBase before that factory was added. This
@@ -24,6 +24,7 @@
 #include "corehydro/numerics/distributions/copulas/clayton_copula.hpp"
 #include "corehydro/numerics/distributions/copulas/frank_copula.hpp"
 #include "corehydro/numerics/distributions/copulas/gumbel_copula.hpp"
+#include "corehydro/numerics/distributions/copulas/independence_copula.hpp"
 #include "corehydro/numerics/distributions/copulas/joe_copula.hpp"
 #include "corehydro/numerics/distributions/copulas/normal_copula.hpp"
 #include "corehydro/numerics/distributions/copulas/student_t_copula.hpp"
@@ -46,6 +47,8 @@ inline std::unique_ptr<BivariateCopula> create_copula(CopulaType type) {
             return std::make_unique<NormalCopula>();
         case CopulaType::StudentT:
             return std::make_unique<StudentTCopula>();
+        case CopulaType::Independence:
+            return std::make_unique<IndependenceCopula>();
         default:
             throw std::invalid_argument("copula type not yet ported");
     }
@@ -61,6 +64,7 @@ inline std::unique_ptr<BivariateCopula> create_copula(const std::string& name) {
     if (name == "Joe") return create_copula(CopulaType::Joe);
     if (name == "Normal") return create_copula(CopulaType::Normal);
     if (name == "StudentT") return create_copula(CopulaType::StudentT);
+    if (name == "Independence") return create_copula(CopulaType::Independence);
     throw std::invalid_argument("unknown copula name: " + name);
 }
 

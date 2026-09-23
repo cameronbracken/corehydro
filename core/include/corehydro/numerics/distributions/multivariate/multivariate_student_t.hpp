@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Multivariate/MultivariateStudentT.cs @ 2a0357a
+// ported from: Numerics/Distributions/Multivariate/MultivariateStudentT.cs @ 7e8e8d1
 //
 // Re-audited against v2.1.4's "Harden distribution parameter validation" wave:
 // ValidateParameters gained three NaN/Infinity checks -- degrees_of_freedom (previously only
@@ -26,16 +26,9 @@
 // uses a deterministic K=200 stratified-quantile chi-square(v) mixture over
 // MultivariateNormal's CDF (see cdf() below): every quantile is a midpoint of an
 // equal-probability stratum, so the mixture construction itself has no seeded/statistical
-// component. For dim <= 2 this makes the result fully bit-reproducible for a given (v, mu,
-// Sigma, x), because the inner MultivariateNormal::cdf() calls it drives are themselves
-// closed-form/deterministic at dim 1-2. For dim >= 3, though, each of the 200 inner
-// MultivariateNormal::cdf() calls runs the seeded Genz-Bretz quasi-Monte-Carlo integrator
-// (see multivariate_normal.hpp), and the MultivariateNormal instance this constructor
-// builds is never given an explicit seed, so its `mvnuni_` stream defaults to
-// make_clock_seeded() -- meaning MVT's own cdf() is NOT bit-reproducible across runs at
-// dim >= 3 (a faithful mirror of the upstream C# `_MVNUNI = new MersenneTwister()` default
-// in MultivariateNormal.cs, not a divergence introduced by this port; no fixture exercises
-// MVT CDF at dim >= 3). Member order mirrors the C# source throughout.
+// component. The inner MultivariateNormal integrator defaults to the shipped seed 12345, so
+// CDF is reproducible at every dimension. `set_mvnuni_seed()` mirrors the public C# generator
+// replacement through the language-neutral specification. Member order mirrors the C# source.
 //
 // Divergence notes (see also docs/upstream-csharp-issues.md for the running log):
 //   - `Variance`/`StandardDeviation` are computed on every call rather than lazily cached
@@ -101,6 +94,9 @@ namespace sf = corehydro::numerics::math::special;
 
 class MultivariateStudentT : public MultivariateDistribution {
    public:
+    void set_mvnuni_seed(int seed) {
+        mvnuni_ = sampling::MersenneTwister(static_cast<std::uint32_t>(seed));
+    }
     // Constructs a standard multivariate Student's t-distribution with zero location vector,
     // identity scale matrix, and the specified degrees of freedom.
     MultivariateStudentT(int dimension, double degrees_of_freedom) {
@@ -350,6 +346,7 @@ class MultivariateStudentT : public MultivariateDistribution {
 
         // Create MVN with zero mean and the scale matrix Sigma for CDF evaluation
         MultivariateNormal mvn(std::vector<double>(static_cast<std::size_t>(dimension_), 0.0), scale_matrix_.to_array());
+        mvn.mvnuni() = mvnuni_;
 
         double sum = 0.0;
         for (int k = 0; k < K; ++k) {
@@ -366,6 +363,7 @@ class MultivariateStudentT : public MultivariateDistribution {
             sum += mvn.cdf(scaled_z);
         }
 
+        mvnuni_ = mvn.mvnuni();
         double result = sum / K;
 
         // Clamp to [0, 1]
@@ -516,6 +514,7 @@ class MultivariateStudentT : public MultivariateDistribution {
         mvt->scale_matrix_ = scale_matrix_.clone();
         mvt->cholesky_.emplace(scale_matrix_.clone());
         mvt->lnconstant_ = lnconstant_;
+        mvt->mvnuni_ = mvnuni_;
         return mvt;
     }
 
@@ -549,6 +548,7 @@ class MultivariateStudentT : public MultivariateDistribution {
     la::Matrix scale_matrix_ = la::Matrix(0, 0);
     std::optional<la::CholeskyDecomposition> cholesky_;
     double lnconstant_ = 0.0;
+    mutable sampling::MersenneTwister mvnuni_ = sampling::MersenneTwister(12345U);
     // (`_variance`/`_standardDeviation` lazy-cache fields omitted -- see file header note)
 };
 

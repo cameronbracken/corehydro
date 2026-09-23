@@ -116,7 +116,7 @@
           "args": [
             2
           ],
-          "expected": -0.11697673213754865,
+          "expected": -0.11697675244682341,
           "mode": "rel",
           "tol": 1e-08,
           "note": "LP3 log-space skew. Reproduces to ~1.6e-9 relative, the loosest of the three: it is the parameter the BFGS search is least sharply determined in, and the file policy for optimizer-dependent parameters is rel 1e-8."

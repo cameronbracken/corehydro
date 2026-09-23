@@ -414,6 +414,21 @@
       ]
     },
     {
+      "name": "quadrature_2d_gauss_kronrod_x_plus_y",
+      "construct": {
+        "group": "math",
+        "method": "quadrature_2d",
+        "callback": "Quad2D_XPlusY",
+        "options": { "method": "adaptive_gauss_kronrod", "min_x": -1.0, "max_x": 1.0, "min_y": -1.0, "max_y": 1.0 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": -9.71445146547012e-17, "mode": "abs", "tol": 2e-16, "source": "EMITTER-READ: AdaptiveGaussKronrod2D tensor rule over the symmetric linear integrand; the absolute tolerance admits harmless reassociation around the analytic zero" },
+        { "method": "value", "args": [1], "expected": 441, "mode": "abs", "tol": 0, "source": "EMITTER-READ: one 21 by 21 tensor-product rule" },
+        { "method": "value", "args": [2], "expected": 1.8041124150158794e-16, "mode": "abs", "tol": 2e-16, "source": "EMITTER-READ: embedded Gauss-Kronrod disagreement is at roundoff scale; the absolute tolerance admits cross-runtime reassociation" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ: AdaptiveGaussKronrod2D.Status after Integrate()" }
+      ]
+    },
+    {
       "name": "quadrature_nd_pi",
       "construct": {
         "group": "math",
@@ -457,6 +472,22 @@
         { "method": "value", "args": [2], "expected": 0.05012701277983261, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: Vegas.StandardError at the same settings" },
         { "method": "value", "args": [3], "expected": 0.0011714379070326686, "mode": "rel", "tol": 1e-6, "source": "EMITTER-READ: Vegas.ChiSquared at the same settings. Looser than every other tolerance in this file (measured drift ~1.1e-7 relative, not sub-ulp): chi_squared is `(sum_chi_squared_ - sum_weighted_results_ * result_) / (it + 1)`, a subtraction of two close large quantities that AMPLIFIES the ~1-ulp difference between clang/gcc's default fused-multiply-add contraction (core/CMakeLists.txt's -ffp-contract=off is deliberately scoped to the fixture_callback_catalog.cpp TU alone, NOT the shared core Vegas/Miser/MonteCarloIntegration classes, so R, Python and this C++ runner all compile and AGREE with each other on the fused arithmetic, but not with .NET's never-fused one) and .NET's own never-fused arithmetic; isolated single-file recompiles of vegas.hpp confirm removing contraction there reproduces the C# value to the bit, and restoring it reproduces this file's own pinned value to the bit -- a measured toolchain effect, not a stream/order bug" },
         { "method": "status", "expected": "Success", "source": "EMITTER-READ: Vegas.Status after Integrate()" }
+      ]
+    },
+    {
+      "name": "quadrature_vegas_seeded_scrambled_sum_normals",
+      "construct": {
+        "group": "math",
+        "method": "quadrature_vegas",
+        "callback": "NdW_SumOfNormals3",
+        "options": { "min": [1e-16, 1e-16, 1e-16], "max": [0.9999999999999999, 0.9999999999999999, 0.9999999999999999], "sobol_seed": 12345, "independent_evaluations": 3, "function_calls": 2000 }
+      },
+      "assertions": [
+        { "method": "value", "args": [0], "expected": 56.994442806162596, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: seeded scrambled Sobol Vegas result" },
+        { "method": "value", "args": [1], "expected": 4000, "mode": "abs", "tol": 0, "source": "EMITTER-READ: seeded scrambled Sobol Vegas function evaluations" },
+        { "method": "value", "args": [2], "expected": 0.05344170253211002, "mode": "rel", "tol": 1e-12, "source": "EMITTER-READ: seeded scrambled Sobol Vegas standard error" },
+        { "method": "value", "args": [3], "expected": 0.005598131683655083, "mode": "rel", "tol": 1e-6, "source": "EMITTER-READ: seeded scrambled Sobol Vegas chi squared; the tolerance covers the same fused-arithmetic sensitivity documented for the unrandomized case" },
+        { "method": "status", "expected": "Success", "source": "EMITTER-READ: seeded scrambled Sobol Vegas status" }
       ]
     }
   ]

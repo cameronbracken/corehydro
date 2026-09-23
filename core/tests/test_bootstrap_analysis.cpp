@@ -20,8 +20,10 @@
 #include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/chi_squared.hpp"
+#include "corehydro/numerics/distributions/log_normal.hpp"
 #include "corehydro/numerics/distributions/normal.hpp"
 #include "corehydro/numerics/distributions/uncertainty_analysis/bootstrap_analysis.hpp"
+#include "corehydro/numerics/distributions/uncertainty_analysis/standard_error_extensions.hpp"
 #include "corehydro/numerics/distributions/uncertainty_analysis/uncertainty_analysis_results.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/utilities/extension_methods.hpp"
@@ -29,6 +31,7 @@
 
 using corehydro::numerics::BootstrapAnalysis;
 using corehydro::numerics::distributions::ChiSquared;
+using corehydro::numerics::distributions::LogNormal;
 using corehydro::numerics::distributions::Normal;
 using corehydro::numerics::distributions::ParameterEstimationMethod;
 using corehydro::numerics::distributions::UncertaintyAnalysisResults;
@@ -212,6 +215,32 @@ void test_guards() {
     CHECK_THROWS(BootstrapAnalysis(dist, ParameterEstimationMethod::MethodOfMoments, 100, 50));
 }
 
+void test_log_normal_bootstrap_preserves_configured_base() {
+    LogNormal distribution(3.0, 0.25);
+    distribution.set_base(2.0);
+    BootstrapAnalysis bootstrap(distribution, ParameterEstimationMethod::MethodOfMoments,
+                                20, 100, 42);
+
+    auto samples = bootstrap.distributions();
+    CHECK_EQ(bootstrap.failed_replications(), 0);
+    for (const auto& sample : samples) {
+        const auto* log_normal = dynamic_cast<const LogNormal*>(sample.get());
+        CHECK_TRUE(log_normal != nullptr);
+        CHECK_NEAR(log_normal->base(), 2.0, 0.0);
+    }
+}
+
+void test_log_abs_quantile_jacobian_extension() {
+    LogNormal distribution(3.0, 0.25);
+    const std::vector<double> probabilities{0.25, 0.75};
+    double determinant = 0.0;
+    distribution.quantile_jacobian(probabilities, determinant);
+    const double expected = std::log(std::fabs(determinant));
+    CHECK_NEAR(corehydro::numerics::distributions::log_abs_quantile_jacobian(
+                   distribution, probabilities),
+               expected, 1e-14);
+}
+
 }  // namespace
 
 int main() {
@@ -221,5 +250,7 @@ int main() {
     test_bca_ci();
     test_uar_equivalence();
     test_guards();
+    test_log_normal_bootstrap_preserves_configured_base();
+    test_log_abs_quantile_jacobian_extension();
     return chtest::summary("bootstrap_analysis");
 }

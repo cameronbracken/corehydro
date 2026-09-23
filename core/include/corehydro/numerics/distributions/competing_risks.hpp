@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/CompetingRisks.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/CompetingRisks.cs @ 7e8e8d1
 //
 // Competing risks (series / parallel system) distribution.
 // Constructor: CompetingRisks(vector of component unique_ptrs).
@@ -13,9 +13,7 @@
 //   CentralDifference + CalculateStepSize(order=1), see numerical_derivative() below).
 // InverseCDF: Brent root-finding on CDF(y) − p = 0; bracket from per-component quantiles.
 //   On solve failure, falls back to bisection on [minimum, maximum].
-// Moments: central_moments(1000), the fixed-step trapezoidal overload the C# integer literal
-//   in `CentralMoments(1000)` binds to (CompetingRisks.cs line 217). This file used to call
-//   adaptive Gauss-Kronrod instead, which agreed with the C# only to about six digits.
+// Moments use the shared log-density integration kernel.
 // Mode: BrentSearch maximizing the PDF over [InverseCDF(0.001), InverseCDF(0.999)]
 //   (CompetingRisks.cs line 241), replacing an earlier ternary search.
 // IEstimation: MLE via Nelder-Mead on total log-likelihood (mirrors C# MLE()); initial
@@ -77,6 +75,9 @@
 #include "corehydro/numerics/data/probability.hpp"
 #include "corehydro/numerics/data/statistics.hpp"
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
+#include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
+#include "corehydro/numerics/distributions/base/distribution_moment_integration.hpp"
+#include "corehydro/numerics/distributions/base/distribution_snapshot.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
@@ -94,7 +95,9 @@ namespace corehydro::numerics::distributions {
 
 namespace prob = corehydro::numerics::data::probability;
 
-class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
+class CompetingRisks : public UnivariateDistributionBase,
+                       public IEstimation,
+                       public IMaximumLikelihoodEstimation {
    public:
     // Construct from already-created component unique_ptrs (takes ownership).
     explicit CompetingRisks(
@@ -123,6 +126,8 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
         if (dependency_ != value) {
             dependency_ = value;
             mvn_created_ = false;
+            moments_computed_ = false;
+            empirical_cdf_created_ = false;
         }
     }
 
@@ -139,6 +144,8 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
     void set_correlation_matrix(prob::Matrix2D m) {
         correlation_matrix_ = std::move(m);
         mvn_created_ = false;
+        moments_computed_ = false;
+        empirical_cdf_created_ = false;
     }
 
     // Accessors.
@@ -215,6 +222,7 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
 
     // --- Moments / support ---
     double mean() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[0];
     }
@@ -230,14 +238,17 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
         return brent.best_parameter();
     }
     double standard_deviation() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[1];
     }
     double skewness() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[2];
     }
     double kurtosis() const override {
+        refresh_cached_configuration();
         if (!moments_computed_) compute_moments();
         return u_[3];
     }
@@ -387,9 +398,7 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
     // .cs line 1095, added for the M11 CompetingRisksModel which delegates here): for each
     // sample, draw one value from EVERY component (each draw consumes one uniform from the
     // shared Mersenne Twister stream, j-major within each i), then take the minimum (min-rule)
-    // or maximum (max-rule). NOT the base class's composite inverse-CDF sampler. The
-    // dependency-aware variant `GenerateRandomValuesWithDependency` (C# line 1124) is not
-    // ported -- no ported caller uses it.
+    // or maximum (max-rule). This is not the base class's composite inverse-CDF sampler.
     std::vector<double> generate_random_values(int sample_size, int seed = -1) const override {
         // Create PRNG for generating random numbers.
         sampling::MersenneTwister rnd =
@@ -410,6 +419,70 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
         }
         // Return array of random values.
         return sample;
+    }
+
+    std::vector<double> generate_random_values_with_dependency(
+        int sample_size, int seed = -1) const {
+        if (dependency_ == prob::DependencyType::Independent)
+            return generate_random_values(sample_size, seed);
+        std::vector<double> sample(static_cast<std::size_t>(sample_size));
+        if (dependency_ == prob::DependencyType::PerfectlyPositive) {
+            sampling::MersenneTwister random =
+                seed > 0 ? sampling::MersenneTwister(static_cast<std::uint32_t>(seed))
+                         : sampling::MersenneTwister();
+            for (int i = 0; i < sample_size; ++i) {
+                const double probability = random.next_double();
+                double minimum = std::numeric_limits<double>::max();
+                double maximum = std::numeric_limits<double>::lowest();
+                for (const auto& component : components_) {
+                    const double value = component->inverse_cdf(probability);
+                    minimum = std::min(minimum, value);
+                    maximum = std::max(maximum, value);
+                }
+                sample[static_cast<std::size_t>(i)] =
+                    minimum_of_random_variables ? minimum : maximum;
+            }
+            return sample;
+        }
+        if (!mvn_created_) create_multivariate_normal();
+        const auto normal_samples = mvn_->generate_random_values(sample_size, seed);
+        for (int i = 0; i < sample_size; ++i) {
+            double minimum = std::numeric_limits<double>::max();
+            double maximum = std::numeric_limits<double>::lowest();
+            for (std::size_t j = 0; j < components_.size(); ++j) {
+                const double probability = Normal::standard_cdf(
+                    normal_samples[static_cast<std::size_t>(i)][j]);
+                const double value = components_[j]->inverse_cdf(probability);
+                minimum = std::min(minimum, value);
+                maximum = std::max(maximum, value);
+            }
+            sample[static_cast<std::size_t>(i)] =
+                minimum_of_random_variables ? minimum : maximum;
+        }
+        return sample;
+    }
+
+    void get_parameter_constraints(const std::vector<double>& sample,
+                                   std::vector<double>& initials,
+                                   std::vector<double>& lowers,
+                                   std::vector<double>& uppers) const override {
+        distribution_numerics::validate_sample(sample);
+        initials.clear();
+        lowers.clear();
+        uppers.clear();
+        for (const auto& component : components_) {
+            const auto* mle_component =
+                dynamic_cast<const IMaximumLikelihoodEstimation*>(component.get());
+            if (mle_component == nullptr)
+                throw std::runtime_error(
+                    "CompetingRisks component does not provide maximum-likelihood constraints");
+            std::vector<double> component_initials, component_lowers, component_uppers;
+            mle_component->get_parameter_constraints(
+                sample, component_initials, component_lowers, component_uppers);
+            initials.insert(initials.end(), component_initials.begin(), component_initials.end());
+            lowers.insert(lowers.end(), component_lowers.begin(), component_lowers.end());
+            uppers.insert(uppers.end(), component_uppers.begin(), component_uppers.end());
+        }
     }
 
     // --- Parameter display names (X1; C# CompetingRisks.cs ParameterNames /
@@ -457,7 +530,7 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
 
         auto bins = sampling::Stratify::XValues(
             sampling::StratificationOptions(minX, maxX, binN, false),
-            x_transform == data::Transform::Logarithmic);
+            true);
         std::vector<double> x_values, p_values;
         double x = bins.front().lower_bound();
         double p = cdf(bins.front().lower_bound());
@@ -515,6 +588,14 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
     // Lazy moment cache.
     mutable bool moments_computed_ = false;
     mutable double u_[4] = {kNaN, kNaN, kNaN, kNaN};  // [mean, sd, skewness, kurtosis]
+    mutable std::optional<DistributionSnapshot> configuration_snapshot_;
+
+    void refresh_cached_configuration() const {
+        if (configuration_snapshot_ && configuration_snapshot_->matches(this)) return;
+        moments_computed_ = false;
+        const_cast<CompetingRisks*>(this)->empirical_cdf_created_ = false;
+        configuration_snapshot_ = DistributionSnapshot::try_capture(this);
+    }
 
     // User-supplied correlation matrix (CorrelationMatrix dependency mode) and the lazily-
     // built MultivariateNormal cache (mirrors C# _correlationMatrix/_mvnCreated/_mvn).
@@ -712,14 +793,11 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
         return (std::isnan(result) || std::isinf(result)) ? kLogZero : result;
     }
 
-    // Mirrors C# ComputeMoments() (CompetingRisks.cs line 217): CentralMoments(1000). The
-    // integer literal binds to the base class's fixed-step TRAPEZOIDAL overload
-    // (`CentralMoments(int steps)`), not the adaptive-tolerance one -- see
-    // docs/upstream-csharp-issues.md. This file used to call adaptive Gauss-Kronrod here,
-    // which agreed with C# only to about six digits; the 1000-step trapezoid reproduces it
-    // to ~1e-12 relative.
     void compute_moments() const {
-        auto mom = central_moments(1000);
+        const double center = inverse_cdf(0.5);
+        const double scale = inverse_cdf(0.75) - inverse_cdf(0.25);
+        auto mom = distribution_moment_integration::compute(
+            [this](double x) { return log_pdf(x); }, minimum(), maximum(), center, scale);
         u_[0] = mom[0];
         u_[1] = mom[1];
         u_[2] = mom[2];
@@ -729,39 +807,10 @@ class CompetingRisks : public UnivariateDistributionBase, public IEstimation {
 
     // Nelder-Mead MLE. Mirrors C# MLE() method.
     std::vector<double> mle(const std::vector<double>& sample) const {
-        int K = static_cast<int>(components_.size());
         int Np = number_of_parameters();
 
-        // Get initial values for each component via estimate() if available.
         std::vector<double> initials, lowers, uppers;
-        {
-            auto tmp_stats = data::product_moments(sample);
-            double sample_mean = tmp_stats[0];
-            double sample_sd = std::max(tmp_stats[1], 1e-10);
-            for (int i = 0; i < K; ++i) {
-                auto comp_clone = components_[i]->clone();
-                auto* est = dynamic_cast<IEstimation*>(comp_clone.get());
-                if (est) {
-                    try { est->estimate(sample, ParameterEstimationMethod::MaximumLikelihood); }
-                    catch (...) { comp_clone = components_[i]->clone(); }
-                }
-                auto p = comp_clone->get_parameters();
-                int n_comp = static_cast<int>(p.size());
-                for (int j = 0; j < n_comp; ++j) {
-                    double v = std::isfinite(p[j]) && std::fabs(p[j]) > 1e-10 ? p[j] : sample_mean;
-                    initials.push_back(v);
-                    double range = std::max(100.0 * std::fabs(v), 100.0 * sample_sd);
-                    // LIMITATION: every parameter is floored at 1e-15, which wrongly forbids
-                    // legitimately-negative parameters (e.g. a Normal/Gumbel location). Correct
-                    // per-parameter bounds need IMaximumLikelihoodEstimation.GetParameterConstraints
-                    // (not ported). The composite MLE path is not oracle-covered (C# fits
-                    // seeded-RNG samples that cannot be transcribed), so this is a documented,
-                    // untested deferral; PDF/CDF/moments are exact mirrors of C#.
-                    lowers.push_back(1e-15);
-                    uppers.push_back(v + range);
-                }
-            }
-        }
+        get_parameter_constraints(sample, initials, lowers, uppers);
 
         // Nelder-Mead on total log-likelihood over all component parameters.
         auto log_lh_fn = [this, &sample](const std::vector<double>& x) -> double {

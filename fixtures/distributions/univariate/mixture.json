@@ -60,11 +60,11 @@
       "assertions": [
         { "method": "param",   "args": [0],    "expected": 0.2,                "mode": "abs", "tol": 1e-12 },
         { "method": "param",   "args": [1],    "expected": 0.6,                "mode": "abs", "tol": 1e-12 },
-        { "method": "pdf",     "args": [-1.0], "expected": 0.2,                "mode": "abs", "tol": 1e-12 },
+        { "method": "pdf",     "args": [-1.0], "expected": 0.0,                "mode": "equal" },
         { "method": "pdf",     "args": [0.0],  "expected": 0.2,                "mode": "abs", "tol": 1e-12 },
-        { "method": "pdf",     "args": [5.0],  "expected": 0.11968298146433276, "mode": "abs", "tol": 1e-9 },
+        { "method": "pdf",     "args": [5.0],  "expected": 0.12043111201585302, "mode": "abs", "tol": 1e-12 },
         { "method": "cdf",     "args": [0.0],  "expected": 0.2,                "mode": "abs", "tol": 1e-12 },
-        { "method": "cdf",     "args": [5.0],  "expected": 0.69999994266968568, "mode": "abs", "tol": 1e-9 },
+        { "method": "cdf",     "args": [5.0],  "expected": 0.69812534547644989, "mode": "abs", "tol": 1e-12 },
         { "method": "parameters_valid", "args": [], "expected": true,          "mode": "bool" }
       ]
     },
@@ -94,17 +94,17 @@
         "weights": [0.3, 0.2, 0.5]
       },
       "assertions": [
-        { "method": "median",         "args": [], "expected": 21.27465332194634, "mode": "abs", "tol": 1e-8,  "source": "curated via oracle_emitter --dump" },
+        { "method": "median",         "args": [], "expected": 21.274653172236025, "mode": "abs", "tol": 1e-12,  "source": "curated via oracle_emitter --dump" },
         { "method": "mode",           "args": [], "expected": 29.99999990517664, "mode": "abs", "tol": 1e-9,  "source": "curated via oracle_emitter --dump" },
         { "method": "log_pdf",        "args": [20], "expected": -2.4628973326762438, "mode": "abs", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
         { "method": "log_likelihood", "args": [8, 12, 19, 21, 28, 33], "expected": -19.168253138297175, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
         { "method": "random_value",   "args": [5, 42, 0], "expected": 20.82933648395096, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
         { "method": "random_value",   "args": [5, 42, 1], "expected": 25.48823684287538, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
         { "method": "random_value",   "args": [5, 42, 4], "expected": 9.72760591980181, "mode": "abs", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
-        { "method": "mean",           "args": [], "expected": 21.999999995011922, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
-        { "method": "sd",             "args": [], "expected": 9.481575923790889, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
-        { "method": "skewness",       "args": [], "expected": -0.00985460360386465, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" },
-        { "method": "kurtosis",       "args": [], "expected": 1.8641595464622873, "mode": "rel", "tol": 1e-10, "source": "curated via oracle_emitter --dump" }
+        { "method": "mean",           "args": [], "expected": 22.0, "mode": "rel", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "sd",             "args": [], "expected": 9.4815610529068461, "mode": "rel", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "skewness",       "args": [], "expected": -0.009854616963405928, "mode": "rel", "tol": 1e-12, "source": "curated via oracle_emitter --dump" },
+        { "method": "kurtosis",       "args": [], "expected": 1.8641526056018249, "mode": "rel", "tol": 1e-12, "source": "curated via oracle_emitter --dump" }
       ]
     }
   ]

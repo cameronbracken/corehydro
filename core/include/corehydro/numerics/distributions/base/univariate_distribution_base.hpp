@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Base/UnivariateDistributionBase.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Base/UnivariateDistributionBase.cs @ 7e8e8d1
 //
 // Abstract base for every univariate distribution. Declares the distribution-core
 // surface as pure virtuals (moments, support, PDF/CDF/InverseCDF, parameters) and
@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "corehydro/numerics/distributions/base/univariate_distribution_type.hpp"
+#include "corehydro/numerics/distributions/base/distribution_numerics.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/sampling/stratification_options.hpp"
 #include "corehydro/numerics/sampling/stratify.hpp"
@@ -110,19 +111,33 @@ class UnivariateDistributionBase {
 
     // C# `LogLikelihood_LeftCensored(double threshold, long numberBelow)` (line 173).
     double log_likelihood_left_censored(double threshold, long long number_below) const {
+        if (number_below < 0) throw std::out_of_range("censored count cannot be negative");
+        if (number_below == 0) return 0.0;
         return static_cast<double>(number_below) * log_cdf(threshold);
     }
 
     // C# `LogLikelihood_RightCensored(double threshold, long numberAbove)` (line 183).
     double log_likelihood_right_censored(double threshold, long long number_above) const {
+        if (number_above < 0) throw std::out_of_range("censored count cannot be negative");
+        if (number_above == 0) return 0.0;
         return static_cast<double>(number_above) * log_ccdf(threshold);
     }
 
-    // C# `LogLikelihood_Intervals(double lowerLimit, double upperLimit)` (line 193):
-    // Math.Log of the interval mass (log(0) = -inf, log(negative) = NaN, as in C#).
+    // C# `LogLikelihood_Intervals(double lowerLimit, double upperLimit)` (line 199): stable
+    // logarithm of the probability on the open-lower, closed-upper interval.
     double log_likelihood_intervals(double lower_limit, double upper_limit) const {
-        double interval = cdf(upper_limit) - cdf(lower_limit);
-        return std::log(interval);
+        if (std::isnan(lower_limit) || std::isnan(upper_limit) || lower_limit > upper_limit)
+            throw std::out_of_range("interval limits must be ordered and not NaN");
+        if (lower_limit == upper_limit) return -kInf;
+        const double lower = log_cdf(lower_limit);
+        const double upper = log_cdf(upper_limit);
+        double result = lower < -0.6931471805599453
+                            ? distribution_numerics::log_difference(upper, lower)
+                            : distribution_numerics::log_difference(log_ccdf(lower_limit),
+                                                                    log_ccdf(upper_limit));
+        return result == -kInf ? distribution_numerics::collapsed_continuous_log_interval(
+                                     *this, lower_limit, upper_limit)
+                               : result;
     }
 
     // Returns the central moments {Mean, Standard Deviation, Skew, Kurtosis} of the
@@ -139,44 +154,37 @@ class UnivariateDistributionBase {
 
         auto bins = sampling::Stratify::XValues(sampling::StratificationOptions(a, b, steps));
         std::vector<double> d_fx(static_cast<std::size_t>(steps));
-        double u1, u2, u3, u4;
-        double sum_u1 = 0;
-        double sum_u2 = 0;
-        double sum_u3 = 0;
-        double sum_u4 = 0;
+        std::vector<double> coordinates(static_cast<std::size_t>(steps));
+        const double reference = a / 2.0 + b / 2.0;
+        const double scale = std::max(std::fabs(a - reference), std::fabs(b - reference));
 
         // First compute the mean and standard deviation
         d_fx[0] = cdf(bins[0].upper_bound());
-        sum_u1 += bins[0].upper_bound() * d_fx[0];
-        sum_u2 += std::pow(bins[0].upper_bound(), 2.0) * d_fx[0];
+        coordinates[0] =
+            distribution_numerics::standardize(bins[0].upper_bound(), reference, scale);
         for (int i = 1; i < steps - 1; i++) {
             const auto& bin = bins[static_cast<std::size_t>(i)];
             d_fx[static_cast<std::size_t>(i)] = cdf(bin.upper_bound()) - cdf(bin.lower_bound());
-            sum_u1 += bin.midpoint() * d_fx[static_cast<std::size_t>(i)];
-            sum_u2 += std::pow(bin.midpoint(), 2.0) * d_fx[static_cast<std::size_t>(i)];
+            coordinates[static_cast<std::size_t>(i)] =
+                distribution_numerics::standardize(bin.midpoint(), reference, scale);
         }
         const auto& last = bins.back();
         d_fx[static_cast<std::size_t>(steps - 1)] = 1 - cdf(last.lower_bound());
-        sum_u1 += last.lower_bound() * d_fx[static_cast<std::size_t>(steps - 1)];
-        sum_u2 += std::pow(last.lower_bound(), 2.0) * d_fx[static_cast<std::size_t>(steps - 1)];
-        u1 = sum_u1;
-        u2 = std::sqrt(sum_u2 - std::pow(u1, 2.0));
-
-        // Then compute skewness and kurtosis
-        sum_u3 += std::pow((bins[0].upper_bound() - u1) / u2, 3.0) * d_fx[0];
-        sum_u4 += std::pow((bins[0].upper_bound() - u1) / u2, 4.0) * d_fx[0];
-        for (int i = 1; i < steps - 1; i++) {
-            const auto& bin = bins[static_cast<std::size_t>(i)];
-            sum_u3 += std::pow((bin.midpoint() - u1) / u2, 3.0) * d_fx[static_cast<std::size_t>(i)];
-            sum_u4 += std::pow((bin.midpoint() - u1) / u2, 4.0) * d_fx[static_cast<std::size_t>(i)];
+        coordinates[static_cast<std::size_t>(steps - 1)] =
+            distribution_numerics::standardize(last.lower_bound(), reference, scale);
+        double offset = 0.0;
+        for (int i = 0; i < steps; ++i)
+            offset += coordinates[static_cast<std::size_t>(i)] * d_fx[static_cast<std::size_t>(i)];
+        double second = 0.0, third = 0.0, fourth = 0.0;
+        for (int i = 0; i < steps; ++i) {
+            const double centered = coordinates[static_cast<std::size_t>(i)] - offset;
+            const double square = centered * centered;
+            second += square * d_fx[static_cast<std::size_t>(i)];
+            third += square * centered * d_fx[static_cast<std::size_t>(i)];
+            fourth += square * square * d_fx[static_cast<std::size_t>(i)];
         }
-        sum_u3 += std::pow((last.lower_bound() - u1) / u2, 3.0) *
-                  d_fx[static_cast<std::size_t>(steps - 1)];
-        sum_u4 += std::pow((last.lower_bound() - u1) / u2, 4.0) *
-                  d_fx[static_cast<std::size_t>(steps - 1)];
-        u3 = sum_u3;
-        u4 = sum_u4;
-        return {u1, u2, u3, u4};
+        return {reference + scale * offset, scale * std::sqrt(second),
+                third / second / std::sqrt(second), fourth / second / second};
     }
 
     // Returns conditional central moments (up to 4th order) between [a, b] (C#

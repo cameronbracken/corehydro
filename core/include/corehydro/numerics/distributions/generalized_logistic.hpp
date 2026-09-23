@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/GeneralizedLogistic.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/GeneralizedLogistic.cs @ 7e8e8d1
 //
 // Generalized Logistic distribution: parameters ξ (location), α (scale), κ (shape).
 // Mirrors the C# source method-for-method. The IBootstrappable, IStandardError, and
@@ -14,6 +14,7 @@
 #pragma once
 #include <string>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -21,6 +22,9 @@
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
+#include "corehydro/numerics/distributions/base/i_standard_error.hpp"
+#include "corehydro/numerics/distributions/base/kappa_expected_information.hpp"
+#include "corehydro/numerics/distributions/base/kappa_four_boundary.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
@@ -33,7 +37,8 @@ namespace corehydro::numerics::distributions {
 class GeneralizedLogistic : public UnivariateDistributionBase,
                             public IEstimation,
                             public ILinearMomentEstimation,
-                            public IMaximumLikelihoodEstimation {
+                            public IMaximumLikelihoodEstimation,
+                            public IStandardError {
    public:
     GeneralizedLogistic() { set_parameters(100.0, 10.0, 0.0); }
     GeneralizedLogistic(double location, double scale, double shape) {
@@ -63,102 +68,119 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
 
     // --- Moments / support ---
     double mean() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero) return xi_;
-        if (std::fabs(kappa_) < 1.0) {
-            double U1 = g::function(1.0 + kappa_) * g::function(1.0 - kappa_);
-            return xi_ + alpha_ / kappa_ * (1.0 - U1);
-        }
-        return kNaN;
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (std::fabs(kappa_) >= 1.0) return kNaN;
+        if (kappa_ == 0.0) return xi_;
+        return xi_ + alpha_ * standard_mean(kappa_);
     }
 
     double median() const override { return inverse_cdf(0.5); }
 
     double mode() const override {
-        if (std::fabs(kappa_) <= kNearZero) return xi_;
-        return xi_ + alpha_ * (std::pow(1.0 + kappa_, -kappa_) - 1.0) / kappa_;
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (kappa_ <= -1.0) return minimum();
+        if (kappa_ >= 1.0) return maximum();
+        const double z = std::log1p(kappa_) - std::log1p(-kappa_);
+        return quantile_at_latent(z);
     }
 
     double standard_deviation() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero)
-            return alpha_ * kPi / std::sqrt(3.0);
-        if (std::fabs(kappa_) < 0.5) {
-            double U1 = g::function(1.0 + kappa_) * g::function(1.0 - kappa_);
-            double U2 = g::function(1.0 + 2.0 * kappa_) * g::function(1.0 - 2.0 * kappa_);
-            return std::sqrt(alpha_ * alpha_ / (kappa_ * kappa_) * (U2 - U1 * U1));
-        }
-        return kNaN;
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (std::fabs(kappa_) >= 0.5) return kNaN;
+        return alpha_ * std::sqrt(standard_variance(kappa_));
     }
 
     double skewness() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero) return 0.0;
-        if (std::fabs(kappa_) < 1.0 / 3.0) {
-            double U1 = g::function(1.0 + kappa_) * g::function(1.0 - kappa_);
-            double U2 = g::function(1.0 + 2.0 * kappa_) * g::function(1.0 - 2.0 * kappa_);
-            double U3 = g::function(1.0 + 3.0 * kappa_) * g::function(1.0 - 3.0 * kappa_);
-            double num = -U3 + 3.0 * U1 * U2 - 2.0 * std::pow(U1, 3.0);
-            double den = std::pow(U2 - U1 * U1, 1.5);
-            return sign(kappa_) * num / den;
-        }
-        return kNaN;
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (std::fabs(kappa_) >= 1.0 / 3.0) return kNaN;
+        if (kappa_ == 0.0) return 0.0;
+        if (std::fabs(kappa_) <= 0.05)
+            return kappa_ * polynomial(third_coefficients(), kappa_ * kappa_, 2) /
+                   std::pow(standard_variance(kappa_), 1.5);
+        const double b1 = reciprocal_sinc(kappa_);
+        const double b2 = reciprocal_sinc(2.0 * kappa_);
+        const double b3 = reciprocal_sinc(3.0 * kappa_);
+        return std::copysign(1.0, kappa_) *
+               (-b3 + 3.0 * b1 * b2 - 2.0 * b1 * b1 * b1) /
+               std::pow(b2 - b1 * b1, 1.5);
     }
 
     double kurtosis() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero) return 3.0 + 6.0 / 5.0;
-        if (std::fabs(kappa_) < 0.25) {
-            double U1 = g::function(1.0 + kappa_) * g::function(1.0 - kappa_);
-            double U2 = g::function(1.0 + 2.0 * kappa_) * g::function(1.0 - 2.0 * kappa_);
-            double U3 = g::function(1.0 + 3.0 * kappa_) * g::function(1.0 - 3.0 * kappa_);
-            double U4 = g::function(1.0 + 4.0 * kappa_) * g::function(1.0 - 4.0 * kappa_);
-            double knum = U4 - 4.0 * U3 * U1 - 3.0 * U2 * U2 + 12.0 * U2 * U1 * U1 -
-                          6.0 * std::pow(U1, 4.0);
-            double kden = std::pow(U2 - U1 * U1, 2.0);
-            return 3.0 + knum / kden;
-        }
-        return kNaN;
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (std::fabs(kappa_) >= 0.25) return kNaN;
+        if (kappa_ == 0.0) return 21.0 / 5.0;
+        const double variance = standard_variance(kappa_);
+        if (std::fabs(kappa_) <= 0.05)
+            return polynomial(fourth_coefficients(), kappa_ * kappa_, 2) /
+                   (variance * variance);
+        const double b1 = reciprocal_sinc(kappa_);
+        const double b2 = reciprocal_sinc(2.0 * kappa_);
+        const double b3 = reciprocal_sinc(3.0 * kappa_);
+        const double b4 = reciprocal_sinc(4.0 * kappa_);
+        return (b4 - 4.0 * b1 * b3 + 6.0 * b1 * b1 * b2 -
+                3.0 * b1 * b1 * b1 * b1) /
+               (variance * variance * kappa_ * kappa_ * kappa_ * kappa_);
     }
 
     double minimum() const override {
-        if (kappa_ >= -kNearZero) return -kInf;
-        return xi_ + alpha_ / kappa_;
+        if (kappa_ >= 0.0) return -kInf;
+        return finite_shape_endpoint();
     }
 
     double maximum() const override {
-        if (kappa_ <= kNearZero) return kInf;
-        return xi_ + alpha_ / kappa_;
+        if (kappa_ <= 0.0) return kInf;
+        return finite_shape_endpoint();
     }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        if (x < minimum() || x > maximum()) return 0.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero)
-            y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return 1.0 / alpha_ * std::exp(-(1.0 - kappa_) * y) /
-               std::pow(1.0 + std::exp(-y), 2.0);
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (std::isnan(x)) return x;
+        if (std::isinf(x) || x < minimum() || x > maximum()) return -kInf;
+        if (x == minimum() || x == maximum())
+            return std::fabs(kappa_) < 1.0
+                       ? -kInf
+                       : std::fabs(kappa_) == 1.0 ? -std::log(alpha_) : kInf;
+        const double z = latent_logistic(x);
+        return (z >= 0.0 ? (kappa_ - 1.0) * z - 2.0 * std::log1p(std::exp(-z))
+                         : (kappa_ + 1.0) * z - 2.0 * std::log1p(std::exp(z))) -
+               std::log(alpha_);
     }
 
-    double cdf(double x) const override {
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (x <= minimum()) return -kInf;
+        if (x >= maximum()) return 0.0;
+        const double z = latent_logistic(x);
+        return z <= 0.0 ? z - std::log1p(std::exp(z)) : -std::log1p(std::exp(-z));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GeneralizedLogistic: invalid parameters");
         if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero)
-            y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return 1.0 / (1.0 + std::exp(-y));
+        if (x >= maximum()) return -kInf;
+        const double z = latent_logistic(x);
+        return z >= 0.0 ? -z - std::log1p(std::exp(-z)) : -std::log1p(std::exp(z));
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        if (std::fabs(kappa_) <= kNearZero)
-            return xi_ - alpha_ * std::log((1.0 - probability) / probability);
-        return xi_ + alpha_ / kappa_ *
-                         (1.0 - std::pow((1.0 - probability) / probability, kappa_));
+        const double z = std::log(probability) - std::log1p(-probability);
+        return quantile_at_latent(z);
     }
 
     // --- Parameter display names (X1; C# GeneralizedLogistic.cs ParametersToString col0 +
@@ -177,6 +199,7 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
     // --- Estimation ---
     void estimate(const std::vector<double>& sample,
                   ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(direct_method_of_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -229,27 +252,13 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
     // for tiny nonzero kappa; coefficients transcribed exactly from C#.
     std::vector<double> parameters_from_linear_moments(
         const std::vector<double>& moments) const override {
-        double L1 = moments[0];
-        double L2 = moments[1];
-        double T3 = moments[2];
-        // C# reads moments[3] (T4) but does not use it.
-        double kappa = -T3;
-        double alpha, xi;
-        if (kappa == 0.0) {
-            alpha = L2;
-            xi = L1;
-        } else if (std::fabs(kappa) <= kNearZero) {
-            double kappa2 = kappa * kappa;
-            double pi2 = kPi * kPi;
-            double sinc = 1.0 - pi2 * kappa2 / 6.0 + pi2 * pi2 * kappa2 * kappa2 / 120.0;
-            double reciprocal_difference = -pi2 * kappa / 6.0
-                                           - 7.0 * pi2 * pi2 * kappa * kappa2 / 360.0;
-            alpha = L2 * sinc;
-            xi = L1 - alpha * reciprocal_difference;
-        } else {
-            alpha = L2 * std::sin(kappa * kPi) / (kappa * kPi);
-            xi = L1 - alpha * (1.0 / kappa - kPi / std::sin(kappa * kPi));
-        }
+        if (moments.size() < 3 || !std::isfinite(moments[0]) ||
+            !std::isfinite(moments[1]) || moments[1] <= 0.0 ||
+            !std::isfinite(moments[2]) || std::fabs(moments[2]) >= 1.0)
+            throw std::out_of_range("invalid generalized-logistic L-moments");
+        const double kappa = -moments[2];
+        const double alpha = moments[1] / reciprocal_sinc(kappa);
+        const double xi = moments[0] - alpha * standard_mean(kappa);
         return {xi, alpha, kappa};
     }
 
@@ -262,25 +271,12 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
         double xi = parameters[0];
         double alpha = parameters[1];
         double kappa = parameters[2];
+        if (!validate(xi, alpha, kappa))
+            throw std::invalid_argument("GeneralizedLogistic: invalid parameters");
         if (std::fabs(kappa) >= 1.0)
             throw std::out_of_range("L-moments can only be defined for -1 < kappa < 1");
-        double L1, L2;
-        if (kappa == 0.0) {
-            L1 = xi;
-            L2 = alpha;
-        } else if (std::fabs(kappa) <= kNearZero) {
-            double kappa2 = kappa * kappa;
-            double pi2 = kPi * kPi;
-            double reciprocal_difference = -pi2 * kappa / 6.0
-                                           - 7.0 * pi2 * pi2 * kappa * kappa2 / 360.0;
-            double reciprocal_sinc = 1.0 + pi2 * kappa2 / 6.0
-                                     + 7.0 * pi2 * pi2 * kappa2 * kappa2 / 360.0;
-            L1 = xi + alpha * reciprocal_difference;
-            L2 = alpha * reciprocal_sinc;
-        } else {
-            L1 = xi + alpha * (1.0 / kappa - kPi / std::sin(kappa * kPi));
-            L2 = alpha * kappa * kPi / std::sin(kappa * kPi);
-        }
+        const double L1 = xi + alpha * standard_mean(kappa);
+        const double L2 = alpha * reciprocal_sinc(kappa);
         double T3 = -kappa;
         double T4 = (1.0 + 5.0 * kappa * kappa) / 6.0;
         return {L1, L2, T3, T4};
@@ -291,17 +287,13 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = parameters_from_linear_moments(data::linear_moments(sample));
-        if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
-        lowers.resize(3);
-        uppers.resize(3);
-        lowers[0] = -std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0])) + 1.0));
-        uppers[0] = std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0])) + 1.0));
-        lowers[1] = kDoubleMachineEpsilon;
-        uppers[1] = std::pow(10.0, std::ceil(std::log10(std::fabs(initials[1]))) + 1.0);
-        lowers[2] = -10.0;
-        uppers[2] = 10.0;
-        if (initials[2] <= lowers[2] || initials[2] >= uppers[2]) initials[2] = 0.0;
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
     }
 
     std::vector<double> mle(const std::vector<double>& sample) const {
@@ -314,10 +306,282 @@ class GeneralizedLogistic : public UnivariateDistributionBase,
         };
         math::optimization::NelderMead solver(log_lh, 3, initials, lowers, uppers);
         solver.maximize();
-        return solver.best_parameters();
+        const auto result = solver.best_parameters();
+        if (solver.status() != math::optimization::OptimizationStatus::Success ||
+            !validate(result[0], result[1], result[2]) ||
+            !std::isfinite(GeneralizedLogistic(result[0], result[1], result[2])
+                               .log_likelihood(sample)))
+            throw std::runtime_error(
+                "Generalized logistic maximum likelihood estimation failed or returned a "
+                "nonfinite fit");
+        return result;
+    }
+
+    math::linalg::Matrix2D parameter_covariance(
+        int sample_size, ParameterEstimationMethod method) const override {
+        distribution_numerics::validate_sample_size(sample_size);
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        if (method != ParameterEstimationMethod::MaximumLikelihood)
+            throw std::logic_error(
+                "Generalized-logistic covariance is implemented only for maximum likelihood");
+        return distribution_numerics::KappaExpectedInformation::parameter_covariance(
+            alpha_, kappa_, -1.0, sample_size, 3);
+    }
+
+    double quantile_variance(double probability, int sample_size,
+                             ParameterEstimationMethod method) const override {
+        distribution_numerics::validate_probability(probability);
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        GeneralizedLogistic unit(0.0, 1.0, kappa_);
+        const auto covariance = unit.parameter_covariance(sample_size, method);
+        const double z = std::log(probability) - std::log1p(-probability);
+        const double argument = -kappa_ * z;
+        const double scale_gradient = distribution_numerics::scaled_exprel_product(
+            alpha_, z, argument);
+        const double shape_gradient =
+            -distribution_numerics::scaled_exprel_derivative_product(
+                alpha_, z, argument);
+        return distribution_numerics::scaled_quantile_variance(
+            covariance, {alpha_, scale_gradient, shape_gradient});
+    }
+
+    std::vector<double> quantile_gradient(double probability) const override {
+        distribution_numerics::validate_probability(probability);
+        if (!parameters_valid_)
+            throw std::out_of_range("GeneralizedLogistic: invalid parameters");
+        const double z = std::log(probability) - std::log1p(-probability);
+        const double v = -kappa_ * z;
+        const double shape =
+            v < -50.0
+                ? -std::exp(std::log(alpha_) - 2.0 * std::log(std::fabs(kappa_)))
+                : v > 50.0
+                      ? -std::exp(std::log(alpha_) + v + std::log(v - 1.0) -
+                                  2.0 * std::log(std::fabs(kappa_)))
+                      : -alpha_ * z * z * distribution_numerics::exprel_derivative(v);
+        const double scale =
+            v > 50.0
+                ? -std::copysign(std::exp(v - std::log(std::fabs(kappa_))), kappa_)
+                : v < -50.0 ? 1.0 / kappa_ : z * distribution_numerics::exprel(v);
+        return {1.0, scale, shape};
+    }
+
+    math::linalg::Matrix2D quantile_jacobian(
+        const std::vector<double>& probabilities, double& determinant) const override {
+        return distribution_numerics::quantile_jacobian(
+            *this, number_of_parameters(), probabilities, determinant);
     }
 
    private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        const auto moments = data::linear_moments(sample);
+        const double l1 = moments[0];
+        const double l2 = moments[1];
+        const double kappa = -moments[2];
+        double alpha, xi;
+        if (kappa == 0.0) {
+            alpha = l2;
+            xi = l1;
+        } else if (std::fabs(kappa) <= kNearZero) {
+            const double kappa2 = kappa * kappa;
+            const double pi2 = kPi * kPi;
+            const double sinc = 1.0 - pi2 * kappa2 / 6.0 +
+                                pi2 * pi2 * kappa2 * kappa2 / 120.0;
+            const double reciprocal_difference =
+                -pi2 * kappa / 6.0 -
+                7.0 * pi2 * pi2 * kappa * kappa2 / 360.0;
+            alpha = l2 * sinc;
+            xi = l1 - alpha * reciprocal_difference;
+        } else {
+            alpha = l2 * std::sin(kappa * kPi) / (kappa * kPi);
+            xi = l1 - alpha * (1.0 / kappa - kPi / std::sin(kappa * kPi));
+        }
+        std::vector<double> initials = {xi, alpha, kappa};
+        std::vector<double> lowers(3), uppers(3);
+        if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
+        lowers[0] = -std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0])) + 1.0));
+        uppers[0] = std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0])) + 1.0));
+        lowers[1] = kDoubleMachineEpsilon;
+        uppers[1] = std::pow(10.0, std::ceil(std::log10(std::fabs(initials[1]))) + 1.0);
+        lowers[2] = -10.0;
+        uppers[2] = 10.0;
+        if (initials[2] <= lowers[2] || initials[2] >= uppers[2]) initials[2] = 0.0;
+        return {initials, lowers, uppers};
+    }
+
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        double magnitude = 0.0;
+        for (double value : sample) magnitude = std::max(magnitude, std::fabs(value));
+        std::vector<double> scaled(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i) scaled[i] = sample[i] / magnitude;
+        const auto moments = data::linear_moments(scaled);
+        auto initials = parameters_from_linear_moments(moments);
+        initials[0] *= magnitude;
+        initials[1] *= magnitude;
+        GeneralizedLogistic candidate(initials[0], initials[1], initials[2]);
+        if (!candidate.parameters_valid() || !std::isfinite(candidate.log_likelihood(sample)))
+            initials = {moments[0] * magnitude, moments[1] * magnitude, 0.0};
+        std::vector<double> lowers(3), uppers(3);
+        const double location_magnitude = std::max(std::fabs(initials[0]), initials[1]);
+        lowers[0] = -finite_decimal_bound(location_magnitude);
+        uppers[0] = -lowers[0];
+        lowers[1] = std::min(kDoubleMachineEpsilon, initials[1] / 10.0);
+        uppers[1] = finite_decimal_bound(initials[1]);
+        lowers[2] = -10.0;
+        uppers[2] = 10.0;
+        if (initials[2] <= lowers[2] || initials[2] >= uppers[2]) initials[2] = 0.0;
+        candidate.set_parameters(initials);
+        if (!candidate.parameters_valid() || !std::isfinite(candidate.log_likelihood(sample)) ||
+            initials[0] <= lowers[0] || initials[0] >= uppers[0] ||
+            initials[1] <= lowers[1] || initials[1] >= uppers[1])
+            throw std::runtime_error(
+                "the sample does not admit a finite supported generalized-logistic "
+                "initializer within finite bounds");
+        return {initials, lowers, uppers};
+    }
+
+    static double finite_decimal_bound(double value) {
+        const double bound = std::pow(10.0, std::ceil(std::log10(value)) + 1.0);
+        return std::isinf(bound) ? std::numeric_limits<double>::max() : bound;
+    }
+
+    static std::vector<double> build_reciprocal_coefficients() {
+        std::vector<double> sinc(15), reciprocal(15);
+        sinc[0] = reciprocal[0] = 1.0;
+        for (int n = 1; n < 15; ++n) {
+            sinc[static_cast<std::size_t>(n)] =
+                -sinc[static_cast<std::size_t>(n - 1)] * kPi * kPi /
+                (2.0 * n) / (2.0 * n + 1.0);
+            for (int j = 1; j <= n; ++j)
+                reciprocal[static_cast<std::size_t>(n)] -=
+                    sinc[static_cast<std::size_t>(j)] *
+                    reciprocal[static_cast<std::size_t>(n - j)];
+        }
+        return reciprocal;
+    }
+
+    static const std::vector<double>& reciprocal_coefficients() {
+        static const auto coefficients = build_reciprocal_coefficients();
+        return coefficients;
+    }
+
+    static std::vector<double> multiply(const std::vector<double>& left,
+                                        const std::vector<double>& right) {
+        std::vector<double> result(left.size());
+        for (std::size_t n = 0; n < result.size(); ++n)
+            for (std::size_t j = 0; j <= n; ++j)
+                result[n] += left[j] * right[n - j];
+        return result;
+    }
+
+    static std::vector<double> build_moment_coefficients(int order) {
+        const auto& b1 = reciprocal_coefficients();
+        std::vector<double> b2(b1.size()), b3(b1.size()), b4(b1.size());
+        for (std::size_t n = 0; n < b1.size(); ++n) {
+            b2[n] = b1[n] * std::pow(4.0, static_cast<double>(n));
+            b3[n] = b1[n] * std::pow(9.0, static_cast<double>(n));
+            b4[n] = b1[n] * std::pow(16.0, static_cast<double>(n));
+        }
+        const auto b11 = multiply(b1, b1);
+        const auto b12 = multiply(b1, b2);
+        const auto b111 = multiply(b11, b1);
+        const auto b13 = multiply(b1, b3);
+        const auto b112 = multiply(b11, b2);
+        const auto b1111 = multiply(b11, b11);
+        std::vector<double> result(b1.size());
+        for (std::size_t n = 0; n < result.size(); ++n)
+            result[n] =
+                order == 2 ? b2[n] - b11[n]
+                           : order == 3
+                                 ? -b3[n] + 3.0 * b12[n] - 2.0 * b111[n]
+                                 : b4[n] - 4.0 * b13[n] + 6.0 * b112[n] -
+                                       3.0 * b1111[n];
+        return result;
+    }
+
+    static const std::vector<double>& variance_coefficients() {
+        static const auto coefficients = build_moment_coefficients(2);
+        return coefficients;
+    }
+
+    static const std::vector<double>& third_coefficients() {
+        static const auto coefficients = build_moment_coefficients(3);
+        return coefficients;
+    }
+
+    static const std::vector<double>& fourth_coefficients() {
+        static const auto coefficients = build_moment_coefficients(4);
+        return coefficients;
+    }
+
+    static double polynomial(const std::vector<double>& coefficients,
+                             double squared_shape, int first) {
+        double value = 0.0;
+        for (int n = static_cast<int>(coefficients.size()) - 1; n >= first; --n)
+            value = value * squared_shape + coefficients[static_cast<std::size_t>(n)];
+        return value;
+    }
+
+    static double reciprocal_sinc(double kappa) {
+        return std::fabs(kappa) <= 0.05
+                   ? 1.0 + kappa * kappa *
+                               polynomial(reciprocal_coefficients(), kappa * kappa, 1)
+                   : kPi * kappa / std::sin(kPi * kappa);
+    }
+
+    static double standard_mean(double kappa) {
+        return std::fabs(kappa) <= 0.05
+                   ? -kappa * polynomial(reciprocal_coefficients(), kappa * kappa, 1)
+                   : (1.0 - reciprocal_sinc(kappa)) / kappa;
+    }
+
+    static double standard_variance(double kappa) {
+        return std::fabs(kappa) <= 0.05
+                   ? polynomial(variance_coefficients(), kappa * kappa, 1)
+                   : (reciprocal_sinc(2.0 * kappa) -
+                      std::pow(reciprocal_sinc(kappa), 2.0)) /
+                         (kappa * kappa);
+    }
+
+    double finite_shape_endpoint() const {
+        const double shift = alpha_ / kappa_;
+        return std::isinf(shift) && std::signbit(xi_) != std::signbit(shift)
+                   ? (xi_ * kappa_ + alpha_) / kappa_
+                   : xi_ + shift;
+    }
+
+    double latent_logistic(double x) const {
+        const double y = distribution_numerics::standardize(x, xi_, alpha_);
+        if (kappa_ == 0.0) return y;
+        const double product = -kappa_ * y;
+        if (product < -0.9)
+            return -distribution_numerics::KappaFourBoundary::log_t(
+                x, xi_, alpha_, kappa_);
+        return distribution_numerics::hosking_shape_transform(
+            x, xi_, alpha_, kappa_);
+    }
+
+    double quantile_at_latent(double z) const {
+        const double v = -kappa_ * z;
+        const double standard =
+            v > 50.0 ? -std::copysign(1.0, kappa_) *
+                           std::exp(v - std::log(std::fabs(kappa_)))
+                     : v < -50.0 ? 1.0 / kappa_ : z * distribution_numerics::exprel(v);
+        const double offset =
+            v > 50.0 ? -std::copysign(1.0, kappa_) *
+                           std::exp(std::log(alpha_) + v - std::log(std::fabs(kappa_)))
+                     : alpha_ * standard;
+        const double value = xi_ + offset;
+        if (std::isinf(value) && std::isfinite(standard)) {
+            const double combined = xi_ / alpha_ + standard;
+            if (std::isfinite(combined)) return alpha_ * combined;
+        }
+        return value;
+    }
+
     static double sign(double x) { return (x > 0.0) - (x < 0.0); }
 
     static bool validate(double location, double scale, double shape) {

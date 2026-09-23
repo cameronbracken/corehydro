@@ -15,8 +15,8 @@ a named list with the entries relevant to \code{mv}'s family.
 }
 \description{
 The scalar or vector parameters specific to a multivariate family, beyond mean/covariance:
-\code{df} for \code{"MultivariateStudentT"}; \code{alpha} and \code{alpha_sum} for \code{"Dirichlet"}; \code{trials} and
-\code{probabilities} for \code{"Multinomial"}.
+\code{decomposition} for \code{"MultivariateNormal"}; \code{df} for \code{"MultivariateStudentT"}; \code{alpha} and
+\code{alpha_sum} for \code{"Dirichlet"}; \code{trials} and \code{probabilities} for \code{"Multinomial"}.
 }
 \examples{
 mvdist_params(mvdist_student_t(5, c(0, 0)))

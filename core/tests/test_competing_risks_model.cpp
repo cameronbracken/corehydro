@@ -908,15 +908,13 @@ void test_jeffreys_prior_nonpositive_scale_returns_negative_infinity() {
 // Edge cases.
 // ===========================================================================================
 
-// Test_CompetingRisks_SingleDataPoint
+// Numerics v2.2 rejects a one-observation sample before a positive scale can be initialized.
 void test_competing_risks_single_data_point() {
     DataFrame df;
     df.set_exact_series(ExactSeries(std::vector<ExactData>{ExactData(2000, 1000)}));
     std::vector<UnivariateDistributionType> types{UnivariateDistributionType::Normal};
 
-    CompetingRisksModel model(std::move(df), types);
-
-    CHECK_TRUE(model.has_competing_risks());
+    CHECK_THROWS(CompetingRisksModel(std::move(df), types));
 }
 
 // Test_CompetingRisks_LargeValues

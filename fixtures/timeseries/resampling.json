@@ -1,7 +1,7 @@
 {
   "kind": "toolbox",
   "group": "timeseries",
-  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 2a0357a, ResampleWithKNN (Lall and Sharma 1996) and ResampleWithBlockBootstrap (Kuensch 1989). Upstream's own tests build their input from System.Random, which has no ported equivalent, so they assert statistical properties rather than values and cannot be scraped; every value here was harvested with verify_oracles.py --dump against the real library over a literal input series.",
+  "source": "Numerics/Data/Time Series/TimeSeries.cs @ 7e8e8d1, ResampleWithKNN (Lall and Sharma 1996) and ResampleWithBlockBootstrap (Kuensch 1989). Upstream's own tests build their input from System.Random, which has no ported equivalent, so they assert statistical properties rather than values and cannot be scraped; every value here was harvested with verify_oracles.py --dump against the real library over a literal input series.",
   "reference": "Both resamplers draw from the ported MersenneTwister inside the shared core, so a seeded run is bit-identical across C++, R and Python -- these are asserted at ZERO tolerance. The kNN path also exercises the P5 KNearestNeighbors learner, whose distance sort is the ported .NET introsort, so a tie in the neighbour distances is resolved the same way in all four runners.",
   "cases": [
     {

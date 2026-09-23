@@ -409,12 +409,15 @@ dist_competing_risks <- function(components, minimum_of = TRUE, dependency = "In
 #'   through the standard-normal quantile; `"None"` interpolates `p` directly.
 #' @param p_descending whether `p` decreases as `x` increases (a survival-function
 #'   encoding); `FALSE` (the default) is the ordinary ascending-CDF case.
+#' @param extrapolation sides on which to extend the boundary segments: `"none"` (default),
+#'   `"below"`, `"above"`, or `"both"`.
 #' @return a `corehydro_dist` of family `"Empirical"`, accepted by every `dist_*()` verb.
 #' @export
 #' @examples
 #' d <- dist_empirical(x = c(1, 2, 3), p = c(0.1, 0.5, 0.9))
 #' dist_quantile(d, 0.5)
-dist_empirical <- function(x, p, p_transform = "NormalZ", p_descending = FALSE) {
+dist_empirical <- function(x, p, p_transform = "NormalZ", p_descending = FALSE,
+                           extrapolation = "none") {
   pt_choices <- c("NormalZ", "None")
   if (!is.character(p_transform) || length(p_transform) != 1L ||
       !p_transform %in% pt_choices) {
@@ -422,12 +425,14 @@ dist_empirical <- function(x, p, p_transform = "NormalZ", p_descending = FALSE) 
          call. = FALSE)
   }
   if (length(x) != length(p)) stop("`x` and `p` must have the same length", call. = FALSE)
+  extrapolation <- match.arg(extrapolation, c("none", "below", "above", "both"))
   new_composite_dist("Empirical", to_spec_json(list(
     family = "Empirical",
     x = spec_array(as.double(x)),
     p = spec_array(as.double(p)),
     p_transform = p_transform,
-    p_descending = isTRUE(p_descending)
+    p_descending = isTRUE(p_descending),
+    extrapolation = extrapolation
   )))
 }
 

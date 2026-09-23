@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Global/DifferentialEvolution.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Global/DifferentialEvolution.cs @ 7e8e8d1
 //
 // The Differential Evolution (DE) global optimizer (Storn & Price, 1997/1998): maintains a
 // population of candidate solutions, mutates/recombines them each generation, and keeps
@@ -102,6 +102,9 @@ class DifferentialEvolution : public Optimizer {
     double crossover_probability = 0.9;
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         if (population_size < 1) throw ArgumentException("The population size must be greater than 0.");
         if (mutation < 0 || mutation > 2)
@@ -179,9 +182,15 @@ class DifferentialEvolution : public Optimizer {
                             Xp[static_cast<std::size_t>(r0)].values[static_cast<std::size_t>(j)] +
                             G * (Xp[static_cast<std::size_t>(r1)].values[static_cast<std::size_t>(j)] -
                                  Xp[static_cast<std::size_t>(r2)].values[static_cast<std::size_t>(j)]);
-                        u[static_cast<std::size_t>(j)] = repair_parameter(
-                            u[static_cast<std::size_t>(j)], lower_bounds_[static_cast<std::size_t>(j)],
-                            upper_bounds_[static_cast<std::size_t>(j)]);
+                        if (u[static_cast<std::size_t>(j)] < lower_bounds_[static_cast<std::size_t>(j)]) {
+                            u[static_cast<std::size_t>(j)] =
+                                0.5 * Xp[static_cast<std::size_t>(i)].values[static_cast<std::size_t>(j)] +
+                                0.5 * lower_bounds_[static_cast<std::size_t>(j)];
+                        } else if (u[static_cast<std::size_t>(j)] > upper_bounds_[static_cast<std::size_t>(j)]) {
+                            u[static_cast<std::size_t>(j)] =
+                                0.5 * Xp[static_cast<std::size_t>(i)].values[static_cast<std::size_t>(j)] +
+                                0.5 * upper_bounds_[static_cast<std::size_t>(j)];
+                        }
                     } else {
                         u[static_cast<std::size_t>(j)] = Xp[static_cast<std::size_t>(i)].values[static_cast<std::size_t>(j)];
                     }

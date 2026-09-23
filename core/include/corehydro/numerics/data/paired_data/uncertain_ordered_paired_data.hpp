@@ -1,4 +1,4 @@
-// ported from: Numerics/Data/Paired Data/UncertainOrderedPairedData.cs @ 2a0357a
+// ported from: Numerics/Data/Paired Data/UncertainOrderedPairedData.cs @ 7e8e8d1
 //
 // P4 Task 9: the uncertain twin of Task 8's OrderedPairedData (ordered_paired_data.hpp) -- an
 // x-y curve container whose Y coordinate is a whole continuous distribution (UncertainOrdinate,
@@ -355,16 +355,13 @@ class UncertainOrderedPairedData {
         }
     }
 
-    // C# InsertRange(int, IList<UncertainOrdinate>) (lines ~716-731). See transcription note 4
-    // above: the loop below calls `ordinate_valid(index)` (the constant first-inserted position)
-    // on every pass, NOT `ordinate_valid(i)` -- an upstream defect with a REAL consequence
-    // (unlike AddRange's inert startIndex bug), ported exactly as C# wrote it.
+    // C# InsertRange(int, IList<UncertainOrdinate>) (lines ~716-731).
     void insert_range(int index, const std::vector<UncertainOrdinate>& items) {
         if (items.empty()) return;
         ordinates_.insert(ordinates_.begin() + index, items.begin(), items.end());  // deep-clones
         for (int i = index; i <= index + static_cast<int>(items.size()) - 1; ++i) {
             if (is_valid_) {
-                if (!ordinate_valid(index)) is_valid_ = false;
+                if (!ordinate_valid(i)) is_valid_ = false;
             }
         }
     }

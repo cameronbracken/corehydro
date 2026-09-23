@@ -1,7 +1,7 @@
 // P5 Task 8 -- RandomForest.
 //
 // Transcribes both [TestMethod]s of
-// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_RandomForest.cs @ 2a0357a, at
+// upstream/Numerics/Test_Numerics/Machine Learning/Supervised/Test_RandomForest.cs @ 7e8e8d1, at
 // the C# default of 1,000 trees.
 //
 // WALL TIME (measured on this machine before transcribing, to settle whether the C# default was
@@ -15,7 +15,12 @@
 // below is what holds this port to the algorithm: the interval-column ordering, the
 // classification flooring, the untrained/wrong-shape null returns, and seeded determinism.
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <iomanip>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "check.hpp"
@@ -32,6 +37,28 @@ namespace iris = corehydro::testdata::iris;
 namespace fpp3 = corehydro::testdata::fpp3;
 
 namespace {
+
+std::uint64_t fnv1a(const std::string& value) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+std::uint64_t matrix_golden_hash(const la::Matrix& values) {
+    std::ostringstream out;
+    for (int i = 0; i < values.number_of_rows(); ++i) {
+        for (int j = 0; j < 4; ++j) {
+            std::uint64_t bits = 0;
+            double value = values(i, j);
+            std::memcpy(&bits, &value, sizeof(bits));
+            out << std::uppercase << std::hex << std::setw(16) << std::setfill('0') << bits << '|';
+        }
+    }
+    return fnv1a(out.str());
+}
 
 // C# `Subset(start, end)` is INCLUSIVE of `end`; `Subset(start)` runs to the end of the array.
 std::vector<double> subset(const std::vector<double>& v, int start, int end) {
@@ -69,6 +96,7 @@ void test_random_forest_iris() {
 
     // Accuracy should be greater than or equal to 90%.
     CHECK_TRUE(accuracy >= 90.0);
+    CHECK_EQ(matrix_golden_hash(*prediction), 0x53587DCA7E3388B3ULL);
 }
 
 void test_random_forest_regression() {
@@ -98,6 +126,7 @@ void test_random_forest_regression() {
 
     // The random forest is better (the point upstream's DecisionTree regression test sets up).
     CHECK_TRUE(rf_r2 > lm_r2);
+    CHECK_EQ(matrix_golden_hash(*rf_predict), 0xF8A0782DDEC60AC0ULL);
 }
 
 // --- COREHYDRO SUPPLEMENT (no C# counterpart) ---------------------------------------------

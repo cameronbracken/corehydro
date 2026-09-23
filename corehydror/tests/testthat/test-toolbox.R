@@ -49,6 +49,26 @@ test_that("percentile() rejects a non-numeric probs argument, naming it", {
   expect_error(percentile(c(1, 2, 3), probs = "half"), "probs")
 })
 
+test_that("global sensitivity uses deterministic tie order", {
+  x <- rep(1, 32)
+  y <- c(rep(0, 16), rep(1, 16))
+  expect_identical(first_order_sobol(x, y, bins = 2), 1)
+  expect_identical(pawn(x, y, bins = 2), c(0.5, 0.5))
+  expect_identical(pawn_median(x, y, bins = 2), 0.5)
+  expect_identical(borgonovo_delta(x, y, x_bins = 2, y_bins = 2), 0.5)
+})
+
+test_that("single factor probability methods are exposed", {
+  p <- c(0.01, 0.05, 0.2, 0.001)
+  expect_equal(union_single_factor(p, 0), 1 - prod(1 - p), tolerance = 1e-12)
+  thresholds <- c(-2.3263478740408408, -0.8416212335729142, 0.5244005127080407)
+  expect_equal(
+    single_factor_conditional_probabilities(thresholds, 0, 1.7),
+    c(0.01, 0.2, 0.7),
+    tolerance = 1e-14
+  )
+})
+
 test_that("correlation() with a matrix returns the p-by-p matrix, diagonal 1, symmetric, and off-diagonals matching the pairwise calls", {
   c0 <- c(14, 8, 32, 7, 3, 15)
   c1 <- c(10, 5, 7, 4, 3, 8)
@@ -383,6 +403,18 @@ test_that("sobol_sequence() skip moves the stream: point 1 with skip = k equals 
   seq5 <- sobol_sequence(5, dimension = 2)
   skipped <- sobol_sequence(1, dimension = 2, skip = 4)
   expect_equal(skipped[1, ], seq5[5, ], tolerance = 0)
+})
+
+test_that("sobol_sequence() seed reproduces the scrambled stream", {
+  expected <- matrix(c(
+    0.659847889995655, 0.5825658737429362,
+    0.8092207866147765, 0.15954710391098081,
+    0.48233205686128877, 0.7857143836043143
+  ), nrow = 3, byrow = TRUE)
+  first <- sobol_sequence(3, dimension = 2, seed = 12345)
+  # R's decimal parser lands one ulp away from two of the C# literals.
+  expect_equal(first, expected, tolerance = 1e-15)
+  expect_identical(first, sobol_sequence(3, dimension = 2, seed = 12345))
 })
 
 test_that("sobol_sequence() rejects a non-positive n or dimension, naming the argument", {
@@ -761,6 +793,47 @@ test_that("univariate_function() rejects an unknown type", {
   expect_error(univariate_function("quadratic", c(1, 1), 1), "unknown function type")
 })
 
+test_that("univariate_function() evaluates v2.2 segmented, composite, and ensemble specs", {
+  segmented <- list(type = "segmented_power", parameters = c(1, 1.5, 2, 0.1))
+  expect_equal(univariate_function(segmented, c(0.5, 5)), c(0, 505.9644256269407),
+               tolerance = 1e-10)
+
+  composite <- list(
+    type = "composite", mode = "weighted_average", weights = c(0.25, 0.75),
+    functions = list(
+      list(type = "linear", parameters = c(0, 2, 0)),
+      list(type = "linear", parameters = c(10, 4, 0))
+    )
+  )
+  expect_equal(univariate_function(composite, 4), 21.5, tolerance = 1e-12)
+
+  mixture <- composite
+  mixture$mode <- "mixture"
+  mixture$confidence_level <- 0.75
+  mixture$functions <- list(
+    list(type = "linear", parameters = c(0, 1, 0)),
+    list(type = "linear", parameters = c(100, 1, 0))
+  )
+  expect_equal(univariate_function(mixture, 5), 105, tolerance = 1e-12)
+
+  ensemble <- list(
+    type = "ensemble", template = segmented,
+    parameter_sets = list(
+      c(1, 1.5, 2, 0.1), c(0.9, 1.6, 1.9, 0.12), c(1.1, 1.4, 2.1, 0.08)
+    ),
+    sample_percentile = 1
+  )
+  expect_equal(univariate_function(ensemble, 5), 10^1.4 * (5 - 1.1)^2.1,
+               tolerance = 1e-10)
+  ensemble$sample_percentile <- NULL
+  ensemble$sample_index <- 0
+  expect_equal(univariate_function(ensemble, 5), 505.9644256269407, tolerance = 1e-10)
+
+  invalid <- composite
+  invalid$weights <- c(0.3, 0.3)
+  expect_error(univariate_function(invalid, 4), "weights")
+})
+
 # The "network" toolbox group (P3 optimizers Task 10): Dijkstra shortest paths over an edge
 # list. The oracle values live in fixtures/toolbox/network.json; the assertions below are the
 # same C# literals scraped from Test_Numerics/Mathematics/Optimization/Dynamic/DijkstraTesting.cs
@@ -808,6 +881,20 @@ test_that("shortest_path() takes several destinations", {
   expect_identical(sp$cost[[3]], 5)
 })
 
+test_that("shortest_path() exposes the single-pass nearest solve", {
+  args <- list(
+    from = c(0, 1, 1, 2, 1),
+    to = c(1, 0, 2, 1, 3),
+    weight = c(1, 3, 1, 2, 3),
+    destinations = c(0, 3, 3),
+    edge_index = c(0, 1, 2, 3, 4),
+    node_count = 4
+  )
+  merged <- do.call(shortest_path, args)
+  nearest <- do.call(shortest_path, c(args, list(nearest = TRUE)))
+  expect_identical(nearest$cost, merged$cost)
+})
+
 test_that("shortest_path() marks an unreachable node", {
   sp <- shortest_path(
     from = c(0, 1, 2),
@@ -843,6 +930,10 @@ test_that("shortest_path() validates its arguments", {
                "whole, non-negative")
   expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
                              edge_index = c(0, 1, 2)), "same length")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
+                             edge_index = c(0, -1)), "whole, non-negative")
+  expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 0,
+                             nearest = 1), "TRUE or FALSE")
   expect_error(shortest_path(numeric(0), numeric(0), numeric(0), destinations = 0), "at least one")
   expect_error(shortest_path(c(0, 1), c(1, 2), c(1, 1), destinations = 7), "out of range")
 })
@@ -993,14 +1084,12 @@ test_that("curve_simplify() reproduces the three simplification algorithms on th
   expect_equal(rdp$y, c(0, 1, -1, 0), tolerance = 1e-6)
   expect_equal(vis$y, c(0, 1, -1, 0), tolerance = 1e-6)
 
-  # LangSimplify never force-keeps the trailing point -- verified directly against the real C#
-  # library (see ordered_paired_data.hpp's sixth transcription note): the correct result here is
-  # THREE points, dropping (6.28, 0), not the four upstream's own (weakly-asserted) test claims.
+  # Numerics v2.2.0 fixes LangSimplify so it retains the trailing point.
   lang <- curve_simplify(x, y, method = "lang", tolerance = 0.01, look_ahead = 2,
                          strict_y = FALSE, order_y = "none")
-  expect_equal(nrow(lang), 3L)
-  expect_equal(lang$x, c(0, 1.57, 4.71), tolerance = 1e-6)
-  expect_equal(lang$y, c(0, 1, -1), tolerance = 1e-6)
+  expect_equal(nrow(lang), 4L)
+  expect_equal(lang$x, c(0, 1.57, 4.71, 6.28), tolerance = 1e-6)
+  expect_equal(lang$y, c(0, 1, -1, 0), tolerance = 1e-6)
 })
 
 test_that("uncertain_curve_sample() reproduces Test_Curve_Sample_Probability", {
@@ -1083,4 +1172,16 @@ test_that("\"log\" and \"logarithmic\" are equivalent everywhere a transform arg
   ia <- interpolate(x, y, 2.5, x_transform = "log")
   ib <- interpolate(x, y, 2.5, x_transform = "logarithmic")
   expect_equal(ia, ib)
+})
+
+test_that("paired-data v2.2 extrapolation reaches both public wrappers", {
+  expect_equal(curve_interpolate(c(1, 2), c(10, 20), xout = c(0, 3),
+                                 extrapolation = "both"), c(0, 30))
+  expect_equal(curve_interpolate(c(100, 10), c(2, 1), xout = c(1000, 1),
+                                 x_transform = "logarithmic", order_x = "descending",
+                                 order_y = "descending", extrapolation = "both"), c(3, 0))
+  d <- lapply(c(100, 200, 300, 400, 500), function(v) distribution("Deterministic", v))
+  expect_equal(tabular_function(c(50, 100, 150, 200, 250), d, at = 600, inverse = TRUE,
+                                x_transform = "logarithmic", extrapolation = "both"),
+               312.5, tolerance = 1e-12)
 })

@@ -1,0 +1,30 @@
+{
+  "kind": "toolbox",
+  "group": "probability",
+  "source": "Numerics/Data/Statistics/Probability.cs",
+  "reference": "Numerics @ 7e8e8d1; equicorrelated single-factor union and conditional primitive",
+  "datasets": {
+    "probabilities": [0.01, 0.05, 0.2, 0.001],
+    "normal_thresholds": [-2.3263478740408408, -0.8416212335729143, 0.5244005127080407]
+  },
+  "cases": [
+    {
+      "name": "independent_limit",
+      "data": ["probabilities"],
+      "options": {"rho": 0.0, "relative_tolerance": 1e-10},
+      "assertions": [
+        {"method": "union_single_factor", "expected": 0.2483524, "mode": "abs", "tol": 1e-10}
+      ]
+    },
+    {
+      "name": "conditional_independent_of_factor_at_rho_zero",
+      "data": ["normal_thresholds"],
+      "options": {"rho": 0.0, "z": 1.7},
+      "assertions": [
+        {"method": "single_factor_conditional", "index": 0, "expected": 0.01, "mode": "abs", "tol": 1e-14},
+        {"method": "single_factor_conditional", "index": 1, "expected": 0.2, "mode": "abs", "tol": 1e-14},
+        {"method": "single_factor_conditional", "index": 2, "expected": 0.7, "mode": "abs", "tol": 1e-14}
+      ]
+    }
+  ]
+}

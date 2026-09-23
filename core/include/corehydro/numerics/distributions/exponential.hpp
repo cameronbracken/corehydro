@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Exponential.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Exponential.cs @ 7e8e8d1
 //
 // The (two-parameter) Exponential distribution, location ξ and scale α. Logic mirrors
 // the C# source method-for-method. B4 adds QuantileGradient and the ConditionalMoments
@@ -58,23 +58,46 @@ class Exponential : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        if (x < minimum() || x > maximum()) return 0.0;
-        return 1.0 / alpha_ * std::exp(-((x - xi_) / alpha_));
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Exponential: invalid parameters");
+        if (x < minimum() || x > maximum()) return -kInf;
+        const double value = -std::log(alpha_) -
+                             distribution_numerics::standardize(x, xi_, alpha_);
+        return std::isnan(value) ? -kInf : value;
     }
 
     double cdf(double x) const override {
         if (x <= minimum()) return 0.0;
         if (x >= maximum()) return 1.0;
-        return 1.0 - std::exp(-((x - xi_) / alpha_));
+        return -std::expm1(-distribution_numerics::standardize(x, xi_, alpha_));
+    }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Exponential: invalid parameters");
+        if (x <= xi_) return -kInf;
+        return distribution_numerics::log1m_exp(
+            -distribution_numerics::standardize(x, xi_, alpha_));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Exponential: invalid parameters");
+        return x <= xi_ ? 0.0 : -distribution_numerics::standardize(x, xi_, alpha_);
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        return xi_ - alpha_ * std::log(1.0 - probability);
+        const double unit_quantile = -std::log1p(-probability);
+        const double displacement = alpha_ * unit_quantile;
+        return std::isinf(displacement) && std::isfinite(unit_quantile)
+                   ? alpha_ * (xi_ / alpha_ + unit_quantile)
+                   : xi_ + displacement;
     }
 
     // --- Parameter display names (X1; C# Exponential.cs ParametersToString col0 +
@@ -92,6 +115,7 @@ class Exponential : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(parameters_from_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -122,23 +146,61 @@ class Exponential : public UnivariateDistributionBase,
     void get_parameter_constraints(const std::vector<double>& sample, std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
         auto moments = data::product_moments(sample);
         double N = static_cast<double>(sample.size());
         double min_data = *std::min_element(sample.begin(), sample.end());
-        initials = {(N * min_data - moments[0]) / (N - 1.0), N * (moments[0] - min_data) / (N - 1.0)};
-        lowers.assign(2, 0.0);
-        uppers.assign(2, 0.0);
+        std::vector<double> initials = {
+            (N * min_data - moments[0]) / (N - 1.0),
+            N * (moments[0] - min_data) / (N - 1.0)};
+        std::vector<double> lowers(2), uppers(2);
         if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
         lowers[0] = initials[0] - std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0]))));
-        uppers[0] = std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
+        uppers[0] = min_data + kDoubleMachineEpsilon;
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
         if (initials[0] <= lowers[0] || initials[0] >= uppers[0])
             initials[0] = 0.5 * (lowers[0] + uppers[0]);
         if (initials[1] <= lowers[1] || initials[1] >= uppers[1])
             initials[1] = 0.5 * (lowers[1] + uppers[1]);
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        const double normalization = distribution_numerics::initialization_scale(sample);
+        std::vector<double> normalized(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            normalized[i] = sample[i] / normalization;
+        const auto moments = data::product_moments(normalized);
+        const auto [minimum_it, maximum_it] =
+            std::minmax_element(sample.begin(), sample.end());
+        const double unit_minimum = *minimum_it / normalization;
+        const double n = static_cast<double>(sample.size());
+        std::vector<double> initials = {
+            (unit_minimum - (moments[0] - unit_minimum) / (n - 1.0)) * normalization,
+            (n / (n - 1.0)) * (moments[0] - unit_minimum) * normalization};
+        std::vector<double> lowers(2), uppers(2);
+        distribution_numerics::location_parameter_bounds(
+            initials[0], initials[1], *minimum_it, *maximum_it, true,
+            lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        return {initials, lowers, uppers};
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);
@@ -156,11 +218,12 @@ class Exponential : public UnivariateDistributionBase,
     // IStandardError.QuantileGradient, Exponential.cs:457). Q(p) = xi - alpha*log(1-p).
     // C# ValidateParameters(..., true) throw -> std::invalid_argument.
     std::vector<double> quantile_gradient(double probability) const {
+        distribution_numerics::validate_probability(probability);
         // Validate parameters
         if (!parameters_valid_) throw std::invalid_argument("Exponential: invalid parameters");
         return {
             1.0,                           // location
-            -std::log(1.0 - probability)  // scale
+            -std::log1p(-probability)  // scale
         };
     }
 

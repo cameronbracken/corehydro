@@ -137,6 +137,8 @@ static UnivariateDistributionBase BuildComposite(string target, JsonElement cons
                 var s     => throw new Exception($"unknown p_transform: {s}")
             };
         }
+        if (construct.TryGetProperty("extrapolation", out var ex))
+            emp.Extrapolation = ParseExtrapolationSides(ex.GetString()!);
         return emp;
     }
     if (target == "KernelDensity")
@@ -455,6 +457,7 @@ static Func<double[], double>? ResolveSpecialFunction(string target) => target s
     "Erf.erfc"         => a => Erf.Erfc(a[0]),
     "Erf.inverse_erf"  => a => Erf.InverseErf(a[0]),
     "Erf.inverse_erfc" => a => Erf.InverseErfc(a[0]),
+    "Debye.function_order_one" => a => Debye.FunctionOrderOne(a[0]),
     // Gamma family
     "Gamma.function"                 => a => Gamma.Function(a[0]),
     "Gamma.log_gamma"                => a => Gamma.LogGamma(a[0]),
@@ -464,6 +467,7 @@ static Func<double[], double>? ResolveSpecialFunction(string target) => target s
     "Gamma.upper_incomplete"         => a => Gamma.UpperIncomplete(a[0], a[1]),
     "Gamma.inverse_lower_incomplete" => a => Gamma.InverseLowerIncomplete(a[0], a[1]),
     "Gamma.inverse_upper_incomplete" => a => Gamma.InverseUpperIncomplete(a[0], a[1]),
+    "Gamma.incomplete"               => a => Gamma.Incomplete(a[0], a[1]),
     // Beta family
     "Beta.function"           => a => Beta.Function(a[0], a[1]),
     "Beta.incomplete"         => a => Beta.Incomplete(a[0], a[1], a[2]),
@@ -724,6 +728,7 @@ static Func<double[], double>? ResolveSpecialFunction(string target) => target s
     "Probability.hpcm_conditional_at" => ProbabilityHpcmConditionalAt,
     // Tools.log10 (args: [x] -- see fixtures/special_functions/tools.json)
     "Tools.log10" => a => Tools.Log10(a[0]),
+    "Tools.expm1" => a => Tools.Expm1(a[0]),
     _ => null,
 };
 
@@ -2074,8 +2079,13 @@ static MCMCSampler BuildAndSampleCallbackMcmc(JsonElement options, LogLikelihood
         if (Has("snooker_threshold")) demczsC.SnookerThreshold = Num("snooker_threshold", 0);
         if (Has("noise")) demczsC.Noise = Num("noise", 0);
     }
-    if (sampler is NUTS nutsC && Has("adapt_mass_matrix"))
-        nutsC.AdaptMassMatrix = options.GetProperty("adapt_mass_matrix").GetBoolean();
+    if (sampler is NUTS nutsC)
+    {
+        if (Has("adapt_mass_matrix"))
+            nutsC.AdaptMassMatrix = options.GetProperty("adapt_mass_matrix").GetBoolean();
+        if (Has("target_acceptance_rate"))
+            nutsC.TargetAcceptanceRate = Num("target_acceptance_rate", 0.8);
+    }
 
     sampler.Sample();
     return sampler;
@@ -2096,7 +2106,7 @@ static (double[] values, string[] names, int[] dims) FlattenCallbackMcmc(MCMCSam
     }
 
     Push("map_fitness", results.MAP.Fitness);
-    PushEach("acceptance_rate", j => sampler.AcceptanceRates[j], chains);
+    PushEach("acceptance_rate", j => results.AcceptanceRates[j], chains);
     PushEach("map", j => results.MAP.Values[j], p);
     PushEach("posterior_mean", j => results.ParameterResults[j].SummaryStatistics.Mean, p);
     PushEach("posterior_sd", j => results.ParameterResults[j].SummaryStatistics.StandardDeviation, p);
@@ -2294,7 +2304,11 @@ static MultivariateDistribution BuildMultivariate(string target, JsonElement con
             var row = covRows[i].EnumerateArray().Select(ParseNum).ToArray();
             for (int j = 0; j < row.Length; j++) covariance[i, j] = row[j];
         }
-        var mvn = new MultivariateNormal(mean, covariance);
+        var decomposition = construct.TryGetProperty("decomposition", out var decompositionElement)
+            && decompositionElement.GetString() is "SingularValue" or "singular_value" or "svd"
+                ? DecompositionMethod.SingularValue
+                : DecompositionMethod.Cholesky;
+        var mvn = new MultivariateNormal(mean, covariance, decomposition);
         if (construct.TryGetProperty("seed", out var seedEl))
             mvn.MVNUNI = new MersenneTwister(seedEl.GetInt32());
         if (construct.TryGetProperty("max_evaluations", out var maxEvalEl))
@@ -2401,6 +2415,7 @@ static double DispatchMultivariate(MultivariateDistribution d, string target, st
         var nn = (MultivariateNormal)d;
         switch (m)
         {
+            case "decomposition": return nn.Decomposition == DecompositionMethod.SingularValue ? 1d : 0d;
             case "mean": return nn.Mean[a[0].GetInt32()];
             case "median": return nn.Median[a[0].GetInt32()];
             case "mode": return nn.Mode[a[0].GetInt32()];
@@ -2563,8 +2578,12 @@ static BivariateCopula BuildCopula(string target, JsonElement construct,
         CopulaType.Joe => new JoeCopula(),
         CopulaType.Normal => new NormalCopula(),
         CopulaType.StudentT => new StudentTCopula(),
+        CopulaType.Independence => new IndependenceCopula(),
         _ => throw new Exception($"copula type not yet ported: {target}")
     };
+
+    if (type == CopulaType.Independence && !construct.TryGetProperty("fit", out _))
+        return copula;
 
     if (construct.TryGetProperty("theta", out var thetaEl))
     {
@@ -2641,8 +2660,8 @@ static void SetThetaFromTauDispatch(BivariateCopula copula, string target, doubl
     if (target == "Clayton") { ((ClaytonCopula)copula).SetThetaFromTau(x, y); return; }
     if (target == "AliMikhailHaq") { ((AMHCopula)copula).SetThetaFromTau(x, y); return; }
     if (target == "Gumbel") { ((GumbelCopula)copula).SetThetaFromTau(x, y); return; }
-    // NOTE: JoeCopula has no SetThetaFromTau in the C# source; intentionally not branched
-    // here (see joe_copula.hpp's file header and .superpowers/sdd/task-8-report.md).
+    if (target == "Frank") { ((FrankCopula)copula).SetThetaFromTau(x, y); return; }
+    if (target == "Joe") { ((JoeCopula)copula).SetThetaFromTau(x, y); return; }
     throw new Exception($"copula '{target}' has no tau-based method-of-moments fit");
 }
 
@@ -2678,6 +2697,8 @@ static double DispatchCopula(BivariateCopula c, string m, JsonElement[] a,
         case "pdf": return c.PDF(a[0].GetDouble(), a[1].GetDouble());
         case "log_pdf": return c.LogPDF(a[0].GetDouble(), a[1].GetDouble());
         case "cdf": return c.CDF(a[0].GetDouble(), a[1].GetDouble());
+        case "conditional_cdf": return c.ConditionalCDF(a[0].GetDouble(), a[1].GetDouble());
+        case "inverse_conditional_cdf": return c.InverseConditionalCDF(a[0].GetDouble(), a[1].GetDouble());
         case "inverse_cdf": return c.InverseCDF(a[0].GetDouble(), a[1].GetDouble())[a[2].GetInt32()];
         case "upper_tail_dependence": return c.UpperTailDependence;
         case "lower_tail_dependence": return c.LowerTailDependence;
@@ -2894,6 +2915,8 @@ static MCMCSampler BuildAndSampleMcmc(string samplerTarget, JsonElement construc
         if (sampler is NUTS nuts)
         {
             if (settings.TryGetProperty("adapt_mass_matrix", out var amm)) nuts.AdaptMassMatrix = amm.GetBoolean();
+            if (settings.TryGetProperty("target_acceptance_rate", out var target))
+                nuts.TargetAcceptanceRate = target.GetDouble();
         }
     }
 
@@ -2915,7 +2938,7 @@ static double DispatchMcmc(MCMCSampler sampler, MCMCResults results, string m, J
         case "chain_fitness": return sampler.MarkovChains[Idx(0)][Idx(1)].Fitness;
         case "map_value": return results.MAP.Values[Idx(0)];
         case "map_fitness": return results.MAP.Fitness;
-        case "acceptance_rate": return sampler.AcceptanceRates[Idx(0)];
+        case "acceptance_rate": return results.AcceptanceRates[Idx(0)];
         case "mean_log_likelihood": return sampler.MeanLogLikelihood[Idx(0)];
         case "rhat": return results.ParameterResults[Idx(0)].SummaryStatistics.Rhat;
         case "ess": return results.ParameterResults[Idx(0)].SummaryStatistics.ESS;
@@ -5150,6 +5173,16 @@ static double DataFrameDispatch(string method, BestFitModels.DataFrame df, JsonE
             return ToolboxSelectFlatNoDims(asrt, new[] { df.MannKendallTest(useLog10) });
         case "unimodality":
             return ToolboxSelectFlatNoDims(asrt, new[] { df.UnimodalityTest(useLog10) });
+        case "plotting_position":
+            df.CalculatePlottingPositions();
+            return ToolboxSelectFlatNoDims(asrt,
+                df.ExactSeries.Select(item => item.PlottingPosition).ToArray());
+        case "number_of_low_outliers":
+            df.CalculatePlottingPositions();
+            return ToolboxSelectFlatNoDims(asrt, new[] { (double)df.NumberOfLowOutliers });
+        case "low_outlier_threshold":
+            df.CalculatePlottingPositions();
+            return ToolboxSelectFlatNoDims(asrt, new[] { df.LowOutlierThreshold });
         case "summary_hypothesis":
         {
             // `index` is OPTIONAL here (unlike the two-sample facades above): the method clamps
@@ -5299,17 +5332,9 @@ static double LinalgDispatch(string method, List<double[]> data, JsonElement opt
 // `options.destinations` and an optional `node_count`; the float[nNodes, 3] result table is
 // flattened row-major to match the C++ ToolboxResult (dims = {nNodes, 3}).
 //
-// ALL THREE methods are driven through the free Dijkstra.Solve, INCLUDING the two network_* ones,
-// and that is deliberate rather than a shortcut: the shipped C# Network cannot be constructed at
-// all (its constructor sizes both edge caches at the maximum node index rather than max + 1 and
-// then indexes one past the end, so every construction throws IndexOutOfRangeException -- measured,
-// and written up in docs/upstream-csharp-issues.md). A patched Network -- the same file with only
-// that sizing corrected, which is the port's one intentional divergence -- was measured returning
-// the free solver's table element for element, because Network.Solve does nothing but forward its
-// cached edge lists to this very function. `network_solve_weights` is likewise driven on the
-// ORIGINAL weights, because Network.Solve(float[] edgeWeights) passes the stale cache alongside
-// its re-weighted array and the solver reads its weights out of that cache: the custom weights
-// have no effect, which is exactly what the fixture case pins.
+// v2.2.0 repairs Network construction and positional custom weights and adds the single-pass
+// nearest solve plus path reconstruction. The network_* arms therefore drive the real compiled
+// Network rather than standing in with the free solver.
 static double NetworkDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
     double[] from = data[0], to = data[1], weight = data[2], index = data[3];
@@ -5323,26 +5348,47 @@ static double NetworkDispatch(string method, List<double[]> data, JsonElement op
         foreach (var e in d.EnumerateArray()) destinations.Add((int)ParseNum(e));
     else destinations.Add((int)ParseNum(d));
 
-    // "dijkstra" honors the fixture's node_count (C#'s own optional nNodes parameter, -1 meaning
-    // "derive it"); the two network_* methods take none, because Network derives its own.
+    // Free Dijkstra methods honor node_count; Network derives its own.
     int nodeCount = -1;
-    if (method == "dijkstra")
+    if (method == "dijkstra" || method == "dijkstra_nearest" || method == "dijkstra_path")
     {
         if (options.TryGetProperty("node_count", out var nc)) nodeCount = (int)ParseNum(nc);
     }
-    else if (method == "network_solve" || method == "network_solve_weights")
+    float[,] table;
+    if (method == "dijkstra" || method == "dijkstra_path")
+        table = destinations.Count == 1
+            ? Dijkstra.Solve(edges, destinations[0], nodeCount)
+            : Dijkstra.Solve(edges, destinations.ToArray(), nodeCount);
+    else if (method == "dijkstra_nearest")
+        table = Dijkstra.SolveNearest(edges, destinations.ToArray(), nodeCount);
+    else
     {
-        int max = 0;
-        foreach (var edge in edges) max = Math.Max(max, Math.Max(edge.FromIndex, edge.ToIndex));
-        nodeCount = max + 1;
+        var network = new Network(edges.ToArray(), destinations.ToArray());
+        if (method == "network_solve")
+            table = destinations.Count == 1
+                ? network.Solve(destinations[0]) : network.Solve(destinations.ToArray());
+        else if (method == "network_solve_weights")
+            table = network.Solve(data[4].Select(v => (float)v).ToArray());
+        else if (method == "network_nearest")
+            table = network.SolveNearest();
+        else if (method == "network_path")
+        {
+            int start = options.GetProperty("start_node").GetInt32();
+            int[] removed = data[4].Select(v => (int)v).ToArray();
+            double[] path = (network.GetPath(removed, start) ?? new List<int>())
+                .Select(v => (double)v).ToArray();
+            return ToolboxSelectFlatNoDims(asrt, path);
+        }
+        else throw new Exception($"unknown network method: {method}");
     }
-    else throw new Exception($"unknown network method: {method}");
 
-    // Which overload: the single-destination one for one destination, the int[] one otherwise --
-    // the same rule the C++ arm follows, and the one each transcribed C# test calls.
-    float[,] table = destinations.Count == 1
-        ? Dijkstra.Solve(edges, destinations[0], nodeCount)
-        : Dijkstra.Solve(edges, destinations.ToArray(), nodeCount);
+    if (method == "dijkstra_path")
+    {
+        int start = options.GetProperty("start_node").GetInt32();
+        double[] path = (Dijkstra.GetPath(table, start) ?? new List<int>())
+            .Select(v => (double)v).ToArray();
+        return ToolboxSelectFlatNoDims(asrt, path);
+    }
 
     int rows = table.GetLength(0);
     var flat = new double[rows * 3];
@@ -5719,7 +5765,9 @@ static double SamplingDispatch(string method, List<double[]> data, JsonElement o
             ? nEl.GetInt32() : 1;
         int skip = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("skip", out var sk)
             ? sk.GetInt32() : 0;
-        var sobol = new SobolSequence(dimension);
+        var sobol = options.ValueKind == JsonValueKind.Object && options.TryGetProperty("seed", out var seed)
+            ? new SobolSequence(dimension, seed.GetInt32())
+            : new SobolSequence(dimension);
         if (skip > 0) sobol.SkipTo(skip);
         var flat = new List<double>();
         for (int i = 0; i < n; i++) flat.AddRange(sobol.NextDouble());
@@ -5751,8 +5799,22 @@ static double SamplingDispatch(string method, List<double[]> data, JsonElement o
 // Numerics.Data.Statistics.Probability.
 static double ProbabilityDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
-    if (method != "joint") throw new Exception($"unknown probability method: {method}");
     double[] p = data[0];
+    if (method == "union_single_factor")
+    {
+        double rho = options.GetProperty("rho").GetDouble();
+        double tolerance = options.TryGetProperty("relative_tolerance", out var t) ? t.GetDouble() : 1E-8;
+        return Probability.UnionSingleFactor(p, rho, tolerance);
+    }
+    if (method == "single_factor_conditional")
+    {
+        double rho = options.GetProperty("rho").GetDouble();
+        double z = options.GetProperty("z").GetDouble();
+        var conditional = new double[p.Length];
+        Probability.SingleFactorConditionalProbabilities(p, rho, z, conditional);
+        return ToolboxSelectFlatNoDims(asrt, conditional);
+    }
+    if (method != "joint") throw new Exception($"unknown probability method: {method}");
     string dep = OptString(options, "dependency", "independent");
     var type = dep switch
     {
@@ -5896,6 +5958,60 @@ static double TrendDispatch(string method, List<double[]> data, JsonElement opti
 // scoped-checked exactly as the C++ arm does; `confidence_level`'s mere PRESENCE (not its value)
 // switches IsDeterministic to false before SetParameters runs, mirroring every non-deterministic
 // C# constructor overload (the one that takes sigma).
+static IUnivariateFunction BuildFunctionSpec(JsonElement spec)
+{
+    string type = spec.GetProperty("type").GetString()!;
+    bool deterministic = OptBool(spec, "is_deterministic", true);
+    double confidence = spec.TryGetProperty("confidence_level", out var confidenceElement)
+        ? confidenceElement.GetDouble() : -1d;
+    if (type == "linear")
+    {
+        var result = new LinearFunction { IsDeterministic = deterministic };
+        result.SetParameters(spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray());
+        result.ConfidenceLevel = confidence;
+        return result;
+    }
+    if (type == "power")
+    {
+        var result = new PowerFunction
+        {
+            IsDeterministic = deterministic,
+            IsInverse = OptBool(spec, "is_inverse", false),
+        };
+        result.SetParameters(spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray());
+        result.ConfidenceLevel = confidence;
+        return result;
+    }
+    if (type == "segmented_power")
+    {
+        double[] parameters = spec.GetProperty("parameters").EnumerateArray().Select(ParseNum).ToArray();
+        var result = new SegmentedPowerFunction((parameters.Length - 1) / 3)
+        {
+            IsDeterministic = deterministic,
+            ConfidenceLevel = confidence,
+        };
+        result.SetParameters(parameters);
+        return result;
+    }
+    if (type == "composite")
+    {
+        IUnivariateFunction[] children = spec.GetProperty("functions").EnumerateArray()
+            .Select(BuildFunctionSpec).ToArray();
+        CompositeFunction result = spec.TryGetProperty("weights", out var weightsElement)
+            ? new CompositeFunction(children, weightsElement.EnumerateArray().Select(ParseNum).ToArray())
+            : new CompositeFunction(children);
+        result.Mode = OptString(spec, "mode", "weighted_average") switch
+        {
+            "weighted_average" => CompositeFunctionMode.WeightedAverage,
+            "mixture" => CompositeFunctionMode.Mixture,
+            var value => throw new Exception($"unknown composite function mode: {value}"),
+        };
+        result.ConfidenceLevel = confidence;
+        return result;
+    }
+    throw new Exception($"unknown function spec type: {type}");
+}
+
 static double FunctionsDispatch(string method, List<double[]> data, JsonElement options, JsonElement asrt)
 {
     if (method == "tabular" || method == "tabular_inverse")
@@ -5912,6 +6028,7 @@ static double FunctionsDispatch(string method, List<double[]> data, JsonElement 
         var tabFunc = new TabularFunction(tabUpd);
         tabFunc.XTransform = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
         tabFunc.YTransform = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
+        tabFunc.Extrapolation = ParseExtrapolationSides(OptString(options, "extrapolation", "none"));
         if (OptBool(options, "is_deterministic", false)) tabFunc.IsDeterministic = true;
         if (options.TryGetProperty("confidence_level", out var clOpt)) tabFunc.ConfidenceLevel = clOpt.GetDouble();
         tabFunc.AllowNegativeYValues = OptBool(options, "allow_negative_y_values", true);
@@ -5922,15 +6039,46 @@ static double FunctionsDispatch(string method, List<double[]> data, JsonElement 
         return ToolboxSelectFlat(asrt, tvalues, tvalues.Length, 1);
     }
 
-    string fn = options.GetProperty("function").GetString()!;
-    double[] parameters = options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+    IUnivariateFunction? specFunction = null;
+    if (options.TryGetProperty("spec", out var functionSpec))
+    {
+        if (functionSpec.GetProperty("type").GetString() == "ensemble")
+        {
+            IUnivariateFunction template = BuildFunctionSpec(functionSpec.GetProperty("template"));
+            var sets = functionSpec.GetProperty("parameter_sets").EnumerateArray()
+                .Select(values => new ParameterSet(values.EnumerateArray().Select(ParseNum).ToArray(), 0d))
+                .ToArray();
+            var ensemble = new EnsembleFunction(template, sets);
+            specFunction = functionSpec.TryGetProperty("sample_index", out var sampleIndex)
+                ? ensemble.SampleAt(sampleIndex.GetInt32())
+                : ensemble.Sample(functionSpec.GetProperty("sample_percentile").GetDouble());
+        }
+        else
+        {
+            specFunction = BuildFunctionSpec(functionSpec);
+        }
+        if (options.TryGetProperty("confidence_level", out var specConfidence))
+        {
+            specFunction.IsDeterministic = false;
+            specFunction.ConfidenceLevel = specConfidence.GetDouble();
+        }
+    }
+
+    string fn = specFunction == null ? options.GetProperty("function").GetString()! : "";
+    double[] parameters = specFunction == null
+        ? options.GetProperty("parameters").EnumerateArray().Select(e => e.GetDouble()).ToArray()
+        : Array.Empty<double>();
     bool hasConfidence = options.TryGetProperty("confidence_level", out var clEl);
     bool hasIsInverse = options.TryGetProperty("is_inverse", out var isInvEl);
-    if (hasIsInverse && fn != "power")
+    if (specFunction == null && hasIsInverse && fn != "power")
         throw new Exception($"'is_inverse' is only valid for function 'power'; got function '{fn}'");
 
     IUnivariateFunction f;
-    if (fn == "linear")
+    if (specFunction != null)
+    {
+        f = specFunction;
+    }
+    else if (fn == "linear")
     {
         var lf = new LinearFunction();
         lf.IsDeterministic = !hasConfidence;
@@ -5946,6 +6094,16 @@ static double FunctionsDispatch(string method, List<double[]> data, JsonElement 
         pf.SetParameters(parameters);
         if (hasConfidence) pf.ConfidenceLevel = clEl.GetDouble();
         f = pf;
+    }
+    else if (fn == "segmented_power")
+    {
+        var sf = new SegmentedPowerFunction((parameters.Length - 1) / 3)
+        {
+            IsDeterministic = !hasConfidence,
+        };
+        sf.SetParameters(parameters);
+        if (hasConfidence) sf.ConfidenceLevel = clEl.GetDouble();
+        f = sf;
     }
     else
     {
@@ -6124,6 +6282,9 @@ static double TimeSeriesToolboxDispatch(string method, List<double[]> data, Json
             return SeriesResult(ts.CumulativeSum());
         case "difference":
             return SeriesResult(ts.Difference(Opt("lag", 1), Opt("differences", 1)));
+        case "smoothed_series":
+            return SeriesResult(ts.SmoothedSeries(
+                ParseSmoothing(OptS("smoothing", "none")), Opt("period", 1)));
         case "standardize":
             ts.Standardize();
             return SeriesResult(ts);
@@ -6388,6 +6549,15 @@ static Numerics.Data.Transform ParsePairedDataTransform(string s) => s switch
     _ => throw new Exception($"unknown transform '{s}'; expected none, logarithmic, or normal_z")
 };
 
+static Numerics.Data.ExtrapolationSides ParseExtrapolationSides(string s) => s.ToLowerInvariant() switch
+{
+    "none" => Numerics.Data.ExtrapolationSides.None,
+    "below" => Numerics.Data.ExtrapolationSides.Below,
+    "above" => Numerics.Data.ExtrapolationSides.Above,
+    "both" => Numerics.Data.ExtrapolationSides.Both,
+    _ => throw new Exception($"unknown extrapolation policy '{s}'")
+};
+
 // Mirrors numerics/support/toolbox/paired_data.hpp's run_paired_data: the real
 // Numerics.Data.OrderedPairedData / UncertainOrderedPairedData / LineSimplification driving the
 // same nine methods. `curve_sample`'s `distribution_type` is optional here too, defaulting to
@@ -6434,7 +6604,8 @@ static double PairedDataDispatch(string method, List<double[]> data, JsonElement
         double[] xout = data[2];
         var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
         var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
-        var values = xout.Select(v => opd.GetYFromX(v, xt, yt)).ToArray();
+        var extrapolation = ParseExtrapolationSides(OptString(options, "extrapolation", "none"));
+        var values = xout.Select(v => opd.GetYFromX(v, xt, yt, extrapolation)).ToArray();
         return ToolboxSelectFlat(asrt, values, values.Length, 1);
     }
 
@@ -6444,7 +6615,8 @@ static double PairedDataDispatch(string method, List<double[]> data, JsonElement
         double[] yout = data[2];
         var xt = ParsePairedDataTransform(OptString(options, "x_transform", "none"));
         var yt = ParsePairedDataTransform(OptString(options, "y_transform", "none"));
-        var values = yout.Select(v => opd.GetXFromY(v, xt, yt)).ToArray();
+        var extrapolation = ParseExtrapolationSides(OptString(options, "extrapolation", "none"));
+        var values = yout.Select(v => opd.GetXFromY(v, xt, yt, extrapolation)).ToArray();
         return ToolboxSelectFlat(asrt, values, values.Length, 1);
     }
 
@@ -6724,6 +6896,18 @@ static double StatisticsDispatch(string method, List<double[]> data, JsonElement
         RejectDimsSelect(asrt, "statistics.ranks");
         return Statistics.RanksInPlace(x)[ToolboxSelectIndex(asrt)];
     }
+    double[] y = data.Count > 1 ? data[1] : Array.Empty<double>();
+    int GetInt(string key, int fallback) =>
+        options.ValueKind == JsonValueKind.Object && options.TryGetProperty(key, out var value)
+            ? value.GetInt32() : fallback;
+    if (method == "first_order_sobol")
+        return GlobalSensitivity.FirstOrderSobol(x, y, GetInt("bins", 20));
+    if (method == "pawn")
+        return GlobalSensitivity.Pawn(x, y, GetInt("bins", 20))[ToolboxSelectIndex(asrt)];
+    if (method == "pawn_median")
+        return GlobalSensitivity.PawnMedian(x, y, GetInt("bins", 20));
+    if (method == "borgonovo_delta")
+        return GlobalSensitivity.BorgonovoDelta(x, y, GetInt("x_bins", 20), GetInt("y_bins", 20));
     if (method == "percentile") RejectDimsSelect(asrt, "statistics.percentile");
     throw new Exception($"statistics method '{method}' has no dumped oracle case wired in the emitter");
 }
@@ -7545,28 +7729,41 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
             }
             else if (method == "quadrature_2d")
             {
-                // P2 "math extras": the (x, y) half of the math group, always driving
-                // AdaptiveSimpsonsRule2D and always returning the result triple + status, exactly
-                // as quadrature's Integrator-class arms do. See callback/math.hpp's file header.
                 var f2 = CallbackScalarXyFunction(callbackName)
                     ?? throw new Exception($"callback '{callbackName}' is not an (x, y) function");
-                var asr2d = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule2D(
-                    f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
-                if (options.ValueKind == JsonValueKind.Object)
+                var q2Method = options.ValueKind == JsonValueKind.Object &&
+                               options.TryGetProperty("method", out var q2mEl)
+                    ? q2mEl.GetString()! : "adaptive_simpson";
+                if (q2Method == "adaptive_gauss_kronrod")
                 {
-                    if (options.TryGetProperty("absolute_tolerance", out var at2))
-                        asr2d.AbsoluteTolerance = ParseNum(at2);
-                    if (options.TryGetProperty("relative_tolerance", out var rt2))
-                        asr2d.RelativeTolerance = ParseNum(rt2);
-                    if (options.TryGetProperty("min_depth", out var mnd))
-                        asr2d.MinDepth = (int)ParseNum(mnd);
-                    if (options.TryGetProperty("max_depth", out var mxd))
-                        asr2d.MaxDepth = (int)ParseNum(mxd);
+                    var gk2d = new Numerics.Mathematics.Integration.AdaptiveGaussKronrod2D(
+                        f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
+                    if (Has("absolute_tolerance")) gk2d.AbsoluteTolerance = Opt("absolute_tolerance", 0d);
+                    if (Has("relative_tolerance")) gk2d.RelativeTolerance = Opt("relative_tolerance", 0d);
+                    if (Has("min_depth")) gk2d.MinDepth = (int)Opt("min_depth", 0d);
+                    if (Has("max_depth")) gk2d.MaxDepth = (int)Opt("max_depth", 0d);
+                    if (Has("max_function_evaluations"))
+                        gk2d.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    gk2d.Integrate();
+                    values = [gk2d.Result, gk2d.FunctionEvaluations, gk2d.StandardError];
+                    statusName = gk2d.Status.ToString();
                 }
-                asr2d.Integrate();
-                values = [asr2d.Result, asr2d.FunctionEvaluations, asr2d.StandardError];
+                else if (q2Method == "adaptive_simpson")
+                {
+                    var asr2d = new Numerics.Mathematics.Integration.AdaptiveSimpsonsRule2D(
+                        f2, Opt("min_x", 0d), Opt("max_x", 0d), Opt("min_y", 0d), Opt("max_y", 0d));
+                    if (Has("absolute_tolerance")) asr2d.AbsoluteTolerance = Opt("absolute_tolerance", 0d);
+                    if (Has("relative_tolerance")) asr2d.RelativeTolerance = Opt("relative_tolerance", 0d);
+                    if (Has("min_depth")) asr2d.MinDepth = (int)Opt("min_depth", 0d);
+                    if (Has("max_depth")) asr2d.MaxDepth = (int)Opt("max_depth", 0d);
+                    if (Has("max_function_evaluations"))
+                        asr2d.MaxFunctionEvaluations = (int)Opt("max_function_evaluations", 0d);
+                    asr2d.Integrate();
+                    values = [asr2d.Result, asr2d.FunctionEvaluations, asr2d.StandardError];
+                    statusName = asr2d.Status.ToString();
+                }
+                else throw new Exception($"math/quadrature_2d: unknown method '{q2Method}'");
                 dims = [];
-                statusName = asr2d.Status.ToString();
             }
             else if (method == "quadrature_nd")
             {
@@ -7646,6 +7843,7 @@ foreach (var file in Directory.EnumerateFiles(fixturesDir, "*.json", SearchOptio
                 int vDims = vMin.Length;
                 var vegas = new Numerics.Mathematics.Integration.Vegas(fw, vDims, vMin, vMax);
                 if (Has("seed")) vegas.Random = new MersenneTwister((int)Opt("seed", 0d));
+                if (Has("sobol_seed")) vegas.SobolSeed = (int)Opt("sobol_seed", 0d);
                 vegas.UseSobolSequence = !options.ValueKind.Equals(JsonValueKind.Object) ||
                                          !options.TryGetProperty("use_sobol", out var vusEl) ||
                                          vusEl.GetBoolean();

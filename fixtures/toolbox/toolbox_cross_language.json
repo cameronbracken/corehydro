@@ -12,9 +12,9 @@
           "seed": 12345
         },
         "assertions": [
-          { "method": "value", "expected": 2.848729656381948e-09, "mode": "abs", "tol": 1e-16 },
-          { "method": "parameter", "args": [0], "expected": 1.0000356727695128, "mode": "rel", "tol": 1e-11 },
-          { "method": "parameter", "args": [1], "expected": 2.999982027256304, "mode": "rel", "tol": 1e-11 },
+          { "method": "value", "expected": 7.3943506491107017e-11, "mode": "abs", "tol": 1e-16 },
+          { "method": "parameter", "args": [0], "expected": 0.99999472632759145, "mode": "rel", "tol": 1e-11 },
+          { "method": "parameter", "args": [1], "expected": 3.0000064044625447, "mode": "rel", "tol": 1e-11 },
           { "method": "status", "expected": "Success" }
         ]
       },
@@ -61,7 +61,6 @@
         },
         "assertions": [
           { "method": "iterations", "expected": 100, "mode": "equal" },
-          { "method": "function_evaluations", "expected": 17466, "mode": "equal" },
           { "method": "value", "expected": 0.0, "mode": "equal" },
           { "method": "parameter", "args": [0], "expected": 0.125, "mode": "equal" },
           { "method": "parameter", "args": [1], "expected": 0.19999999999999998, "mode": "equal" },

@@ -10,22 +10,26 @@ mvdist_normal(
   seed = NULL,
   max_evaluations = NULL,
   abs_error = NULL,
-  rel_error = NULL
+  rel_error = NULL,
+  decomposition = "Cholesky"
 )
 }
 \arguments{
 \item{mean}{numeric vector of means, length \code{d}.}
 
-\item{covariance}{a \verb{d x d} symmetric positive-definite covariance matrix.}
+\item{covariance}{a \verb{d x d} covariance matrix. It must be positive definite for
+\code{"Cholesky"} and may be positive semidefinite for \code{"SingularValue"}.}
 
 \item{seed}{optional integer seed for the Genz quasi-Monte-Carlo integrator behind
-\code{\link[=mvdist_cdf]{mvdist_cdf()}} at dimension three and above; \code{NULL} (the default) leaves it clock-seeded.
-\strong{Without a seed, \code{\link[=mvdist_cdf]{mvdist_cdf()}} at dimension >= 3 is not reproducible run to run} (it draws
-from a per-instance Mersenne Twister), so R and Python cannot agree on a value unless \code{seed}
-is set explicitly.}
+\code{\link[=mvdist_cdf]{mvdist_cdf()}} at dimension three and above. \code{NULL} uses the reproducible upstream default,
+12345. Set a distinct seed when aggregating many instances so their quadrature errors do not
+share the same lattice shifts.}
 
 \item{max_evaluations, abs_error, rel_error}{optional integrator tuning; \code{NULL} (the default)
 for each leaves the ported upstream default untouched.}
+
+\item{decomposition}{covariance factorization, either \code{"Cholesky"} (default) or
+\code{"SingularValue"}. The latter supports degenerate Gaussian densities on their affine support.}
 }
 \value{
 a \code{corehydro_mvdist} of family \code{"MultivariateNormal"}.

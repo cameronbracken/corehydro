@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/GumbelCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/GumbelCopula.cs @ 7e8e8d1
 //
 // The Gumbel (Gumbel-Hougaard) copula. theta in [1, +inf). No PDF/CDF override -- both
 // resolve through ArchimedeanCopula's generic Genest-1986 forms built from the generator
@@ -76,21 +76,24 @@ class GumbelCopula : public ArchimedeanCopula {
 
     // Solves the conditional distribution C(v|u) = p for v via Brent root-find (no closed
     // form for Gumbel).
-    std::array<double, 2> inverse_cdf(double u, double v) const override {
+    double inverse_conditional_cdf(double u, double t) const override {
         if (!parameters_valid()) validate_parameter(theta(), true);
-        double p = v;
+        double p = t;
         double th = theta();
-        double vv = corehydro::numerics::math::rootfinding::solve(
-            [u, p, th](double x) {
+        auto f = [u, p, th](double x) {
                 double lu = -std::log(u);
                 double lx = -std::log(x);
                 double s = std::pow(lu, th) + std::pow(lx, th);
                 double vu = std::pow(lu, th - 1.0) * std::exp(-std::pow(s, 1.0 / th)) *
                             std::pow(s, 1.0 / th - 1.0) / u;
                 return vu - p;
-            },
-            0.0, 1.0);
-        return {u, vv};
+            };
+        if (f(1.0) <= 0.0) return 1.0;
+        return corehydro::numerics::math::rootfinding::solve(f, 0.0, 1.0);
+    }
+
+    std::array<double, 2> inverse_cdf(double u, double v) const override {
+        return {u, inverse_conditional_cdf(u, v)};
     }
 
     // Gets the upper tail dependence coefficient lambda_U = 2 - 2^(1/theta).

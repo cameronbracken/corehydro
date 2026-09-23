@@ -1,28 +1,37 @@
-// Transcribed C# oracle tests for the Numerics univariate Functions layer (Task 11):
-//   upstream/Numerics/Test_Numerics/Functions/Test_Functions.cs   @ 2a0357a
+// Transcribed C# oracle tests for the Numerics univariate Functions layer:
+//   upstream/Numerics/Test_Numerics/Functions/*.cs @ 7e8e8d1
 //
 // Six of the seven Test_Functions.cs methods are transcribed here: Test_Linear_Function,
 // Test_Linear_Function_Inverse, Test_Power_Function, Test_Power_Function_Inverse,
 // Test_InversePower_Function, Test_InversePower_Function_Inverse.
 //
-// Test_Tabular_Function is NOT transcribed: TabularFunction (Numerics/Functions/
-// TabularFunction.cs) is a documented severance, not ported. It is built entirely on
-// UncertainOrderedPairedData/OrderedPairedData/Ordinate/UncertainOrdinate (the Numerics.Data
-// "Paired Data" subsystem), which this repo has not ported -- scheduled for Phase P4. See
-// i_univariate_function.hpp's file header and upstream/CLAUDE.md's "What is deliberately not
-// ported" section.
+// TabularFunction remains tested with the paired-data subsystem. This file adds the v2.2.0
+// segmented, composite, ensemble, and JSON factory cases beside the original linear and power
+// checks.
 //
 // The C# test file mixes computed-expected literals (e.g. `double valid1 = (5*6) + -2;`) and
 // hand-transcribed decimal literals found via R's norminv() (e.g. `30.0234692505882`); both
 // forms are transcribed verbatim below, matching each source line.
 #include <cmath>
+#include <memory>
+#include <vector>
 
+#include "corehydro/models/json_lite.hpp"
+#include "corehydro/numerics/functions/composite_function.hpp"
+#include "corehydro/numerics/functions/ensemble_function.hpp"
 #include "corehydro/numerics/functions/linear_function.hpp"
 #include "corehydro/numerics/functions/power_function.hpp"
+#include "corehydro/numerics/functions/segmented_power_function.hpp"
+#include "corehydro/numerics/functions/univariate_function_factory.hpp"
 #include "check.hpp"
 
 using corehydro::numerics::functions::LinearFunction;
 using corehydro::numerics::functions::PowerFunction;
+using corehydro::numerics::functions::CompositeFunction;
+using corehydro::numerics::functions::CompositeFunctionMode;
+using corehydro::numerics::functions::EnsembleFunction;
+using corehydro::numerics::functions::IUnivariateFunction;
+using corehydro::numerics::functions::SegmentedPowerFunction;
 
 namespace {
 
@@ -142,6 +151,64 @@ void test_inverse_power_function_inverse() {
     CHECK_NEAR(xx, 6, 1e-6);
 }
 
+void test_segmented_power_function() {
+    SegmentedPowerFunction one({1.0, 1.5, 2.0, 0.1});
+    one.set_is_deterministic(true);
+    CHECK_NEAR(one.function(0.5), 0.0, 0.0);
+    CHECK_NEAR(one.function(5.0), 505.9644256269407, 1E-10);
+
+    SegmentedPowerFunction two({1.0, 1.5, 2.0, 3.0, 1.2, 1.5, 0.1});
+    two.set_is_deterministic(true);
+    CHECK_NEAR(two.function(2.5), 71.15124735378853, 1E-10);
+    CHECK_NEAR(two.function(5.0), 550.7919745807667, 1E-10);
+    CHECK_NEAR(two.inverse_function(two.function(5.0)), 5.0, 1E-6);
+    CHECK_THROWS(SegmentedPowerFunction(0));
+}
+
+std::vector<std::unique_ptr<IUnivariateFunction>> two_linear_children() {
+    std::vector<std::unique_ptr<IUnivariateFunction>> children;
+    children.push_back(std::make_unique<LinearFunction>(0.0, 2.0));
+    children.push_back(std::make_unique<LinearFunction>(10.0, 4.0));
+    return children;
+}
+
+void test_composite_function() {
+    CompositeFunction average(two_linear_children(), {0.25, 0.75});
+    CHECK_NEAR(average.function(4.0), 21.5, 1E-12);
+    CHECK_NEAR(average.inverse_function(average.function(5.0)), 5.0, 1E-8);
+    CHECK_THROWS(CompositeFunction(two_linear_children(), {0.3, 0.3}));
+
+    std::vector<std::unique_ptr<IUnivariateFunction>> mixture_children;
+    mixture_children.push_back(std::make_unique<LinearFunction>(0.0, 1.0));
+    mixture_children.push_back(std::make_unique<LinearFunction>(100.0, 1.0));
+    CompositeFunction mixture(std::move(mixture_children), {0.25, 0.75});
+    mixture.set_mode(CompositeFunctionMode::Mixture);
+    mixture.set_confidence_level(0.25);
+    CHECK_NEAR(mixture.function(5.0), 5.0, 1E-12);
+    mixture.set_confidence_level(0.75);
+    CHECK_NEAR(mixture.function(5.0), 105.0, 1E-12);
+}
+
+void test_ensemble_and_json_factory() {
+    auto function_template =
+        std::make_unique<SegmentedPowerFunction>(std::vector<double>{1.0, 1.5, 2.0, 0.1});
+    EnsembleFunction ensemble(std::move(function_template),
+                              {{1.0, 1.5, 2.0, 0.1}, {0.9, 1.6, 1.9, 0.12},
+                               {1.1, 1.4, 2.1, 0.08}});
+    auto first = ensemble.sample_at(1);
+    first->set_parameters({8.0, 1.6, 1.9, 0.12});
+    auto second = ensemble.sample_at(1);
+    CHECK_NEAR(dynamic_cast<SegmentedPowerFunction&>(*second).breakpoint(1), 0.9, 0.0);
+    auto last = ensemble.sample(1.0);
+    CHECK_NEAR(dynamic_cast<SegmentedPowerFunction&>(*last).breakpoint(1), 1.1, 0.0);
+    CHECK_THROWS(ensemble.sample_at(3));
+
+    auto spec = corehydro::models::spec::JsonParser::parse(
+        R"({"type":"composite","mode":"weighted_average","weights":[0.25,0.75],"functions":[{"type":"linear","parameters":[0,2,0]},{"type":"linear","parameters":[10,4,0]}]})");
+    auto built = corehydro::numerics::functions::build_function_spec(spec);
+    CHECK_NEAR(built->function(4.0), 21.5, 1E-12);
+}
+
 }  // namespace
 
 int main() {
@@ -151,5 +218,8 @@ int main() {
     test_power_function_inverse();
     test_inverse_power_function();
     test_inverse_power_function_inverse();
+    test_segmented_power_function();
+    test_composite_function();
+    test_ensemble_and_json_factory();
     return chtest::summary("test_univariate_functions");
 }

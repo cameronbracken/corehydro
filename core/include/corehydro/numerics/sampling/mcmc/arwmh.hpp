@@ -1,4 +1,4 @@
-// ported from: Numerics/Sampling/MCMC/ARWMH.cs @ 2a0357a
+// ported from: Numerics/Sampling/MCMC/ARWMH.cs @ 7e8e8d1
 //
 // Adaptive Random Walk Metropolis-Hastings (ARWMH): like RWMH, but the proposal covariance
 // adapts online from the chain's own history via a per-chain RunningCovarianceMatrix (P3.2),
@@ -17,11 +17,8 @@
 // check (no draw); (4) the log-Metropolis ratio; (5) one more uniform for the accept/reject
 // draw. Drawing the Beta-test uniform anywhere but first desyncs the stream.
 //
-// The adaptive covariance (`sigma_[index]`) is pushed with `Push(state.values)` on BOTH an
-// infeasible-proposal reject and a Metropolis reject (gated by `SampleCount[index] >
-// ThinningInterval * WarmupIterations`, i.e. only after warmup), and with `Push(xp)` on
-// acceptance -- transcribed verbatim; this is what lets the RunningCovarianceMatrix track the
-// post-warmup chain's own empirical covariance.
+// The adaptive covariance is updated from the realized retained chain state on every
+// iteration. Rejected and infeasible proposals contribute the repeated current state.
 #pragma once
 #include <cmath>
 #include <memory>
@@ -133,39 +130,28 @@ class ARWMH : public MCMCSampler {
         auto xp = mvn_i.inverse_cdf(
             ext::next_doubles(chain_prngs_[static_cast<std::size_t>(index)], number_of_parameters()));
 
-        // Check if the parameter is feasible (within the constraints).
+        bool feasible = true;
         for (int i = 0; i < number_of_parameters(); ++i) {
             const auto& prior = prior_distributions_[static_cast<std::size_t>(i)];
             if (xp[static_cast<std::size_t>(i)] < prior->minimum() || xp[static_cast<std::size_t>(i)] > prior->maximum()) {
-                // The proposed parameter vector was infeasible, so leave xi unchanged.
-                // Adapt covariance matrix after warmup.
-                if (sample_count_[static_cast<std::size_t>(index)] > thinning_interval_ * warmup_iterations_)
-                    sigma_i.push(state.values);
-                return state;
+                feasible = false;
+                break;
             }
         }
 
-        // Evaluate fitness.
-        double log_lh_p = log_likelihood_function_(xp);
-        double log_lh_i = state.fitness;
-
-        // Calculate the Metropolis ratio.
-        double log_ratio = log_lh_p - log_lh_i;
-
-        // Accept the proposal with probability min(1, r); otherwise leave xi unchanged.
-        double log_u = std::log(chain_prngs_[static_cast<std::size_t>(index)].next_double());
-        if (log_u <= log_ratio) {
-            // The proposal is accepted.
-            accept_count_[static_cast<std::size_t>(index)] += 1;
-            // Adapt covariance matrix.
-            sigma_i.push(xp);
-            return ParameterSet(xp, log_lh_p);
-        } else {
-            // Adapt covariance matrix after warmup.
-            if (sample_count_[static_cast<std::size_t>(index)] > thinning_interval_ * warmup_iterations_)
-                sigma_i.push(state.values);
-            return state;
+        ParameterSet retained = state;
+        if (feasible) {
+            const double proposed_log_likelihood = log_likelihood_function_(xp);
+            const double log_ratio = proposed_log_likelihood - state.fitness;
+            const double log_uniform =
+                std::log(chain_prngs_[static_cast<std::size_t>(index)].next_double());
+            if (log_uniform <= log_ratio) {
+                accept_count_[static_cast<std::size_t>(index)] += 1;
+                retained = ParameterSet(xp, proposed_log_likelihood);
+            }
         }
+        sigma_i.push(retained.values);
+        return retained;
     }
 
    private:

@@ -24,6 +24,7 @@ quadrature_nd(
   alpha = NULL,
   number_of_bins = NULL,
   tail_focus_parameter = NULL,
+  sobol_seed = NULL,
   initialize = NULL,
   check_convergence = NULL,
   target_probability = NULL
@@ -68,11 +69,12 @@ the dither applied when the integrand's active region falls on a subdivision bou
 the default, leaves the ported class's own defaults in force. Supplying any for another
 \code{method} raises an error.}
 
-\item{independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter, initialize, check_convergence, target_probability}{\code{method = "vegas"} alone. \code{independent_evaluations}
+\item{independent_evaluations, function_calls, alpha, number_of_bins, tail_focus_parameter, sobol_seed, initialize, check_convergence, target_probability}{\code{method = "vegas"} alone. \code{independent_evaluations}
 and \code{function_calls} bound the run (their product is the maximum total evaluations);
 \code{alpha} is the grid-refinement damping exponent; \code{number_of_bins} the stratification bin
 count; \code{tail_focus_parameter} the Power Transform exponent (1.0, the default, is standard
-uniform sampling); \code{initialize} selects a cold start (0, the default), inheriting the grid
+uniform sampling); \code{sobol_seed} the v2.2 linear matrix scramble and digital shift seed used
+when Sobol sampling is enabled; \code{initialize} selects a cold start (0, the default), inheriting the grid
 alone (1), or inheriting the grid and its answers (2); \code{check_convergence} whether to exit
 early on convergence. \code{target_probability}, if supplied, calls the ported
 \code{configure_for_rare_events()} helper -- applied AFTER every other option, so it may override

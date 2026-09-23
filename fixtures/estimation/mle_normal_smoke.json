@@ -19,13 +19,13 @@
         { "method": "aic", "args": [], "expected": 202.9586131357003, "mode": "rel", "tol": 1e-9 },
         { "method": "bic", "args": [10], "expected": 203.5637833216884, "mode": "rel", "tol": 1e-9 },
         { "method": "covariance", "args": [0, 0], "expected": 2560725.86611761, "mode": "rel", "tol": 1e-5 },
-        { "method": "covariance", "args": [1, 1], "expected": 1278966.6813195054, "mode": "rel", "tol": 1e-5 },
-        { "method": "covariance", "args": [0, 1], "expected": -349.06295882301333, "mode": "abs", "tol": 1e-2 },
+        { "method": "covariance", "args": [1, 1], "expected": 1279431.7334841869, "mode": "rel", "tol": 1e-5 },
+        { "method": "covariance", "args": [0, 1], "expected": -232.79325572856385, "mode": "abs", "tol": 1e-2 },
         { "method": "standard_error", "args": [0], "expected": 1600.2268170848813, "mode": "rel", "tol": 1e-5 },
-        { "method": "standard_error", "args": [1], "expected": 1130.9140910429517, "mode": "rel", "tol": 1e-5 },
+        { "method": "standard_error", "args": [1], "expected": 1131.1196813265105, "mode": "rel", "tol": 1e-5 },
         { "method": "correlation", "args": [0, 0], "expected": 1.0, "mode": "rel", "tol": 1e-9 },
         { "method": "correlation", "args": [1, 1], "expected": 1.0, "mode": "rel", "tol": 1e-9 },
-        { "method": "correlation", "args": [0, 1], "expected": -0.0001928824021644005, "mode": "abs", "tol": 1e-8 }
+        { "method": "correlation", "args": [0, 1], "expected": -0.00012861164568414568, "mode": "abs", "tol": 1e-8 }
       ]
     }
   ]

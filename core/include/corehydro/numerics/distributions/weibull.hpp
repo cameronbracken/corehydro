@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Weibull.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Weibull.cs @ 7e8e8d1
 //
 // Weibull distribution with scale λ (lambda) and shape κ (kappa). Logic mirrors the C#
 // source method-for-method. The WPF helpers, IBootstrappable, and IStandardError
@@ -95,28 +95,55 @@ class Weibull : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
         if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
-        if (x < minimum()) return 0.0;
-        if (x == 0.0 && kappa_ == 1.0)
-            return kappa_ / lambda_;
-        return kappa_ / lambda_ * std::pow(x / lambda_, kappa_ - 1.0)
-               * std::exp(-std::pow(x / lambda_, kappa_));
+        if (x < minimum() || x == kInf) return -kInf;
+        if (x == 0.0)
+            return kappa_ == 1.0 ? -std::log(lambda_)
+                                 : kappa_ < 1.0 ? kInf : -kInf;
+        const double logarithm = log_standardized_value(x);
+        const double power = std::exp(kappa_ * logarithm);
+        if (power == kInf) return -kInf;
+        const double value = std::log(kappa_) - std::log(lambda_) +
+                             (kappa_ - 1.0) * logarithm - power;
+        return std::isnan(value) ? -kInf : value;
     }
 
     double cdf(double x) const override {
         if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
-        if (x < minimum()) return 0.0;
-        return 1.0 - std::exp(-std::pow(x / lambda_, kappa_));
+        if (x <= minimum()) return 0.0;
+        return -std::expm1(-std::exp(kappa_ * log_standardized_value(x)));
+    }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
+        if (x <= 0.0) return -kInf;
+        const double logarithm = kappa_ * log_standardized_value(x);
+        const double power = std::exp(logarithm);
+        return power == 0.0 ? logarithm : distribution_numerics::log1m_exp(-power);
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
+        return x <= 0.0 ? 0.0 : -std::exp(kappa_ * log_standardized_value(x));
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
         if (!parameters_valid_) throw std::invalid_argument("Weibull: invalid parameters");
-        return lambda_ * std::pow(std::log(1.0 / (1.0 - probability)), 1.0 / kappa_);
+        if (kappa_ == 1.0) return -lambda_ * std::log1p(-probability);
+        const double logarithm = std::log(-std::log1p(-probability)) / kappa_;
+        const double unit_quantile = std::exp(logarithm);
+        return unit_quantile < 1e-200 || std::isinf(unit_quantile)
+                   ? std::exp(std::log(lambda_) + logarithm)
+                   : lambda_ * unit_quantile;
     }
 
     // --- Parameter display names (X1; C# Weibull.cs ParametersToString col0 +
@@ -146,15 +173,40 @@ class Weibull : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = solve_mle(sample);
-        lowers.resize(2);
-        uppers.resize(2);
+        distribution_numerics::validate_sample(sample, 2);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto initials = legacy_constraint_solve_mle(sample);
+        std::vector<double> lowers(2), uppers(2);
         lowers[0] = kDoubleMachineEpsilon;
         uppers[0] = std::pow(10.0, std::ceil(std::log10(initials[0]) + 1.0));
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 2, true);
+        auto initials = solve_mle(sample);
+        std::vector<double> lowers(2), uppers(2);
+        distribution_numerics::positive_parameter_bounds(
+            initials[0], lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        return {initials, lowers, uppers};
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);
@@ -170,7 +222,8 @@ class Weibull : public UnivariateDistributionBase,
 
     // SolveMLE: iterative closed-form Weibull MLE
     // (Qiao & Tsokos 1994 / Math.NET)
-    std::vector<double> solve_mle(const std::vector<double>& samples) const {
+    std::vector<double> legacy_constraint_solve_mle(
+        const std::vector<double>& samples) const {
         double n = static_cast<double>(samples.size());
         if (n <= 1.0)
             throw std::invalid_argument("Weibull::solve_mle: need more than 1 data point");
@@ -203,7 +256,48 @@ class Weibull : public UnivariateDistributionBase,
         return {b, c};
     }
 
+    std::vector<double> solve_mle(const std::vector<double>& samples) const {
+        distribution_numerics::validate_sample(samples, 2, true);
+        const double n = static_cast<double>(samples.size());
+        const double scale = distribution_numerics::initialization_scale(samples);
+        std::vector<double> log_ratios(samples.size());
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            const double ratio = samples[i] / scale;
+            log_ratios[i] = ratio > 0.0 ? std::log(ratio)
+                                        : std::log(samples[i]) - std::log(scale);
+        }
+        double previous_c = static_cast<double>(std::numeric_limits<int>::min());
+        double c = 10.0;
+        while (std::fabs(c - previous_c) >= 0.0001) {
+            double s1 = 0.0;
+            double s2 = 0.0;
+            double s3 = 0.0;
+            for (double logarithm : log_ratios) {
+                const double weight = std::exp(c * logarithm);
+                s1 += logarithm;
+                s2 += weight;
+                s3 += weight * logarithm;
+            }
+            const double q_of_c = n * s2 / (n * s3 - s1 * s2);
+            previous_c = c;
+            c = (c + q_of_c) / 2.0;
+            if (!(c > 0.0) || !std::isfinite(c))
+                throw std::runtime_error(
+                    "Weibull initialization did not produce a finite positive shape");
+        }
+        double b = 0.0;
+        for (double logarithm : log_ratios) b += std::exp(c * logarithm);
+        b = scale * std::pow(b / n, 1.0 / c);
+        return {b, c};
+    }
+
    private:
+    double log_standardized_value(double x) const {
+        const double ratio = x / lambda_;
+        return ratio > 0.0 && !std::isinf(ratio) ? std::log(ratio)
+                                                 : std::log(x) - std::log(lambda_);
+    }
+
     static bool validate(double scale, double shape) {
         if (std::isnan(scale) || std::isinf(scale) || scale <= 0.0) return false;
         if (std::isnan(shape) || std::isinf(shape) || shape <= 0.0) return false;

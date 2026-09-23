@@ -205,14 +205,16 @@ inline DistResult run_copula(const std::string& spec_json, const std::string& me
                               std::vector<double>(all.begin() + h, all.end()));
     };
 
-    if (method == "pdf" || method == "log_pdf" || method == "cdf") {
+    if (method == "pdf" || method == "log_pdf" || method == "cdf" ||
+        method == "conditional_cdf") {
         auto uv = split_xy();
         if (uv.first.empty())
             throw std::runtime_error("copula method '" + method + "' needs at least one (u, v) pair");
         for (std::size_t i = 0; i < uv.first.size(); ++i) {
             if (method == "pdf") r.values.push_back(c->pdf(uv.first[i], uv.second[i]));
             else if (method == "log_pdf") r.values.push_back(c->log_pdf(uv.first[i], uv.second[i]));
-            else r.values.push_back(c->cdf(uv.first[i], uv.second[i]));
+            else if (method == "cdf") r.values.push_back(c->cdf(uv.first[i], uv.second[i]));
+            else r.values.push_back(c->conditional_cdf(uv.first[i], uv.second[i]));
         }
         return r;
     }
@@ -220,6 +222,12 @@ inline DistResult run_copula(const std::string& spec_json, const std::string& me
         std::array<double, 2> uv = c->inverse_cdf(detail::arg_at(args, 0, "inverse_cdf"),
                                                   detail::arg_at(args, 1, "inverse_cdf"));
         r.values = {uv[0], uv[1]};
+        return r;
+    }
+    if (method == "inverse_conditional_cdf") {
+        r.values = {c->inverse_conditional_cdf(
+            detail::arg_at(args, 0, "inverse_conditional_cdf"),
+            detail::arg_at(args, 1, "inverse_conditional_cdf"))};
         return r;
     }
     if (method == "tail_dependence") {
@@ -314,6 +322,8 @@ inline std::string mvn_spec_string(const MultivariateNormal& m, const JsonValue&
         out += "]";
     }
     out += "]";
+    if (m.decomposition() == la::DecompositionMethod::SingularValue)
+        out += R"(,"decomposition":"SingularValue")";
     auto copy_int = [&](const char* key) {
         if (!parent.contains(key)) return;
         char buf[64];
@@ -389,6 +399,11 @@ inline DistResult run_mvdist(const std::string& spec_json, const std::string& me
     if (method == "cdf") { r.values = {d->cdf(detail::arg_numbers(args))}; return r; }
     if (method == "dimension") { r.values = {static_cast<double>(d->dimension())}; return r; }
     if (method == "parameters_valid") { r.values = {d->parameters_valid() ? 1.0 : 0.0}; return r; }
+    if (method == "decomposition") {
+        if (!mvn) throw std::runtime_error("'decomposition' is available for MultivariateNormal only");
+        r.values = {mvn->decomposition() == la::DecompositionMethod::SingularValue ? 1.0 : 0.0};
+        return r;
+    }
     if (method == "marginal") {
         std::vector<int> idx;
         for (double v : detail::arg_numbers(args)) idx.push_back(static_cast<int>(v));

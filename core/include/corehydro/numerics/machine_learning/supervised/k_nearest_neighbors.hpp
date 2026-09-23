@@ -1,4 +1,4 @@
-// ported from: Numerics/Machine Learning/Supervised/KNearestNeighbors.cs @ 2a0357a
+// ported from: Numerics/Machine Learning/Supervised/KNearestNeighbors.cs @ 7e8e8d1
 //
 // The k-nearest-neighbors algorithm, for regression (inverse-squared-distance weighted average of
 // the k neighbors' responses) or classification (their most common response).
@@ -7,22 +7,10 @@
 //
 // Six transcription notes, each on something a "cleanup" would silently change:
 //
-// 1. THE DISTANCE SORT IS `Array.Sort(items, comparison)`, a .NET introsort, and it is UNSTABLE.
-//    Equidistant training points therefore come back in a specific, non-obvious permutation that
-//    neither `std::sort` nor `std::stable_sort` reproduces, and it is oracle-visible: upstream's
-//    own `Test_GetNeighbors_MultiRow` queries the exact center of a symmetric cluster where four
-//    points tie. `numerics/utilities/dotnet_sort.hpp`'s `dotnet_list_sort` is the sort, driven by
-//    `compare_double` (C# `Double.CompareTo`, which orders NaN below every number and treats
-//    -0.0 and 0.0 as equal), NOT a raw `<`.
-// 2. `kNN` (the neighbor-index helper) guards on `NumberOfFeatures != xTrain.NumberOfColumns`,
-//    which is ALWAYS FALSE -- `NumberOfFeatures` is defined as `X.NumberOfColumns` and `xTrain`
-//    is always `this.X`. So it never rejects a mismatched TEST matrix, unlike `kNNPredict`, which
-//    checks `xTest.NumberOfColumns != xTrain.NumberOfColumns` correctly. `Tools.Distance` loops
-//    over the QUERY row's length, so in C# a NARROWER query silently computes a partial-dimension
-//    distance and returns neighbors, while a WIDER one throws IndexOutOfRangeException. This port
-//    reproduces the narrower case exactly (same partial distance, same neighbors) and replaces
-//    the wider case's C++ out-of-bounds read with a thrown `std::out_of_range` -- the port's
-//    standard mapping for a C# index exception. See docs/upstream-csharp-issues.md.
+// 1. Distance ties are broken by the original training index. This makes the result independent
+//    of the host sort implementation while preserving the first-row-wins behavior.
+// 2. Both neighbor lookup and prediction reject a query whose column count differs from the
+//    training matrix.
 // 3. The regression prediction is an inverse-SQUARED-distance weighted average with `w = 1` when
 //    the distance is exactly 0, and it accumulates `knn[j] = y * w` and then divides each term by
 //    `sum` SEPARATELY (`avg += knn[j] / sum`) rather than dividing once at the end. The division
@@ -35,7 +23,7 @@
 //    iteration writes only its own index, and `PredictionIntervals` draws all `realizations`
 //    seeds up front. The mean column comes from `Statistics.ParallelMean`, whose PLINQ
 //    partitioned sum is not reproducible across machines -- see `parallel_mean`'s own note in
-//    numerics/data/statistics.hpp.
+//    numerics/data/statistics.hpp. v2.2.0 uses the sequential mean instead.
 //
 // The `double[,]` constructor overload is not ported, for the same reason as in decision_tree.hpp.
 #pragma once
@@ -52,7 +40,6 @@
 #include "corehydro/numerics/math/linalg/vector.hpp"
 #include "corehydro/numerics/sampling/mersenne_twister.hpp"
 #include "corehydro/numerics/tools.hpp"
-#include "corehydro/numerics/utilities/dotnet_sort.hpp"
 #include "corehydro/numerics/utilities/extension_methods.hpp"
 
 namespace corehydro::numerics::machine_learning {
@@ -137,24 +124,17 @@ class KNearestNeighbors {
         double distance = 0.0;
     };
 
-    // Sorts the training rows by distance from `point` using the .NET introsort (note 1).
+    // Sorts training rows by distance, then by original training index (note 1).
     static std::vector<KnnItem> sorted_items(const math::linalg::Matrix& x_train,
                                              const std::vector<double>& point) {
-        // Note 2: upstream's guard is a tautology and `Tools.Distance` loops over the QUERY row,
-        // so a wider query reads past the end of each training row. C# throws
-        // IndexOutOfRangeException there; this throws rather than reading out of bounds. A
-        // NARROWER query is left alone -- it computes the same partial distance C# computes.
-        if (static_cast<int>(point.size()) > x_train.number_of_columns())
-            throw std::out_of_range(
-                "KNearestNeighbors: the query row has more columns than the training matrix");
-
         std::vector<KnnItem> items(static_cast<std::size_t>(x_train.number_of_rows()));
         for (int idx = 0; idx < x_train.number_of_rows(); idx++) {
             items[static_cast<std::size_t>(idx)].index = idx;
             items[static_cast<std::size_t>(idx)].distance = distance(point, x_train.row(idx));
         }
-        utilities::dotnet_list_sort(items, [](const KnnItem& a, const KnnItem& b) {
-            return utilities::compare_double(a.distance, b.distance);
+        std::sort(items.begin(), items.end(), [](const KnnItem& a, const KnnItem& b) {
+            if (a.distance != b.distance) return a.distance < b.distance;
+            return a.index < b.index;
         });
         return items;
     }
@@ -163,9 +143,7 @@ class KNearestNeighbors {
     std::optional<std::vector<int>> k_nn(const math::linalg::Matrix& x_train,
                                          const math::linalg::Vector& /*y_train*/,
                                          const math::linalg::Matrix& x_test) const {
-        // (Upstream's `NumberOfFeatures != xTrain.NumberOfColumns` guard is always false -- see
-        // transcription note 2. It is kept here for structural fidelity and does nothing.)
-        if (number_of_features() != x_train.number_of_columns()) return std::nullopt;
+        if (x_test.number_of_columns() != x_train.number_of_columns()) return std::nullopt;
         int r = x_test.number_of_rows();
         std::vector<int> result(static_cast<std::size_t>(r) * static_cast<std::size_t>(k_), 0);
         for (int i = 0; i < r; i++) {
@@ -277,7 +255,7 @@ class KNearestNeighbors {
             for (int j = 0; j < 3; j++)
                 output(idx, j) = data::percentile(values, percentiles[j], true);
 
-            output(idx, 3) = data::parallel_mean(values);
+            output(idx, 3) = data::mean(values);
         }
 
         return output;

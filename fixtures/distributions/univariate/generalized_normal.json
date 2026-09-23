@@ -109,15 +109,15 @@
     {
       "name": "product_moments_xi97_alpha35_kappa_neg01",
       "source": "curated via oracle_emitter --dump",
-      "comment": "Test_Moments asserts only self-consistency against CentralMoments(1E-8), so it carries no literal. These are the four product moments plus Median and Mode off the real C# GeneralizedNormal(9.7, 3.5, -0.1), the same object the CDF case above pins. The first four come from the base class's fixed 1000-step CentralMoments quadrature -- identical stepping in both ports, so the residual is rounding noise, not quadrature error, and it measures 5e-16 / 1.1e-15 / 1.7e-14 / 4.9e-15 for mean / sd / skewness / kurtosis. They are asserted at 1e-9 relative, the tier the other quadrature-moment families use, leaving headroom for the platforms CI runs. Median is the closed-form InverseCDF(0.5) and Mode the bounded BrentSearch maximiser over [InverseCDF(0.001), InverseCDF(0.999)]; both reproduce bit-for-bit against C# on this platform but are asserted at the same conventional tiers (1e-12 relative, 1e-9 absolute) rather than at equality.",
+      "comment": "The v2.2.0 source evaluates shifted-lognormal moments and the mode analytically. These values come from the real C# GeneralizedNormal(9.7, 3.5, -0.1).",
       "construct": { "params": [9.7, 3.5, -0.1] },
       "assertions": [
         { "method": "mean",     "args": [], "expected": 9.87543822290746,   "mode": "rel", "tol": 1e-9 },
-        { "method": "sd",       "args": [], "expected": 3.5263761609534616, "mode": "rel", "tol": 1e-9 },
-        { "method": "skewness", "args": [], "expected": 0.3017534468009728, "mode": "rel", "tol": 1e-9 },
-        { "method": "kurtosis", "args": [], "expected": 3.1623144473616542, "mode": "rel", "tol": 1e-9 },
+        { "method": "sd",       "args": [], "expected": 3.5263560306171571, "mode": "rel", "tol": 1e-12 },
+        { "method": "skewness", "args": [], "expected": 0.30175909933883399, "mode": "rel", "tol": 1e-12 },
+        { "method": "kurtosis", "args": [], "expected": 3.1623238621796892, "mode": "rel", "tol": 1e-12 },
         { "method": "median",   "args": [], "expected": 9.7,                "mode": "rel", "tol": 1e-12 },
-        { "method": "mode",     "args": [], "expected": 9.351744161202223,  "mode": "abs", "tol": 1e-9 }
+        { "method": "mode",     "args": [], "expected": 9.3517441812208819, "mode": "abs", "tol": 1e-12 }
       ]
     },
     {

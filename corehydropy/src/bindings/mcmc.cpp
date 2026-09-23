@@ -51,6 +51,7 @@ mcmc::MCMCRunSettings read_settings(const py::dict& settings) {
     read_setting(settings, "steps", s.steps);
     read_setting(settings, "max_tree_depth", s.max_tree_depth);
     read_setting(settings, "adapt_mass_matrix", s.adapt_mass_matrix);
+    read_setting(settings, "target_acceptance_rate", s.target_acceptance_rate);
     read_setting(settings, "scale", s.scale);
     read_setting(settings, "beta", s.beta);
     read_setting(settings, "jump", s.jump);

@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Local/Powell.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Local/Powell.cs @ 7e8e8d1
 //
 // Powell's direction-set optimization method (Numerical Recipes, Press et al.; see the
 // C# file's references): minimizes without derivatives by bi-directionally line-searching
@@ -98,6 +98,9 @@ class Powell : public Optimizer {
     const std::vector<double>& upper_bounds() const { return upper_bounds_; }
 
    protected:
+    const std::vector<double>& parameter_lower_bounds() const override { return lower_bounds_; }
+    const std::vector<double>& parameter_upper_bounds() const override { return upper_bounds_; }
+
     void optimize() override {
         // Set variables
         int i, j, D = number_of_parameters_, ibig;
@@ -141,13 +144,17 @@ class Powell : public Optimizer {
             }
             // Construct the extrapolated point and save the average direction moved.
             // Save the old starting point.
+            bool extrapolation_is_feasible = true;
             for (j = 0; j < D; j++) {
                 ptt[j] = 2.0 * p[j] - pt[j];
+                if (ptt[j] < lower_bounds_[static_cast<std::size_t>(j)] ||
+                    ptt[j] > upper_bounds_[static_cast<std::size_t>(j)])
+                    extrapolation_is_feasible = false;
                 xi[j] = p[j] - pt[j];
                 pt[j] = p[j];
             }
-            // Function evaluated at the extrapolated point
-            fptt = evaluate(ptt, cancel);
+            fptt = extrapolation_is_feasible ? evaluate(ptt, cancel)
+                                             : std::numeric_limits<double>::infinity();
             if (cancel == true) return;
             if (fptt < fp) {
                 t = 2.0 * (fp - 2.0 * fret + fptt) * sqr(fp - fret - delta) -
@@ -181,36 +188,98 @@ class Powell : public Optimizer {
     //   cancel:      determines if the solver should be canceled.
     double line_minimization(std::vector<double>& start_point, std::vector<double>& direction,
                              bool& cancel) {
-        // Line-minimization routine, Given an n-dimensional point p[0..n-1] and an
-        // n-dimension direction xi[0..n-1], moves and resets p to where the function of
-        // functor func(p) takes on a minimum along the direction xi from p, and replaces
-        // xi by the actual vector displacement that p was moved. Also returns the value
-        // of func at the return location p. This is actually all accomplished by calling
-        // the Brent minimize routine.
         int D = number_of_parameters_;
-        // C# copies the ref parameter into a local so the lambda can capture it (a C#
-        // ref-capture restriction); transcribed as-is for line-for-line mapping.
         bool c = cancel;
-        auto func = [this, &start_point, &direction, D, &c](double alpha) {
+        auto interval = feasible_step_interval(start_point, direction);
+        double alpha_min = interval.first;
+        double alpha_max = interval.second;
+
+        double zero_step = evaluate(start_point, c);
+        cancel = c;
+        if (cancel) return std::numeric_limits<double>::quiet_NaN();
+        if (alpha_min == 0.0 && alpha_max == 0.0) return zero_step;
+
+        auto func = [this, &start_point, &direction, D, alpha_min, alpha_max, &c](double alpha) {
+            double step = std::max(alpha_min, std::min(alpha_max, alpha));
             std::vector<double> x(static_cast<std::size_t>(D));
-            for (int i = 0; i < D; i++) x[i] = start_point[i] + alpha * direction[i];
+            for (int i = 0; i < D; i++)
+                x[static_cast<std::size_t>(i)] = repair_parameter(
+                    start_point[static_cast<std::size_t>(i)] +
+                        step * direction[static_cast<std::size_t>(i)],
+                    lower_bounds_[static_cast<std::size_t>(i)],
+                    upper_bounds_[static_cast<std::size_t>(i)]);
             return evaluate(x, c);
         };
-        BrentSearch brent(func, 0.0, 1.0);
+
+        BrentSearch bracketing(func, 0.0, 1.0);
+        bracketing.relative_tolerance = relative_tolerance;
+        bracketing.absolute_tolerance = absolute_tolerance;
+        bracketing.bracket(bracketing_step(alpha_min, alpha_max));
+        cancel = c;
+        if (cancel) return std::numeric_limits<double>::quiet_NaN();
+        double lower = std::max(alpha_min, std::min(alpha_max, bracketing.lower_bound()));
+        double upper = std::max(alpha_min, std::min(alpha_max, bracketing.upper_bound()));
+
+        BrentSearch brent(func, lower, upper);
         brent.relative_tolerance = relative_tolerance;
         brent.absolute_tolerance = absolute_tolerance;
-        brent.bracket(0.1);
         brent.minimize();
         cancel = c;
         if (cancel) return std::numeric_limits<double>::quiet_NaN();
         double xmin = brent.best_parameter();
+        double fmin = brent.best_fitness();
+
+        if (upper == alpha_max && upper != 0.0) {
+            double at_end = func(alpha_max);
+            if (at_end < fmin) { xmin = alpha_max; fmin = at_end; }
+        }
+        if (lower == alpha_min && lower != 0.0) {
+            double at_end = func(alpha_min);
+            if (at_end < fmin) { xmin = alpha_min; fmin = at_end; }
+        }
+        cancel = c;
+        if (cancel) return std::numeric_limits<double>::quiet_NaN();
+        if (!(fmin < zero_step)) return zero_step;
+
         for (int j = 0; j < number_of_parameters_; j++) {
             direction[j] *= xmin;
             start_point[j] += direction[j];
             // Make sure the parameter is within bounds
             start_point[j] = repair_parameter(start_point[j], lower_bounds_[j], upper_bounds_[j]);
         }
-        return brent.best_fitness();
+        return fmin;
+    }
+
+    static double bracketing_step(double alpha_min, double alpha_max) {
+        constexpr double default_step = 0.1;
+        if (alpha_max >= default_step) return default_step;
+        if (alpha_min <= -default_step) return -default_step;
+        double wider = alpha_max >= -alpha_min ? alpha_max : alpha_min;
+        double half = 0.5 * wider;
+        return half == 0.0 ? wider : half;
+    }
+
+    std::pair<double, double> feasible_step_interval(
+        const std::vector<double>& start_point, const std::vector<double>& direction) const {
+        double alpha_min = -std::numeric_limits<double>::infinity();
+        double alpha_max = std::numeric_limits<double>::infinity();
+        bool moves = false;
+        for (int i = 0; i < number_of_parameters_; ++i) {
+            std::size_t ui = static_cast<std::size_t>(i);
+            double d = direction[ui];
+            if (d == 0.0) continue;
+            moves = true;
+            double to_upper = (upper_bounds_[ui] - start_point[ui]) / d;
+            double to_lower = (lower_bounds_[ui] - start_point[ui]) / d;
+            double high = d > 0.0 ? to_upper : to_lower;
+            double low = d > 0.0 ? to_lower : to_upper;
+            if (high < alpha_max) alpha_max = high;
+            if (low > alpha_min) alpha_min = low;
+        }
+        if (!moves) return {0.0, 0.0};
+        if (!(alpha_max > 0.0)) alpha_max = 0.0;
+        if (!(alpha_min < 0.0)) alpha_min = 0.0;
+        return {alpha_min, alpha_max};
     }
 };
 

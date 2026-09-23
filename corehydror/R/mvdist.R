@@ -56,12 +56,14 @@ print.corehydro_mvdist <- function(x, ...) {
 #' Mirrors the C# `MultivariateNormal` class of the Numerics library.
 #'
 #' @param mean numeric vector of means, length `d`.
-#' @param covariance a `d x d` symmetric positive-definite covariance matrix.
+#' @param covariance a `d x d` covariance matrix. It must be positive definite for
+#'   `"Cholesky"` and may be positive semidefinite for `"SingularValue"`.
 #' @param seed optional integer seed for the Genz quasi-Monte-Carlo integrator behind
-#'   [mvdist_cdf()] at dimension three and above; `NULL` (the default) leaves it clock-seeded.
-#'   **Without a seed, [mvdist_cdf()] at dimension >= 3 is not reproducible run to run** (it draws
-#'   from a per-instance Mersenne Twister), so R and Python cannot agree on a value unless `seed`
-#'   is set explicitly.
+#'   [mvdist_cdf()] at dimension three and above. `NULL` uses the reproducible upstream default,
+#'   12345. Set a distinct seed when aggregating many instances so their quadrature errors do not
+#'   share the same lattice shifts.
+#' @param decomposition covariance factorization, either `"Cholesky"` (default) or
+#'   `"SingularValue"`. The latter supports degenerate Gaussian densities on their affine support.
 #' @param max_evaluations,abs_error,rel_error optional integrator tuning; `NULL` (the default)
 #'   for each leaves the ported upstream default untouched.
 #' @return a `corehydro_mvdist` of family `"MultivariateNormal"`.
@@ -70,7 +72,8 @@ print.corehydro_mvdist <- function(x, ...) {
 #' mvdist_pdf(mv, c(0, 0))
 #' @export
 mvdist_normal <- function(mean, covariance, seed = NULL, max_evaluations = NULL,
-                           abs_error = NULL, rel_error = NULL) {
+                           abs_error = NULL, rel_error = NULL,
+                           decomposition = "Cholesky") {
   covariance <- as.matrix(covariance)
   if (nrow(covariance) != ncol(covariance)) {
     stop("`covariance` must be a square matrix", call. = FALSE)
@@ -83,6 +86,7 @@ mvdist_normal <- function(mean, covariance, seed = NULL, max_evaluations = NULL,
     family = "MultivariateNormal",
     mean = spec_array(as.double(mean)),
     covariance = rows,
+    decomposition = decomposition,
     seed = if (is.null(seed)) NULL else as.integer(seed),
     max_evaluations = if (is.null(max_evaluations)) NULL else as.integer(max_evaluations),
     abs_error = if (is.null(abs_error)) NULL else as.double(abs_error),
@@ -436,8 +440,8 @@ mvdist_random <- function(mv, n, seed = NULL, method = c("random", "latin_hyperc
 #' Family-specific multivariate parameters
 #'
 #' The scalar or vector parameters specific to a multivariate family, beyond mean/covariance:
-#' `df` for `"MultivariateStudentT"`; `alpha` and `alpha_sum` for `"Dirichlet"`; `trials` and
-#' `probabilities` for `"Multinomial"`.
+#' `decomposition` for `"MultivariateNormal"`; `df` for `"MultivariateStudentT"`; `alpha` and
+#' `alpha_sum` for `"Dirichlet"`; `trials` and `probabilities` for `"Multinomial"`.
 #'
 #' @param mv a `corehydro_mvdist` of family `"MultivariateStudentT"`, `"Dirichlet"`, or
 #'   `"Multinomial"`.
@@ -450,6 +454,9 @@ mvdist_random <- function(mv, n, seed = NULL, method = c("random", "latin_hyperc
 mvdist_params <- function(mv) {
   check_mvdist(mv)
   switch(mv$family,
+    MultivariateNormal = list(decomposition = if (
+      as.integer(mvdist_run(mv, "decomposition")$values) == 1L
+    ) "SingularValue" else "Cholesky"),
     MultivariateStudentT = list(df = unname(mvdist_run(mv, "degrees_of_freedom")$values)),
     Dirichlet = list(alpha = unname(mvdist_run(mv, "alpha")$values),
                      alpha_sum = unname(mvdist_run(mv, "alpha_sum")$values)),

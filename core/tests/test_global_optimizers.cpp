@@ -40,6 +40,7 @@
 #include <cmath>
 #include <vector>
 
+#include "corehydro/numerics/math/optimization/differential_evolution.hpp"
 #include "corehydro/numerics/math/optimization/multi_start.hpp"
 #include "corehydro/numerics/math/optimization/particle_swarm.hpp"
 #include "corehydro/numerics/math/optimization/shuffled_complex_evolution.hpp"
@@ -47,6 +48,7 @@
 #include "check.hpp"
 #include "optimization_test_functions.hpp"
 
+using corehydro::numerics::math::optimization::DifferentialEvolution;
 using corehydro::numerics::math::optimization::MultiStart;
 using corehydro::numerics::math::optimization::ParticleSwarm;
 using corehydro::numerics::math::optimization::ShuffledComplexEvolution;
@@ -1177,39 +1179,46 @@ void sa_constant_objective_reproduces_csharp_path() {
     }
 }
 
-// WHY THIS EXISTS (MultiStart). multi_start.hpp transcription hazard 2 reproduces an upstream array
-// aliasing effect: C#'s `values = InitialValues` is a reference assignment, so from the first
-// iteration on, every uniformly-drawn restart point is written THROUGH the InitialValues array and
-// the property ends the run holding the last sampled point instead of the user's starting point.
-// Copying instead (the obvious "cleanup") changes no answer at all -- measured: all 52 transcribed
-// MS checks stay green -- so nothing else in this file guards it.
-//
-// WHAT IT ASSERTS. The value of InitialValues AFTER a run, from the real C# library. It also pins
-// hazard 1 indirectly: the count of uniform draws consumed is (MaxIterations - 1) * D, so the
-// constructor's MaxIterations = 100 is load-bearing for the number below.
-//
-// WHY IT IS PORTABLE, and why it is a sharper guard than an evaluation count. The restart points
-// come only from MersenneTwister draws pushed through Uniform::inverse_cdf, which is
-// `lower + p * (upper - lower)` -- multiply and add, no libm, no dependence on the objective or on
-// the local method. (Measured: the real C# run reports the same two values for BFGS, Powell and
-// NelderMead, and for Booth and this sphere alike.) A local optimizer's evaluation count, by
-// contrast, would drag BFGS's transcendentals in.
-//
-// One further C# detail confirmed by the same probe and mirrored here: the CALLER's array is NOT
-// clobbered, because the C# constructor stores `initialValues.ToArray()`. The port takes the vector
-// by value for the same reason, so the aliasing stays confined to the object.
-void ms_initial_values_aliasing_reproduces_csharp() {
+// Numerics v2.2.0 copies InitialValues into its working array instead of re-seating the working
+// reference. Both the solver's public snapshot and the caller's vector therefore remain unchanged.
+void ms_initial_values_are_not_mutated() {
     std::vector<double> initial = {0.0, 0.0};
     std::vector<double> lower = {-10.0, -10.0};
     std::vector<double> upper = {10.0, 10.0};
     auto solver = MultiStart(sphere, 2, initial, lower, upper);
     solver.minimize();
     CHECK_EQ(solver.max_iterations, 100);
-    CHECK_EQ(solver.initial_values()[0], 7.9620126774534583);
-    CHECK_EQ(solver.initial_values()[1], 5.2228572824969888);
-    // The caller's own vector is untouched (the ctor copied it), exactly as in C#.
+    CHECK_EQ(solver.initial_values()[0], 0.0);
+    CHECK_EQ(solver.initial_values()[1], 0.0);
     CHECK_EQ(initial[0], 0.0);
     CHECK_EQ(initial[1], 0.0);
+}
+
+void de_repairs_infeasible_trials_halfway_to_target() {
+    std::vector<double> evaluated;
+    auto solver = DifferentialEvolution(
+        [&evaluated](std::vector<double>& values) {
+            evaluated.push_back(values[0]);
+            double difference = values[0] - 0.5;
+            return difference * difference;
+        },
+        1, {0.0}, {1.0});
+    solver.population_size = 4;
+    solver.prng_seed = 12345;
+    solver.mutation = 2.0;
+    solver.dither_rate = 0.0;
+    solver.crossover_probability = 1.0;
+    solver.max_iterations = 11;
+    solver.compute_hessian = false;
+    solver.report_failure = false;
+    solver.minimize();
+    CHECK_TRUE(evaluated.size() > static_cast<std::size_t>(solver.population_size));
+    CHECK_NEAR(evaluated[static_cast<std::size_t>(solver.population_size)],
+               0.1893519861914683, 1e-15);
+    for (std::size_t i = static_cast<std::size_t>(solver.population_size); i < evaluated.size(); ++i) {
+        CHECK_TRUE(evaluated[i] > 0.0);
+        CHECK_TRUE(evaluated[i] < 1.0);
+    }
 }
 
 }  // namespace
@@ -1278,6 +1287,7 @@ int main() {
     // Supplement: the upstream aliasing quirk (transcription hazard 4)
     sce_aliasing_reproduces_csharp_evaluation_counts();
     sa_constant_objective_reproduces_csharp_path();
-    ms_initial_values_aliasing_reproduces_csharp();
+    ms_initial_values_are_not_mutated();
+    de_repairs_infeasible_trials_halfway_to_target();
     return chtest::summary("test_global_optimizers");
 }

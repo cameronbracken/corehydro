@@ -965,10 +965,13 @@ callback_options_json <- function(ns, options) {
 # utility group runs through ch_toolbox_run_. Mirrors run_toolbox_kind in
 # core/tests/test_fixtures.cpp.
 toolbox_case_data <- function(case, datasets) {
-  if (is.null(case$data)) {
+  # Use exact lookup: `$data` partially matches `data_frame`, which would pass both input forms
+  # to the shared runner for censored DataFrame fixtures.
+  case_data <- case[["data", exact = TRUE]]
+  if (is.null(case_data)) {
     return(list())
   }
-  lapply(case$data, function(d) {
+  lapply(case_data, function(d) {
     if (is.character(d)) as.double(unlist(datasets[[d]])) else as.double(unlist(d))
   })
 }
@@ -1201,7 +1204,7 @@ mvn_consumes_stream <- function(m) {
   m %in% c("cdf", "interval", "mvndst", "mvndst_inform", "mvndst_error")
 }
 
-kMvDelegatedMethods <- c("dimension", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance",
+kMvDelegatedMethods <- c("dimension", "decomposition", "pdf", "log_pdf", "cdf", "mahalanobis", "mean", "variance",
                          "sd", "covariance", "median", "mode", "inverse_cdf", "interval",
                          "degrees_of_freedom", "alpha", "alpha_sum", "number_of_trials",
                          "random_value", "lhs_value", "marginal_dimension", "marginal_mean",
@@ -1240,7 +1243,7 @@ square_dim <- function(n) {
 dispatch_multivariate_delegated <- function(spec, method, args) {
   ns <- asNamespace("corehydror")
   run <- function(s, m, a) ns$ch_mvdist_run_(s, m, to_runner_json(a))
-  if (method %in% c("dimension", "alpha_sum", "degrees_of_freedom", "number_of_trials")) {
+  if (method %in% c("dimension", "decomposition", "alpha_sum", "degrees_of_freedom", "number_of_trials")) {
     return(run(spec, method, list())$values[[1]])
   }
   if (method %in% c("pdf", "log_pdf", "cdf", "mahalanobis")) {
@@ -2134,7 +2137,8 @@ test_that("oracle fixtures validate", {
       datasets <- spec$datasets
       for (case in spec$cases) {
         data <- toolbox_case_data(case, datasets)
-        df_json <- if (is.null(case$data_frame)) "" else ns$to_spec_json(case$data_frame)
+        case_data_frame <- case[["data_frame", exact = TRUE]]
+        df_json <- if (is.null(case_data_frame)) "" else ns$to_spec_json(case_data_frame)
         opts_list <- if (is.null(case$options)) list() else case$options
         opts <- if (length(opts_list) == 0L) "{}" else ns$to_spec_json(opts_list)
         for (a in case$assertions) {

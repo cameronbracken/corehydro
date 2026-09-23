@@ -28,14 +28,13 @@ Mirrors the C# \code{KMeans} class: partitions the rows of \code{x} into \code{k
 belonging to the cluster with the nearest centroid. Initialization is k-means++ by default.
 }
 \details{
-Two behaviours inherited from upstream are worth knowing:
+Two details inherited from upstream are worth knowing:
 \itemize{
 \item \code{labels} are 0-BASED in both R and Python, matching the library's own indexing (the same
 choice \code{\link[=shortest_path]{shortest_path()}} made for node indices). Add 1 before using them to subset an R
 object.
-\item With \code{k = 1} the algorithm stops before its first update step, so the single reported
-"cluster mean" is a randomly chosen observation rather than the mean of \code{x}. Use \code{mean()}
-instead if that is what you want.
+\item \code{k} must be between 1 and \code{nrow(x)}. Empty clusters are relocated to distinct farthest
+observations, and a one-cluster fit reports the sample mean.
 }
 }
 \examples{

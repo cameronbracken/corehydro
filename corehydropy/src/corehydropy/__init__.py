@@ -1,7 +1,7 @@
 """corehydropy: Bayesian flood-frequency and extreme-value analysis.
 
 Python bindings to a shared C++ port of the USACE-RMC Numerics / RMC.BestFit
-libraries, validated value-by-value against Numerics 2.1.4 and RMC.BestFit 2.0.0.
+libraries, validated value-by-value against Numerics 2.2.0 and RMC.BestFit 2.0.0.
 """
 
 from __future__ import annotations
@@ -35,6 +35,8 @@ from .toolbox import (
     interpolate,
     interpolate_2d,
     joint_probability,
+    union_single_factor,
+    single_factor_conditional_probabilities,
     l_moments,
     link,
     link_derivative,
@@ -43,6 +45,10 @@ from .toolbox import (
     link_names,
     linear_regression,
     percentile,
+    first_order_sobol,
+    pawn,
+    pawn_median,
+    borgonovo_delta,
     polynomial_eval,
     product_moments,
     qr_decomposition,
@@ -195,6 +201,10 @@ __all__ = [
     "l_moments",
     "ranks",
     "percentile",
+    "first_order_sobol",
+    "pawn",
+    "pawn_median",
+    "borgonovo_delta",
     "RunningStatistics",
     "running_statistics",
     "RunningCovariance",
@@ -211,6 +221,8 @@ __all__ = [
     "sobol_sequence",
     "stratify",
     "joint_probability",
+    "union_single_factor",
+    "single_factor_conditional_probabilities",
     "Link",
     "link_function",
     "link",

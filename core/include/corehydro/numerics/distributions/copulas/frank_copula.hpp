@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/FrankCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/FrankCopula.cs @ 7e8e8d1
 //
 // The Frank copula. theta unbounded (-inf, +inf); custom closed-form PDF/CDF/InverseCDF
 // (all five generator functions also have closed forms, including generator_prime_inverse
@@ -10,11 +10,7 @@
 // here (mirrored below). Clone() deep-copies attached marginals via
 // BivariateCopula::clone_marginal (v2.1.4, Task 8).
 //
-// The C# FrankCopula class has NO SetThetaFromTau method (unlike Clayton/AMH/Gumbel) --
-// its ParameterConstraints computes Kendall's tau from the sample data purely to pick the
-// sign of the MPL/IFM/MLE search bracket ([0.001, 100] or [-100, -0.001]), not to fit theta
-// directly. There is accordingly no "tau" method-of-moments fixture case for Frank (see
-// frank_copula.json's source note and .superpowers/sdd/task-8-report.md).
+// Numerics v2.2.0 adds SetThetaFromTau using the Debye order-one relation and Brent inversion.
 #pragma once
 #include <array>
 #include <cmath>
@@ -27,7 +23,9 @@
 
 #include "corehydro/numerics/data/correlation.hpp"
 #include "corehydro/numerics/distributions/copulas/base/archimedean_copula.hpp"
+#include "corehydro/numerics/math/special/debye.hpp"
 #include "corehydro/numerics/distributions/copulas/base/copula_type.hpp"
+#include "corehydro/numerics/math/rootfinding/brent.hpp"
 
 namespace corehydro::numerics::distributions::copulas {
 
@@ -116,13 +114,19 @@ class FrankCopula : public ArchimedeanCopula {
                                   (std::exp(-theta()) - 1.0));
     }
 
-    std::array<double, 2> inverse_cdf(double u, double v) const override {
+    double inverse_conditional_cdf(double u, double t) const override {
         if (!parameters_valid()) validate_parameter(theta(), true);
         double a = -std::fabs(theta());
-        double vv = -1.0 / a *
-                    std::log((-v * (std::exp(-a) - 1.0) / (std::exp(-a * u) * (v - 1.0) - v)) + 1.0);
-        vv = theta() > 0.0 ? 1.0 - vv : vv;
-        return {u, vv};
+        double s = theta() > 0.0 ? 1.0 - t : t;
+        double v = -1.0 / a *
+                   std::log((-s * (std::exp(-a) - 1.0) /
+                                 (std::exp(-a * u) * (s - 1.0) - s)) +
+                            1.0);
+        return theta() > 0.0 ? 1.0 - v : v;
+    }
+
+    std::array<double, 2> inverse_cdf(double u, double v) const override {
+        return {u, inverse_conditional_cdf(u, v)};
     }
 
     // Gets the upper tail dependence coefficient lambda_U = 0. The Frank copula has no tail
@@ -136,6 +140,33 @@ class FrankCopula : public ArchimedeanCopula {
     std::unique_ptr<BivariateCopula> clone() const override {
         return std::make_unique<FrankCopula>(theta(), clone_marginal(marginal_distribution_x),
                                               clone_marginal(marginal_distribution_y));
+    }
+
+    static double kendalls_tau_from_theta(double theta_value) {
+        if (theta_value == 0.0 || !std::isfinite(theta_value))
+            throw std::out_of_range(
+                "The dependency parameter theta must be finite and non-zero.");
+        return 1.0 - 4.0 / theta_value *
+                         (1.0 - corehydro::numerics::math::special::debye_function_order_one(
+                                    theta_value));
+    }
+
+    void set_theta_from_tau(const std::vector<double>& sample_data_x,
+                            const std::vector<double>& sample_data_y) {
+        double tau = corehydro::numerics::data::kendalls_tau(sample_data_x, sample_data_y);
+        if (std::fabs(tau) > kendalls_tau_from_theta(100.0))
+            throw std::invalid_argument(
+                "For the Frank copula, tau is outside the fitting range [-0.96065, 0.96065].");
+        double near_independence = tau > 0.0 ? 0.001 : -0.001;
+        if (std::fabs(tau) <= std::fabs(kendalls_tau_from_theta(near_independence))) {
+            set_theta(near_independence);
+            return;
+        }
+        double lower = tau > 0.0 ? 0.001 : -100.0;
+        double upper = tau > 0.0 ? 100.0 : -0.001;
+        set_theta(corehydro::numerics::math::rootfinding::solve(
+            [tau](double value) { return kendalls_tau_from_theta(value) - tau; }, lower,
+            upper));
     }
 
     math::linalg::Matrix2D parameter_constraints(const std::vector<double>& sample_data_x,

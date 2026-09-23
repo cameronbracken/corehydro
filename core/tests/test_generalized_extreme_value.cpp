@@ -14,7 +14,6 @@ using corehydro::numerics::kEuler;
 using corehydro::numerics::distributions::GeneralizedExtremeValue;
 namespace sf = corehydro::numerics::math::special;  // not "gamma": clashes with glibc gamma()
 
-static bool is_nan(double x) { return std::isnan(x); }
 constexpr double INF = std::numeric_limits<double>::infinity();
 
 int main() {
@@ -46,30 +45,30 @@ int main() {
     // --- Mean ---
     CHECK_EQ(GeneralizedExtremeValue().mean(), 100.0 + 10.0 * kEuler);
     CHECK_NEAR(GeneralizedExtremeValue(100, 10, 0.9).mean(), 100.42482, 1e-4);
-    CHECK_EQ(is_nan(GeneralizedExtremeValue(100, 10, 10).mean()), true);
+    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 10).mean(), -3628699.0000000028, 1e-6);
 
     // --- Median ---
     CHECK_NEAR(GeneralizedExtremeValue().median(), 103.66512, 1e-4);
-    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 0.9).median(), 104.3419519, 1e-4);
+    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 0.9).median(), 103.12196423496414, 1e-12);
 
     // --- Mode ---
     CHECK_EQ(GeneralizedExtremeValue().mode(), 100.0);
-    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 1).mode(), 95.0, 1e-9);
+    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 1).mode(), 110.0, 1e-9);
 
     // --- Standard deviation ---
     CHECK_NEAR(GeneralizedExtremeValue().standard_deviation(), 12.825498, 1e-5);
     CHECK_NEAR(GeneralizedExtremeValue(100, 10, 0.49).standard_deviation(), 9.280898, 1e-4);
-    CHECK_EQ(is_nan(GeneralizedExtremeValue(100, 10, 1).standard_deviation()), true);
+    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 1).standard_deviation(), 10.0, 1e-12);
 
     // --- Skewness ---
-    CHECK_NEAR(GeneralizedExtremeValue().skewness(), 1.1396, 1e-9);
+    CHECK_NEAR(GeneralizedExtremeValue().skewness(), 1.1395470994046487, 1e-15);
     CHECK_NEAR(GeneralizedExtremeValue(100, 10, 0.3).skewness(), -0.0690175, 1e-3);
-    CHECK_EQ(is_nan(GeneralizedExtremeValue(100, 10, 1).skewness()), true);
+    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 1).skewness(), -2.0, 0.0);
 
     // --- Kurtosis ---
     CHECK_NEAR(GeneralizedExtremeValue().kurtosis(), 3.0 + 12.0 / 5.0, 1e-9);
     CHECK_NEAR(GeneralizedExtremeValue(100, 10, 0.24).kurtosis(), 2.7659607, 1e-4);
-    CHECK_EQ(is_nan(GeneralizedExtremeValue(100, 10, 1).kurtosis()), true);
+    CHECK_NEAR(GeneralizedExtremeValue(100, 10, 1).kurtosis(), 9.0, 0.0);
 
     // --- Minimum / Maximum ---
     CHECK_EQ(GeneralizedExtremeValue().minimum(), -INF);

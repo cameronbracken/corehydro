@@ -220,6 +220,13 @@ def test_quadrature_2d_integrates_over_a_rectangle():
     assert q.function_evaluations > 0
     assert q.standard_error >= 0.0
 
+    gk = ch.quadrature_2d(
+        lambda x, y: x + y, 0, 1, 0, 1, method="adaptive_gauss_kronrod"
+    )
+    assert float(gk) == pytest.approx(1.0, abs=1e-12)
+    assert gk.status == "Success"
+    assert gk.function_evaluations == 441
+
     def boom(x, y):
         raise ValueError("my own error")
 
@@ -227,6 +234,8 @@ def test_quadrature_2d_integrates_over_a_rectangle():
         ch.quadrature_2d(boom, 0, 1, 0, 1)
     with pytest.raises(ValueError, match="must be below"):
         ch.quadrature_2d(lambda x, y: x + y, 1, 0, 0, 1)
+    with pytest.raises(ValueError, match="method"):
+        ch.quadrature_2d(lambda x, y: x + y, 0, 1, 0, 1, method="nope")
 
 
 def test_ode_solve_rk4_on_exponential_growth():

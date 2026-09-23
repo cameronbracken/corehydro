@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/LogPearsonTypeIII.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/LogPearsonTypeIII.cs @ 7e8e8d1
 //
 // Log-Pearson Type III distribution parameterized by mean µ, standard deviation σ,
 // and skew γ of the log-transformed (base-10) data. Wraps PearsonTypeIII in log10
@@ -20,6 +20,7 @@
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
 #include "corehydro/numerics/distributions/base/parameter_estimation_method.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
+#include "corehydro/numerics/distributions/pearson_type_iii.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
 #include "corehydro/numerics/math/special/erf.hpp"
 #include "corehydro/numerics/math/special/gamma.hpp"
@@ -76,207 +77,146 @@ class LogPearsonTypeIII : public UnivariateDistributionBase,
     // --- Moments / support ---
     // Mean of X (not of log X). Mirrors C# Mean property.
     double mean() const override {
-        double ln_b = std::log(kBase);
-        if (std::fabs(gamma_) <= kNearZero) {
-            // Log-Normal case: E[X] = exp((µ + 0.5*σ²*ln(b)) * ln(b))
-            return std::exp((mu_ + 0.5 * sigma_ * sigma_ * ln_b) * ln_b);
-        } else {
-            double ln_mean = xi() * ln_b - alpha() * std::log(1.0 - beta() * ln_b);
-            return std::exp(ln_mean);
-        }
+        return std::exp(mu_ * std::log(kBase) + log_moment_shape(1));
     }
 
     double median() const override { return inverse_cdf(0.5); }
 
     // Mode of X. Mirrors C# Mode property.
     double mode() const override {
-        double K = k_factor();
-        if (std::fabs(gamma_) <= kNearZero) {
-            return std::exp(mu_ / K);
-        } else {
-            return std::exp((xi() + (alpha() - 1.0) * beta()) / K);
+        const double log_base = std::log(kBase);
+        const double scale = sigma_ * log_base;
+        if (gamma_ == 0.0) return std::exp(mu_ * log_base - scale * scale);
+        const double beta_log = beta() * log_base;
+        const double shape = alpha();
+        if (gamma_ > 0.0 && shape <= 1.0) return minimum();
+        if (gamma_ < 0.0) {
+            if (shape < 1.0) return maximum();
+            if (shape == 1.0) return beta_log < -1.0 ? 0.0 : maximum();
+            if (beta_log <= -1.0) return 0.0;
         }
+        return std::exp(mu_ * log_base - (scale * scale + beta_log) / (1.0 + beta_log));
     }
 
     // Standard deviation of X. Mirrors C# StandardDeviation property.
     double standard_deviation() const override {
-        double ln_b = std::log(kBase);
-        if (std::fabs(gamma_) <= kNearZero) {
-            double a = sigma_ * sigma_ * ln_b;
-            double log_prefactor = (2.0 * mu_ + a) * ln_b;
-            double exp_a = std::exp(a * ln_b);
-            double variance = std::exp(log_prefactor) * (exp_a - 1.0);
-            return std::sqrt(variance);
-        } else {
-            double t1 = -alpha() * std::log(1.0 - 2.0 * beta() * ln_b);
-            double t2 = -2.0 * alpha() * std::log(1.0 - beta() * ln_b);
-            double max_t = std::max(t1, t2);
-            double diff = std::exp(t1 - max_t) - std::exp(t2 - max_t);
-            double log_variance = 2.0 * xi() * ln_b + max_t + std::log(diff);
-            return std::sqrt(std::exp(log_variance));
-        }
+        const double first = log_moment_shape(1);
+        const double second = log_moment_shape(2);
+        if (std::isinf(first) || std::isinf(second)) return kInf;
+        const double delta = second - 2.0 * first;
+        const double log_excess =
+            delta > 0.5 ? delta + std::log1p(-std::exp(-delta)) : std::log(std::expm1(delta));
+        return std::exp(mu_ * std::log(kBase) + first + 0.5 * log_excess);
     }
 
     // Skewness of X. Mirrors C# Skewness property.
     double skewness() const override {
-        double ln_b = std::log(kBase);
-        if (std::fabs(gamma_) <= kNearZero) {
-            // Log-Normal case
-            double a = sigma_ * sigma_ * ln_b;
-            double mu1 = (mu_ + 0.5 * a) * ln_b;
-            double mu2 = (2.0 * mu_ + 2.0 * a) * ln_b;
-            double mu3 = (3.0 * mu_ + 4.5 * a) * ln_b;
-            double m1 = std::exp(mu1);
-            double m2 = std::exp(mu2);
-            double m3 = std::exp(mu3);
-            double third_central = m3 - 3.0 * m2 * m1 + 2.0 * m1 * m1 * m1;
-            double sd = standard_deviation();
-            return third_central / (sd * sd * sd);
-        } else {
-            // LP3 case
-            double t1 = 1.0 - beta() * ln_b;
-            double t2 = 1.0 - 2.0 * beta() * ln_b;
-            double t3 = 1.0 - 3.0 * beta() * ln_b;
-            double m1 = std::pow(t1, -alpha());
-            double m2 = std::pow(t2, -alpha());
-            double m3 = std::pow(t3, -alpha());
-            double third_central = m3 - 3.0 * m2 * m1 + 2.0 * m1 * m1 * m1;
-            double prefactor = std::pow(kBase, 3.0 * xi());
-            double sd = standard_deviation();
-            return prefactor * third_central / (sd * sd * sd);
-        }
+        if (std::isinf(log_moment_shape(3)))
+            return std::isinf(log_moment_shape(2)) ? kNaN : kInf;
+        const double scale = sigma_ * std::log(kBase);
+        if (std::fabs(scale) * (1.0 + std::fabs(gamma_)) < 0.01)
+            return small_scale_standardized_moments()[0];
+        const double first = log_moment_shape(1);
+        const double d2 = log_moment_shape(2) - 2.0 * first;
+        const double d3 = log_moment_shape(3) - 3.0 * first;
+        const double log_variance =
+            d2 > 0.5 ? d2 + std::log1p(-std::exp(-d2)) : std::log(std::expm1(d2));
+        const double normalized_third =
+            -std::expm1(-d3) - 3.0 * std::exp(d2 - d3) * -std::expm1(-d2);
+        if (normalized_third == 0.0) return 0.0;
+        return std::copysign(
+            std::exp(d3 - 1.5 * log_variance + std::log(std::fabs(normalized_third))),
+            normalized_third);
     }
 
     // Kurtosis of X. Mirrors C# Kurtosis property.
     double kurtosis() const override {
-        double ln_b = std::log(kBase);
-        if (std::fabs(gamma_) <= kNearZero) {
-            // Log-Normal case
-            double a = sigma_ * sigma_ * ln_b;
-            double mu1 = (mu_ + 0.5 * a) * ln_b;
-            double mu2 = (2.0 * mu_ + 2.0 * a) * ln_b;
-            double mu3 = (3.0 * mu_ + 4.5 * a) * ln_b;
-            double mu4 = (4.0 * mu_ + 8.0 * a) * ln_b;
-            double m1 = std::exp(mu1);
-            double m2 = std::exp(mu2);
-            double m3 = std::exp(mu3);
-            double m4 = std::exp(mu4);
-            double fourth_central = m4 - 4.0 * m3 * m1 + 6.0 * m2 * m1 * m1
-                                    - 3.0 * m1 * m1 * m1 * m1;
-            double sd = standard_deviation();
-            return fourth_central / std::pow(sd, 4.0);
-        } else {
-            // LP3 case
-            double t1 = 1.0 - beta() * ln_b;
-            double t2 = 1.0 - 2.0 * beta() * ln_b;
-            double t3 = 1.0 - 3.0 * beta() * ln_b;
-            double t4 = 1.0 - 4.0 * beta() * ln_b;
-            double m1 = std::pow(t1, -alpha());
-            double m2 = std::pow(t2, -alpha());
-            double m3 = std::pow(t3, -alpha());
-            double m4 = std::pow(t4, -alpha());
-            double fourth_central = m4 - 4.0 * m3 * m1 + 6.0 * m2 * m1 * m1
-                                    - 3.0 * m1 * m1 * m1 * m1;
-            double prefactor = std::pow(kBase, 4.0 * xi());
-            double sd = standard_deviation();
-            return prefactor * fourth_central / std::pow(sd, 4.0);
-        }
+        if (std::isinf(log_moment_shape(4)))
+            return std::isinf(log_moment_shape(2)) ? kNaN : kInf;
+        const double scale = sigma_ * std::log(kBase);
+        if (std::fabs(scale) * (1.0 + std::fabs(gamma_)) < 0.01)
+            return small_scale_standardized_moments()[1];
+        const double first = log_moment_shape(1);
+        const double d2 = log_moment_shape(2) - 2.0 * first;
+        const double d3 = log_moment_shape(3) - 3.0 * first;
+        const double d4 = log_moment_shape(4) - 4.0 * first;
+        const double log_variance =
+            d2 > 0.5 ? d2 + std::log1p(-std::exp(-d2)) : std::log(std::expm1(d2));
+        const double normalized_fourth =
+            -std::expm1(-d4) - 4.0 * std::exp(d3 - d4) * -std::expm1(-d3) +
+            6.0 * std::exp(d2 - d4) * -std::expm1(-d2);
+        return std::exp(d4 - 2.0 * log_variance + std::log(normalized_fourth));
     }
 
     // Minimum of X. Mirrors C# Minimum property.
     double minimum() const override {
-        double K = k_factor();
-        if (std::fabs(gamma_) <= kNearZero) {
-            return 0.0;
-        } else if (beta() > 0.0) {
-            return std::exp(xi() / K);
-        } else {
-            return 0.0;
-        }
+        return gamma_ > 0.0 ? std::exp(xi() * std::log(kBase)) : 0.0;
     }
 
     // Maximum of X. Mirrors C# Maximum property.
     double maximum() const override {
-        double K = k_factor();
-        if (std::fabs(gamma_) <= kNearZero) {
-            return kInf;
-        } else if (beta() > 0.0) {
-            return kInf;
-        } else {
-            return std::exp(xi() / K);
-        }
+        return gamma_ < 0.0 ? std::exp(xi() * std::log(kBase)) : kInf;
     }
 
     // --- Distribution functions ---
     double pdf(double x) const override {
+        return std::exp(log_pdf(x));
+    }
+
+    double log_pdf(double x) const override {
         if (!parameters_valid_)
             throw std::invalid_argument("LogPearsonTypeIII: invalid parameters");
-        if (x < minimum() || x > maximum()) return 0.0;
-        double K = k_factor();
-        if (std::fabs(gamma_) <= kNearZero) {
-            // Log-Normal branch
-            double log10x = std::log(x) / std::log(kBase);  // log10(x) = log_base(x)
-            double d = (log10x - mu_) / sigma_;
-            return std::exp(-0.5 * d * d) / (kSqrt2PI * sigma_) * (K / x);
-        } else if (beta() > 0.0) {
-            double shifted_x = std::log(x) / std::log(kBase) - xi();
-            double abs_beta = std::fabs(beta());
-            return std::exp(-shifted_x / abs_beta
-                            + (alpha() - 1.0) * std::log(shifted_x)
-                            - alpha() * std::log(abs_beta)
-                            - sf::log_gamma(alpha()))
-                   * (K / x);
-        } else {
-            double shifted_x = xi() - std::log(x) / std::log(kBase);
-            double abs_beta = std::fabs(beta());
-            return std::exp(-shifted_x / abs_beta
-                            + (alpha() - 1.0) * std::log(shifted_x)
-                            - alpha() * std::log(abs_beta)
-                            - sf::log_gamma(alpha()))
-                   * (K / x);
+        const double log_base = std::log(kBase);
+        const double boundary = gamma_ == 0.0 ? kNaN : std::exp(xi() * log_base);
+        const double lower = gamma_ > 0.0 ? boundary : 0.0;
+        const double upper = gamma_ < 0.0 ? boundary : kInf;
+        if (x < lower || x > upper || x == kInf) return -kInf;
+        if (x == 0.0) {
+            if (gamma_ >= 0.0) return -kInf;
+            const double rate = -1.0 / (beta() * log_base);
+            if (rate > 1.0) return -kInf;
+            if (rate < 1.0 || alpha() > 1.0) return kInf;
+            return alpha() == 1.0 ? -xi() * log_base : -kInf;
         }
+        const double log_x = std::log(x);
+        const double transformed = ((gamma_ > 0.0 || gamma_ < 0.0) && x == boundary)
+                                       ? xi()
+                                       : log_x / log_base;
+        return PearsonTypeIII(mu_, sigma_, gamma_).log_pdf(transformed) - std::log(log_base) -
+               log_x;
     }
 
     double cdf(double x) const override {
+        return std::exp(log_cdf(x));
+    }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_)
+            throw std::invalid_argument("LogPearsonTypeIII: invalid parameters");
+        if (x <= minimum()) return -kInf;
+        if (x >= maximum()) return 0.0;
+        return PearsonTypeIII(mu_, sigma_, gamma_).log_cdf(std::log(x) / std::log(kBase));
+    }
+
+    double ccdf(double x) const override { return std::exp(log_ccdf(x)); }
+
+    double log_ccdf(double x) const override {
         if (!parameters_valid_)
             throw std::invalid_argument("LogPearsonTypeIII: invalid parameters");
         if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        if (std::fabs(gamma_) <= kNearZero) {
-            double log10x = std::log(x) / std::log(kBase);
-            return 0.5 * (1.0 + std::erf((log10x - mu_) / (sigma_ * kSqrt2)));
-        } else if (beta() > 0.0) {
-            double shifted_x = std::log(x) / std::log(kBase) - xi();
-            return sf::lower_incomplete(alpha(), shifted_x / std::fabs(beta()));
-        } else {
-            double shifted_x = xi() - std::log(x) / std::log(kBase);
-            return 1.0 - sf::lower_incomplete(alpha(), shifted_x / std::fabs(beta()));
-        }
+        if (x >= maximum()) return -kInf;
+        return PearsonTypeIII(mu_, sigma_, gamma_).log_ccdf(std::log(x) / std::log(kBase));
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (std::isnan(probability) || probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
-        if (probability == 0.0) return minimum();
-        if (probability == 1.0) return maximum();
         if (!parameters_valid_)
             throw std::invalid_argument("LogPearsonTypeIII: invalid parameters");
-        double K = k_factor();
-        if (std::fabs(gamma_) <= kNearZero) {
-            // Log-Normal branch: InverseCDF using erfc
-            return std::exp((mu_ - sigma_ * kSqrt2
-                             * sf::erf::inverse_erfc(2.0 * probability))
-                            / K);
-        } else if (beta() > 0.0) {
-            return std::exp(
-                (xi() + sf::inverse_lower_incomplete(alpha(), probability) * std::fabs(beta()))
-                / K);
-        } else {
-            return std::exp(
-                (xi() - sf::inverse_lower_incomplete(alpha(), 1.0 - probability)
-                       * std::fabs(beta()))
-                / K);
-        }
+        if (probability == 0.0) return minimum();
+        if (probability == 1.0) return maximum();
+        return std::exp(PearsonTypeIII(mu_, sigma_, gamma_).inverse_cdf(probability) *
+                        std::log(kBase));
     }
 
     // --- Parameter display names (X1; C# LogPearsonTypeIII.cs ParametersToString col0 +
@@ -294,6 +234,7 @@ class LogPearsonTypeIII : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4, true);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             // Indirect MoM: transform to log10, compute product moments.
             auto log_sample = transform_log(sample);
@@ -439,19 +380,39 @@ class LogPearsonTypeIII : public UnivariateDistributionBase,
                                    std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        // Use indirect MoM for initial values
-        auto log_sample = transform_log(sample);
-        auto mom = data::product_moments(log_sample);
-        initials = {mom[0], mom[1], mom[2]};
-        lowers.resize(3);
-        uppers.resize(3);
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&] { return legacy_parameter_constraints(sample); },
+            [&] { return robust_parameter_constraints(sample); });
+        initials = std::get<0>(constraints);
+        lowers = std::get<1>(constraints);
+        uppers = std::get<2>(constraints);
+    }
+
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 4, true);
+        return PearsonTypeIII().robust_parameter_constraints(transform_log(sample));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        std::vector<double> transformed(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            transformed[i] = std::log(sample[i] > 0.0 ? sample[i] : 0.01) / std::log(kBase);
+        auto mom = data::product_moments(transformed);
+        std::vector<double> initials = {mom[0], mom[1], mom[2]};
+        std::vector<double> lowers(3);
+        std::vector<double> uppers(3);
         double K = k_factor();
         // Bounds of mu
         double real_mu = std::exp(initials[0] / K);
-        lowers[0] = kDoubleMachineEpsilon;
-        uppers[0] = std::ceil(std::log(std::pow(10.0, std::ceil(std::log10(real_mu) + 1.0)))
+        if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
+        lowers[0] = std::floor(std::log(std::pow(10.0, std::floor(std::log10(real_mu)) - 1.0))
+                               / std::log(kBase));
+        uppers[0] = std::ceil(std::log(std::pow(10.0, std::ceil(std::log10(real_mu)) + 1.0))
                               / std::log(kBase));
-        if (std::isnan(uppers[0])) uppers[0] = 5.0;
         // Bounds of sigma
         double real_sigma = std::exp(initials[1] / K);
         lowers[1] = kDoubleMachineEpsilon;
@@ -465,7 +426,10 @@ class LogPearsonTypeIII : public UnivariateDistributionBase,
         if (initials[2] <= lowers[2] || initials[2] >= uppers[2]) {
             initials[2] = 0.01;
         }
+        return {initials, lowers, uppers};
     }
+
+   public:
 
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
@@ -481,17 +445,74 @@ class LogPearsonTypeIII : public UnivariateDistributionBase,
     }
 
    private:
-    // Transform sample to log-base (base 10). Values <= 0 map to log10(0.01) as in C#.
+    double log_moment_shape(int order) const {
+        const double scale = order * sigma_ * std::log(kBase);
+        const double argument = gamma_ * scale / 2.0;
+        if (!(argument < 1.0)) return kInf;
+        if (std::fabs(argument) < 0.01) {
+            double sum = 0.5;
+            double term = 1.0;
+            for (int k = 1; k <= 12; ++k) {
+                term *= argument;
+                sum += term / (k + 2.0);
+            }
+            return scale * scale * sum;
+        }
+        return alpha() * (-std::log1p(-argument) - argument);
+    }
+
+    static std::vector<double> multiply_series(const std::vector<double>& left,
+                                               const std::vector<double>& right) {
+        std::vector<double> result(left.size(), 0.0);
+        for (std::size_t n = 0; n < result.size(); ++n)
+            for (std::size_t k = 0; k <= n; ++k) result[n] += left[k] * right[n - k];
+        return result;
+    }
+
+    std::vector<double> small_scale_standardized_moments() const {
+        constexpr int order = 12;
+        std::vector<std::vector<double>> raw(4, std::vector<double>(order + 1, 0.0));
+        for (int r = 1; r <= 4; ++r) {
+            raw[static_cast<std::size_t>(r - 1)][0] = 1.0;
+            for (int n = 2; n <= order; ++n)
+                for (int k = 2; k <= n; ++k)
+                    raw[static_cast<std::size_t>(r - 1)][static_cast<std::size_t>(n)] +=
+                        std::pow(static_cast<double>(r), k) * std::pow(gamma_ / 2.0, k - 2) *
+                        raw[static_cast<std::size_t>(r - 1)]
+                           [static_cast<std::size_t>(n - k)] /
+                        n;
+        }
+        const auto square = multiply_series(raw[0], raw[0]);
+        const auto cube = multiply_series(square, raw[0]);
+        const auto fourth = multiply_series(square, square);
+        const auto second_first = multiply_series(raw[1], raw[0]);
+        const auto third_first = multiply_series(raw[2], raw[0]);
+        const auto second_square = multiply_series(raw[1], square);
+        const double scale = sigma_ * std::log(kBase);
+        double variance = 0.0;
+        double third = 0.0;
+        double fourth_central = 0.0;
+        for (int n = order; n >= 2; --n)
+            variance = variance * scale + raw[1][static_cast<std::size_t>(n)] -
+                       square[static_cast<std::size_t>(n)];
+        for (int n = order; n >= 3; --n)
+            third = third * scale + raw[2][static_cast<std::size_t>(n)] -
+                    3.0 * second_first[static_cast<std::size_t>(n)] +
+                    2.0 * cube[static_cast<std::size_t>(n)];
+        for (int n = order; n >= 4; --n)
+            fourth_central = fourth_central * scale + raw[3][static_cast<std::size_t>(n)] -
+                             4.0 * third_first[static_cast<std::size_t>(n)] +
+                             6.0 * second_square[static_cast<std::size_t>(n)] -
+                             3.0 * fourth[static_cast<std::size_t>(n)];
+        return {third / std::pow(variance, 1.5), fourth_central / (variance * variance)};
+    }
+
+    // Transform a validated positive sample to log-base coordinates.
     std::vector<double> transform_log(const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 4, true);
         std::vector<double> result;
         result.reserve(sample.size());
-        for (double v : sample) {
-            if (v > 0.0) {
-                result.push_back(std::log(v) / std::log(kBase));
-            } else {
-                result.push_back(std::log(0.01) / std::log(kBase));
-            }
-        }
+        for (double v : sample) result.push_back(std::log(v) / std::log(kBase));
         return result;
     }
 

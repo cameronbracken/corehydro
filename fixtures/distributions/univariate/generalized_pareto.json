@@ -53,17 +53,17 @@
       "comment": "xi=100, alpha=10, kappa=1: bounded above at xi+alpha/kappa=110",
       "construct": { "params": [100.0, 10.0, 1.0] },
       "assertions": [
-        { "method": "mean",     "args": [],      "expected": "nan",  "mode": "equal" },
-        { "method": "sd",       "args": [],      "expected": "nan",  "mode": "equal" },
-        { "method": "skewness", "args": [],      "expected": "nan",  "mode": "equal" },
-        { "method": "kurtosis", "args": [],      "expected": "nan",  "mode": "equal" },
+        { "method": "mean",     "args": [],      "expected": 105.0,               "mode": "equal" },
+        { "method": "sd",       "args": [],      "expected": 2.8867513459481291,  "mode": "abs", "tol": 1e-14 },
+        { "method": "skewness", "args": [],      "expected": 0.0,                 "mode": "equal" },
+        { "method": "kurtosis", "args": [],      "expected": 1.8,                 "mode": "equal" },
         { "method": "minimum",  "args": [],      "expected": 100.0,  "mode": "equal" },
         { "method": "maximum",  "args": [],      "expected": 110.0,  "mode": "equal" },
         { "method": "cdf",      "args": [50.0],  "expected": 0.0,    "mode": "equal" },
         { "method": "cdf",      "args": [200.0], "expected": 1.0,    "mode": "equal" },
         { "method": "pdf",      "args": [50.0],  "expected": 0.0,    "mode": "equal" },
         { "method": "quantile", "args": [0.3],   "expected": 103.0,  "mode": "abs",  "tol": 1e-9 },
-        { "method": "median",   "args": [],      "expected": 95.0,   "mode": "abs",  "tol": 1e-9 }
+        { "method": "median",   "args": [],      "expected": 105.0,  "mode": "abs",  "tol": 1e-9 }
       ]
     },
     {

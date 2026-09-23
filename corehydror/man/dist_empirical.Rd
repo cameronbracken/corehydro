@@ -4,7 +4,13 @@
 \alias{dist_empirical}
 \title{Empirical distribution}
 \usage{
-dist_empirical(x, p, p_transform = "NormalZ", p_descending = FALSE)
+dist_empirical(
+  x,
+  p,
+  p_transform = "NormalZ",
+  p_descending = FALSE,
+  extrapolation = "none"
+)
 }
 \arguments{
 \item{x}{numeric vector of values.}
@@ -16,6 +22,9 @@ through the standard-normal quantile; \code{"None"} interpolates \code{p} direct
 
 \item{p_descending}{whether \code{p} decreases as \code{x} increases (a survival-function
 encoding); \code{FALSE} (the default) is the ordinary ascending-CDF case.}
+
+\item{extrapolation}{sides on which to extend the boundary segments: \code{"none"} (default),
+\code{"below"}, \code{"above"}, or \code{"both"}.}
 }
 \value{
 a \code{corehydro_dist} of family \code{"Empirical"}, accepted by every \verb{dist_*()} verb.

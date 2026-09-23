@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Optimization/Support/OptimizationStatus.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Optimization/Support/OptimizationStatus.cs @ 7e8e8d1
 //
 // Enumeration of optimization statuses. Verbatim port; member order mirrors the C# source, and
 // `status_name` (a corehydro addition, no C# counterpart) writes the C# member names so a fixture,
@@ -30,6 +30,9 @@ enum class OptimizationStatus {
 
     // The optimization method was stopped due to internal failure.
     Failure,
+
+    // The optimization method stopped because its line search could not find an acceptable step.
+    LineSearchFailed,
 };
 
 // The C# member name for a status, for the fixture/binding surface. Every status other than the
@@ -41,6 +44,8 @@ inline std::string status_name(OptimizationStatus s) {
         case OptimizationStatus::MaximumIterationsReached: return "MaximumIterationsReached";
         case OptimizationStatus::MaximumFunctionEvaluationsReached:
             return "MaximumFunctionEvaluationsReached";
+        case OptimizationStatus::Failure: return "Failure";
+        case OptimizationStatus::LineSearchFailed: return "LineSearchFailed";
         default: return "Failure";
     }
 }

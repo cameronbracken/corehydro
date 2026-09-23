@@ -70,13 +70,13 @@ using corehydro::models::spec::JsonValue;
 using Objective = std::function<double(const std::vector<double>&)>;
 
 // A gradient callback: the trial point in, one partial derivative per parameter out. Read only by
-// the two gradient-taking methods ("adam", "gradient_descent"), which mirror the C# classes'
+// the three gradient-taking methods ("bfgs", "adam", "gradient_descent"), which mirror the C# classes'
 // optional `Gradient` field -- absent, both fall back to the ported NumericalDerivative.Gradient
 // exactly as a null C# delegate does.
 using Gradient = std::function<std::vector<double>(const std::vector<double>&)>;
 
 // Everything a run may need from the host language. `objective` is always required; `gradient` is
-// read only by the "adam"/"gradient_descent" methods, and `constraints` only by
+// read only by the "bfgs"/"adam"/"gradient_descent" methods, and `constraints` only by
 // "augmented_lagrange", whose spec's `constraints[i]` object pairs POSITIONALLY with
 // `constraints[i]` here (the serializable half of a constraint -- its type, value and tolerance --
 // travels in the spec; its function half travels here, because a constraint is a callable). Every
@@ -275,7 +275,7 @@ inline OptimizerBuild read_build(const JsonValue& spec) {
 // "augmented_lagrange" arm rejects them by name before ever calling this.
 //
 // `grad_fn` is the already-guarded analytic gradient, empty unless the caller supplied one; only
-// the "adam"/"gradient_descent" branches read it. The seed and every method-specific control key
+// the "bfgs"/"adam"/"gradient_descent" branches read it. The seed and every method-specific control key
 // are applied here on the DERIVED type (the base has neither); the six base-wide control keys are
 // applied at the bottom, after construction, because MultiStart's constructor sets max_iterations
 // to 100 itself and a caller-supplied value has to win.
@@ -355,11 +355,11 @@ inline std::unique_ptr<opt::Optimizer> make_optimizer(const OptimizerBuild& b,
             mlsl->method = parse_local_method(control.at("local_method").as_string());
         o = std::move(mlsl);
     } else if (method == "bfgs") {
-        o = std::make_unique<opt::BFGS>(adapted, Di, b.initial, b.lower, b.upper);
+        o = std::make_unique<opt::BFGS>(adapted, Di, b.initial, b.lower, b.upper, grad_fn);
     } else if (method == "powell") {
         o = std::make_unique<opt::Powell>(adapted, Di, b.initial, b.lower, b.upper);
     } else if (method == "adam" || method == "gradient_descent") {
-        // The only two methods that read `grad_fn`. Both mirror the same C# shape (a settable
+        // These two methods mirror the same C# shape (a settable
         // optional `Gradient` field; null means finite differences), so they share one branch --
         // the classes differ only in ADAM's two extra decay factors. `alpha` is a CONSTRUCTOR
         // argument in both, so it is read here rather than with the other control keys.
@@ -441,7 +441,7 @@ inline std::unique_ptr<opt::Optimizer> make_optimizer(const OptimizerBuild& b,
 // method reads only the control keys of its own class; the R and Python surfaces reject the rest
 // by name rather than letting them look like they did something (see R/optim.R's kOptimMethods).
 // "alpha" is read by "adam" and "gradient_descent"; "beta1"/"beta2" by "adam" alone.
-// `callbacks.gradient` is likewise read only by those two methods -- absent, both fall back to the
+// `callbacks.gradient` is likewise read only by those three methods -- absent, all fall back to the
 // ported NumericalDerivative.Gradient exactly as a null C# `Gradient` delegate does.
 //
 // "constraints" and "inner" belong to "augmented_lagrange" and to nothing else. Each
@@ -451,14 +451,9 @@ inline std::unique_ptr<opt::Optimizer> make_optimizer(const OptimizerBuild& b,
 // which may be any method except "augmented_lagrange" itself and the two standalone classes
 // ("nelder_mead"/"brent", which do not derive from the Optimizer base); each vector it omits falls
 // back to the top-level one, and an absent "inner" means BFGS over the top-level vectors, the
-// shape every upstream C# test uses. NOTE that AugmentedLagrange::optimize() always drives the
-// INNER optimizer through minimize(), whatever the outer request -- upstream behavior, mirrored,
-// not corrected. It is also, MEASURED, a wrong answer reported as Success: the augmented
-// Lagrangian is built from the RAW objective, so `"maximize": true` flips the outer bookkeeping
-// and not the search direction, and the run returns the constrained MINIMUM. This runner keeps
-// mirroring it (a fixture case must be able to pin upstream behavior), and the guard lives on the
-// two PUBLIC verbs instead: R/optim.R's kOptimMinimizeOnlyMethods and optim.py's
-// _MINIMIZE_ONLY_METHODS both reject `optim_maximize(method = "augmented_lagrange")` by name.
+// shape every upstream C# test uses. AugmentedLagrange::optimize() still drives the inner
+// optimizer through minimize(), but v2.2.0 scales the primary objective inside the augmented
+// Lagrangian, so an outer maximize request searches in the requested direction.
 // Argument-shape validation beyond what the ported constructors
 // already do (missing bounds/initial, mismatched lengths) is deliberately NOT duplicated here --
 // see the file header on this being a thin dispatcher, and R/toolbox: optim_run()/
@@ -505,8 +500,8 @@ inline OptimResult run_optimizer(const std::string& spec_json, const OptimCallba
     // "nelder_mead" and "brent" are handled by their own arms below because neither derives from
     // that base; "augmented_lagrange" has its own arm because it takes a borrowed inner optimizer
     // and a set of constraint callbacks that no other method has.
-    if (method == "adam" || method == "gradient_descent") {
-        // The only two methods that take a SECOND host-language callback. Its guard shares the
+    if (method == "bfgs" || method == "adam" || method == "gradient_descent") {
+        // The three methods that take a SECOND host-language callback. Its guard shares the
         // objective guard's abort state so a throw in either callback stops both, and so the
         // single rethrow below covers both.
         int D = static_cast<int>(initial.size());
@@ -721,7 +716,7 @@ inline OptimResult run_optimizer(const std::string& spec_json, const OptimCallba
 }
 
 // The objective-only form, kept so every caller that needs no second callback -- which is every
-// method except "adam"/"gradient_descent" -- compiles and reads unchanged.
+// method except "bfgs"/"adam"/"gradient_descent" -- compiles and reads unchanged.
 inline OptimResult run_optimizer(const std::string& spec_json, const Objective& objective) {
     return run_optimizer(spec_json, OptimCallbacks{objective, nullptr, {}});
 }

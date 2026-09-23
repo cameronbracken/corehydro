@@ -18,8 +18,8 @@
 //
 // A MultivariateNormal spec accepts four optional integrator settings beside its mean and
 // covariance -- "seed", "max_evaluations", "abs_error" and "rel_error". They configure the Genz
-// quasi-Monte-Carlo integrator behind the CDF for dimension >= 3; without "seed" the instance
-// clock-seeds and repeated calls disagree. An absent key leaves the ported default untouched.
+// quasi-Monte-Carlo integrator behind the CDF for dimension >= 3. The v2.2.0 default seed is
+// 12345; an explicit seed lets callers decorrelate numerical errors across instances.
 //
 // `target`/`params` are accepted as aliases of `family`/`parameters` because every fixture file
 // spells them that way; renaming keys across the pinned corpus would buy nothing.
@@ -163,8 +163,23 @@ inline std::unique_ptr<UnivariateDistributionBase> build_univariate(const JsonVa
         EmpiricalTransform pt = EmpiricalTransform::NormalZ;
         if (spec.contains("p_transform"))
             pt = detail::parse_empirical_transform(spec.at("p_transform").as_string());
-        out = std::make_unique<EmpiricalDistribution>(std::move(x), std::move(p), pt,
-                                                      spec.value_or("p_descending", false));
+        auto empirical = std::make_unique<EmpiricalDistribution>(
+            std::move(x), std::move(p), pt, spec.value_or("p_descending", false));
+        if (spec.contains("extrapolation")) {
+            const std::string& policy = spec.at("extrapolation").as_string();
+            using data::paired_data::ExtrapolationSides;
+            if (policy == "none" || policy == "None")
+                empirical->set_extrapolation(ExtrapolationSides::None);
+            else if (policy == "below" || policy == "Below")
+                empirical->set_extrapolation(ExtrapolationSides::Below);
+            else if (policy == "above" || policy == "Above")
+                empirical->set_extrapolation(ExtrapolationSides::Above);
+            else if (policy == "both" || policy == "Both")
+                empirical->set_extrapolation(ExtrapolationSides::Both);
+            else
+                throw std::runtime_error("unknown empirical extrapolation policy: " + policy);
+        }
+        out = std::move(empirical);
     } else if (family == "KernelDensity") {
         std::vector<double> data = spec.at("data").as_double_vector();
         KernelType kt = KernelType::Gaussian;
@@ -209,6 +224,14 @@ inline bool set_theta_from_tau(BivariateCopula& copula, const std::vector<double
         return true;
     }
     if (auto* c = dynamic_cast<GumbelCopula*>(&copula)) {
+        c->set_theta_from_tau(x, y);
+        return true;
+    }
+    if (auto* c = dynamic_cast<FrankCopula*>(&copula)) {
+        c->set_theta_from_tau(x, y);
+        return true;
+    }
+    if (auto* c = dynamic_cast<JoeCopula*>(&copula)) {
         c->set_theta_from_tau(x, y);
         return true;
     }
@@ -281,7 +304,7 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
     } catch (const std::exception&) {
         throw std::runtime_error("unknown copula family '" + family +
                                  "'; expected AliMikhailHaq, Clayton, Frank, Gumbel, Joe, "
-                                 "Normal or StudentT");
+                                 "Normal, StudentT or Independence");
     }
 
     auto attach = [&](const JsonValue& holder) {
@@ -310,7 +333,7 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
             if (!copulas::set_theta_from_tau(*c, x, y))
                 throw std::runtime_error("method 'tau' is not available for '" + family +
                                          "'; upstream implements SetThetaFromTau for Clayton, "
-                                         "Gumbel and AliMikhailHaq only");
+                                         "Gumbel, Frank, Joe and AliMikhailHaq only");
         } else if (method == "mpl") {
             // Pseudo-likelihood is defined on the plotting positions, not on the data scale --
             // see plotting_positions above. Ranking here means a caller passes raw paired
@@ -328,7 +351,8 @@ inline std::unique_ptr<copulas::BivariateCopula> build_copula(const JsonValue& s
         return c;
     }
 
-    std::vector<double> params = {spec.at("theta").as_double()};
+    std::vector<double> params;
+    if (spec.contains("theta")) params.push_back(spec.at("theta").as_double());
     if (spec.contains("df")) params.push_back(spec.at("df").as_double());
     c->set_copula_parameters(params);
     attach(spec);
@@ -344,10 +368,20 @@ inline std::unique_ptr<MultivariateDistribution> build_multivariate(const JsonVa
     };
     if (family == "MultivariateNormal") {
         std::vector<double> mean = spec.at("mean").as_double_vector();
+        la::DecompositionMethod decomposition = la::DecompositionMethod::Cholesky;
+        if (spec.contains("decomposition")) {
+            std::string value = spec.at("decomposition").as_string();
+            if (value == "SingularValue" || value == "singular_value" || value == "svd")
+                decomposition = la::DecompositionMethod::SingularValue;
+            else if (value != "Cholesky" && value != "cholesky")
+                throw std::runtime_error("unknown decomposition '" + value +
+                                         "'; expected Cholesky or SingularValue");
+        }
         std::unique_ptr<MultivariateNormal> m =
             spec.contains("covariance")
-                ? std::make_unique<MultivariateNormal>(std::move(mean), rows(spec.at("covariance")))
-                : std::make_unique<MultivariateNormal>(std::move(mean));
+                ? std::make_unique<MultivariateNormal>(std::move(mean), rows(spec.at("covariance")),
+                                                       decomposition)
+                : std::make_unique<MultivariateNormal>(std::move(mean), decomposition);
         // The four Genz-integrator settings, applied AFTER construction because
         // set_parameters resets max_evaluations to its 1000 x dimension default. An absent key
         // leaves the ported default untouched. `seed` is what makes a dimension >= 3 CDF
@@ -363,9 +397,12 @@ inline std::unique_ptr<MultivariateDistribution> build_multivariate(const JsonVa
     if (family == "MultivariateStudentT") {
         double df = spec.at("df").as_double();
         std::vector<double> loc = spec.at("location").as_double_vector();
-        if (!spec.contains("scale"))
-            return std::make_unique<MultivariateStudentT>(df, std::move(loc));
-        return std::make_unique<MultivariateStudentT>(df, std::move(loc), rows(spec.at("scale")));
+        std::unique_ptr<MultivariateStudentT> m =
+            !spec.contains("scale")
+                ? std::make_unique<MultivariateStudentT>(df, std::move(loc))
+                : std::make_unique<MultivariateStudentT>(df, std::move(loc), rows(spec.at("scale")));
+        if (spec.contains("seed")) m->set_mvnuni_seed(spec.at("seed").as_int());
+        return m;
     }
     if (family == "Dirichlet") return std::make_unique<Dirichlet>(spec.at("alpha").as_double_vector());
     if (family == "Multinomial")

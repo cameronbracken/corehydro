@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/NormalCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/NormalCopula.cs @ 7e8e8d1
 //
 // The Gaussian (Normal) elliptical copula. theta = rho in [-1, +1]; extends BivariateCopula
 // DIRECTLY (not ArchimedeanCopula -- the Normal copula has no Archimedean generator).
@@ -111,14 +111,24 @@ class NormalCopula : public BivariateCopula {
             -Normal::standard_z(u), -Normal::standard_z(v), theta());
     }
 
-    std::array<double, 2> inverse_cdf(double u, double v) const override {
+    double conditional_cdf(double u, double v) const override {
+        if (!parameters_valid()) validate_parameter(theta(), true);
+        double r = theta();
+        return Normal::standard_cdf((Normal::standard_z(v) - r * Normal::standard_z(u)) /
+                                    std::sqrt(1.0 - r * r));
+    }
+
+    double inverse_conditional_cdf(double u, double t) const override {
         if (!parameters_valid()) validate_parameter(theta(), true);
         double z1 = Normal::standard_z(u);
-        double z2 = Normal::standard_z(v);
+        double z2 = Normal::standard_z(t);
         double r = theta();
         double w2 = r * z1 + std::sqrt(1.0 - r * r) * z2;
-        double vv = Normal::standard_cdf(w2);
-        return {u, vv};
+        return Normal::standard_cdf(w2);
+    }
+
+    std::array<double, 2> inverse_cdf(double u, double v) const override {
+        return {u, inverse_conditional_cdf(u, v)};
     }
 
     // Gets the upper tail dependence coefficient lambda_U = 0. The Normal copula has no

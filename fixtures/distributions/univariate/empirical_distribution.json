@@ -120,6 +120,22 @@
         { "method": "random_value",   "args": [5, 42, 4], "expected": 18879.29881670046, "mode": "abs", "tol": 1e-9, "source": "curated via oracle_emitter --dump" },
         { "method": "mode",           "args": [], "expected": 15198.510496728823, "mode": "rel", "tol": 1e-15, "source": "curated via oracle_emitter --dump" }
       ]
+    },
+    {
+      "name": "v220_sided_extrapolation",
+      "note": "Numerics v2.2.0 EmpiricalDistribution carries the X-space extrapolation policy through CDF and InverseCDF.",
+      "construct": {
+        "x": [1.0, 2.0],
+        "p": [0.25, 0.75],
+        "p_transform": "None",
+        "extrapolation": "both"
+      },
+      "assertions": [
+        { "method": "cdf", "args": [0.0], "expected": 0.0, "mode": "abs", "tol": 1e-12 },
+        { "method": "cdf", "args": [3.0], "expected": 1.0, "mode": "abs", "tol": 1e-12 },
+        { "method": "quantile", "args": [1e-16], "expected": 0.5000000000000002, "mode": "abs", "tol": 1e-12 },
+        { "method": "quantile", "args": [0.9999999999999999], "expected": 2.5, "mode": "abs", "tol": 1e-12 }
+      ]
     }
   ]
 }

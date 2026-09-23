@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Linear Algebra/MatrixRegularization.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Linear Algebra/MatrixRegularization.cs @ 7e8e8d1
 //
 // Phase 1 ported ONLY `MakeSymmetricPositiveDefinite` -- the sole member the then-in-scope
 // BestFit Estimation layer (MaximumLikelihood covariance/sandwich estimator,
@@ -25,6 +25,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <exception>
 #include <stdexcept>
 #include <vector>
@@ -33,6 +34,7 @@
 #include "corehydro/numerics/math/linalg/eigenvalue_decomposition.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/linalg/vector.hpp"
+#include "corehydro/numerics/tools.hpp"
 
 namespace corehydro::numerics::math::linalg {
 
@@ -80,33 +82,55 @@ class MatrixRegularization {
 
     // Makes the matrix symmetric and positive definite (C# `MakeSymmetricPositiveDefinite`).
     static Matrix make_symmetric_positive_definite(const Matrix& m) {
-        // Symmetrize.
+        if (!m.is_square()) throw std::invalid_argument("The matrix must be square.");
+        for (int i = 0; i < m.number_of_rows(); ++i)
+            for (int j = 0; j < m.number_of_columns(); ++j)
+                if (!corehydro::numerics::is_finite(m(i, j)))
+                    throw std::invalid_argument("The matrix must contain only finite entries.");
         Matrix s = (m + m.transpose()) * 0.5;
+        for (int i = 0; i < s.number_of_rows(); ++i)
+            for (int j = 0; j < s.number_of_columns(); ++j)
+                if (!corehydro::numerics::is_finite(s(i, j)))
+                    throw std::runtime_error(
+                        "Matrix symmetrization produced a non-finite entry.");
 
-        // Tiny trace-scaled ridge.
+        Matrix lower(s.number_of_rows());
+        int failed_row = -1;
+        double failed_pivot = std::numeric_limits<double>::quiet_NaN();
+        const double tolerance =
+            CholeskyDecomposition::default_relative_tolerance(s.number_of_rows());
+        if (CholeskyDecomposition::try_factorize(
+                s, tolerance, lower, failed_row, failed_pivot)) return s;
+
         double tr = 0.0;
         for (int i = 0; i < s.number_of_rows(); ++i) tr += s(i, i);
         double base_ridge = (tr > 0 ? 1e-10 * tr / s.number_of_rows() : 1e-10);
-
-        // Try increasing ridge until Cholesky succeeds.
-        for (int k = 0; k < 8; ++k) {
-            Matrix t = s.clone();
-            double ridge = base_ridge * std::pow(10.0, static_cast<double>(k));
-            for (int i = 0; i < t.number_of_rows(); ++i) t(i, i) += ridge;
-            try {
-                CholeskyDecomposition chol(t);
-                (void)chol;
-                return t;
-            } catch (const std::exception&) {
-                // retry bigger ridge
-            }
+        if (!corehydro::numerics::is_finite(tr) ||
+            !corehydro::numerics::is_finite(base_ridge) || base_ridge <= 0.0) {
+            throw std::runtime_error(
+                "The trace-scaled matrix ridge is not a positive finite number.");
         }
 
-        // Last resort: add a biggish ridge.
-        Matrix u = s.clone();
-        double big = (tr > 0 ? 1e-4 * tr / u.number_of_rows() : 1e-4);
-        for (int i = 0; i < u.number_of_rows(); ++i) u(i, i) += big;
-        return u;
+        double ridge = base_ridge;
+        for (int k = 0; corehydro::numerics::is_finite(ridge); ++k) {
+            Matrix t = s.clone();
+            for (int i = 0; i < t.number_of_rows(); ++i) {
+                t(i, i) += ridge;
+                if (!corehydro::numerics::is_finite(t(i, i))) {
+                    throw std::runtime_error(
+                        "Matrix ridge escalation overflowed a diagonal before positive "
+                        "definiteness was achieved.");
+                }
+            }
+            if (CholeskyDecomposition::try_factorize(
+                    t, tolerance, lower, failed_row, failed_pivot)) return t;
+            ridge = k < 7
+                ? base_ridge * std::pow(10.0, static_cast<double>(k + 1))
+                : ridge * 10.0;
+        }
+        throw std::runtime_error(
+            "Matrix ridge escalation exhausted finite candidates before positive "
+            "definiteness was achieved.");
     }
 
    private:

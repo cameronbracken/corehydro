@@ -3315,7 +3315,7 @@
           "args": [
             0
           ],
-          "expected": 1.1435661803065706,
+          "expected": 1.458409958573379,
           "mode": "rel",
           "tol": 1e-09,
           "source": "curated via oracle_emitter --dump"
@@ -3325,7 +3325,7 @@
           "args": [
             1
           ],
-          "expected": 1.0406351062668306,
+          "expected": 1.3551353815182128,
           "mode": "rel",
           "tol": 1e-09,
           "source": "curated via oracle_emitter --dump"
@@ -3335,7 +3335,7 @@
           "args": [
             0
           ],
-          "expected": 347.57905707312824,
+          "expected": 180.58962805916215,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"
@@ -3345,7 +3345,7 @@
           "args": [
             1
           ],
-          "expected": 467.863815321521,
+          "expected": 522.6979723138102,
           "mode": "rel",
           "tol": 1e-05,
           "source": "curated via oracle_emitter --dump"

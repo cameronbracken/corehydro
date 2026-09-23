@@ -1,312 +1,346 @@
-// ported from: Numerics/Mathematics/Optimization/Dynamic/Dijkstra.cs @ 2a0357a
-//
-// The `Edge` struct and Dijkstra's shortest-path solver, run BACKWARDS from a destination: the
-// result table answers "from node i, which neighbour do I step to, along which edge, at what
-// remaining cost" for every node at once, which is what a routing consumer wants.
-//
-// Transcription notes:
-//
-// 1. WEIGHTS ARE `float`, NOT `double`. C# declares `float Weight`, allocates `float[nNodes, 3]`
-//    and accumulates `float newCost = cost + edge.Weight`, and its tests assert the table by
-//    EXACT equality (`Assert.AreEqual(3f, result[2, 2])`), so the port keeps `float` end to end;
-//    widening to double belongs at the toolbox boundary, not here. This is not a theoretical
-//    concern: MEASURED against the real Numerics library at 2a0357a, a 10-hop chain of 0.1f edges
-//    reports node costs of 0.90000009536743164, 0.80000007152557373, ... , which the port
-//    reproduces bit-for-bit and a double-precision port would not (see the SUPPLEMENT block in
-//    core/tests/test_network_optimization.cpp, which pins that graph).
-//
-// 2. The result table is C#'s `float[nNodes, 3]` -> `std::vector<std::array<float, 3>>`, with the
-//    same column order. C# keeps NEXT_NODE / EDGE_INDEX / COST as PRIVATE consts and its tests
-//    index with bare literals; the port exposes them (still by the C# names) because the
-//    ported consumers next door -- Network and the toolbox group -- and the tests here read the
-//    table by column, and a named column is the difference between a readable port and three
-//    magic numbers.
-//
-// 3. `List<Edge>[] edgesToNodes` -> `std::vector<std::vector<Edge>>` passed by const pointer, so
-//    the caller-supplied cache stays optional exactly as C#'s `= null` default is. C#'s per-node
-//    entries are null until first appended to and the loop guards `if (edgesToNodes[current] ==
-//    null) continue;`; an empty vector iterates zero times, so the port needs no guard and the
-//    behavior is identical.
-//
-// 4. C# REASSIGNS the `edgesToNodes` parameter when it is null or the wrong length. A const
-//    pointer parameter cannot be reassigned, so the port builds a local and re-seats a
-//    `resolved` pointer at it. Same effect, same condition (`== null || Length != nNodes`).
-//
-// 5. Both overloads build their cache from `edge.ToIndex` -- INCLUDING the multi-destination one,
-//    whose parameter is named `edgesFromNodes` while it is populated with incoming edges exactly
-//    like the single-destination `edgesToNodes`. The naming is inconsistent upstream; the
-//    behavior is not, and the port transcribes the behavior as written rather than "fixing" a
-//    parameter name that a caller may be passing by position.
-//
-// 6. severed: `Console.WriteLine($"Node{i} is unreachable from destination {destinationIndex}")`,
-//    the trailing loop over unreached nodes in the single-destination overload. It is a console
-//    diagnostic with no effect on the returned table, and a library that prints to stdout is not
-//    something an R or Python caller can be handed. The unreachable state remains fully
-//    observable through the table's positive-infinity COST column (that is what `path_exists`
-//    reads, and what four of the eight C# tests assert).
-//
-// 7. `edges.Max(o => Math.Max(o.FromIndex, o.ToIndex)) + 1` computes the node count when the
-//    caller passes -1. LINQ `Max` on an empty sequence throws InvalidOperationException
-//    ("Sequence contains no elements."); the port mirrors that as std::runtime_error carrying the
-//    same message rather than silently returning an empty table.
-//
-// 8. The heap is constructed with a hard-coded capacity of 10000 in C#, independent of the node
-//    count. Transcribed as written -- a graph with more than 10000 nodes reachable in one pass
-//    would throw "Heap is full." there exactly as it does here.
-//
-// 9. A `node_count` SMALLER than the graph needs is a CHECKED error, not undefined behavior. C#
-//    allocates every array at `nNodes` and then indexes them by node index without checking --
-//    `edgesToNodes[edge.ToIndex]`, `resultTable[destinationIndex, ...]`,
-//    `nodeWeightToDestination[from]` -- so the CLR raises IndexOutOfRangeException ("Index was
-//    outside the bounds of the array."). `std::vector::operator[]` would be undefined behavior
-//    instead, which is a silent wrong answer at best, so `detail::checked_node_index` guards
-//    every one of those sites and throws std::out_of_range carrying the C# message.
-//
-//    The guard is IN PLACE, at each indexing site, and deliberately NOT hoisted into one up-front
-//    sweep of the edge list, because C#'s throw is LAZY: an out-of-range index on an edge the
-//    search never relaxes never throws. MEASURED against the real Numerics library at 2a0357a
-//    (probe: /tmp/getpath_probe):
-//      Solve({(0,1),(1,5)}, 0, nodeCount: 2)      THREW System.IndexOutOfRangeException
-//      Solve({(0,1),(1,5)}, new[]{0}, 2)          THREW System.IndexOutOfRangeException
-//      Solve({(5,1),(0,1)}, 1, nodeCount: 2)      THREW System.IndexOutOfRangeException
-//      Solve({(0,1)},       5, nodeCount: 2)      THREW System.IndexOutOfRangeException
-//      Solve({(0,1),(7,0)}, 1, nodeCount: 2)      THREW System.IndexOutOfRangeException
-//      Solve({(0,1),(7,1)}, 0, nodeCount: 2)      RETURNED [(0,-1,0), (-1,-1,Inf)]
-//    The last line is the lazy case: node 1 is never reached from destination 0, so the edge
-//    carrying the out-of-range FromIndex 7 is never relaxed and C# returns a table. An up-front
-//    sweep would reject it, which is why there is not one here. The R and Python `shortest_path()`
-//    wrappers ARE stricter (they reject any `node_count` below `max(from, to) + 1` up front, so
-//    the user gets a message naming the argument rather than this one from inside the solver);
-//    that asymmetry is deliberate and documented on both of them.
+// ported from: Numerics/Mathematics/Optimization/Dynamic/Dijkstra.cs @ 7e8e8d1
 #pragma once
+
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
-#include "corehydro/numerics/math/optimization/dynamic/binary_heap.hpp"
+#include "corehydro/numerics/math/optimization/dynamic/compact_adjacency.hpp"
+#include "corehydro/numerics/math/optimization/dynamic/edge.hpp"
+#include "corehydro/numerics/math/optimization/dynamic/indexed_min_heap.hpp"
 
 namespace corehydro::numerics::math::optimization {
 
-// Struct that represents an edge in a network. An edge contains information on the start node,
-// end node, edge weight, and edge index.
-struct Edge {
-    // Node index at start of edge.
-    int from_index;
-    // Node index at end of edge.
-    int to_index;
-    // Weight (or Cost) of transversing the edge.
-    float weight;
-    // Index of the edge, often used as an index to the edge source (e.g., road segment).
-    int index;
+inline CompactAdjacency CompactAdjacency::from_edges(const std::vector<Edge>& edges,
+                                                     int count, bool group_by_end_node,
+                                                     const std::string& parameter_name) {
+    CompactAdjacency out;
+    out.node_count = count;
+    out.row_start.assign(static_cast<std::size_t>(count + 1), 0);
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+        const Edge& edge = edges[i];
+        if (edge.from_index < 0 || edge.from_index >= count || edge.to_index < 0 ||
+            edge.to_index >= count) {
+            int bad = edge.from_index < 0 || edge.from_index >= count ? edge.from_index
+                                                                      : edge.to_index;
+            throw std::invalid_argument(parameter_name + ": edge at position " +
+                                        std::to_string(i) + " references node index " +
+                                        std::to_string(bad) + " outside [0, " +
+                                        std::to_string(count) + ")");
+        }
+        if (edge.index < 0)
+            throw std::invalid_argument(parameter_name + ": edge at position " +
+                                        std::to_string(i) + " has negative edge index " +
+                                        std::to_string(edge.index));
+        int bucket = group_by_end_node ? edge.to_index : edge.from_index;
+        ++out.row_start[static_cast<std::size_t>(bucket + 1)];
+    }
+    for (int n = 0; n < count; ++n)
+        out.row_start[static_cast<std::size_t>(n + 1)] +=
+            out.row_start[static_cast<std::size_t>(n)];
 
-    // C# structs are default-initialized (all fields zero); see binary_heap.hpp note 3.
-    Edge() : from_index(0), to_index(0), weight(0.0f), index(0) {}
+    std::vector<int> cursor(static_cast<std::size_t>(count), 0);
+    out.from_node.resize(edges.size());
+    out.to_node.resize(edges.size());
+    out.weight.resize(edges.size());
+    out.edge_index.resize(edges.size());
+    out.source_position.resize(edges.size());
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+        const Edge& edge = edges[i];
+        int bucket = group_by_end_node ? edge.to_index : edge.from_index;
+        int slot = out.row_start[static_cast<std::size_t>(bucket)] +
+                   cursor[static_cast<std::size_t>(bucket)]++;
+        std::size_t k = static_cast<std::size_t>(slot);
+        out.from_node[k] = edge.from_index;
+        out.to_node[k] = edge.to_index;
+        out.weight[k] = edge.weight;
+        out.edge_index[k] = edge.index;
+        out.source_position[k] = static_cast<int>(i);
+    }
+    return out;
+}
 
-    Edge(int from_node_index, int to_node_index, float edge_weight, int edge_index)
-        : from_index(from_node_index),
-          to_index(to_node_index),
-          weight(edge_weight),
-          index(edge_index) {}
-};
+inline CompactAdjacency CompactAdjacency::from_incoming_lists(
+    const std::vector<std::vector<Edge>>& lists, int count,
+    const std::string& parameter_name) {
+    CompactAdjacency out;
+    out.node_count = count;
+    out.row_start.assign(static_cast<std::size_t>(count + 1), 0);
+    int edge_count = 0;
+    for (int n = 0; n < count; ++n) {
+        edge_count += static_cast<int>(lists[static_cast<std::size_t>(n)].size());
+        out.row_start[static_cast<std::size_t>(n + 1)] = edge_count;
+    }
+    out.from_node.resize(static_cast<std::size_t>(edge_count));
+    out.to_node.resize(static_cast<std::size_t>(edge_count));
+    out.weight.resize(static_cast<std::size_t>(edge_count));
+    out.edge_index.resize(static_cast<std::size_t>(edge_count));
+    for (int n = 0; n < count; ++n) {
+        int slot = out.row_start[static_cast<std::size_t>(n)];
+        for (const Edge& edge : lists[static_cast<std::size_t>(n)]) {
+            if (edge.from_index < 0 || edge.from_index >= count || edge.to_index < 0 ||
+                edge.to_index >= count)
+                throw std::invalid_argument(parameter_name +
+                                            ": incoming list contains an out-of-range node");
+            if (edge.index < 0)
+                throw std::invalid_argument(parameter_name +
+                                            ": incoming list contains a negative edge index");
+            std::size_t k = static_cast<std::size_t>(slot++);
+            out.from_node[k] = edge.from_index;
+            out.to_node[k] = edge.to_index;
+            out.weight[k] = edge.weight;
+            out.edge_index[k] = edge.index;
+        }
+    }
+    return out;
+}
 
-// C# `public static class Dijkstra`; a namespace of free functions is the C++ spelling of a
-// static class.
 namespace dijkstra {
 
-// C#'s three private column constants, by their C# names (see dijkstra.hpp note 2).
 inline constexpr int NEXT_NODE = 0;
 inline constexpr int EDGE_INDEX = 1;
 inline constexpr int COST = 2;
-
-// The result table type: C#'s `float[nNodes, 3]`.
 using ResultTable = std::vector<std::array<float, 3>>;
 
 namespace detail {
 
-// Stands in for the CLR's own bounds check on every `nNodes`-sized array C# indexes by a node
-// index; see note 9 for the measured C# behavior this reproduces, including why it is called at
-// each indexing site rather than once up front.
-inline std::size_t checked_node_index(int index, int n_nodes) {
-    if (index < 0 || index >= n_nodes) {
-        throw std::out_of_range("Index was outside the bounds of the array.");
-    }
-    return static_cast<std::size_t>(index);
-}
-
-// C# `edges.Max(o => Math.Max(o.FromIndex, o.ToIndex)) + 1`; see note 7.
 inline int node_count_from_edges(const std::vector<Edge>& edges) {
-    if (edges.empty()) throw std::runtime_error("Sequence contains no elements.");
-    int max_index = edges[0].from_index > edges[0].to_index ? edges[0].from_index
-                                                            : edges[0].to_index;
-    for (const auto& edge : edges) {
-        if (edge.from_index > max_index) max_index = edge.from_index;
-        if (edge.to_index > max_index) max_index = edge.to_index;
+    if (edges.empty())
+        throw std::invalid_argument(
+            "The node count cannot be derived from an empty edge list; provide node_count "
+            "explicitly.");
+    int maximum = 0;
+    for (const Edge& edge : edges) {
+        if (edge.from_index > maximum) maximum = edge.from_index;
+        if (edge.to_index > maximum) maximum = edge.to_index;
     }
-    return max_index + 1;
+    return maximum + 1;
 }
 
-// C#'s `edgesToNodes[edge.ToIndex] ??= new List<Edge>(); ...Add(edge);` build loop, shared by
-// both overloads (which write it out identically).
-inline std::vector<std::vector<Edge>> build_edges_to_nodes(const std::vector<Edge>& edges,
-                                                           int n_nodes) {
-    std::vector<std::vector<Edge>> edges_to_nodes(
-        static_cast<std::size_t>(n_nodes > 0 ? n_nodes : 0));
-    for (const auto& edge : edges) {
-        edges_to_nodes[checked_node_index(edge.to_index, n_nodes)].push_back(edge);
-    }
-    return edges_to_nodes;
+inline int resolve_node_count(const std::vector<Edge>& edges, int node_count) {
+    if (node_count == -1) return node_count_from_edges(edges);
+    if (node_count < 1)
+        throw std::out_of_range(
+            "The node count must be positive, or -1 to derive it from the edges.");
+    return node_count;
+}
+
+inline CompactAdjacency build_incoming_adjacency(
+    const std::vector<Edge>& edges, int node_count,
+    const std::vector<std::vector<Edge>>* provided_lists) {
+    if (provided_lists != nullptr &&
+        static_cast<int>(provided_lists->size()) == node_count)
+        return CompactAdjacency::from_incoming_lists(*provided_lists, node_count, "edges");
+    return CompactAdjacency::from_edges(edges, node_count, true, "edges");
 }
 
 }  // namespace detail
 
-// May be a useful call in LifeSim -> GetPath(). Follows the logic that is implemented in the
-// Solve method.
-inline bool path_exists(const ResultTable& result_table, int node_index) {
-    const float cost =
-        result_table[detail::checked_node_index(node_index,
-                                                static_cast<int>(result_table.size()))][COST];
-    // C# `!float.IsPositiveInfinity(...)`.
+inline bool path_exists(const ResultTable& table, int node_index) {
+    if (node_index < 0 || node_index >= static_cast<int>(table.size()))
+        throw std::out_of_range("The node index is outside the result table.");
+    const float cost = table[static_cast<std::size_t>(node_index)][COST];
     return !(std::isinf(cost) && cost > 0.0f);
 }
 
-// Solves the shortest path from every node in the network of edges to a given destination.
-//   edges           Edges, or segments, that make up the network.
-//   destination_index  Index of the destination node.
-//   node_count      Optional number of nodes in the network. If not provided (-1) it will be
-//                   calculated internally.
-//   edges_to_nodes  Optional list of incoming edges from each node in the network. If not
-//                   provided or mismatched with edges it will be calculated internally.
-// Returns a lookup table of shortest paths from any given node.
-inline ResultTable solve(const std::vector<Edge>& edges, int destination_index,
-                         int node_count = -1,
-                         const std::vector<std::vector<Edge>>* edges_to_nodes = nullptr) {
-    // Set optional parameters if required.
-    const int n_nodes = (node_count == -1) ? detail::node_count_from_edges(edges) : node_count;
-
-    std::vector<std::vector<Edge>> local_edges_to_nodes;
-    const std::vector<std::vector<Edge>>* resolved = edges_to_nodes;
-    if (resolved == nullptr || static_cast<int>(resolved->size()) != n_nodes) {
-        local_edges_to_nodes = detail::build_edges_to_nodes(edges, n_nodes);
-        resolved = &local_edges_to_nodes;
+inline bool try_get_path(const ResultTable& table, int start_node_index,
+                         std::vector<int>& path_edge_indices, float& total_cost) {
+    int rows = static_cast<int>(table.size());
+    if (start_node_index < 0 || start_node_index >= rows)
+        throw std::out_of_range("The start node index is outside the result table.");
+    path_edge_indices.clear();
+    total_cost = table[static_cast<std::size_t>(start_node_index)][COST];
+    if (std::isinf(total_cost) && total_cost > 0.0f) return false;
+    int node = start_node_index;
+    int steps = 0;
+    while (table[static_cast<std::size_t>(node)][EDGE_INDEX] >= 0.0f) {
+        if (++steps > rows)
+            throw std::invalid_argument(
+                "The result table does not converge to a destination; it may be inconsistent.");
+        path_edge_indices.push_back(
+            static_cast<int>(table[static_cast<std::size_t>(node)][EDGE_INDEX]));
+        int next = static_cast<int>(table[static_cast<std::size_t>(node)][NEXT_NODE]);
+        if (next < 0 || next >= rows)
+            throw std::invalid_argument(
+                "The result table routes to a node outside the table; it may be inconsistent.");
+        node = next;
     }
-
-    // Prepare results table with destination defined.
-    const std::size_t table_rows = static_cast<std::size_t>(n_nodes > 0 ? n_nodes : 0);
-    ResultTable result_table(table_rows);
-    // 0 - Node hasn't been scanned yet, 1 - Node has been solved for, 2 - Node has been scanned
-    // into heap but not solved for.
-    std::vector<int> node_state(table_rows, 0);
-    std::vector<float> node_weight_to_destination(table_rows);
-
-    // Initialize all nodes are unreachable
-    for (int i = 0; i < n_nodes; i++) {
-        auto& row = result_table[static_cast<std::size_t>(i)];
-        row[NEXT_NODE] = -1;
-        row[EDGE_INDEX] = -1;
-        row[COST] = std::numeric_limits<float>::infinity();
-        node_weight_to_destination[static_cast<std::size_t>(i)] =
-            std::numeric_limits<float>::infinity();
-    }
-
-    BinaryHeap<Edge> heap(10000);
-
-    const std::size_t destination = detail::checked_node_index(destination_index, n_nodes);
-    auto& destination_row = result_table[destination];
-    destination_row[NEXT_NODE] = static_cast<float>(destination_index);  // Tail
-    destination_row[EDGE_INDEX] = -1;                                    // edge index
-    destination_row[COST] = 0;                                           // Cumulative Weight
-    node_weight_to_destination[destination] = 0;
-    heap.add(BinaryHeap<Edge>::Node(0, destination_index,
-                                    Edge(destination_index, destination_index, 0, -1)));
-    node_state[destination] = 2;
-
-    while (heap.count() > 0) {
-        auto node = heap.remove_min();
-        int current = node.index;
-        float cost = node.weight;
-
-        if (node_state[static_cast<std::size_t>(current)] == 1) continue;
-
-        node_state[static_cast<std::size_t>(current)] = 1;
-
-        for (const auto& edge : (*resolved)[static_cast<std::size_t>(current)]) {
-            int from = edge.from_index;
-            int to = edge.to_index;
-            float new_cost = cost + edge.weight;
-
-            // C# reads `nodeWeightToDestination[from]` here unchecked; see note 9. This is the
-            // site whose lazy throw the up-front alternative would get wrong.
-            const std::size_t from_node = detail::checked_node_index(from, n_nodes);
-            if (new_cost < node_weight_to_destination[from_node]) {
-                node_weight_to_destination[from_node] = new_cost;
-                auto new_node = BinaryHeap<Edge>::Node(new_cost, from, edge);
-
-                if (node_state[from_node] != 2) {
-                    heap.add(new_node);
-                    node_state[from_node] = 2;
-                } else {
-                    heap.decrease_key(new_node);
-                }
-
-                auto& row = result_table[from_node];
-                row[NEXT_NODE] = static_cast<float>(to);
-                row[EDGE_INDEX] = static_cast<float>(edge.index);
-                row[COST] = new_cost;
-            }
-        }
-    }
-    // severed here: the C# unreachable-node Console.WriteLine loop (see note 6).
-    return result_table;
+    if (table[static_cast<std::size_t>(node)][COST] != 0.0f)
+        throw std::invalid_argument(
+            "The result table walk ended away from a destination; it may be inconsistent.");
+    return true;
 }
 
-// Solves the shortest path from every node in the network of edges to a set of destinations,
-// keeping the cheaper of the per-destination paths.
-//   edges              Edges, or segments, that make up the network.
-//   destination_indices  Indices of the destination nodes.
-//   node_count         Optional number of nodes in the network.
-//   edges_from_nodes   Optional list of incoming edges from each node (upstream's parameter name;
-//                      see note 5).
-inline ResultTable solve(const std::vector<Edge>& edges,
-                         const std::vector<int>& destination_indices, int node_count = -1,
-                         const std::vector<std::vector<Edge>>* edges_from_nodes = nullptr) {
-    // Set optional parameters if required.
-    const int n_nodes = (node_count == -1) ? detail::node_count_from_edges(edges) : node_count;
+inline std::optional<std::vector<int>> get_path(const ResultTable& table,
+                                                int start_node_index) {
+    std::vector<int> path;
+    float cost = 0.0f;
+    if (!try_get_path(table, start_node_index, path, cost)) return std::nullopt;
+    return path;
+}
 
-    std::vector<std::vector<Edge>> local_edges_from_nodes;
-    const std::vector<std::vector<Edge>>* resolved = edges_from_nodes;
-    if (resolved == nullptr || static_cast<int>(resolved->size()) != n_nodes) {
-        local_edges_from_nodes = detail::build_edges_to_nodes(edges, n_nodes);
-        resolved = &local_edges_from_nodes;
-    }
-
-    ResultTable result_table(static_cast<std::size_t>(n_nodes > 0 ? n_nodes : 0));
-    for (int i = 0; i < n_nodes; i++) {
-        auto& row = result_table[static_cast<std::size_t>(i)];
-        row[NEXT_NODE] = -1;
-        row[EDGE_INDEX] = -1;
-        row[COST] = std::numeric_limits<float>::infinity();
-    }
-
-    for (std::size_t i = 0; i < destination_indices.size(); i++) {
-        int destination_index = destination_indices[i];
-        auto partial_result = solve(edges, destination_index, n_nodes, resolved);
-        for (int j = 0; j < n_nodes; j++) {
-            // Keep better path
-            auto& row = result_table[static_cast<std::size_t>(j)];
-            const auto& partial_row = partial_result[static_cast<std::size_t>(j)];
-            if (partial_row[COST] < row[COST]) {
-                row[NEXT_NODE] = partial_row[NEXT_NODE];
-                row[EDGE_INDEX] = partial_row[EDGE_INDEX];
-                row[COST] = partial_row[COST];
+inline void run_to_exhaustion(const CompactAdjacency& adjacency,
+                              const std::vector<float>* weight_override,
+                              std::vector<int>& next, std::vector<int>& edge_indexes,
+                              std::vector<float>& dist, std::vector<int>& state,
+                              IndexedMinHeap& heap) {
+    while (heap.count() > 0) {
+        int current = 0;
+        float cost = 0.0f;
+        heap.remove_min(current, cost);
+        if (state[static_cast<std::size_t>(current)] == 1) continue;
+        state[static_cast<std::size_t>(current)] = 1;
+        int row_end = adjacency.row_start[static_cast<std::size_t>(current + 1)];
+        for (int k = adjacency.row_start[static_cast<std::size_t>(current)]; k < row_end; ++k) {
+            std::size_t slot = static_cast<std::size_t>(k);
+            int from = adjacency.from_node[slot];
+            float weight = weight_override == nullptr
+                               ? adjacency.weight[slot]
+                               : (*weight_override)[static_cast<std::size_t>(
+                                     adjacency.source_position[slot])];
+            float new_cost = cost + weight;
+            if (new_cost < dist[static_cast<std::size_t>(from)]) {
+                dist[static_cast<std::size_t>(from)] = new_cost;
+                if (state[static_cast<std::size_t>(from)] != 2) {
+                    heap.add(from, new_cost);
+                    state[static_cast<std::size_t>(from)] = 2;
+                } else {
+                    heap.decrease_key(from, new_cost);
+                }
+                next[static_cast<std::size_t>(from)] = adjacency.to_node[slot];
+                edge_indexes[static_cast<std::size_t>(from)] = adjacency.edge_index[slot];
             }
         }
     }
-    return result_table;
+}
+
+inline void solve_core(const CompactAdjacency& adjacency,
+                       const std::vector<float>* weight_override, int destination_index,
+                       std::vector<int>& next, std::vector<int>& edge_indexes,
+                       std::vector<float>& dist, std::vector<int>& state,
+                       IndexedMinHeap& heap) {
+    int n = adjacency.node_count;
+    next.assign(static_cast<std::size_t>(n), -1);
+    edge_indexes.assign(static_cast<std::size_t>(n), -1);
+    dist.assign(static_cast<std::size_t>(n), std::numeric_limits<float>::infinity());
+    state.assign(static_cast<std::size_t>(n), 0);
+    heap.clear();
+    next[static_cast<std::size_t>(destination_index)] = destination_index;
+    dist[static_cast<std::size_t>(destination_index)] = 0.0f;
+    heap.add(destination_index, 0.0f);
+    state[static_cast<std::size_t>(destination_index)] = 2;
+    run_to_exhaustion(adjacency, weight_override, next, edge_indexes, dist, state, heap);
+}
+
+inline void solve_nearest_core(const CompactAdjacency& adjacency,
+                               const std::vector<float>* weight_override,
+                               const std::vector<int>& destinations,
+                               std::vector<int>& next, std::vector<int>& edge_indexes,
+                               std::vector<float>& dist, std::vector<int>& state,
+                               IndexedMinHeap& heap) {
+    int n = adjacency.node_count;
+    next.assign(static_cast<std::size_t>(n), -1);
+    edge_indexes.assign(static_cast<std::size_t>(n), -1);
+    dist.assign(static_cast<std::size_t>(n), std::numeric_limits<float>::infinity());
+    state.assign(static_cast<std::size_t>(n), 0);
+    heap.clear();
+    for (int destination : destinations) {
+        if (state[static_cast<std::size_t>(destination)] == 2) continue;
+        next[static_cast<std::size_t>(destination)] = destination;
+        dist[static_cast<std::size_t>(destination)] = 0.0f;
+        heap.add(destination, 0.0f);
+        state[static_cast<std::size_t>(destination)] = 2;
+    }
+    run_to_exhaustion(adjacency, weight_override, next, edge_indexes, dist, state, heap);
+}
+
+inline void solve_merged_core(const CompactAdjacency& adjacency,
+                              const std::vector<float>* weight_override,
+                              const std::vector<int>& destinations,
+                              std::vector<int>& next, std::vector<int>& edge_indexes,
+                              std::vector<float>& dist, std::vector<int>& state,
+                              IndexedMinHeap& heap, std::vector<int>& best_next,
+                              std::vector<int>& best_edge, std::vector<float>& best_dist) {
+    int n = adjacency.node_count;
+    best_next.assign(static_cast<std::size_t>(n), -1);
+    best_edge.assign(static_cast<std::size_t>(n), -1);
+    best_dist.assign(static_cast<std::size_t>(n), std::numeric_limits<float>::infinity());
+    for (int destination : destinations) {
+        solve_core(adjacency, weight_override, destination, next, edge_indexes, dist, state, heap);
+        for (int j = 0; j < n; ++j) {
+            std::size_t i = static_cast<std::size_t>(j);
+            if (dist[i] < best_dist[i]) {
+                best_next[i] = next[i];
+                best_edge[i] = edge_indexes[i];
+                best_dist[i] = dist[i];
+            }
+        }
+    }
+}
+
+inline ResultTable write_table(const std::vector<int>& next,
+                               const std::vector<int>& edge_indexes,
+                               const std::vector<float>& dist) {
+    ResultTable table(next.size());
+    for (std::size_t i = 0; i < next.size(); ++i)
+        table[i] = {static_cast<float>(next[i]), static_cast<float>(edge_indexes[i]), dist[i]};
+    return table;
+}
+
+inline void validate_destinations(const std::vector<int>& destinations, int node_count,
+                                  bool require_nonempty) {
+    if (require_nonempty && destinations.empty())
+        throw std::invalid_argument("At least one destination index is required.");
+    for (int destination : destinations)
+        if (destination < 0 || destination >= node_count)
+            throw std::out_of_range("A destination index is outside the network.");
+}
+
+inline ResultTable solve(const std::vector<Edge>& edges, int destination_index,
+                         int node_count = -1,
+                         const std::vector<std::vector<Edge>>* incoming = nullptr) {
+    int n = detail::resolve_node_count(edges, node_count);
+    validate_destinations({destination_index}, n, true);
+    CompactAdjacency adjacency = detail::build_incoming_adjacency(edges, n, incoming);
+    std::vector<int> next, edge_indexes, state;
+    std::vector<float> dist;
+    IndexedMinHeap heap(n);
+    solve_core(adjacency, nullptr, destination_index, next, edge_indexes, dist, state, heap);
+    return write_table(next, edge_indexes, dist);
+}
+
+inline ResultTable solve(const std::vector<Edge>& edges, const std::vector<int>& destinations,
+                         int node_count = -1,
+                         const std::vector<std::vector<Edge>>* incoming = nullptr) {
+    int n = detail::resolve_node_count(edges, node_count);
+    validate_destinations(destinations, n, false);
+    CompactAdjacency adjacency = detail::build_incoming_adjacency(edges, n, incoming);
+    std::vector<int> next, edge_indexes, state, best_next, best_edge;
+    std::vector<float> dist, best_dist;
+    IndexedMinHeap heap(n);
+    solve_merged_core(adjacency, nullptr, destinations, next, edge_indexes, dist, state, heap,
+                      best_next, best_edge, best_dist);
+    return write_table(best_next, best_edge, best_dist);
+}
+
+inline ResultTable solve_nearest(const std::vector<Edge>& edges,
+                                 const std::vector<int>& destinations,
+                                 int node_count = -1) {
+    int n = detail::resolve_node_count(edges, node_count);
+    validate_destinations(destinations, n, true);
+    CompactAdjacency adjacency = CompactAdjacency::from_edges(edges, n, true, "edges");
+    std::vector<int> next, edge_indexes, state;
+    std::vector<float> dist;
+    IndexedMinHeap heap(n);
+    solve_nearest_core(adjacency, nullptr, destinations, next, edge_indexes, dist, state, heap);
+    return write_table(next, edge_indexes, dist);
 }
 
 }  // namespace dijkstra
-
 }  // namespace corehydro::numerics::math::optimization

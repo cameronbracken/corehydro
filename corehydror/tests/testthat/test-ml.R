@@ -41,6 +41,9 @@ test_that("ml_kmeans reproduces the iris cluster means and label counts", {
   expect_equal(sum(fit$labels == 1L), 38L)
   expect_equal(sum(fit$labels == 2L), 50L)
   expect_true(fit$iterations >= 2L)
+
+  one <- ml_kmeans(c(1, 2, 3, 10, 11, 12), k = 1, seed = 7)
+  expect_equal(one$means[1, 1], 6.5)
 })
 
 test_that("ml_gaussian_mixture returns a weight simplex and one covariance per component", {
@@ -55,6 +58,7 @@ test_that("ml_gaussian_mixture returns a weight simplex and one covariance per c
     expect_true(all(diag(s) > 0))
   }
   expect_true(is.finite(fit$log_likelihood))
+  expect_equal(fit$log_likelihood, -180.18547746042975, tolerance = 1e-12)
   expect_true(all(fit$labels %in% 0:2))
 })
 
@@ -70,6 +74,7 @@ test_that("ml_jenks_breaks classifies a small vector", {
   expect_equal(unname(fit$clusters[1, "start_index"]), 0)
   expect_equal(unname(fit$clusters[3, "end_index"]), 8)
   expect_true(fit$gvf > 0.9 && fit$gvf < 1)
+  expect_error(ml_jenks_breaks(rep(3.5, 20), n_clusters = 3), "distinct value")
 })
 
 test_that("ml_naive_bayes reproduces the iris means and predictions", {
@@ -90,6 +95,17 @@ test_that("ml_naive_bayes reproduces the iris means and predictions", {
   trained <- ml_naive_bayes(iris_train(), iris_species_train())
   expect_null(trained$prediction)
   expect_equal(trained$means, fit$means)
+
+  off <- 1e10
+  large_x <- cbind(
+    off + c(0:5, 50:55),
+    c(1.2, 1.9, 0.8, 1.5, 1.1, 1.7, 6.1, 5.8, 6.6, 5.2, 6.9, 5.5)
+  )
+  stable <- ml_naive_bayes(large_x, rep(0:1, each = 6),
+                           newdata = cbind(off + c(2.5, 52.5, 27), c(1.4, 6.3, 3.4)))
+  expect_equal(stable$standard_deviations[1, ], c(1.8708286933869707, 0.408248290463863),
+               tolerance = 1e-9)
+  expect_equal(stable$prediction, c(0, 1, 0))
 })
 
 test_that("ml_knn reproduces the iris classification oracle and its four result kinds", {
@@ -119,6 +135,12 @@ test_that("ml_knn reproduces the iris classification oracle and its four result 
   expect_equal(colnames(band), c("lower", "median", "upper", "mean"))
   expect_true(all(band[, "lower"] <= band[, "median"]))
   expect_true(all(band[, "median"] <= band[, "upper"]))
+
+  tied_x <- cbind(c(rep(1, 20), 0.5, 10, 10, 10), rep(0, 24))
+  tied_y <- c(0:19, 100, 999, 999, 999)
+  expect_equal(ml_knn(tied_x, tied_y, newdata = matrix(c(0, 0), nrow = 1), k = 3,
+                      what = "neighbors"), matrix(c(20L, 0L, 1L), nrow = 1))
+  expect_equal(ml_knn(tied_x, tied_y, newdata = matrix(c(0, 0), nrow = 1), k = 3), 401 / 6)
 })
 
 test_that("ml_decision_tree and ml_random_forest separate a clean two-group problem", {
@@ -135,6 +157,8 @@ test_that("ml_decision_tree and ml_random_forest separate a clean two-group prob
   expect_true(all(band[, "lower"] <= band[, "median"]))
   expect_true(all(band[, "median"] <= band[, "upper"]))
   expect_true(band[1, "upper"] < 50 && band[2, "lower"] > 50)
+  expect_equal(unname(band), matrix(c(10, 10, 11, 10.4, 100, 100, 101, 100.4),
+                                    nrow = 2, byrow = TRUE))
 
   # A seeded forest is reproducible, including the mean column.
   again <- ml_random_forest(x, y, newdata = c(3, 104), seed = 42, number_of_trees = 25)
@@ -199,6 +223,8 @@ test_that("the ml verbs validate their arguments", {
   expect_error(ml_kmeans(x, k = 2, seed = 1) |> suppressWarnings(), NA)
   expect_error(ml_jenks_breaks(x, n_clusters = 11),
                "cannot be greater than the length of the data array")
+  expect_error(ml_kmeans(x, k = 0), "between 1")
+  expect_error(ml_kmeans(x, k = 11), "between 1")
   expect_error(ml_decision_tree(x[1:9], y[1:9], newdata = 1),
                "at least ten training data points")
 })

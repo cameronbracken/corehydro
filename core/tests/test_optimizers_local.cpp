@@ -25,6 +25,7 @@
 #include "optimization_test_functions.hpp"
 
 using corehydro::numerics::math::optimization::BFGS;
+using corehydro::numerics::math::optimization::OptimizationStatus;
 using corehydro::numerics::math::optimization::Powell;
 
 namespace {
@@ -319,6 +320,131 @@ void powell_beale() {
     CHECK_NEAR(y, validY, 1E-4);
 }
 
+// ==================== Numerics v2.2.0 optimizer regressions ====================
+
+void bfgs_stationary_start_does_not_search() {
+    int gradients = 0;
+    auto solver = BFGS(
+        [](std::vector<double>& p) { return p[0] * p[0]; }, 1, {0.0}, {-10.0}, {10.0},
+        [&gradients](const std::vector<double>& p) {
+            ++gradients;
+            return std::vector<double>{2.0 * p[0]};
+        });
+    solver.compute_hessian = false;
+    solver.minimize();
+    CHECK_TRUE(solver.status() == OptimizationStatus::Success);
+    CHECK_EQ(solver.iterations(), 0);
+    CHECK_EQ(solver.function_evaluations(), 1);
+    CHECK_EQ(gradients, 1);
+}
+
+void bfgs_maximize_scales_supplied_gradient() {
+    std::vector<double> buffer(1);
+    auto solver = BFGS(
+        [](std::vector<double>& p) { return -(p[0] - 2.0) * (p[0] - 2.0); },
+        1, {0.0}, {-10.0}, {10.0},
+        [&buffer](const std::vector<double>& p) {
+            buffer[0] = -2.0 * (p[0] - 2.0);
+            return buffer;
+        });
+    solver.compute_hessian = false;
+    solver.maximize();
+    CHECK_TRUE(solver.status() == OptimizationStatus::Success);
+    CHECK_NEAR(solver.best_parameter_set().values[0], 2.0, 1e-8);
+}
+
+void bfgs_boundary_uses_projected_gradient_and_bounded_hessian() {
+    int outside = 0;
+    auto objective = [&outside](std::vector<double>& p) {
+        if (p[0] < 0.0 || p[0] > 1.0 || p[1] < 0.0 || p[1] > 1.0) ++outside;
+        return (p[0] - 2.0) * (p[0] - 2.0) + (p[1] - 0.3) * (p[1] - 0.3);
+    };
+    auto solver = BFGS(objective, 2, {0.0, 0.0}, {0.0, 0.0}, {1.0, 1.0},
+                       [](const std::vector<double>& p) {
+                           return std::vector<double>{2.0 * (p[0] - 2.0), 2.0 * (p[1] - 0.3)};
+                       });
+    solver.minimize();
+    CHECK_TRUE(solver.status() == OptimizationStatus::Success);
+    CHECK_EQ(solver.best_parameter_set().values[0], 1.0);
+    CHECK_NEAR(solver.best_parameter_set().values[1], 0.3, 1e-8);
+    CHECK_TRUE(solver.hessian().has_value());
+    CHECK_EQ(outside, 0);
+}
+
+void bfgs_reports_line_search_and_invalid_gradient_statuses() {
+    auto inconsistent = BFGS([](std::vector<double>&) { return 1.0; }, 1, {0.0}, {-10.0}, {10.0},
+                             [](const std::vector<double>&) { return std::vector<double>{1.0}; });
+    inconsistent.report_failure = false;
+    inconsistent.minimize();
+    CHECK_TRUE(inconsistent.status() == OptimizationStatus::LineSearchFailed);
+    CHECK_EQ(inconsistent.iterations(), 0);
+    CHECK_TRUE(inconsistent.hessian().has_value());
+
+    auto invalid = BFGS([](std::vector<double>& p) { return p[0] * p[0]; }, 1,
+                        {1.0}, {-10.0}, {10.0}, [](const std::vector<double>&) {
+                            return std::vector<double>{std::numeric_limits<double>::quiet_NaN()};
+                        });
+    invalid.report_failure = false;
+    invalid.compute_hessian = false;
+    invalid.minimize();
+    CHECK_TRUE(invalid.status() == OptimizationStatus::Failure);
+}
+
+void bfgs_preserves_evaluation_budget() {
+    auto solver = BFGS([](std::vector<double>& p) { return -p[0]; }, 1, {0.0},
+                       {-std::numeric_limits<double>::infinity()},
+                       {std::numeric_limits<double>::infinity()},
+                       [](const std::vector<double>&) { return std::vector<double>{-1.0}; });
+    solver.max_function_evaluations = 10;
+    solver.report_failure = false;
+    solver.compute_hessian = false;
+    solver.minimize();
+    CHECK_TRUE(solver.status() == OptimizationStatus::MaximumFunctionEvaluationsReached);
+    CHECK_EQ(solver.function_evaluations(), 10);
+}
+
+double corner_quadratic(std::vector<double>& p) {
+    return (p[0] - 20.0) * (p[0] - 20.0) + (p[1] - 20.0) * (p[1] - 20.0);
+}
+
+void powell_never_evaluates_outside_bounds() {
+    int outside = 0;
+    auto solver = Powell(
+        [&outside](std::vector<double>& p) {
+            if (p[0] < 0.0 || p[0] > 1.0 || p[1] < 0.0 || p[1] > 1.0) ++outside;
+            return corner_quadratic(p);
+        },
+        2, {0.5, 0.5}, {0.0, 0.0}, {1.0, 1.0});
+    solver.report_failure = false;
+    solver.record_traces = false;
+    solver.minimize();
+    CHECK_EQ(outside, 0);
+    CHECK_EQ(solver.best_parameter_set().values[0], 1.0);
+    CHECK_EQ(solver.best_parameter_set().values[1], 1.0);
+    CHECK_EQ(solver.best_parameter_set().fitness, 722.0);
+}
+
+void powell_handles_degenerate_and_infinite_boxes() {
+    auto pinned = Powell([](std::vector<double>& p) {
+        return (p[0] - 3.0) * (p[0] - 3.0) + (p[1] + 2.0) * (p[1] + 2.0);
+    }, 2, {1.0, 1.0}, {1.0, 1.0}, {1.0, 1.0});
+    pinned.report_failure = false;
+    pinned.compute_hessian = false;
+    pinned.minimize();
+    CHECK_TRUE(pinned.status() == OptimizationStatus::Success);
+    CHECK_EQ(pinned.best_parameter_set().fitness, 13.0);
+
+    double inf = std::numeric_limits<double>::infinity();
+    auto unbounded = Powell([](std::vector<double>& p) {
+        return (p[0] - 30.0) * (p[0] - 30.0) + (p[1] + 40.0) * (p[1] + 40.0);
+    }, 2, {0.0, 0.0}, {-inf, -inf}, {inf, inf});
+    unbounded.report_failure = false;
+    unbounded.compute_hessian = false;
+    unbounded.minimize();
+    CHECK_NEAR(unbounded.best_parameter_set().values[0], 30.0, 1e-4);
+    CHECK_NEAR(unbounded.best_parameter_set().values[1], -40.0, 1e-4);
+}
+
 // ==================== SUPPLEMENT: Tools additions (B5, hand-computed) ====================
 // Not from Test_BFGS.cs -- direct unit checks for the two Tools.cs functions B5 ports.
 
@@ -377,6 +503,13 @@ int main() {
     powell_matyas();
     powell_mccormick();
     powell_beale();
+    bfgs_stationary_start_does_not_search();
+    bfgs_maximize_scales_supplied_gradient();
+    bfgs_boundary_uses_projected_gradient_and_bounded_hessian();
+    bfgs_reports_line_search_and_invalid_gradient_statuses();
+    bfgs_preserves_evaluation_budget();
+    powell_never_evaluates_outside_bounds();
+    powell_handles_degenerate_and_infinite_boxes();
     // Supplement: Tools additions (B5)
     tools_sum_product();
     tools_normalized_distance();

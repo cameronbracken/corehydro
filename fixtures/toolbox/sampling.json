@@ -2,7 +2,7 @@
  "kind": "toolbox",
  "group": "sampling",
  "source": "Numerics/Sampling/SobolSequence.cs; Numerics/Sampling/Stratify.cs",
- "reference": "Numerics @ 2a0357a. `sobol` cases scraped verbatim from Test_SobolSequence.cs's Test_Sobol (dimension 2, first 10 points, themselves verified against R's randtoolbox::sobol()) plus a skip_to identity the same test's oracle already implies (SkipTo(k+1) == the (k+1)-th sequential NextDouble(), traced from SobolSequence.cs's own Gray-code reconstruction). `stratify` cases scraped verbatim from Test_Stratification.cs's Test_XValues (linear) and Test_XValues_Log10 (logarithmic); only the single-StratificationOptions overload is exposed here (Stratify::XValues(List<StratificationOptions>, ...), exercised by Test_XValues_Multi, has no toolbox verb -- stratify.hpp's own file header documents the multi-options overload as in scope for the estimators that need it, but no fixture/wrapper wires a second StratificationOptions list through this grammar). This harness resolves and injects the Sobol direction-numbers file path itself (see numerics/support/toolbox/sampling.hpp's file header) -- the fixture's own `options` never carries a `path` key.",
+ "reference": "Numerics @ 7e8e8d1. Unscrambled cases retain the published Test_SobolSequence values. The seeded case pins the v2.2.0 linear matrix scramble and digital shift. This harness resolves and injects the Sobol direction-numbers file path itself.",
  "cases": [
   {
    "name": "sobol_dimension2_first10",
@@ -26,6 +26,18 @@
    "assertions": [
     {"method": "sobol", "index": 0, "expected": 0.75, "mode": "equal", "source": "Test_Sobol point 2 (row 1, dim 0); SkipTo(1) reconstructs the state up to point 1 via the Gray-code trick, so the first NextDouble() call after it returns point 2"},
     {"method": "sobol", "index": 1, "expected": 0.25, "mode": "equal", "source": "Test_Sobol point 2 (row 1, dim 1)"}
+   ]
+  },
+  {
+   "name": "sobol_scrambled_seed_12345",
+   "options": {"dimension": 2, "n": 3, "skip": 0, "seed": 12345},
+   "assertions": [
+    {"method": "sobol", "index": 0, "expected": 0.659847889995655, "mode": "equal"},
+    {"method": "sobol", "index": 1, "expected": 0.5825658737429362, "mode": "equal"},
+    {"method": "sobol", "index": 2, "expected": 0.8092207866147765, "mode": "equal"},
+    {"method": "sobol", "index": 3, "expected": 0.15954710391098081, "mode": "equal"},
+    {"method": "sobol", "index": 4, "expected": 0.48233205686128877, "mode": "equal"},
+    {"method": "sobol", "index": 5, "expected": 0.7857143836043143, "mode": "equal"}
    ]
   },
   {

@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Gumbel.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Gumbel.cs @ 7e8e8d1
 //
 // The Gumbel (Extreme Value Type I) distribution with location ξ and scale α. Logic
 // mirrors the C# source method-for-method. The WPF helpers, IBootstrappable, and
@@ -55,7 +55,7 @@ class Gumbel : public UnivariateDistributionBase,
     double median() const override { return xi_ - alpha_ * std::log(std::log(2.0)); }
     double mode() const override { return xi_; }
     double standard_deviation() const override {
-        return std::sqrt((kPi * kPi) / 6.0 * alpha_ * alpha_);
+        return alpha_ * (kPi / std::sqrt(6.0));
     }
     double skewness() const override { return 1.1396; }
     double kurtosis() const override { return 3.0 + 12.0 / 5.0; }
@@ -63,22 +63,41 @@ class Gumbel : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        return 1.0 / alpha_ * std::exp(-(z + std::exp(-z)));
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Gumbel: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        const double value = -(z + std::exp(-z)) - std::log(alpha_);
+        return std::isnan(value) ? -kInf : value;
     }
 
-    double cdf(double x) const override {
-        double z = (x - xi_) / alpha_;
-        return std::exp(-std::exp(-z));
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Gumbel: invalid parameters");
+        return -std::exp(-distribution_numerics::standardize(x, xi_, alpha_));
+    }
+
+    double ccdf(double x) const override { return -std::expm1(log_cdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Gumbel: invalid parameters");
+        const double z = distribution_numerics::standardize(x, xi_, alpha_);
+        const double exponential = std::exp(-z);
+        return exponential == 0.0 ? -z : distribution_numerics::log1m_exp(-exponential);
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        return xi_ - alpha_ * std::log(-std::log(probability));
+        const double unit_quantile = -std::log(-std::log(probability));
+        const double displacement = alpha_ * unit_quantile;
+        return std::isinf(displacement) && std::isfinite(unit_quantile)
+                   ? alpha_ * (xi_ / alpha_ + unit_quantile)
+                   : xi_ + displacement;
     }
 
     // --- Parameter display names (X1; C# Gumbel.cs ParametersToString col0 +
@@ -96,6 +115,7 @@ class Gumbel : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(parameters_from_moments(data::product_moments(sample)));
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -134,16 +154,49 @@ class Gumbel : public UnivariateDistributionBase,
     void get_parameter_constraints(const std::vector<double>& sample, std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
-        initials = parameters_from_linear_moments(data::linear_moments(sample));
-        lowers.resize(2);
-        uppers.resize(2);
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&]() { return legacy_parameter_constraints(sample); },
+            [&]() { return robust_parameter_constraints(sample); });
+        initials = std::move(std::get<0>(constraints));
+        lowers = std::move(std::get<1>(constraints));
+        uppers = std::move(std::get<2>(constraints));
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
+        auto initials = parameters_from_linear_moments(data::linear_moments(sample));
+        std::vector<double> lowers(2), uppers(2);
         if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
         lowers[0] = -std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0])) + 1.0));
         uppers[0] =  std::pow(10.0, std::ceil(std::log10(std::fabs(initials[0])) + 1.0));
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
 
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        const double normalization = distribution_numerics::initialization_scale(sample);
+        std::vector<double> normalized(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i)
+            normalized[i] = sample[i] / normalization;
+        auto initials = parameters_from_linear_moments(data::linear_moments(normalized));
+        initials[0] *= normalization;
+        initials[1] *= normalization;
+        std::vector<double> lowers(2), uppers(2);
+        const auto [minimum_it, maximum_it] =
+            std::minmax_element(sample.begin(), sample.end());
+        distribution_numerics::location_parameter_bounds(
+            initials[0], initials[1], *minimum_it, *maximum_it, false,
+            lowers[0], uppers[0]);
+        distribution_numerics::positive_parameter_bounds(
+            initials[1], lowers[1], uppers[1]);
+        return {initials, lowers, uppers};
+    }
+
+   public:
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
         get_parameter_constraints(sample, initials, lowers, uppers);

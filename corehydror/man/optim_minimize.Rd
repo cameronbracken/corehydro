@@ -50,8 +50,7 @@ and \code{"nelder_mead"}.}
 \item{method}{one of \code{"de"} (differential evolution, the default), \code{"particle_swarm"}, \code{"sce"}
 (shuffled complex evolution), \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}, \code{"bfgs"},
 \code{"powell"}, \code{"adam"}, \code{"gradient_descent"}, \code{"nelder_mead"}, \code{"brent"}, \code{"golden_section"},
-or \code{"augmented_lagrange"} (the one constrained method, and the one method
-\code{optim_maximize()} rejects -- see Details).}
+or \code{"augmented_lagrange"} (the constrained method).}
 
 \item{seed}{optional integer seed for the stochastic methods (\code{"de"}, \code{"particle_swarm"},
 \code{"sce"}, \code{"simulated_annealing"}, \code{"multi_start"}, \code{"mlsl"}); an error for any other method.}
@@ -75,8 +74,8 @@ so a successful run returns a Hessian, computed by extra objective evaluations, 
 caller passes \code{control = list(compute_hessian = FALSE)} to skip it.}
 
 \item{gradient}{optional function taking the parameter vector and returning one partial
-derivative per parameter. Accepted only by \code{"adam"} and \code{"gradient_descent"}, an error for
-every other method. Omitted, both methods differentiate the objective numerically, exactly as
+derivative per parameter. Accepted by \code{"bfgs"}, \code{"adam"}, and \code{"gradient_descent"}, an error for
+every other method. Omitted, these methods differentiate the objective numerically, exactly as
 the upstream C# classes do with a null gradient.}
 
 \item{constraints}{a list of \code{\link[=optim_constraint]{optim_constraint()}} objects. Required by, and accepted only by,
@@ -105,12 +104,9 @@ number generator lives in C++, so a seeded run reproduces exactly, and reproduce
 in corehydropy.
 }
 \details{
-\code{optim_maximize()} accepts every method except \code{"augmented_lagrange"}, which can only minimize:
-the upstream C# class always drives its inner optimizer through \code{Minimize()} over an augmented
-Lagrangian built from the raw objective, so a maximize request would flip the reported sign
-without flipping the search direction and hand back the constrained minimum. Negate the
-objective and call \code{optim_minimize()} instead -- minimizing \code{-f} subject to the same
-constraints is exactly maximizing \code{f}.
+\code{optim_maximize()} accepts every method, including \code{"augmented_lagrange"}. Numerics v2.2.0
+scales the primary objective inside the augmented Lagrangian while leaving constraint penalties
+direction neutral.
 }
 \examples{
 rosenbrock <- function(p) (1 - p[1])^2 + 100 * (p[2] - p[1]^2)^2

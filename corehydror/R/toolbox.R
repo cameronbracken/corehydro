@@ -162,6 +162,40 @@ percentile <- function(x, probs, sorted = FALSE) {
   toolbox_run("statistics", "percentile", list(x, probs), list(sorted = isTRUE(sorted)))$values
 }
 
+#' Given data global sensitivity estimates
+#'
+#' Deterministic estimators over paired input and output samples. Input bins use rank order with
+#' original sample order breaking ties.
+#'
+#' @param x,y aligned numeric input and output samples.
+#' @param bins number of equal frequency input bins.
+#' @param x_bins,y_bins numbers of input bins and output classes for Borgonovo delta.
+#' @return `first_order_sobol()`, `pawn_median()`, and `borgonovo_delta()` return one number.
+#'   `pawn()` returns one Kolmogorov-Smirnov statistic per input bin.
+#' @export
+first_order_sobol <- function(x, y, bins = 20L) {
+  toolbox_run("statistics", "first_order_sobol", list(x, y), list(bins = as.integer(bins)))$values[[1]]
+}
+
+#' @rdname first_order_sobol
+#' @export
+pawn <- function(x, y, bins = 20L) {
+  toolbox_run("statistics", "pawn", list(x, y), list(bins = as.integer(bins)))$values
+}
+
+#' @rdname first_order_sobol
+#' @export
+pawn_median <- function(x, y, bins = 20L) {
+  toolbox_run("statistics", "pawn_median", list(x, y), list(bins = as.integer(bins)))$values[[1]]
+}
+
+#' @rdname first_order_sobol
+#' @export
+borgonovo_delta <- function(x, y, x_bins = 20L, y_bins = 20L) {
+  opts <- list(x_bins = as.integer(x_bins), y_bins = as.integer(y_bins))
+  toolbox_run("statistics", "borgonovo_delta", list(x, y), opts)$values[[1]]
+}
+
 #' Streaming summary statistics
 #'
 #' Accumulates count, extremes, and the first four moments over one or more chunks of data,
@@ -515,11 +549,13 @@ interpolate_2d <- function(x1, x2, y, x1out, x2out,
 #' @param skip number of points to skip before the first returned point: `skip = k` returns the
 #'   same first point as the C# `SkipTo(k)` call, i.e. the sequence's `(k + 1)`-th point.
 #'   Default 0 (no skip).
+#' @param seed optional integer seed for the v2.2.0 linear matrix scramble and digital shift.
+#'   `NULL` returns the original unscrambled sequence.
 #' @return an `n` by `dimension` numeric matrix, every value in `[0, 1)`.
 #' @examples
 #' sobol_sequence(5, dimension = 2)
 #' @export
-sobol_sequence <- function(n, dimension = 1L, skip = 0L) {
+sobol_sequence <- function(n, dimension = 1L, skip = 0L, seed = NULL) {
   if (!is.numeric(n) || length(n) != 1L || n < 1) {
     stop("`n` must be a single positive integer", call. = FALSE)
   }
@@ -534,7 +570,7 @@ sobol_sequence <- function(n, dimension = 1L, skip = 0L) {
     }
   }
   opts <- list(dimension = as.integer(dimension), n = as.integer(n), skip = as.integer(skip),
-               path = path)
+               path = path, seed = if (is.null(seed)) NULL else as.integer(seed))
   r <- toolbox_run("sampling", "sobol", list(), opts)
   matrix(r$values, nrow = r$dims[[1]], ncol = r$dims[[2]], byrow = TRUE)
 }
@@ -638,6 +674,28 @@ joint_probability <- function(p, dependency = c("independent", "positive", "nega
     }
   }
   toolbox_run("probability", "joint", data, list(dependency = dependency))$values[[1]]
+}
+
+#' Equicorrelated single factor event probabilities
+#'
+#' @param p marginal event probabilities.
+#' @param rho common Gaussian correlation in `[0, 1]`.
+#' @param relative_tolerance quadrature relative tolerance.
+#' @return `union_single_factor()` returns one union probability.
+#' @export
+union_single_factor <- function(p, rho, relative_tolerance = 1e-8) {
+  opts <- list(rho = rho, relative_tolerance = relative_tolerance)
+  toolbox_run("probability", "union_single_factor", list(p), opts)$values[[1]]
+}
+
+#' @rdname union_single_factor
+#' @param normal_thresholds standard normal event thresholds.
+#' @param z shared standard normal factor value.
+#' @return `single_factor_conditional_probabilities()` returns one probability per threshold.
+#' @export
+single_factor_conditional_probabilities <- function(normal_thresholds, rho, z) {
+  opts <- list(rho = rho, z = z)
+  toolbox_run("probability", "single_factor_conditional", list(normal_thresholds), opts)$values
 }
 
 # The "link" and "trend" toolbox groups (Task 7). "link" mirrors the seven Numerics link
@@ -998,26 +1056,29 @@ polynomial_eval <- function(coefficients, x, variant = c("standard", "reverse", 
   toolbox_run("special", method, list(as.double(coefficients), as.double(x)), opts)$values
 }
 
-# The "functions" toolbox group (P2 "math extras" Task 11): the two non-tabular
-# IUnivariateFunction implementations (numerics/functions/), LinearFunction and PowerFunction.
-# The severed third implementation, TabularFunction, depends on the unported Paired Data
-# subsystem (see upstream/CLAUDE.md) and is not exposed.
+# The "functions" toolbox group: all serializable IUnivariateFunction implementations plus the
+# posterior ensemble sampler. Nested objects use the shared JSON spec grammar.
 
 #' Evaluate a univariate function
 #'
-#' Mirrors the Numerics `LinearFunction` (`Y = alpha + beta*X + epsilon`) and `PowerFunction`
-#' (`Y = alpha * (X - xi)^beta * epsilon`), both over optional normally distributed noise
-#' (`epsilon ~ Normal(0, sigma)`) via `confidence_level`. `is_inverse` (PowerFunction's own
+#' Mirrors the Numerics linear, power, segmented power, composite, and ensemble function
+#' surfaces. A character `type` keeps the compact linear and power interface. A list `type` is a
+#' shared function spec and `parameters` is then the evaluation vector. Composite specs contain
+#' nested `functions` and optional `weights` and `mode`. Ensemble specs contain a `template`,
+#' `parameter_sets`, and either `sample_index` or `sample_percentile`.
+#'
+#' Linear and power functions support optional normally distributed noise via `confidence_level`.
+#' `is_inverse` (PowerFunction's own
 #' `IsInverse` switch) selects which of the forward power law or its algebraic inverse
 #' `Function()`/`inverse = TRUE` evaluates -- an independent axis from `inverse` itself, which
 #' picks `Function()` vs. `InverseFunction()` on whichever of the two `is_inverse` selects.
 #'
-#' @param type `"linear"` or `"power"`, matched case-insensitively.
-#' @param parameters a numeric vector: `c(alpha, beta, sigma)` for `"linear"`; `c(alpha, beta,
-#'   xi, sigma)` for `"power"`. `sigma` is still required (e.g. 0) when `confidence_level` is
-#'   `NULL` -- it only enters the calculation on the non-deterministic path.
-#' @param x a numeric vector: the values to evaluate the function at, or (when `inverse = TRUE`)
-#'   the values to evaluate the inverse function at.
+#' @param type `"linear"`, `"power"`, or `"segmented_power"`, matched case-insensitively, or a
+#'   shared function spec list.
+#' @param parameters a numeric parameter vector for a character `type`. For a spec list, the
+#'   values at which to evaluate the function.
+#' @param x optional numeric values at which to evaluate a spec list. For a character `type`, the
+#'   values at which to evaluate the function or inverse function.
 #' @param inverse if `TRUE`, evaluates the inverse function (`InverseFunction()`) instead of the
 #'   forward function (`Function()`).
 #' @param is_inverse `"power"`-only: `PowerFunction`'s own `IsInverse` property. An error for
@@ -1030,9 +1091,19 @@ polynomial_eval <- function(coefficients, x, variant = c("standard", "reverse", 
 #' univariate_function("power", c(5, 2, 0, 3), 6)
 #' univariate_function("power", c(5, 2, 0, 3), 6, confidence_level = 0.75)
 #' @export
-univariate_function <- function(type, parameters, x, inverse = FALSE, is_inverse = FALSE,
+univariate_function <- function(type, parameters, x = NULL, inverse = FALSE, is_inverse = FALSE,
                                  confidence_level = NULL) {
-  known <- c("linear", "power")
+  if (is.list(type)) {
+    values <- if (is.null(x)) parameters else x
+    if (!is.numeric(values) || length(values) == 0L) {
+      stop("`x` must be a non-empty numeric vector", call. = FALSE)
+    }
+    opts <- list(spec = type)
+    if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
+    method <- if (isTRUE(inverse)) "inverse" else "evaluate"
+    return(toolbox_run("functions", method, list(as.double(values)), opts)$values)
+  }
+  known <- c("linear", "power", "segmented_power")
   hit <- match(tolower(type), known)
   if (is.na(hit)) {
     stop(sprintf("unknown function type \"%s\". Available: %s", type,
@@ -1084,6 +1155,7 @@ check_edges <- function(from, to, weight, edge_index) {
     stop(sprintf("`edge_index` must be a numeric vector the same length as `from`; got %d for %d",
                  length(edge_index), n), call. = FALSE)
   }
+  check_node_indices(edge_index, "edge_index")
   as.double(edge_index)
 }
 
@@ -1125,6 +1197,9 @@ check_node_indices <- function(x, what) {
 #' @param node_count an optional node count. Defaults to `max(from, to) + 1`; supply a larger
 #'   value to include isolated nodes carrying no edge, which then report `cost = Inf`. A value
 #'   below `max(from, to) + 1` is an error: the graph would not fit the routing table it asks for.
+#' @param nearest if `TRUE`, use the v2.2 single-pass multi-source solver. Costs match the regular
+#'   multi-destination solve, but exact-cost ties use deterministic heap order instead of
+#'   destination order.
 #' @return a data frame with one row per node, in node-index order, and columns `next_node`,
 #'   `edge_index` (both integer) and `cost` (numeric).
 #' @examples
@@ -1137,7 +1212,8 @@ check_node_indices <- function(x, what) {
 #'   node_count = 4
 #' )
 #' @export
-shortest_path <- function(from, to, weight, destinations, edge_index = NULL, node_count = NULL) {
+shortest_path <- function(from, to, weight, destinations, edge_index = NULL, node_count = NULL,
+                          nearest = FALSE) {
   edge_index <- check_edges(from, to, weight, edge_index)
   if (!is.numeric(destinations)) {
     stop("`destinations` must be a numeric vector of node indices", call. = FALSE)
@@ -1172,8 +1248,12 @@ shortest_path <- function(from, to, weight, destinations, edge_index = NULL, nod
     stop(sprintf("`destinations` is out of range for a network of %d nodes", as.integer(n_nodes)),
          call. = FALSE)
   }
+  if (!is.logical(nearest) || length(nearest) != 1L || is.na(nearest)) {
+    stop("`nearest` must be TRUE or FALSE", call. = FALSE)
+  }
+  method <- if (nearest) "dijkstra_nearest" else "dijkstra"
   r <- toolbox_run(
-    "network", "dijkstra",
+    "network", method,
     list(from, to, weight, edge_index),
     opts
   )
@@ -1318,6 +1398,7 @@ hypothesis_test <- function(x = NULL, y = NULL, method = "jarque_bera", populati
 # here -- see the P4 whole-branch-review finding M2.
 .paired_data_orders <- c("ascending", "descending", "none")
 .paired_data_transforms <- c("none", "logarithmic", "log", "normal_z")
+.paired_data_extrapolation <- c("none", "below", "above", "both")
 
 # Internal: build a `distributions` list of corehydro_dist objects, recycling a single one across
 # every `x`. Shared by uncertain_curve_sample() and tabular_function(), which use identical
@@ -1351,6 +1432,8 @@ paired_data_distributions <- function(distributions, x) {
 #' @param yout numeric vector of y positions to interpolate x at.
 #' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
 #'   `"log"`), or `"normal_z"`.
+#' @param extrapolation sides on which to extend the boundary segment: `"none"` (default),
+#'   `"below"`, `"above"`, or `"both"`.
 #' @param order_x,order_y one of `"ascending"` (default), `"descending"`, or `"none"`.
 #' @param strict_x,strict_y require x/y to strictly increase/decrease (per `order_x`/`order_y`)
 #'   between consecutive ordinates. Default `TRUE`.
@@ -1360,6 +1443,7 @@ paired_data_distributions <- function(distributions, x) {
 #' @export
 curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
                               x_transform = "none", y_transform = "none",
+                              extrapolation = "none",
                               order_x = "ascending", order_y = "ascending",
                               strict_x = TRUE, strict_y = TRUE) {
   check_pair(x, y)
@@ -1372,11 +1456,13 @@ curve_interpolate <- function(x, y, xout = NULL, yout = NULL,
   # unambiguous prefix Python does not.
   x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
   y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
+  extrapolation <- check_choice(extrapolation, .paired_data_extrapolation, "extrapolation")
   order_x <- check_choice(order_x, .paired_data_orders, "order_x")
   order_y <- check_choice(order_y, .paired_data_orders, "order_y")
   opts <- list(strict_x = isTRUE(strict_x), strict_y = isTRUE(strict_y),
                order_x = order_x, order_y = order_y,
-               x_transform = x_transform, y_transform = y_transform)
+               x_transform = x_transform, y_transform = y_transform,
+               extrapolation = extrapolation)
   if (!is.null(xout)) {
     if (!is.numeric(xout)) {
       stop("`xout` must be numeric", call. = FALSE)
@@ -1548,6 +1634,8 @@ uncertain_curve_sample <- function(x, distributions, probability = NULL,
 #' @param inverse if `TRUE`, evaluates `InverseFunction()` instead of `Function()`.
 #' @param x_transform,y_transform one of `"none"` (default), `"logarithmic"` (also accepted as
 #'   `"log"`), or `"normal_z"`.
+#' @param extrapolation sides on which to extend the boundary segment: `"none"` (default),
+#'   `"below"`, `"above"`, or `"both"`.
 #' @param confidence_level quantile in `[0, 1]` to sample the curve at; `NULL` (default) samples
 #'   the mean.
 #' @param allow_negative_y_values allow a negative or `NaN` result to pass through unmodified,
@@ -1561,6 +1649,7 @@ uncertain_curve_sample <- function(x, distributions, probability = NULL,
 #' @export
 tabular_function <- function(x, distributions, at, inverse = FALSE,
                              x_transform = "none", y_transform = "none",
+                             extrapolation = "none",
                              confidence_level = NULL, allow_negative_y_values = FALSE) {
   if (!is.numeric(x) || length(x) == 0L) {
     stop("`x` must be a non-empty numeric vector", call. = FALSE)
@@ -1571,8 +1660,10 @@ tabular_function <- function(x, distributions, at, inverse = FALSE,
   }
   x_transform <- check_choice(x_transform, .paired_data_transforms, "x_transform")
   y_transform <- check_choice(y_transform, .paired_data_transforms, "y_transform")
+  extrapolation <- check_choice(extrapolation, .paired_data_extrapolation, "extrapolation")
   opts <- list(x = spec_array(as.double(x)), distributions = distributions,
                x_transform = x_transform, y_transform = y_transform,
+               extrapolation = extrapolation,
                allow_negative_y_values = isTRUE(allow_negative_y_values))
   if (!is.null(confidence_level)) opts$confidence_level <- as.double(confidence_level)
   method <- if (isTRUE(inverse)) "tabular_inverse" else "tabular"

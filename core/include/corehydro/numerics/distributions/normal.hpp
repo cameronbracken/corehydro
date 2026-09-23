@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/Normal.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/Normal.cs @ 7e8e8d1
 //
 // The Normal (Gaussian) distribution, parameters µ (location) and σ (scale).
 // CDF uses std::erf (matches the C# instance Normal.CDF(x), itself erf-based -- see the
@@ -86,13 +86,34 @@ class Normal : public UnivariateDistributionBase,
     double maximum() const override { return kInf; }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        double z = (x - mu_) / sigma_;
-        return std::exp(-0.5 * z * z) / (kSqrt2PI * sigma_);
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        const double z = distribution_numerics::standardize(x, mu_, sigma_);
+        return -0.5 * z * z - std::log(sigma_) - kLogSqrt2PI;
     }
 
     double cdf(double x) const override {
-        return 0.5 * (1.0 + std::erf((x - mu_) / (sigma_ * kSqrt2)));
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return standard_cdf(distribution_numerics::standardize(x, mu_, sigma_));
+    }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return distribution_numerics::normal_log_cdf(
+            distribution_numerics::standardize(x, mu_, sigma_));
+    }
+
+    double ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return standard_cdf(-distribution_numerics::standardize(x, mu_, sigma_));
+    }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("Normal: invalid parameters");
+        return distribution_numerics::normal_log_survival(
+            distribution_numerics::standardize(x, mu_, sigma_));
     }
 
     double inverse_cdf(double probability) const override {
@@ -118,6 +139,7 @@ class Normal : public UnivariateDistributionBase,
 
     // --- Estimation ---
     void estimate(const std::vector<double>& sample, ParameterEstimationMethod method) override {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == ParameterEstimationMethod::MethodOfMoments) {
             set_parameters(data::product_moments(sample));  // {mean, sd, ...}; first two used
         } else if (method == ParameterEstimationMethod::MethodOfLinearMoments) {
@@ -179,17 +201,57 @@ class Normal : public UnivariateDistributionBase,
     void get_parameter_constraints(const std::vector<double>& sample, std::vector<double>& initials,
                                    std::vector<double>& lowers,
                                    std::vector<double>& uppers) const override {
+        distribution_numerics::validate_sample(sample, 4);
+        auto constraints = distribution_numerics::prefer_legacy_constraints(
+            [&] { return legacy_parameter_constraints(sample); },
+            [&] { return robust_parameter_constraints(sample); });
+        initials = std::get<0>(constraints);
+        lowers = std::get<1>(constraints);
+        uppers = std::get<2>(constraints);
+    }
+
+    distribution_numerics::Constraints robust_parameter_constraints(
+        const std::vector<double>& sample) const {
+        distribution_numerics::validate_sample(sample, 4);
+        double magnitude = 0.0;
+        for (double value : sample) magnitude = std::max(magnitude, std::fabs(value));
+        std::vector<double> scaled(sample.size());
+        for (std::size_t i = 0; i < sample.size(); ++i) scaled[i] = sample[i] / magnitude;
+        const auto moments = data::product_moments(scaled);
+        const double location = moments[0] * magnitude;
+        double scale = moments[1] * magnitude;
+        if (!(scale > 0.0) || !std::isfinite(scale) || !std::isfinite(location))
+            throw std::invalid_argument("sample moments must be finite with positive dispersion");
+        scale = std::max(1e-16, scale);
+        const double location_magnitude = location == 0.0 ? scale : std::fabs(location);
+        double location_bound = std::pow(10.0, std::ceil(std::log10(location_magnitude) + 1.0));
+        double scale_bound = std::pow(10.0, std::ceil(std::log10(scale) + 1.0));
+        if (std::isinf(location_bound)) location_bound = std::numeric_limits<double>::max();
+        if (std::isinf(scale_bound)) scale_bound = std::numeric_limits<double>::max();
+        if (std::fabs(location) >= location_bound || scale >= scale_bound)
+            throw std::invalid_argument("sample moments do not admit finite interior bounds");
+        return {{location, scale},
+                {-location_bound, std::min(kDoubleMachineEpsilon, scale / 10.0)},
+                {location_bound, scale_bound}};
+    }
+
+   private:
+    distribution_numerics::Constraints legacy_parameter_constraints(
+        const std::vector<double>& sample) const {
         auto moments = data::product_moments(sample);
-        initials = {moments[0], moments[1]};
-        lowers.assign(2, 0.0);
-        uppers.assign(2, 0.0);
+        std::vector<double> initials = {moments[0], moments[1]};
+        std::vector<double> lowers(2, 0.0);
+        std::vector<double> uppers(2, 0.0);
         if (initials[0] == 0.0) initials[0] = kDoubleMachineEpsilon;
         double locExp = std::ceil(std::log10(std::fabs(initials[0])) + 1.0);
         lowers[0] = -std::pow(10.0, locExp);
         uppers[0] = std::pow(10.0, locExp);
         lowers[1] = kDoubleMachineEpsilon;
         uppers[1] = std::pow(10.0, std::ceil(std::log10(initials[1]) + 1.0));
+        return {initials, lowers, uppers};
     }
+
+   public:
 
     std::vector<double> mle(const std::vector<double>& sample) const {
         std::vector<double> initials, lowers, uppers;
@@ -272,6 +334,12 @@ class Normal : public UnivariateDistributionBase,
     static double standard_z(double probability) {
         if (probability < 0.0 || probability > 1.0)
             throw std::out_of_range("probability must be between 0 and 1");
+        // v2.2 floors endpoint probabilities so bootstrap bias corrections stay finite. Use
+        // symmetry at one because subtracting the smallest subnormal from one rounds back to one.
+        if (probability == 0.0)
+            return r8_normal_01_cdf_inverse(std::numeric_limits<double>::denorm_min());
+        if (probability == 1.0)
+            return -r8_normal_01_cdf_inverse(std::numeric_limits<double>::denorm_min());
         return r8_normal_01_cdf_inverse(probability);
     }
 

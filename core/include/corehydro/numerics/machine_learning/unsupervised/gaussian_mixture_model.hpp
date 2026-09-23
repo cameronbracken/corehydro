@@ -1,4 +1,4 @@
-// ported from: Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs @ 2a0357a
+// ported from: Numerics/Machine Learning/Unsupervised/GaussianMixtureModel.cs @ 7e8e8d1
 //
 // Gaussian mixture model fitted by EM, initialized from k-means. Generalizes k-means clustering
 // by carrying a full covariance per component rather than only a center.
@@ -12,14 +12,8 @@
 //    iteration's ratio is essentially 1 and the test cannot fire; with `-infinity` the expression
 //    would be `inf / -inf = NaN`, every comparison would be false, and the loop would run to
 //    `MaxIterations` every time. Use `std::numeric_limits<double>::lowest()`.
-// 2. `LogLikelihood` IS ASSIGNED ONLY INSIDE THE CONVERGENCE BRANCH. A run that exhausts
-//    `MaxIterations` therefore leaves it at its default 0. Mirrored.
-// 3. `MStep`'s call `MatrixRegularization.MakeSymmetricPositiveDefinite(Sigmas[k]);` DISCARDS THE
-//    RETURN VALUE, and that method is pure (it returns a new Matrix and never mutates its
-//    argument), so the call is a NO-OP -- the symmetrization and ridge the comment above it
-//    promises never reach `Sigmas[k]`. The only thing actually keeping the covariance usable is
-//    the diagonal floor a few lines earlier. Mirrored as an explicitly-discarded call so the
-//    upstream diff keeps mapping; see docs/upstream-csharp-issues.md.
+// 2. `LogLikelihood` records every E-step, including the last iteration of a capped run.
+// 3. The positive-definite covariance repair is assigned back to the component covariance.
 // 4. The E-step's argmax that sets `Labels[i]` runs over the UNNORMALIZED log values with `idx`
 //    seeded at -1 and a strict `>`, so an all-NaN row would leave a label of -1, and ties go to
 //    the lowest component index. The normalization then OVERWRITES `LikelihoodMatrix` in place
@@ -37,6 +31,8 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "corehydro/numerics/machine_learning/unsupervised/k_means.hpp"
@@ -91,8 +87,7 @@ class GaussianMixtureModel {
         return likelihood_matrix_;
     }
 
-    // The total log-likelihood of the fit. See transcription note 2: this is 0 for a run that
-    // exhausted `max_iterations()` without converging.
+    // The full normalized total log-likelihood from the latest E-step.
     double log_likelihood() const { return log_likelihood_; }
 
     // The maximum iterations in the clustering algorithm. Default = 1,000.
@@ -164,12 +159,12 @@ class GaussianMixtureModel {
         double old_log_lh = std::numeric_limits<double>::lowest();
         double new_log_lh = std::numeric_limits<double>::lowest();
         for (iterations_ = 1; iterations_ <= max_iterations_; iterations_++) {
-            // Perform the expectation step.
+            // Perform the expectation step and retain every evaluated value.
             new_log_lh = e_step();
+            log_likelihood_ = new_log_lh;
 
             // Check convergence (see transcription note 1).
             if (std::fabs((old_log_lh - new_log_lh) / old_log_lh) < tolerance_) {
-                log_likelihood_ = new_log_lh;
                 break;
             }
 
@@ -190,7 +185,15 @@ class GaussianMixtureModel {
         for (int k = 0; k < k_; k++) {
             std::size_t ks = static_cast<std::size_t>(k);
             // Decompose the covariance in the outer loop.
-            math::linalg::CholeskyDecomposition cholesky(sigmas_[ks]);
+            math::linalg::CholeskyDecomposition cholesky = [&]() {
+                try {
+                    return math::linalg::CholeskyDecomposition(sigmas_[ks]);
+                } catch (const std::exception& e) {
+                    throw std::runtime_error("Gaussian mixture component " +
+                                             std::to_string(k + 1) +
+                                             " covariance could not be factorized: " + e.what());
+                }
+            }();
             log_det[ks] = cholesky.log_determinant();
             for (int i = 0; i < x_.number_of_rows(); i++) {
                 // Inner loop for likelihoods.
@@ -232,7 +235,8 @@ class GaussianMixtureModel {
                     std::exp(likelihood_matrix_[is][static_cast<std::size_t>(k)] - tmp);
             log_lh += tmp;
         }
-        return log_lh;
+        return log_lh - 0.5 * dimension_ * x_.number_of_rows() *
+                            std::log(2.0 * corehydro::numerics::kPi);
     }
 
     // The maximization step.
@@ -243,6 +247,7 @@ class GaussianMixtureModel {
             for (int i = 0; i < x_.number_of_rows(); i++)
                 wgt += likelihood_matrix_[static_cast<std::size_t>(i)][ks];
             weights_[ks] = wgt / x_.number_of_rows();
+            if (wgt <= 0.0) continue;
             for (int d = 0; d < dimension_; d++) {
                 // Compute centroids.
                 double sum = 0;
@@ -277,13 +282,8 @@ class GaussianMixtureModel {
                 sigmas_[ks](d, d) = std::max(sigmas_[ks](d, d), 1e-6 * col_var);
             }
 
-            // Ensure the full covariance matrix remains symmetric positive-definite.
-            //
-            // TRANSCRIPTION NOTE 3: upstream DISCARDS this return value, and the method is pure,
-            // so this line has no effect on `Sigmas[k]`. Kept (with the discard made explicit)
-            // so the upstream diff keeps mapping line-for-line. Assigning the result here would
-            // be a silent behavior change against every oracle.
-            (void)math::linalg::MatrixRegularization::make_symmetric_positive_definite(sigmas_[ks]);
+            sigmas_[ks] =
+                math::linalg::MatrixRegularization::make_symmetric_positive_definite(sigmas_[ks]);
         }
     }
 

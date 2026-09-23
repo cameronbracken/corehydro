@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Bivariate Copulas/AMHCopula.cs @ 2a0357a
+// ported from: Numerics/Distributions/Bivariate Copulas/AMHCopula.cs @ 7e8e8d1
 //
 // The Ali-Mikhail-Haq (AMH) copula. theta in [-1, +1]; custom closed-form PDF (CDF falls
 // through to ArchimedeanCopula's generic Genest-1986 form via generator/generator_inverse);
@@ -118,16 +118,19 @@ class AMHCopula : public ArchimedeanCopula {
     }
 
     // Johnson (1987, p.362) closed-form conditional quantile.
-    std::array<double, 2> inverse_cdf(double u, double v) const override {
+    double inverse_conditional_cdf(double u, double t) const override {
         if (!parameters_valid()) validate_parameter(theta(), true);
-        double w = v;
+        double w = t;
         double b = 1.0 - u;
         double A = w * std::pow(theta() * b, 2.0) - theta();
         double B = theta() + 1.0 - 2.0 * theta() * b * w;
         double C = w - 1.0;
-        double vv = (-B + std::sqrt(B * B - 4.0 * A * C)) / 2.0 / A;
-        vv = 1.0 - vv;
-        return {u, vv};
+        double v = (-B + std::sqrt(B * B - 4.0 * A * C)) / 2.0 / A;
+        return 1.0 - v;
+    }
+
+    std::array<double, 2> inverse_cdf(double u, double v) const override {
+        return {u, inverse_conditional_cdf(u, v)};
     }
 
     // Gets the upper tail dependence coefficient lambda_U = 0. The AMH copula has no tail

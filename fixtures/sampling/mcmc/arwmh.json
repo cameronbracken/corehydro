@@ -696,7 +696,7 @@
           "args": [
             0
           ],
-          "expected": 0.17633333333333334,
+          "expected": 0.20864166666666667,
           "mode": "equal"
         },
         {
@@ -704,7 +704,7 @@
           "args": [
             1
           ],
-          "expected": 0.10319166666666667,
+          "expected": 0.12095833333333333,
           "mode": "equal"
         },
         {
@@ -712,7 +712,7 @@
           "args": [
             2
           ],
-          "expected": 0.08336666666666667,
+          "expected": 0.0895,
           "mode": "equal"
         },
         {
@@ -720,7 +720,7 @@
           "args": [
             3
           ],
-          "expected": 0.08908333333333333,
+          "expected": 0.10314166666666667,
           "mode": "equal"
         }
       ]
@@ -1311,7 +1311,7 @@
           "args": [
             0
           ],
-          "expected": 0.15904166666666666,
+          "expected": 0.196625,
           "mode": "equal"
         },
         {
@@ -1319,7 +1319,7 @@
           "args": [
             1
           ],
-          "expected": 0.08620833333333333,
+          "expected": 0.09241666666666666,
           "mode": "equal"
         },
         {
@@ -1327,7 +1327,7 @@
           "args": [
             2
           ],
-          "expected": 0.08526666666666667,
+          "expected": 0.09690833333333333,
           "mode": "equal"
         },
         {
@@ -1335,7 +1335,7 @@
           "args": [
             3
           ],
-          "expected": 0.075825,
+          "expected": 0.07581666666666667,
           "mode": "equal"
         }
       ]
@@ -1926,7 +1926,7 @@
           "args": [
             0
           ],
-          "expected": 0.34560833333333335,
+          "expected": 0.370675,
           "mode": "equal"
         },
         {
@@ -1934,7 +1934,7 @@
           "args": [
             1
           ],
-          "expected": 0.24445833333333333,
+          "expected": 0.29263333333333336,
           "mode": "equal"
         },
         {
@@ -1942,7 +1942,7 @@
           "args": [
             2
           ],
-          "expected": 0.171825,
+          "expected": 0.21331666666666665,
           "mode": "equal"
         },
         {
@@ -1950,7 +1950,7 @@
           "args": [
             3
           ],
-          "expected": 0.17778333333333332,
+          "expected": 0.216325,
           "mode": "equal"
         }
       ]
@@ -2543,7 +2543,7 @@
           "args": [
             0
           ],
-          "expected": 0.10931777777777778,
+          "expected": 0.09734444444444444,
           "mode": "equal"
         },
         {
@@ -2551,7 +2551,7 @@
           "args": [
             1
           ],
-          "expected": 0.06194888888888889,
+          "expected": 0.05850888888888889,
           "mode": "equal"
         },
         {
@@ -2559,7 +2559,7 @@
           "args": [
             2
           ],
-          "expected": 0.06423111111111111,
+          "expected": 0.06091333333333333,
           "mode": "equal"
         },
         {
@@ -2567,7 +2567,7 @@
           "args": [
             3
           ],
-          "expected": 0.05692222222222222,
+          "expected": 0.05450222222222222,
           "mode": "equal"
         }
       ]
@@ -3504,7 +3504,7 @@
           "args": [
             0
           ],
-          "expected": 10027.206665988955,
+          "expected": 3.077093620504893,
           "mode": "rel",
           "tol": 1e-09,
           "source": "curated via oracle_emitter --dump"
@@ -3514,7 +3514,7 @@
           "args": [
             1
           ],
-          "expected": 10779.764870442465,
+          "expected": 3.51759941999856,
           "mode": "rel",
           "tol": 1e-09,
           "source": "curated via oracle_emitter --dump"
@@ -3524,7 +3524,7 @@
           "args": [
             0
           ],
-          "expected": 18.611461136196016,
+          "expected": 6.523820562317314,
           "mode": "rel",
           "tol": 1e-09,
           "source": "curated via oracle_emitter --dump"
@@ -3534,7 +3534,7 @@
           "args": [
             1
           ],
-          "expected": 15.840719511559383,
+          "expected": 8.219944329005763,
           "mode": "rel",
           "tol": 1e-09,
           "source": "curated via oracle_emitter --dump"

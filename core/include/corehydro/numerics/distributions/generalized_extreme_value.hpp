@@ -1,4 +1,4 @@
-// ported from: Numerics/Distributions/Univariate/GeneralizedExtremeValue.cs @ 2a0357a
+// ported from: Numerics/Distributions/Univariate/GeneralizedExtremeValue.cs @ 7e8e8d1
 //
 // Generalized Extreme Value distribution: parameters ξ (location), α (scale),
 // κ (shape). Distribution-core surface (moments, PDF/CDF/InverseCDF, log-likelihood).
@@ -15,6 +15,9 @@
 #include "corehydro/numerics/distributions/base/i_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_linear_moment_estimation.hpp"
 #include "corehydro/numerics/distributions/base/i_maximum_likelihood_estimation.hpp"
+#include "corehydro/numerics/distributions/base/i_standard_error.hpp"
+#include "corehydro/numerics/distributions/base/kappa_expected_information.hpp"
+#include "corehydro/numerics/distributions/base/gamma_distribution_numerics.hpp"
 #include "corehydro/numerics/distributions/base/univariate_distribution_base.hpp"
 #include "corehydro/numerics/math/linalg/matrix.hpp"
 #include "corehydro/numerics/math/optimization/nelder_mead.hpp"
@@ -35,7 +38,8 @@ enum class EstimationMethod { MethodOfMoments, MethodOfLinearMoments, MaximumLik
 class GeneralizedExtremeValue : public UnivariateDistributionBase,
                                 public IEstimation,
                                 public ILinearMomentEstimation,
-                                public IMaximumLikelihoodEstimation {
+                                public IMaximumLikelihoodEstimation,
+                                public IStandardError {
    public:
     GeneralizedExtremeValue() { set_parameters(100.0, 10.0, 0.0); }
     GeneralizedExtremeValue(double location, double scale, double shape) {
@@ -91,6 +95,7 @@ class GeneralizedExtremeValue : public UnivariateDistributionBase,
     }
 
     void estimate(const std::vector<double>& sample, EstimationMethod method) {
+        distribution_numerics::validate_sample(sample, 4);
         if (method == EstimationMethod::MethodOfMoments) {
             set_parameters(direct_method_of_moments(data::product_moments(sample)));
         } else if (method == EstimationMethod::MethodOfLinearMoments) {
@@ -217,35 +222,62 @@ class GeneralizedExtremeValue : public UnivariateDistributionBase,
 
     // Expected Fisher information matrix (3x3) for the given sample size.
     math::linalg::Matrix2D expected_information_matrix(int sample_size) const {
-        namespace g = math::special;
-        double N = sample_size, a = alpha_, k = kappa_;
-        double p = std::pow(1.0 - k, 2.0) * g::function(1.0 - 2.0 * k);
-        double q = (1.0 - k) * g::function(1.0 - k) * (g::digamma(1.0 - k) - (1.0 - k) / k);
-        double gg = kEuler;
-        double d2du2 = N / (a * a) * p;
-        double d2da2 = N / (a * a * k * k) * (1.0 - 2.0 * (1.0 - k) * g::function(1.0 - k) + p);
-        double d2dk2 = N / (k * k) *
-                       (kPi * kPi / 6.0 + std::pow(1.0 - gg - 1.0 / k, 2.0) + 2.0 * q / k +
-                        p / (k * k));
-        double d2duda = N / (a * a * k) * (p - (1.0 - k) * g::function(1.0 - k));
-        double d2dudk = -N / (a * k) * (p / k + q);
-        double d2dadk =
-            N / (a * k * k) * (1.0 - gg - (1.0 - (1.0 - k) * g::function(1.0 - k)) / k - p / k - q);
-        return {{d2du2, d2duda, d2dudk}, {d2duda, d2da2, d2dadk}, {d2dudk, d2dadk, d2dk2}};
+        distribution_numerics::validate_sample_size(sample_size);
+        if (!parameters_valid_) throw std::out_of_range("GEV: invalid parameters");
+        std::vector<double> means, mean_errors;
+        math::linalg::Matrix2D errors;
+        auto information =
+            distribution_numerics::KappaExpectedInformation::expected_information(
+                kappa_, 0.0, 3, means, mean_errors, errors);
+        for (int i = 0; i < 3; ++i)
+            for (int j = i; j < 3; ++j) {
+                double value = information[static_cast<std::size_t>(i)]
+                                          [static_cast<std::size_t>(j)];
+                if (value != 0.0) {
+                    const double logarithm =
+                        std::log(std::fabs(value)) + std::log(sample_size) -
+                        (i < 2 ? std::log(alpha_) : 0.0) -
+                        (j < 2 ? std::log(alpha_) : 0.0);
+                    value = std::copysign(std::exp(logarithm), value);
+                    if (!std::isfinite(value))
+                        throw std::runtime_error(
+                            "GEV expected information is outside the finite range");
+                }
+                information[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] = value;
+                information[static_cast<std::size_t>(j)][static_cast<std::size_t>(i)] = value;
+            }
+        return information;
     }
 
     // Parameter covariance = inverse of the expected information matrix (MLE only).
     math::linalg::Matrix2D parameter_covariance(int sample_size) const {
-        return math::linalg::inverse(expected_information_matrix(sample_size));
+        return distribution_numerics::KappaExpectedInformation::parameter_covariance(
+            alpha_, kappa_, 0.0, sample_size, 3);
+    }
+
+    math::linalg::Matrix2D parameter_covariance(
+        int sample_size, ParameterEstimationMethod method) const override {
+        if (method != ParameterEstimationMethod::MaximumLikelihood)
+            throw std::logic_error("GEV covariance is implemented only for maximum likelihood");
+        if (!parameters_valid_) throw std::out_of_range("GEV: invalid parameters");
+        return parameter_covariance(sample_size);
     }
 
     // Gradient of the quantile (InverseCDF) wrt {location, scale, shape}.
-    std::vector<double> quantile_gradient(double probability) const {
-        double a = alpha_, k = kappa_;
-        double mll = -std::log(probability);  // -log(p)
-        return {1.0, 1.0 / k * (1.0 - std::pow(mll, k)),
-                -(a / (k * k)) * (1.0 - std::pow(mll, k)) -
-                    a / k * std::pow(mll, k) * std::log(mll)};
+    std::vector<double> quantile_gradient(double probability) const override {
+        distribution_numerics::validate_probability(probability);
+        if (!parameters_valid_) throw std::out_of_range("GEV: invalid parameters");
+        const double logarithm = std::log(-std::log(probability));
+        const double product = kappa_ * logarithm;
+        return {1.0,
+                product == -kInf
+                    ? 1.0 / kappa_
+                    : distribution_numerics::scaled_exprel_product(
+                          1.0, -logarithm, product),
+                product == -kInf
+                    ? -(alpha_ / kappa_) / kappa_
+                    : -distribution_numerics::scaled_exprel_derivative_product(
+                          alpha_, logarithm, product)};
     }
 
     // Jacobian of the quantile transformation for a set of probabilities (one per
@@ -253,135 +285,169 @@ class GeneralizedExtremeValue : public UnivariateDistributionBase,
     // ported additively in M12 -- PointProcessModel's multi-quantile prior branch needs the
     // determinant). C# ArgumentOutOfRangeException -> std::out_of_range.
     math::linalg::Matrix2D quantile_jacobian(const std::vector<double>& probabilities,
-                                             double& determinant) const {
-        if (static_cast<int>(probabilities.size()) != number_of_parameters()) {
-            throw std::out_of_range(
-                "The number of probabilities must be the same length as the number of "
-                "distribution parameters.");
-        }
-        // Get gradients.
-        auto dQp1 = quantile_gradient(probabilities[0]);
-        auto dQp2 = quantile_gradient(probabilities[1]);
-        auto dQp3 = quantile_gradient(probabilities[2]);
-        // Compute determinant.
-        // |a b c|
-        // |d e f|
-        // |g h i|
-        // |A| = a(ei - fh) - b(di - fg) + c(dh - eg)
-        double a = dQp1[0], b = dQp1[1], c = dQp1[2];
-        double d = dQp2[0], e = dQp2[1], f = dQp2[2];
-        double g = dQp3[0], h = dQp3[1], i = dQp3[2];
-        determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-        // Return Jacobian.
-        return {{a, b, c}, {d, e, f}, {g, h, i}};
+                                             double& determinant) const override {
+        return distribution_numerics::quantile_jacobian(
+            *this, number_of_parameters(), probabilities, determinant);
     }
 
     // Delta-method variance of the quantile (MLE).
     double quantile_variance(double probability, int sample_size) const {
-        auto covar = parameter_covariance(sample_size);
-        auto grad = quantile_gradient(probability);
-        double varA = covar[0][0], varB = covar[1][1], varG = covar[2][2];
-        double covAB = covar[1][0], covAG = covar[2][0], covBG = covar[2][1];
-        double d1 = grad[0], d2 = grad[1], d3 = grad[2];
-        return d1 * d1 * varA + d2 * d2 * varB + d3 * d3 * varG + 2.0 * d1 * d2 * covAB +
-               2.0 * d1 * d3 * covAG + 2.0 * d2 * d3 * covBG;
+        return quantile_variance(probability, sample_size,
+                                 ParameterEstimationMethod::MaximumLikelihood);
+    }
+
+    double quantile_variance(double probability, int sample_size,
+                             ParameterEstimationMethod method) const override {
+        distribution_numerics::validate_probability(probability);
+        if (!parameters_valid_) throw std::out_of_range("GEV: invalid parameters");
+        GeneralizedExtremeValue unit(0.0, 1.0, kappa_);
+        const double logarithm = std::log(-std::log(probability));
+        const double product = kappa_ * logarithm;
+        const double scale_gradient = distribution_numerics::scaled_exprel_product(
+            alpha_, -logarithm, product);
+        const double shape_gradient =
+            -distribution_numerics::scaled_exprel_derivative_product(
+                alpha_, logarithm, product);
+        return distribution_numerics::scaled_quantile_variance(
+            unit.parameter_covariance(sample_size, method),
+            {alpha_, scale_gradient, shape_gradient});
     }
 
     // --- Moments ---
     double mean() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero) return xi_ + alpha_ * kEuler;
-        if (std::fabs(kappa_) < 1.0) return xi_ + (alpha_ / kappa_ * (1.0 - g::function(1.0 + kappa_)));
-        return kNaN;
+        if (kappa_ <= -1.0) return kNaN;
+        if (std::fabs(kappa_) <= 0.05) return xi_ + alpha_ * small_shape_standardized_moments()[0];
+        const double logarithm = math::special::log_gamma(1.0 + kappa_);
+        if (logarithm == 0.0) return xi_;
+        const double magnitude =
+            logarithm > 0.0
+                ? logarithm + distribution_numerics::log1m_exp(-logarithm)
+                : distribution_numerics::log1m_exp(logarithm);
+        return xi_ - std::copysign(1.0, kappa_) * std::copysign(1.0, logarithm) *
+                         std::exp(std::log(alpha_) + magnitude - std::log(std::fabs(kappa_)));
     }
 
     double median() const override {
-        if (std::fabs(kappa_) <= kNearZero) return xi_ - alpha_ * std::log(std::log(2.0));
-        return xi_ + alpha_ * (std::pow(std::log(2.0), -kappa_) - 1.0) / kappa_;
+        return inverse_cdf(0.5);
     }
 
     double mode() const override {
-        if (std::fabs(kappa_) <= kNearZero) return xi_;
-        return xi_ + alpha_ * (std::pow(1.0 + kappa_, -kappa_) - 1.0) / kappa_;
+        if (kappa_ >= 1.0) return maximum();
+        const double logarithm = std::log1p(-kappa_);
+        return xi_ - alpha_ * logarithm * distribution_numerics::exprel(kappa_ * logarithm);
     }
 
     double standard_deviation() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero)
-            return std::sqrt(alpha_ * alpha_ * kPi * kPi / 6.0);
-        if (std::fabs(kappa_) < 0.5) {
-            double g1 = g::function(1.0 + kappa_);
-            double g2 = g::function(1.0 + 2.0 * kappa_);
-            return std::sqrt(alpha_ * alpha_ * (g2 - g1 * g1) / (kappa_ * kappa_));
-        }
-        return kNaN;
+        if (kappa_ <= -0.5) return kNaN;
+        if (std::fabs(kappa_) <= 0.05)
+            return alpha_ * small_shape_standardized_moments()[1];
+        if (kappa_ == 1.0) return alpha_;
+        return std::exp(std::log(alpha_) + 0.5 * log_power_variance(kappa_) -
+                        std::log(std::fabs(kappa_)));
     }
 
     double skewness() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero) return 1.1396;
-        if (std::fabs(kappa_) < 1.0 / 3.0) {
-            double U1 = g::function(1.0 + kappa_);
-            double U2 = g::function(1.0 + 2.0 * kappa_);
-            double U3 = g::function(1.0 + 3.0 * kappa_);
-            return sign(kappa_) * (-U3 + 3.0 * U1 * U2 - 2.0 * std::pow(U1, 3.0)) /
-                   std::pow(U2 - U1 * U1, 1.5);
-        }
-        return kNaN;
+        if (kappa_ <= -1.0 / 3.0) return kNaN;
+        if (std::fabs(kappa_) <= 0.05) return small_shape_standardized_moments()[2];
+        if (kappa_ == 1.0) return -2.0;
+        const double l1 = math::special::log_gamma(1.0 + kappa_);
+        const double l2 = math::special::log_gamma(1.0 + 2.0 * kappa_);
+        const double l3 = math::special::log_gamma(1.0 + 3.0 * kappa_);
+        if (std::isinf(l3) && l3 > 0.0) return -kInf;
+        const double largest = std::max(l3, std::max(l1 + l2, 3.0 * l1));
+        const double centered = std::exp(l3 - largest) -
+                                3.0 * std::exp(l1 + l2 - largest) +
+                                2.0 * std::exp(3.0 * l1 - largest);
+        return centered == 0.0
+                   ? 0.0
+                   : -std::copysign(1.0, kappa_) * std::copysign(1.0, centered) *
+                         std::exp(largest + std::log(std::fabs(centered)) -
+                                  1.5 * log_power_variance(kappa_));
     }
 
     double kurtosis() const override {
-        namespace g = math::special;
-        if (std::fabs(kappa_) <= kNearZero) return 3.0 + 12.0 / 5.0;
-        if (std::fabs(kappa_) < 0.25) {
-            double U1 = g::function(1.0 + kappa_);
-            double U2 = g::function(1.0 + 2.0 * kappa_);
-            double U3 = g::function(1.0 + 3.0 * kappa_);
-            double U4 = g::function(1.0 + 4.0 * kappa_);
-            double num = U4 - 4.0 * U3 * U1 - 3.0 * U2 * U2 + 12.0 * U2 * U1 * U1 -
-                         6.0 * std::pow(U1, 4.0);
-            double den = std::pow(U2 - U1 * U1, 2.0);
-            return 3.0 + num / den;
-        }
-        return kNaN;
+        if (kappa_ <= -0.25) return kNaN;
+        if (std::fabs(kappa_) <= 0.05) return small_shape_standardized_moments()[3];
+        if (kappa_ == 1.0) return 9.0;
+        const double l1 = math::special::log_gamma(1.0 + kappa_);
+        const double l2 = math::special::log_gamma(1.0 + 2.0 * kappa_);
+        const double l3 = math::special::log_gamma(1.0 + 3.0 * kappa_);
+        const double l4 = math::special::log_gamma(1.0 + 4.0 * kappa_);
+        if (std::isinf(l4) && l4 > 0.0) return kInf;
+        const double largest = std::max(std::max(l4, l1 + l3),
+                                        std::max(2.0 * l1 + l2, 4.0 * l1));
+        const double centered =
+            std::exp(l4 - largest) - 4.0 * std::exp(l1 + l3 - largest) +
+            6.0 * std::exp(2.0 * l1 + l2 - largest) -
+            3.0 * std::exp(4.0 * l1 - largest);
+        return std::exp(largest + std::log(centered) -
+                        2.0 * log_power_variance(kappa_));
     }
 
     double minimum() const override {
-        if (kappa_ >= -kNearZero) return -kInf;
+        if (kappa_ >= 0.0) return -kInf;
         return xi_ + alpha_ / kappa_;
     }
     double maximum() const override {
-        if (kappa_ <= kNearZero) return kInf;
+        if (kappa_ <= 0.0) return kInf;
         return xi_ + alpha_ / kappa_;
     }
 
     // --- Distribution functions ---
-    double pdf(double x) const override {
-        if (x < minimum() || x > maximum()) return 0.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero) y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return std::exp(-(1.0 - kappa_) * y - std::exp(-y)) / alpha_;
+    double pdf(double x) const override { return std::exp(log_pdf(x)); }
+
+    double log_pdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GEV: invalid parameters");
+        if (x < minimum() || x > maximum() || std::isinf(x)) return -kInf;
+        if (kappa_ > 0.0 && x == maximum())
+            return kappa_ < 1.0 ? -kInf : kappa_ == 1.0 ? -std::log(alpha_) : kInf;
+        if (kappa_ < 0.0 && x == minimum()) return -kInf;
+        const double y = distribution_numerics::hosking_shape_transform(x, xi_, alpha_, kappa_);
+        const double value = -(1.0 - kappa_) * y - std::exp(-y) - std::log(alpha_);
+        return std::isnan(value) ? -kInf : value;
     }
 
-    double cdf(double x) const override {
+    double cdf(double x) const override { return std::exp(log_cdf(x)); }
+
+    double log_cdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GEV: invalid parameters");
+        if (x <= minimum()) return -kInf;
+        if (x >= maximum()) return 0.0;
+        return -std::exp(-distribution_numerics::hosking_shape_transform(
+            x, xi_, alpha_, kappa_));
+    }
+
+    double ccdf(double x) const override { return -std::expm1(log_cdf(x)); }
+
+    double log_ccdf(double x) const override {
+        if (!parameters_valid_) throw std::out_of_range("GEV: invalid parameters");
         if (x <= minimum()) return 0.0;
-        if (x >= maximum()) return 1.0;
-        double y = (x - xi_) / alpha_;
-        if (std::fabs(kappa_) > kNearZero) y = -std::log(1.0 - kappa_ * y) / kappa_;
-        return std::exp(-std::exp(-y));
+        if (x >= maximum()) return -kInf;
+        const double y =
+            distribution_numerics::hosking_shape_transform(x, xi_, alpha_, kappa_);
+        const double exponential = std::exp(-y);
+        return exponential == 0.0 ? -y : distribution_numerics::log1m_exp(-exponential);
     }
 
     double inverse_cdf(double probability) const override {
-        if (probability < 0.0 || probability > 1.0)
+        if (!(probability >= 0.0 && probability <= 1.0))
             throw std::out_of_range("probability must be between 0 and 1");
         if (probability == 0.0) return minimum();
         if (probability == 1.0) return maximum();
-        if (std::fabs(kappa_) <= kNearZero)
-            return xi_ - alpha_ * std::log(-std::log(probability));
-        return xi_ + alpha_ / kappa_ * (1.0 - std::pow(-std::log(probability), kappa_));
+        const double logarithm = std::log(-std::log(probability));
+        const double product = kappa_ * logarithm;
+        const double unit_quantile =
+            product == -kInf ? 1.0 / kappa_
+                             : distribution_numerics::scaled_exprel_product(
+                                   1.0, -logarithm, product);
+        const double displacement =
+            product == -kInf ? alpha_ / kappa_
+                             : distribution_numerics::scaled_exprel_product(
+                                   alpha_, -logarithm, product);
+        return std::isinf(displacement) && std::isfinite(unit_quantile)
+                   ? alpha_ * (xi_ / alpha_ + unit_quantile)
+                   : xi_ + displacement;
     }
-
-    double log_pdf(double x) const override { return std::log(pdf(x)); }
 
     double log_likelihood(const std::vector<double>& sample) const {
         double ll = 0.0;
@@ -391,6 +457,66 @@ class GeneralizedExtremeValue : public UnivariateDistributionBase,
     }
 
    private:
+    static double log_power_variance(double power) {
+        const double first = math::special::log_gamma(1.0 + power);
+        const double second = math::special::log_gamma(1.0 + 2.0 * power);
+        return std::isinf(second) && second > 0.0
+                   ? kInf
+                   : second + distribution_numerics::log1m_exp(2.0 * first - second);
+    }
+
+    static double normalized_log_gamma_difference(double kappa, int order) {
+        double sum = 0.0;
+        double power = 1.0;
+        for (int n = order; n <= 32; ++n) {
+            const double factor =
+                order == 2 ? std::pow(2.0, n) - 2.0
+                           : order == 3
+                                 ? std::pow(3.0, n) - 3.0 * std::pow(2.0, n) + 3.0
+                                 : std::pow(4.0, n) - 4.0 * std::pow(3.0, n) +
+                                       6.0 * std::pow(2.0, n) - 4.0;
+            sum += (n % 2 == 0 ? 1.0 : -1.0) *
+                   distribution_numerics::zeta_integer(n) * factor * power / n;
+            power *= kappa;
+        }
+        return sum;
+    }
+
+    std::vector<double> small_shape_standardized_moments() const {
+        const double k = kappa_;
+        if (k == 0.0)
+            return {kEuler, kPi / std::sqrt(6.0), 1.1395470994046487, 5.4};
+        const double logarithm = distribution_numerics::log_gamma_one_plus(k);
+        const double mean_value =
+            -(logarithm / k) * distribution_numerics::exprel(logarithm);
+        const double a = normalized_log_gamma_difference(k, 2);
+        const double b = normalized_log_gamma_difference(k, 3);
+        const double c = normalized_log_gamma_difference(k, 4);
+        const double a2 = k * k * a;
+        const double b3 = k * k * k * b;
+        const double c4 = k * k * k * k * c;
+        const double u = std::expm1(a2);
+        const double v = std::expm1(b3);
+        const double variance = a * distribution_numerics::exprel(a2);
+        const double third = b * distribution_numerics::exprel(b3);
+        const double fourth = c * distribution_numerics::exprel(c4);
+        const double skew_value =
+            -(k * variance * variance * (3.0 + u) +
+              std::exp(3.0 * a2) * third) /
+            (variance * std::sqrt(variance));
+        const double kurtosis_value =
+            (variance * variance *
+                 (3.0 + u * (16.0 + u * (15.0 + u * (6.0 + u)))) +
+             12.0 * k * third * std::exp(3.0 * a2) * a *
+                 distribution_numerics::exprel(3.0 * a2) +
+             std::exp(6.0 * a2) *
+                 (k * k * third * third * (6.0 + v * (4.0 + v)) +
+                  std::exp(4.0 * b3) * fourth)) /
+            (variance * variance);
+        return {mean_value, std::exp(logarithm) * std::sqrt(variance), skew_value,
+                kurtosis_value};
+    }
+
     // kNearZero / kNaN / kInf are inherited (protected) from UnivariateDistributionBase.
     static double sign(double x) { return (x > 0) - (x < 0); }
 

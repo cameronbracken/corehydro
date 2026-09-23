@@ -1,4 +1,4 @@
-// ported from: Numerics/Mathematics/Linear Algebra/EigenValueDecomposition.cs @ 2a0357a
+// ported from: Numerics/Mathematics/Linear Algebra/EigenValueDecomposition.cs @ 7e8e8d1
 //
 // Computes all eigenvalues and eigenvectors of a real SYMMETRIC matrix using the classic
 // Jacobi rotation method: A = V * D * V^T, where D contains the eigenvalues and the columns
@@ -9,11 +9,9 @@
 // `MatrixRegularization::regularize` -- deferred at the end of Phase 3 precisely because it
 // needs this decomposition -- is on GeneralizedMethodOfMoments' covariance path.
 //
-// The C# ctor works on `this.A.Array` ("same storage as this.A"); here the loop mutates the
-// member matrix `a_` directly through `operator()`, which is the same storage by
-// construction. The C# input copy (`this.A = new Matrix(A.ToArray())`) is mirrored by
-// `clone()`.
+// v2.2.0 retains the public input copy and rotates a separate working matrix.
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -36,7 +34,12 @@ class EigenValueDecomposition {
             throw std::invalid_argument("The matrix A must be symmetric for this decomposition.");
 
         const int n = n_;
-        const double tol = 1e-12;
+        Matrix work = A.clone();
+        double element_max = 0.0;
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j)
+                element_max = std::max(element_max, std::fabs(work(i, j)));
+        const double tol = 1e-12 * element_max;
         const int max_iter = 2000;
 
         for (int iter = 0; iter < max_iter; ++iter) {
@@ -45,7 +48,7 @@ class EigenValueDecomposition {
             int p = 0, q = 0;
             for (int i = 0; i < n - 1; ++i) {
                 for (int j = i + 1; j < n; ++j) {
-                    double val = std::fabs(a_(i, j));
+                    double val = std::fabs(work(i, j));
                     if (val > max) {
                         max = val;
                         p = i;
@@ -57,9 +60,9 @@ class EigenValueDecomposition {
             if (max <= tol) break;  // Converged
 
             // Current largest off-diagonal pair (p, q).
-            double app = a_(p, p);
-            double aqq = a_(q, q);
-            double apq = a_(p, q);
+            double app = work(p, p);
+            double aqq = work(q, q);
+            double apq = work(p, q);
 
             // Robust angle computation: theta = 0.5 * atan2(2*apq, aqq - app).
             double theta = 0.5 * std::atan2(2.0 * apq, aqq - app);
@@ -69,19 +72,19 @@ class EigenValueDecomposition {
             // Rotate the 2x2 pivot block exactly.
             double app_new = c * c * app - 2.0 * s * c * apq + s * s * aqq;
             double aqq_new = s * s * app + 2.0 * s * c * apq + c * c * aqq;
-            a_(p, p) = app_new;
-            a_(q, q) = aqq_new;
-            a_(p, q) = a_(q, p) = 0.0;
+            work(p, p) = app_new;
+            work(q, q) = aqq_new;
+            work(p, q) = work(q, p) = 0.0;
 
             // Update the rest of the rows/cols (preserve symmetry).
             for (int k = 0; k < n; ++k) {
                 if (k == p || k == q) continue;
-                double aik = a_(k, p);
-                double akq = a_(k, q);
+                double aik = work(k, p);
+                double akq = work(k, q);
                 double akp_new = c * aik - s * akq;
                 double akq_new = s * aik + c * akq;
-                a_(k, p) = a_(p, k) = akp_new;
-                a_(k, q) = a_(q, k) = akq_new;
+                work(k, p) = work(p, k) = akp_new;
+                work(k, q) = work(q, k) = akq_new;
             }
 
             // Accumulate eigenvectors: V = V * J(p, q).
@@ -94,12 +97,10 @@ class EigenValueDecomposition {
         }
 
         // Extract eigenvalues from the diagonal of A.
-        for (int i = 0; i < n; ++i) eigen_values_[i] = a_(i, i);
+        for (int i = 0; i < n; ++i) eigen_values_[i] = work(i, i);
     }
 
-    // The input matrix A that was decomposed (copied from the constructor input, then
-    // diagonalized in place by the Jacobi sweeps -- mirrors the C# `A` property, which is
-    // the same mutated working storage).
+    // The retained input matrix A.
     const Matrix& a() const { return a_; }
 
     // The vector of eigenvalues (length n).
@@ -110,16 +111,20 @@ class EigenValueDecomposition {
 
     // Returns the effective sample size based on Dutilleul's method (1993).
     double effective_sample_size() const {
+        double spectral_scale = 0.0;
+        for (int i = 0; i < eigen_values_.length(); ++i)
+            spectral_scale = std::max(spectral_scale, std::fabs(eigen_values_[i]));
+        if (spectral_scale == 0.0) return 0.0;
         double sum = 0;
         double sumsq = 0;
         for (int i = 0; i < eigen_values_.length(); ++i) {
             // Clip tiny negative eigenvalues that can appear from numerical error.
-            double lambda = eigen_values_[i];
+            double lambda = eigen_values_[i] / spectral_scale;
             if (lambda < 0.0 && std::fabs(lambda) <= 1e-10) lambda = 0.0;
             sum += lambda;
             sumsq += lambda * lambda;
         }
-        if (sumsq <= 1E-12) return 0.0;  // degenerate case
+        if (sumsq == 0.0) return 0.0;
         double neff = (sum * sum) / sumsq;
         return neff;
     }
